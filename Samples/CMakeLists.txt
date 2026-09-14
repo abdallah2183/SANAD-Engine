@@ -41,7 +41,7 @@ endif()
 add_executable(NFSampleBasic3D
     Basic3D/main.cpp
 )
-target_link_libraries(NFSampleBasic3D PRIVATE NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene)
+target_link_libraries(NFSampleBasic3D PRIVATE NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFRuntime)
 nf_target_set_warnings(NFSampleBasic3D)
 
 target_compile_definitions(NFSampleBasic3D PRIVATE

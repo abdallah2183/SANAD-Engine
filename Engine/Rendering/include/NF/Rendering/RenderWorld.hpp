@@ -27,7 +27,8 @@ namespace nf::rendering {
 // Minimal transform for the legacy game:: path — in a real engine this is a
 // full Mat4 (see RenderObject::world below, which is what the new pipeline
 // reads). Named RenderTransform (not Transform) so it never shadows the ECS
-// scene::Transform in translation units that use both namespaces.
+// scene::Transform in translation units that use both namespaces. The ECS bridge
+// that produces this type lives in NF/Runtime/SceneExtraction.hpp (Phase 11, W2).
 struct RenderTransform {
     float x = 0, y = 0, z = 0;
     float scale = 1.0f;
@@ -36,7 +37,7 @@ struct RenderTransform {
 // Everything the renderer needs to draw one object. The legacy fields
 // (transform / mesh / material strings) serve the minimal game:: extraction
 // path and its tests; the handle-based fields are what the real pipeline
-// (extract_render_objects → cull → Renderer3D) consumes.
+// (runtime::extract_render_objects -> cull -> Renderer3D) consumes.
 struct RenderObject {
     u32 id = 0;
     bool visible = true;

@@ -16,7 +16,7 @@
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Time.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
-#include <NF/Rendering/Extraction.hpp>
+#include <NF/Runtime/SceneExtraction.hpp>
 #include <NF/Rendering/Culling.hpp>
 #include <NF/Rendering/Components.hpp>
 #include <NF/ECS/ECS.hpp>
@@ -63,7 +63,7 @@ BenchResult bench_once(u32 count) {
     // --- Extraction ---
     RenderWorld rw;
     nf::Clock c;
-    extract_render_objects(world, meshes, rw);
+    nf::runtime::extract_render_objects(world, meshes, rw);
     r.extract_us = c.elapsed_us();
 
     // --- Frustum culling ---

@@ -24,7 +24,7 @@ set(NFRENDERING_SOURCES
 
 nf_engine_library(NFRendering
     SOURCES ${NFRENDERING_SOURCES}
-    DEPENDS NFCore NFRHI NFJobs NFEcs NFScene
+    DEPENDS NFCore NFRHI NFJobs
 )
 
 target_include_directories(NFRendering

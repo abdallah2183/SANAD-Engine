@@ -5,6 +5,8 @@ set(NFRUNTIME_SOURCES
     src/RunConfigResolver.cpp
     src/Runtime.cpp
     src/RuntimeSceneLoader.cpp
+    src/SceneExtraction.cpp
+    src/WorldStreamer.cpp
     src/SaveSystem.cpp
 )
 

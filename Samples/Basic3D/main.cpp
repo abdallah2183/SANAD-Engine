@@ -9,7 +9,7 @@
 #include <NF/Rendering/Components.hpp>
 #include <NF/Rendering/Camera.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
-#include <NF/Rendering/Extraction.hpp>
+#include <NF/Runtime/SceneExtraction.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/Scene/Transform.hpp>
 
@@ -154,7 +154,7 @@ int run(const SampleConfig& cfg) {
         scene::propagate_transforms(game_world);
 
         rendering::RenderWorld render_world;
-        rendering::extract_render_objects(game_world, meshes, render_world);
+        nf::runtime::extract_render_objects(game_world, meshes, render_world);
 
         u32 image_index = swapchain->acquire_next_image(*image_available);
         if (image_index == u32_max) break;

@@ -19,7 +19,7 @@
 #include <NF/Rendering/RenderGraph.hpp>
 #include <NF/Rendering/ResourceState.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
-#include <NF/Rendering/Extraction.hpp>
+#include <NF/Runtime/SceneExtraction.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/Scene/Transform.hpp>
 
@@ -89,7 +89,7 @@ bool render_full_chain(rhi::IGraphicsDevice& dev, u32 width, u32 height,
 
     scene::propagate_transforms(world);
     RenderWorld render_world;
-    extract_render_objects(world, meshes, render_world);
+    nf::runtime::extract_render_objects(world, meshes, render_world);
 
     rhi::TextureDesc target_desc{};
     target_desc.width = width;
@@ -392,7 +392,7 @@ NF_TEST(static_mesh_extraction) {
 
     scene::propagate_transforms(world);
     RenderWorld rw;
-    extract_render_objects(world, meshes, rw);
+    nf::runtime::extract_render_objects(world, meshes, rw);
     NF_CHECK_EQ(rw.size(), 2u);
     NF_CHECK(rw.objects[0].mesh_handle == h_cube);
     NF_CHECK(rw.objects[1].mesh_handle == h_sphere);
@@ -424,7 +424,7 @@ NF_TEST(renderobject_culling_pipeline) {
     }
     scene::propagate_transforms(world);
     RenderWorld rw;
-    extract_render_objects(world, meshes, rw);
+    nf::runtime::extract_render_objects(world, meshes, rw);
     NF_CHECK_EQ(rw.size(), 4u);
 
     Camera cam = make_camera(5.0f);
@@ -717,7 +717,7 @@ NF_TEST(gbuffer_pass) {
     world.add<MeshComponent>(e, MeshComponent{h, mat, true});
     scene::propagate_transforms(world);
     RenderWorld rw;
-    extract_render_objects(world, meshes, rw);
+    nf::runtime::extract_render_objects(world, meshes, rw);
 
     Camera cam = make_camera(3.0f);
     rhi::TextureDesc target_desc{};

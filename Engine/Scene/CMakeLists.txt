@@ -2,6 +2,7 @@
 
 set(NFSCENE_SOURCES
     src/Transform.cpp
+    src/StreamingVolume.cpp
     src/Scene.cpp
     src/Prefab.cpp
 )

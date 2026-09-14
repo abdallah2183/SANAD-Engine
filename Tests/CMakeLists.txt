@@ -66,7 +66,10 @@ add_executable(RHITests
     RHITests/test_benchmarks_3d.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(RHITests PRIVATE NFCore NFRHI NFRendering)
+# NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
+# NFRuntime provides the game-world -> render-world bridge, which is what these
+# tests are actually exercising.
+target_link_libraries(RHITests PRIVATE NFCore NFRHI NFRendering NFScene NFEcs NFRuntime)
 nf_target_set_warnings(RHITests)
 
 # The RHI tests consume the same compiled SPIR-V as the samples, so the shaders
@@ -161,6 +164,15 @@ target_include_directories(SaveTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 target_link_libraries(SaveTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio NFJobs)
 nf_target_set_warnings(SaveTests)
 
+# --- Streaming tests (world streaming grid + load/unload policy) ---
+add_executable(StreamingTests
+    TestFramework.cpp
+    StreamingTests/test_streaming.cpp
+)
+target_include_directories(StreamingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(StreamingTests PRIVATE NFCore NFScene NFEcs NFRuntime)
+nf_target_set_warnings(StreamingTests)
+
 # --- Tool tests (project scaffold, cooker, packager) ---
 add_executable(ToolTests
     TestFramework.cpp
@@ -219,7 +231,7 @@ add_executable(HeadlessProbe EXCLUDE_FROM_ALL
     HeadlessProbe.cpp
 )
 target_include_directories(HeadlessProbe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(HeadlessProbe PRIVATE NFCore NFRHI NFRendering NFEcs NFScene)
+target_link_libraries(HeadlessProbe PRIVATE NFCore NFRHI NFRendering NFEcs NFScene NFRuntime)
 target_compile_definitions(HeadlessProbe PRIVATE
     "NF_RHI_TEST_SHADER_DIR=\"${NF_TRIANGLE_SHADER_DIR}\""
     "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
@@ -234,7 +246,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests ToolTests HeadlessProbe)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -253,6 +265,7 @@ add_test(NAME AnimationTests COMMAND AnimationTests)
 add_test(NAME AudioTests COMMAND AudioTests)
 add_test(NAME GameplayTests COMMAND GameplayTests)
 add_test(NAME SaveTests COMMAND SaveTests)
+add_test(NAME StreamingTests COMMAND StreamingTests)
 add_test(NAME ToolTests  COMMAND ToolTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)

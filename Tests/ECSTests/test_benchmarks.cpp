@@ -6,6 +6,8 @@
 #include <NF/Core/Time.hpp>
 
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -15,6 +17,33 @@ using namespace nf::ecs;
 
 struct Position { float x, y, z; };
 struct Velocity { float vx, vy, vz; };
+
+// Baseline measured 2026-09-14 on the dev machine (MSVC 14.51.36231, build/verify
+// — a Debug build with /Od, so these are Debug numbers and are slow by design).
+// Values are nanoseconds per entity:
+//
+//   10K : create  547, query 555, add/remove 471, destroy 243
+//   100K: create  528, query 552, add/remove 473, destroy 237
+//   1M  : create  530, query 831, add/remove 767, destroy 418   (cache-bound)
+//
+// The ceiling is ~12x the worst of those. That is deliberate: this is a
+// regression detector, not a performance target. It catches a query that quietly
+// became O(n^2), or storage that started copying, and it does not fail because CI
+// ran on a throttled shared runner. A tighter bound would be more sensitive and
+// also flaky — and a flaky test gets muted, after which it detects nothing.
+constexpr double kMaxNsPerEntity = 10'000.0;
+
+void check_ns_per_entity(double elapsed_ms, size_t count, const char* phase,
+                         size_t ops_per_entity = 1) {
+    const double ns = elapsed_ms * 1'000'000.0 /
+                      (static_cast<double>(count) * static_cast<double>(ops_per_entity));
+    if (!(ns < kMaxNsPerEntity)) {
+        throw std::runtime_error(std::string("benchmark regression: ") + phase + " took " +
+                                 std::to_string(static_cast<long long>(ns)) +
+                                 " ns/entity, ceiling is " +
+                                 std::to_string(static_cast<long long>(kMaxNsPerEntity)));
+    }
+}
 
 void benchmark_world(World& world, size_t count, const char* label) {
     Clock clock;
@@ -52,6 +81,14 @@ void benchmark_world(World& world, size_t count, const char* label) {
     auto all = world.all_entities();
     for (Entity e : all) world.destroy_entity(e);
     double destroy_ms = clock.elapsed_ms();
+
+    // Assert before reporting, so a regression is a failure rather than a number
+    // in a log that nobody reads. `query` covers 10 iterations, hence the
+    // ops_per_entity multiplier.
+    check_ns_per_entity(create_ms, count, "create");
+    check_ns_per_entity(query_ms, count, "query", 10);
+    check_ns_per_entity(add_remove_ms, count, "add/remove");
+    check_ns_per_entity(destroy_ms, count, "destroy");
 
     // Metrics go to stdout unconditionally: the test runner defaults to
     // set_min_level(Warn), which would silently swallow an Info-level report

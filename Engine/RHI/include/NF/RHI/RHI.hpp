@@ -397,13 +397,26 @@ struct PipelineDesc {
     ShaderStage push_constant_stages = ShaderStage::Vertex;
 };
 
-// --- Handle types ---
-struct BufferHandle    { u32 id = u32_max; bool valid() const { return id != u32_max; } };
-struct TextureHandle   { u32 id = u32_max; bool valid() const { return id != u32_max; } };
-struct PipelineHandle  { u32 id = u32_max; bool valid() const { return id != u32_max; } };
-struct ShaderModuleHandle { u32 id = u32_max; bool valid() const { return id != u32_max; } };
-struct RenderPassHandle  { u32 id = u32_max; bool valid() const { return id != u32_max; } };
-struct FramebufferHandle { u32 id = u32_max; bool valid() const { return id != u32_max; } };
+// --- Handle types: removed 2026-09-14 (Phase 11, W3) ---
+//
+// Six handle structs used to live here — BufferHandle, TextureHandle,
+// PipelineHandle, ShaderModuleHandle, RenderPassHandle, FramebufferHandle —
+// each a `{ u32 id; }` wrapper. They had zero references anywhere in the
+// engine, the editor, the tools, the samples or the tests, because the device
+// went a different way: it returns owning `std::unique_ptr<Buffer>` /
+// `Texture` / `Pipeline` / ... instead.
+//
+// They are deleted rather than kept "for later", because two resource models in
+// one header is a trap: the next person to want an indirection would find a
+// half-finished one and build on it, and the engine would end up with two
+// incompatible notions of what a GPU resource is. Owning pointers give RAII,
+// deterministic destruction and no manual lifetime bookkeeping — which is what
+// this RHI wants, and what the historical SIGSEGV-class bugs came from getting
+// wrong.
+//
+// If you are here because you wanted a handle type: use the `unique_ptr` the
+// device already hands you, or add the indirection deliberately, with the
+// reason written down.
 
 // --- Forward declarations ---
 class Buffer;

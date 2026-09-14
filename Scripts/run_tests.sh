@@ -18,7 +18,7 @@ if [ ! -d "${BIN}" ]; then
     exit 1
 fi
 
-SUITES=(CoreTests JobTests ECSTests AssetTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests RuntimeTests EditorTests ToolTests)
+SUITES=(CoreTests JobTests ECSTests AssetTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests RuntimeTests EditorTests ToolTests)
 
 TOTAL_PASSED=0
 TOTAL_FAILED=0

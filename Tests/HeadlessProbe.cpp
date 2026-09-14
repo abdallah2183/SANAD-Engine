@@ -7,7 +7,7 @@
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
 #include <NF/Rendering/MeshLibrary.hpp>
-#include <NF/Rendering/Extraction.hpp>
+#include <NF/Runtime/SceneExtraction.hpp>
 #include <NF/Rendering/Components.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -59,7 +59,7 @@ int main() {
     scene::propagate_transforms(world);
 
     rendering::RenderWorld rw;
-    extract_render_objects(world, meshes, rw);
+    nf::runtime::extract_render_objects(world, meshes, rw);
     std::printf("[probe] extracted=%zu\n", rw.size()); std::fflush(stdout);
 
     rendering::Camera cam{};
