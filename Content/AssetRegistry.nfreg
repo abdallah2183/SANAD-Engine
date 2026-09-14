@@ -2,20 +2,20 @@
 version: 1
 count: 3
 ---
-id: e6a82a96-9f52-4e34-b1a7-eee248199ead
-type: Scene
-logical: content://Scenes/Example.nfscene
-cooked: cache://Scenes/Example.nfscene
-fingerprint: ec84c8472b65aa13
-format: nfscene-v1
-version: 1
----
 id: 49cb7905-ece6-4426-8c57-e2460ac79136
 type: Material
 logical: content://Materials/Default.nfmat
 cooked: cache://Materials/Default.nfmat
 fingerprint: 80ced994f0e362d9
 format: nfmat-v1
+version: 1
+---
+id: e6a82a96-9f52-4e34-b1a7-eee248199ead
+type: Scene
+logical: content://Scenes/Example.nfscene
+cooked: cache://Scenes/Example.nfscene
+fingerprint: ec84c8472b65aa13
+format: nfscene-v1
 version: 1
 ---
 id: f04e488b-4dc8-414b-baee-e3c50e8829ad

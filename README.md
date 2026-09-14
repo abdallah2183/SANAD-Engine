@@ -2,13 +2,46 @@
 
 High-performance C++23 game engine designed with a modern data-oriented architecture and low-overhead Vulkan RHI.
 
-## Current Status (Phase 10 — scripting foundation + save system)
+## Current Status (Phase 11 — foundation: layering, debt, world streaming)
 
-NOVAForge is at **Phase 10**. The core runtime pipeline (`Windows + Vulkan + Jobs + ECS + Deferred 3D Renderer`) is verified, test-hardened, and passes 100% of automated unit and rendering tests with zero validation errors. A project can be created, built, packaged and run as a standalone program. A self-contained deterministic rigid-body solver (`PhysicsWorld`), a skeletal animation system (`Skeleton`, `AnimationClip`, `AnimationPlayer`, `AnimationStateMachine`), an audio engine (`AudioDevice`, `AudioBus`, `AudioSource`), a reflection layer (`PropertyInfo`, `ClassInfo`, `ReflectionRegistry`), a C++ gameplay module system (`GameplayModule`, `GameplayModuleRegistry`), and a versioned save system (`SaveSystem`) are integrated into the ECS, runtime, editor, and serialized scene format.
+NOVAForge is at **Phase 11**. The core runtime pipeline (`Windows + Vulkan + Jobs + ECS + Deferred 3D Renderer`) is verified, test-hardened, and passes 100% of automated unit and rendering tests with zero validation errors. A project can be created, built, packaged and run as a standalone program. A self-contained deterministic rigid-body solver (`PhysicsWorld`), a skeletal animation system (`Skeleton`, `AnimationClip`, `AnimationPlayer`, `AnimationStateMachine`), an audio engine (`AudioDevice`, `AudioBus`, `AudioSource`), a reflection layer (`PropertyInfo`, `ClassInfo`, `ReflectionRegistry`), a C++ gameplay module system (`GameplayModule`, `GameplayModuleRegistry`), and a versioned save system (`SaveSystem`) are integrated into the ECS, runtime, editor, and serialized scene format.
 
 Integration is end-to-end, not just API-level: `Runtime::update()` steps physics → animation → audio → gameplay → transform propagation, so an animated entity's transform is actually written every frame, audio is mixed where the frame will render it, and a gameplay module's writes reach the renderer in the frame it made them. Because the asset import pipelines (mesh/WAV) are still future work, the animation and audio subsystems ship deterministic generators — `make_procedural_clip()` and `make_tone_buffer()` — so a scene can name a clip and a buffer that produce real motion and real samples without a cooked asset. Every component has an editor inspector panel, and the gameplay module state is edited through reflection rather than a hand-written panel.
 
-**Verified 2026-09-14**: build clean under `/W4 /WX`; **515 passed / 0 failed / 1 skipped / 516 across 13 suites**; the packaged `NFPlayer` runs the template scene — a falling box on a static plane plus an entity driven by a procedural clip and a generated tone — with 0 validation errors and 0 leaked RHI objects.
+**Verified 2026-09-14**: build clean under `/W4 /WX`; **534 passed / 0 failed / 1 skipped across 14 suites**; the packaged `NFPlayer` runs the template scene — a falling box on a static plane plus an entity driven by a procedural clip and a generated tone — with 0 validation errors and 0 leaked RHI objects.
+
+### Phase 11 — foundation, not features
+
+Phase 11 deliberately added **no feature area**. It removed three things that were actively wrong and
+landed one seam that the design document calls a "from day one" principle. The case was not aesthetic:
+each item was a trap that had already cost time or structurally blocked a stated goal.
+
+- **`Engine/Assets` no longer depends on `NFRendering`.** The asset library was pulling in the renderer
+  — and therefore the RHI and all of Vulkan — because `AssetManager` was doing two jobs: load, parse
+  and cache CPU assets, *and* upload meshes to the GPU. The upload now lives in `Engine/Rendering`
+  (`MeshUpload`), the runtime owns the device, and `Assets` links only `NFCore`/`NFJobs`. Anything that
+  only needs assets no longer links a graphics stack.
+- **`Engine/Rendering` no longer depends on `NFEcs`/`NFScene`.** The ECS → render-world bridge moved up
+  to `NF/Runtime/SceneExtraction.hpp`, the layer that legitimately knows about both sides. The renderer
+  consumes plain data and can now be built and used standalone — which is what the **dedicated-server
+  path** needs, since a server has no business compiling a renderer to walk a scene graph.
+- **One `.nfmesh` format, not two.** The second writer (`rendering::mesh_asset`, magic `NFM1`) is
+  deleted. `NFME` / `assets::MeshAsset` is the only format, so the cooker can no longer produce
+  something the runtime cannot read.
+- **The six dead RHI handle types are gone** — `BufferHandle`, `TextureHandle`, `PipelineHandle`,
+  `ShaderModuleHandle`, `RenderPassHandle`, `FramebufferHandle`. They had zero references; the device
+  returns owning `unique_ptr`s. Two resource models, one abandoned, is how SIGSEGV-class bugs start.
+- **The ECS benchmarks assert a ceiling** instead of printing numbers nobody reads. The bound is
+  deliberately loose (an order of magnitude) so it catches a real regression without flaking on a
+  throttled runner — a flaky test gets muted, after which it detects nothing.
+- **World-streaming seam** (`scene::StreamingVolume` + `runtime::WorldStreamer`): distance-based chunk
+  load/unload on a uniform grid, with a hysteresis band so a volume parked on a chunk boundary does not
+  thrash, and a per-update load cap with nearest-first ordering. The seam plus one working
+  implementation — LOD, priority queues and a memory budget are deliberately deferred and documented.
+
+Both inversions are enforced by `Scripts/check_layering.sh`, which runs in CI immediately after the
+build so a reintroduced `#include` fails in seconds with the offending line named, instead of
+surfacing later as a confusing link error.
 
 ### Implemented & Stabilized Modules
 - **Core**: Custom math library (`Vec2`, `Vec3`, `Vec4`, `Mat4`, `Quat`), custom memory allocators (Linear, Pool, Stack), fast containers, high-resolution time, GUID/UUID, and thread-safe logging.
@@ -25,7 +58,7 @@ Integration is end-to-end, not just API-level: `Runtime::update()` steps physics
 - **Reflection**: `PropertyInfo` / `ClassInfo` / `EnumInfo` metadata with `NF_CLASS` / `NF_PROPERTY` / `NF_ENUM` macros — no codegen step, so a property declaration sits next to the member it describes and nothing else has to be kept in sync. `ReflectionRegistry` registers classes during static initialisation, so the editor can enumerate types it has never instantiated. `property_to_string` / `property_from_string` are the single text form shared by the inspector, the scene format, and the save format — nine significant digits, so an `f32` survives a round trip exactly.
 - **Gameplay (scripting S0–S1)**: `GameplayModule` with `on_init` / `on_update` / `on_shutdown` / `on_scene_load` / `on_scene_unload`, registered by `NF_GAMEPLAY_MODULE` and driven by `Runtime::step_gameplay()`. Ordering is by `update_priority()` with a name tie-break, so it does not depend on static-init order. A module reaches the engine only through `GameplayContext` (world, scene, physics, audio, input), and its settings are a plain reflected struct, which is what makes them editable in the inspector and serializable without hand-written code. `OrbitCameraModule` is a worked example.
 - **Save system**: `SaveSystem` with named slots under `saves://`, each a directory of `scene.nfscene` + `modules.txt` + `meta.txt`. `save_game` builds into a staging directory and swaps it in with rollback, so a failed save cannot destroy a good one. `save_game_async` snapshots on the calling thread and writes on a worker — the scene is never serialized off-thread. Autosave is interval-driven, and `meta.txt` carries a schema version with a chained migration registry.
-- **Assets**: VFS (`content://`, `cache://`, `engine://`, `project://`, `saves://`), UUID-keyed asset registry, and a CLI cooker.
+- **Assets**: VFS (`content://`, `cache://`, `engine://`, `project://`, `saves://`), UUID-keyed asset registry, and a CLI cooker. **CPU-pure since Phase 11**: the module reads bytes and parses them, and links only `NFCore`/`NFJobs` — no RHI, no renderer, no graphics device. `assets::MeshAsset` (`.nfmesh`, magic `NFME`) is the single mesh format; the conversion to the GPU mesh lives in `Engine/Rendering` (`MeshUpload`).
 - **Samples**:
   - `NFSampleTriangle`: Bare-bones Vulkan RHI clear and pipeline verification.
   - `NFSampleTexturedQuad`: Texture upload, descriptor set binding, and sampler verification.
@@ -155,11 +188,19 @@ blank frame.
 
 ### Running Automated Tests
 
-**515 passed / 0 failed / 1 skipped** across thirteen suites (the skip is the opt-in 1M-entity
+**534 passed / 0 failed / 1 skipped** across fourteen suites (the skip is the opt-in 1M-entity
 benchmark). A skipped test is never counted as a pass. The runtime integration is covered by tests
 that assert a transform *actually moved*, audio *actually mixed*, and a gameplay module *actually
 stepped* after `Runtime::update()` —
 not merely that component fields survive a serialization round-trip.
+
+The module-layering invariants Phase 11 established are checked separately, and cheaply — CI runs this
+immediately after the build, so a reintroduced inversion fails in seconds with the offending line
+named instead of surfacing later as a confusing link error:
+
+```bash
+bash Scripts/check_layering.sh
+```
 
 ```bash
 bash Scripts/run_tests.sh build/debug
@@ -194,13 +235,14 @@ NOVAForge/
 │   ├── Rendering/   — RenderGraph, Renderer3D, PBR Shaders, Materials, Meshes, GPU picking
 │   ├── Jobs/        — Fiber/Worker job system with work stealing
 │   ├── ECS/         — Sparse-set ECS storage and query engine
-│   ├── Scene/       — Scene hierarchy, Transform, Entity management
-│   ├── Assets/      — VFS, asset registry, cooked mesh/material loaders
+│   ├── Scene/       — Scene hierarchy, Transform, entity management, streaming chunk grid
+│   ├── Assets/      — VFS, asset registry, cooked mesh/material loaders (CPU-pure: no RHI, no renderer)
 │   ├── Physics/     — Deterministic rigid-body solver (shapes, broadphase, narrowphase, solver, world)
 │   ├── Animation/   — Skeletal animation (skeleton, clips, player, state machine, blending)
 │   ├── Audio/       — Audio engine (attenuation, 3D pan/gain, mixer, null device for headless)
 │   ├── Gameplay/    — C++ gameplay modules: lifecycle, registry, reflected state bridge
-│   ├── Runtime/     — Runtime + Application: device ownership, frame loop, asset sync, physics stepping
+│   ├── Runtime/     — Runtime + Application: device ownership, frame loop, asset sync, subsystem
+│   │                  stepping, the ECS→render-world bridge, and the world streamer
 │   └── Shaders/     — GLSL shaders compiled to SPIR-V (Depth, GBuffer, Lighting, Tonemap, Pick)
 ├── Editor/          — Dear ImGui + Win32 + Vulkan editor, with a headless acceptance harness
 ├── Samples/
@@ -216,15 +258,20 @@ NOVAForge/
 │   ├── BuildTool/    — the `nf` CLI (new / cook / build / run / verify)
 │   └── Player/       — NFPlayer, the standalone game runtime
 └── Tests/
-    ├── CoreTests/    — Math, Memory, Container, IO            (44)
-    ├── JobTests/     — Job scheduling & parallelism            (4)
-    ├── ECSTests/     — ECS, transform hierarchy & prefabs     (26)
-    ├── AssetTests/   — VFS, registry, cooking, projects        (45)
-    ├── RHITests/     — Vulkan RHI, RenderGraph, 3D pipeline   (69)
-    ├── PhysicsTests/ — Shapes, broadphase, narrowphase, solver, determinism (86)
-    ├── RuntimeTests/ — Scene load, offscreen render, physics serialization (25)
-    ├── EditorTests/  — Outliner, inspector, undo, prefabs     (54)
-    └── ToolTests/    — Project scaffold, cooker, packager     (14)
+    ├── CoreTests/      — Math, memory, containers, IO, reflection           (59)
+    ├── JobTests/       — Job scheduling & parallelism                        (5)
+    ├── ECSTests/       — ECS, transform hierarchy, prefabs, benchmarks    (25+1skip)
+    ├── AssetTests/     — VFS, registry, cooking, projects                   (45)
+    ├── RHITests/       — Vulkan RHI, RenderGraph, 3D pipeline               (69)
+    ├── PhysicsTests/   — Shapes, broadphase, narrowphase, solver, determinism (86)
+    ├── AnimationTests/ — Skeleton, clips, player, state machine             (38)
+    ├── AudioTests/     — Attenuation, pan/gain, mixer, null device          (27)
+    ├── GameplayTests/  — Module lifecycle, registry, state serialization    (24)
+    ├── SaveTests/      — Slots, rollback, async save, migrations            (16)
+    ├── StreamingTests/ — Chunk grid geometry + streaming policy             (19)
+    ├── RuntimeTests/   — Scene load, run config, subsystem stepping         (33)
+    ├── EditorTests/    — Outliner, inspector, undo, prefabs, panels         (74)
+    └── ToolTests/      — Project scaffold, cooker, packager                 (14)
 ```
 
 ## License

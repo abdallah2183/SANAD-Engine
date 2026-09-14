@@ -383,8 +383,9 @@ bool EditorApp::set_rigid_body(ecs::Entity e, const physics::RigidBodyComponent&
         return false;
     }
     // Add or replace the component directly. Physics components are not
-    // undo-tracked in this phase — they are leaf data, and the runtime
-    // rebuilds bodies from the scene on the next play/step.
+    // undo-tracked in this phase — they are leaf data, and the physics body is
+    // deliberately not created here: EditorApp::play() rebuilds the physics
+    // world from the scene's components, so the body appears when play begins.
     if (auto* existing = w->get<physics::RigidBodyComponent>(e)) {
         *existing = rb;
     } else {
@@ -1031,6 +1032,14 @@ bool EditorApp::play(std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    // Physics bodies are built from the scene when it is *loaded*. A RigidBody
+    // and Collider added through the inspector while the scene is already open
+    // therefore has no body yet, and Play would simulate the scene as it was on
+    // disk — the entity the user just gave physics to would sit perfectly still.
+    // Rebuilding here makes Play start from the authored components, which is
+    // also the right semantics: a play session begins from the scene state, not
+    // from wherever the previous session left the simulation.
+    m_runtime->rebuild_physics_from_scene();
     if (!m_play.play(*m_runtime->edit_scene(), out_err)) {
         return false;
     }

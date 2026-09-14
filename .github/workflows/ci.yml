@@ -83,81 +83,55 @@ jobs:
           set -o pipefail
           bash Scripts/run_tests.sh "$BUILD_DIR" | tee test_suites.log
           code=${PIPESTATUS[0]}
-          # run_tests.sh exits 0 when nothing FAILED — including when every GPU
-          # test was SKIPPED. A green build that exercised no GPU is not a green
-          # build, so assert the RHI suite actually executed.
-          rhi_passed=$(sed -n 's/^PASS  RHITests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "RHITests passed: ${rhi_passed:-0}"
-          if [ "${rhi_passed:-0}" -eq 0 ]; then
-            echo "No RHI test executed. Lavapipe is probably missing — GPU coverage was not verified."
+          # run_tests.sh exits 0 when nothing FAILED — including when a suite was
+          # never built, or every GPU test was SKIPPED. A green build that
+          # exercised nothing is not a green build, so every suite is asserted to
+          # have actually executed.
+          #
+          # This is a loop over the suite list, not one hand-written block per
+          # suite. The blocks it replaces had to be added one phase at a time,
+          # which meant a suite could be added without a guard and nothing would
+          # notice — and "a subsystem nobody steps" (Phase 9) is exactly the class
+          # of defect that costs. A loop cannot drift from the runner's own list.
+          require_suite() {
+            local suite="$1" why="$2" n
+            n=$(sed -n "s/^PASS  ${suite} .*Passed: \([0-9]*\).*/\1/p" test_suites.log | tail -1)
+            echo "${suite} passed: ${n:-0}"
+            if [ "${n:-0}" -eq 0 ]; then
+              echo "No ${suite} executed — ${why}"
+              exit 1
+            fi
+          }
+
+          # A suite that failed to build never reaches the count above: run_tests.sh
+          # reports it as SKIP and leaves it out of the totals entirely, so the
+          # per-suite assertion below cannot see it.
+          if grep -qE '^SKIP .*\(not built\)' test_suites.log; then
+            echo "A suite did not build:"
+            grep -E '^SKIP .*\(not built\)' test_suites.log
             exit 1
           fi
-          # Phase 8: physics tests are pure computation (no GPU), so they must
-          # always execute. A zero here means the physics suite was not built
-          # or did not run, which is a hard regression.
-          phys_passed=$(sed -n 's/^PASS  PhysicsTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "PhysicsTests passed: ${phys_passed:-0}"
-          if [ "${phys_passed:-0}" -eq 0 ]; then
-            echo "No PhysicsTests executed — physics suite is missing or broken."
-            exit 1
-          fi
-          # Phase 9: animation and audio tests are pure computation (no GPU),
-          # so they must always execute.
-          anim_passed=$(sed -n 's/^PASS  AnimationTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "AnimationTests passed: ${anim_passed:-0}"
-          if [ "${anim_passed:-0}" -eq 0 ]; then
-            echo "No AnimationTests executed — animation suite is missing or broken."
-            exit 1
-          fi
-          audio_passed=$(sed -n 's/^PASS  AudioTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "AudioTests passed: ${audio_passed:-0}"
-          if [ "${audio_passed:-0}" -eq 0 ]; then
-            echo "No AudioTests executed — audio suite is missing or broken."
-            exit 1
-          fi
-          # Phase 9: the runtime suite is where "the subsystems are actually
-          # stepped" is asserted. A green AnimationTests/AudioTests only proves
-          # the modules work in isolation; RuntimeTests is the only suite that
-          # would catch Runtime::update() no longer calling them. Its
-          # scene-loading and run-config tests are pure computation, so a zero
-          # here means the suite did not run at all.
-          runtime_passed=$(sed -n 's/^PASS  RuntimeTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "RuntimeTests passed: ${runtime_passed:-0}"
-          if [ "${runtime_passed:-0}" -eq 0 ]; then
-            echo "No RuntimeTests executed — runtime suite is missing or broken."
-            exit 1
-          fi
-          # Phase 10: gameplay modules and save slots. Both suites are new, and a
-          # new suite that silently fails to build is the easiest way to ship a
-          # phase whose tests never ran. Note that the reflection tests live in
-          # CoreTests (the reflection module lives in NFCore), not in a suite of
-          # their own.
-          gameplay_passed=$(sed -n 's/^PASS  GameplayTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "GameplayTests passed: ${gameplay_passed:-0}"
-          if [ "${gameplay_passed:-0}" -eq 0 ]; then
-            echo "No GameplayTests executed — gameplay suite is missing or broken."
-            exit 1
-          fi
-          save_passed=$(sed -n 's/^PASS  SaveTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "SaveTests passed: ${save_passed:-0}"
-          if [ "${save_passed:-0}" -eq 0 ]; then
-            echo "No SaveTests executed — save suite is missing or broken."
-            exit 1
-          fi
+
+          require_suite CoreTests      "the core suite (math, memory, containers, IO) is missing or broken."
+          require_suite JobTests       "the job-system suite is missing or broken."
+          require_suite ECSTests       "the ECS suite — which carries the Phase 11 W4 benchmark ceilings — is missing or broken."
+          require_suite AssetTests     "the asset suite — Phase 11 W1 made Assets CPU-pure and unified the mesh format — is missing or broken."
+          require_suite RHITests       "Lavapipe is probably missing — GPU coverage was not verified."
+          require_suite PhysicsTests   "the physics suite is missing or broken."
+          require_suite AnimationTests "the animation suite is missing or broken."
+          require_suite AudioTests     "the audio suite is missing or broken."
+          require_suite GameplayTests  "the gameplay suite is missing or broken."
+          require_suite SaveTests      "the save suite is missing or broken."
+          require_suite StreamingTests "the streaming suite — Phase 11 W5, and the only thing asserting a boundary does not thrash — is missing or broken."
+          require_suite RuntimeTests   "the runtime suite — the only one that catches Runtime::update() no longer stepping a subsystem — is missing or broken."
+          require_suite EditorTests    "the editor suite is missing or broken."
+          require_suite ToolTests      "the tool suite is missing or broken."
+
           # The reflection tests are the only guard against a property table that
           # points at the wrong offset — a defect that compiles, links and
           # silently corrupts data. They live in CoreTests (the reflection module
           # is in NFCore), and the runner only prints per-suite totals, so run the
           # name filter directly and require a non-zero pass count.
-          # Phase 11, W5. The streaming suite is the only thing asserting that a
-          # chunk is not loaded and released on every frame while the volume sits
-          # on a boundary -- a regression that produces no error, only churn.
-          streaming_passed=$(sed -n 's/^PASS  StreamingTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
-          echo "StreamingTests passed: ${streaming_passed:-0}"
-          if [ "${streaming_passed:-0}" -eq 0 ]; then
-            echo "No StreamingTests executed -- streaming suite is missing or broken."
-            exit 1
-          fi
           reflection_out=$("$BUILD_DIR/bin/CoreTests.exe" reflection 2>&1 || true)
           reflection_passed=$(printf '%s\n' "$reflection_out" | sed -n 's/.*Passed: \([0-9]*\).*/\1/p' | tail -1)
           echo "Reflection tests passed: ${reflection_passed:-0}"

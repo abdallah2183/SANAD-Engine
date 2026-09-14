@@ -1,6 +1,6 @@
 # Phase 11 — Foundation: break the layering inversions and pay down the debt
 
-**Status**: **in progress 2026-09-14** — W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 (seam) ✅, W6 partial. All five work items landed; W6 (verify/CI/docs) is the remainder.
+**Status**: **COMPLETE 2026-09-14** — W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 (seam) ✅, W6 ✅. All six work items landed, verified and committed.
 Suite: **534 passed / 0 failed / 1 skipped across 14 suites** (was 515/0/1 across 13).
 **Design doc reference**: §2 (core principles: "clean separation between systems", "Render/Game World separation", "dedicated-server path"), §246 R6 (world streaming), §247 E5.
 
@@ -13,7 +13,7 @@ Suite: **534 passed / 0 failed / 1 skipped across 14 suites** (was 515/0/1 acros
 | W3 | Delete the dead RHI handle types | **done** — 6 structs removed, build clean |
 | W4 | Benchmark thresholds | **done** — baseline measured, ceiling asserted, Rule 0 verified |
 | W5 | World streaming: the seam | **done** — grid + policy + 19 tests, Rule 0 verified |
-| W6 | Verify, CI, docs | **partial** — layering guard (W1+W2 rules live) and all suite guards are in CI |
+| W6 | Verify, CI, docs | **done** — full Rule 0 pass on W1–W5 executed and recorded; layering guard live in CI; the per-suite guards collapsed into one loop asserting all 14 suites ran; `git_repair_ref.sh` de-hardcoded; README + this plan marked complete |
 
 ## Motivation
 
@@ -242,13 +242,66 @@ Rule 0 verified: making `effective_unload_radius()` return `load_radius` (hyster
 `streamer_hysteresis_keeps_a_chunk_between_the_two_radii` and, precisely, `streamer_does_not_thrash_on_a_boundary`
 on `unload_calls != 0`.
 
-### W6 — Verify, CI, docs
+### W6 — Verify, CI, docs ✅ DONE
 - Full Rule 0 pass on W1–W5: each fix reverted, the corresponding test confirmed to fail.
 - CI: assert the new `StreamingTests` suite, and assert the layering invariants directly —
   a `grep` guard that fails the build if `Engine/Assets` ever includes `NF/Rendering/` or
   `Engine/Rendering` ever includes `NF/ECS/`/`NF/Scene/`. **That is the only thing that keeps this
   phase's work from silently regressing**, and it is cheap.
 - README + this plan marked complete.
+
+**Done 2026-09-14.** The Rule 0 pass was executed, not asserted:
+
+| W | Defect reintroduced | Result |
+|---|---|---|
+| W1 | `#include <NF/Rendering/StaticMesh.hpp>` back in `Assets/MeshAsset.hpp` | guard names `MeshAsset.hpp:5`, `RESULT: FAIL`, exit 1 |
+| W2 | `#include <NF/ECS/ECS.hpp>` back in `Rendering/Extraction.hpp` | guard names `Extraction.hpp:24`, `RESULT: FAIL`, exit 1 |
+| W3 | *(no behavioural test — the six types were dead code)* | `grep` finds them only in the explanatory comment at `RHI.hpp:402-403` and in docs; **zero** code references |
+| W4 | ceiling `kMaxNsPerEntity` forced to 1 ns | `benchmark_10k_entities` and `benchmark_100k_entities` FAIL (`create took 555 ns/entity, ceiling is 1`); 1M still SKIPs; suite 23/2/1, exit 1 |
+| W5 | `effective_unload_radius()` returns `load_radius` (hysteresis removed) | `streamer_hysteresis_keeps_a_chunk_between_the_two_radii` and `streamer_does_not_thrash_on_a_boundary` FAIL (`unload_calls != 0`); suite 17/2/0, exit 1 |
+
+All five probes were reverted; `git diff` over `Engine/` and `Tests/` is empty afterwards.
+
+**CI.** `Scripts/check_layering.sh` runs immediately after the build. The per-suite guards had been
+added one phase at a time and covered only 9 of the 14 suites, so the claim "all suite guards are in
+CI" was not true. They are now a single `require_suite` loop over the runner's own list, plus an
+explicit "a suite did not build" check. The block was verified in both directions against a real
+`test_suites.log`: it passes normally, and it exits 1 when the `StreamingTests` line is removed or a
+`SKIP ... (not built)` line is present.
+
+**Also fixed while verifying:** `Scripts/git_repair_ref.sh` hardcoded the branch it was written for
+(`workbuddy/main-e34f0fa2`), so from any other worktree it printed `ok` while repairing nothing — the
+worst possible failure mode for a recovery tool. It now reads the branch from `HEAD` (via
+`symbolic-ref`, which still answers when the branch is unborn) and resolves the ref and reflog through
+`git rev-parse --git-path`. The OneDrive ref deletion was hit again during this pass and recovered
+with the script's own procedure.
+
+**A pre-existing defect found by this verification, and fixed.** The editor's headless acceptance
+harness was **failing**, not passing: `Automation: Physics: body moved under gravity FAILED —
+world_y = 0.000000`, `automation=FAILED`, editor exit 1. It is *not* a Phase 11 regression —
+`Runtime::rebuild_physics_from_scene` and `Runtime::step_physics` are byte-identical across Phase 10
+and Phase 11, and W1's only change to `Editor/src/main.cpp` was mechanical (the `AssetManager`
+constructor and the `make_mesh_asset` rename).
+
+The cause: physics bodies are built from the scene **only when it is loaded**
+(`Runtime::load_scene` → `rebuild_physics_from_scene`). The inspector adds a `RigidBodyComponent` and
+`ColliderComponent` to a scene that is already open, so no body was ever created and Play simulated
+the scene as it was on disk — the entity the user had just given physics to sat perfectly still. The
+comment in `EditorApp::set_rigid_body` claimed "the runtime rebuilds bodies from the scene on the next
+play/step"; nothing did.
+
+Fixed by rebuilding the physics world at the start of a play session (`EditorApp::play`), which is also
+the correct semantics — a play session should begin from the authored components, not from wherever
+the previous session left the simulation. The harness now reports
+`Automation: Physics: body moved under gravity OK`, `automation=OK`, `Validation errors: 0`,
+`Alive RHI objects before shutdown: 0`, exit 0. That acceptance step is the regression test: CI greps
+it for `Automation:.*FAILED`.
+
+**Acceptance re-run** (this worktree, `build/debug`, MSVC 14.51.36231 / Windows SDK 10.0.26100.0):
+layering guard PASS (4/4); suite **534/0/1** across 14 suites; assets cooked (`cooked 1, skipped 0,
+failed 0`); `NFSampleTriangle` 60 frames, 0 validation errors; `NFSampleBasic3D` logs
+`StaticMesh 'Cube' uploaded (1 LODs, 24 verts, 36 indices)` and renders 60 frames; editor headless
+`automation=OK` with 0 validation errors and 0 leaked RHI objects.
 
 ## Findings that were not in the plan
 

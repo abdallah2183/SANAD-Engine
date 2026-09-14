@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Scripts/git_repair_ref.sh — repair the branch ref after a commit.
+# Scripts/git_repair_ref.sh — repair the current branch ref after a commit.
 #
 # WHY THIS EXISTS
 #
@@ -20,7 +20,19 @@
 # still resolved.
 #
 # Every `git commit` writes a fresh loose ref, so this has to run after each one.
-# `Scripts/nf_commit.sh` wraps that; this script is the repair step on its own.
+#
+# WORKTREE / BRANCH AGNOSTIC
+#
+# The first version of this script hardcoded the branch it was written for
+# (`workbuddy/main-e34f0fa2`). Run from any other worktree it reported "ok" while
+# repairing nothing, which is the worst possible failure mode for a recovery
+# tool. It now reads the branch from HEAD and resolves the ref and reflog through
+# git, so it is correct in every worktree of this repository.
+#
+# `git symbolic-ref` is used rather than `git rev-parse --abbrev-ref HEAD`
+# because it reads the HEAD file directly and therefore still answers after the
+# branch ref has been deleted and the branch is "unborn" — which is exactly the
+# state this script exists to recover from.
 #
 # Usage:
 #   bash Scripts/git_repair_ref.sh          # repair + verify
@@ -28,20 +40,30 @@
 
 set -u
 
-GITDIR="C:/Users/abdal/OneDrive/Desktop/NOVAForge Engine/.git"
-BRANCH="workbuddy/main-e34f0fa2"
-REF_FILE="$GITDIR/refs/heads/$BRANCH"
-REFLOG="$GITDIR/logs/refs/heads/$BRANCH"
-
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
+# --- Resolve what we are repairing -----------------------------------------
+BRANCH="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [ -z "$BRANCH" ]; then
+    printf 'ERROR: HEAD is detached or unreadable — there is no branch ref to repair.\n' >&2
+    printf '       This script repairs a branch ref, not a detached HEAD.\n' >&2
+    exit 1
+fi
+
+# `--git-path` resolves through the worktree's `commondir`, so these point at the
+# shared `.git` even when the script runs from a linked worktree. Building the
+# paths by hand from `--git-common-dir` is the same thing with more ways to go
+# wrong, so it is not done here.
+REF_FILE="$(git rev-parse --git-path "refs/heads/${BRANCH}")"
+REFLOG="$(git rev-parse --git-path "logs/refs/heads/${BRANCH}")"
+
 verify() {
     if git rev-parse HEAD >/dev/null 2>&1; then
-        printf 'ok  — %s\n' "$(git log --oneline -1)"
+        printf 'ok  — %s: %s\n' "$BRANCH" "$(git log --oneline -1)"
         return 0
     fi
-    printf 'BROKEN — the branch ref does not resolve\n'
+    printf 'BROKEN — %s does not resolve\n' "$BRANCH"
     return 1
 }
 
