@@ -25,6 +25,7 @@
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
@@ -363,7 +364,7 @@ int main(int argc, char** argv) {
     int exit_code = 0;
     uint32_t frame_count = 0;
     {
-        nf::assets::AssetManager manager(vfs, registry, device.get());
+        nf::assets::AssetManager manager(vfs, registry);
         nf::runtime::Runtime runtime(vfs, registry, manager, *device, swapchain.get());
         nf::editor::EditorApp app(vfs, registry, manager, console);
         app.attach_runtime(&runtime);
@@ -1184,7 +1185,7 @@ int main(int argc, char** argv) {
                     // External procedural cube -> import as mesh (3.0 so the
                     // later shrink is unmistakable next to the 1.0 scene cube).
                     auto cube = nf::rendering::StaticMesh::create_cube(3.0f);
-                    auto ma = nf::assets::MeshAsset::from_static_mesh(
+                    auto ma = nf::rendering::make_mesh_asset(
                         *cube, nf::assets::AssetId::generate(), "content://Meshes/auto_cube.nfmesh");
                     std::vector<uint8_t> bytes;
                     ma->save_to_bytes(bytes);

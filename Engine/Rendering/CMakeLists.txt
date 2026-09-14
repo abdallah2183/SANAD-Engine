@@ -1,4 +1,8 @@
 # NFRendering — RenderGraph + Material System (layer above RHI)
+#
+# Depends on NFAssets since Phase 11 W1: MeshUpload.cpp owns the
+# StaticMesh <-> assets::MeshAsset conversions. Assets never depends back —
+# that was the inversion W1 removed.
 
 set(NFRENDERING_SOURCES
     src/RenderGraph.cpp
@@ -13,7 +17,7 @@ set(NFRENDERING_SOURCES
     src/RenderWorld.cpp
     src/Extraction.cpp
     src/StaticMesh.cpp
-    src/MeshAsset.cpp
+    src/MeshUpload.cpp
     src/MeshLibrary.cpp
     src/Renderer3D.cpp
     src/GpuPicker.cpp
@@ -24,7 +28,7 @@ set(NFRENDERING_SOURCES
 
 nf_engine_library(NFRendering
     SOURCES ${NFRENDERING_SOURCES}
-    DEPENDS NFCore NFRHI NFJobs
+    DEPENDS NFCore NFRHI NFJobs NFAssets
 )
 
 target_include_directories(NFRendering

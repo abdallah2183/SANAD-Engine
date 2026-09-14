@@ -142,7 +142,7 @@ NF_TEST(runtime_steps_animation_and_moves_entity) {
     }
 
     {
-        AssetManager manager(vfs, reg, device.get());
+        AssetManager manager(vfs, reg);
         Runtime rt(vfs, reg, manager, *device, nullptr);
 
         std::string err;
@@ -200,7 +200,7 @@ NF_TEST(runtime_paused_animation_does_not_move) {
     }
 
     {
-        AssetManager manager(vfs, reg, device.get());
+        AssetManager manager(vfs, reg);
         Runtime rt(vfs, reg, manager, *device, nullptr);
 
         std::string err;
@@ -243,7 +243,7 @@ NF_TEST(runtime_audio_mixes_generated_tone) {
     }
 
     {
-        AssetManager manager(vfs, reg, device.get());
+        AssetManager manager(vfs, reg);
         Runtime rt(vfs, reg, manager, *device, nullptr);
 
         std::string err;
@@ -294,7 +294,7 @@ NF_TEST(runtime_audio_silent_without_sources) {
     }
 
     {
-        AssetManager manager(vfs, reg, device.get());
+        AssetManager manager(vfs, reg);
         Runtime rt(vfs, reg, manager, *device, nullptr);
 
         std::string err;
@@ -341,7 +341,7 @@ NF_TEST(runtime_scene_round_trip_keeps_animation_moving) {
     }
 
     {
-        AssetManager manager(vfs, reg, device.get());
+        AssetManager manager(vfs, reg);
         Runtime rt(vfs, reg, manager, *device, nullptr);
 
         std::string err;

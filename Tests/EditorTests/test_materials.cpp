@@ -13,6 +13,7 @@
 #include <NF/Editor/Inspector.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
@@ -150,7 +151,7 @@ NF_TEST(material_params_invalid_rejected) {
     const auto tmp = temp_dir_for("nf_ed_matinvalid");
     vfs.mount("content://", tmp);
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     editor::ConsoleBuffer console;
     editor::EditorApp app(vfs, reg, manager, console);
@@ -193,7 +194,7 @@ NF_TEST(material_params_gpu_effect) {
 
     auto cube = rendering::StaticMesh::create_cube(2.0f);
     const AssetId mesh_id = AssetId::generate();
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
     std::vector<uint8_t> bytes;
     asset->save_to_bytes(bytes);
     NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
@@ -229,7 +230,7 @@ NF_TEST(material_params_gpu_effect) {
     w.add<runtime::MeshComponent>(mesh_e, mc);
     NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Mat.nfscene", scene, err));
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/Mat.nfscene", err));
     auto handle = manager.load_mesh_sync(mesh_id);
@@ -375,7 +376,7 @@ NF_TEST(material_albedo_gpu_effect) {
 
     auto cube = rendering::StaticMesh::create_cube(2.0f);
     const AssetId mesh_id = AssetId::generate();
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
     std::vector<uint8_t> bytes;
     asset->save_to_bytes(bytes);
     NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
@@ -406,7 +407,7 @@ NF_TEST(material_albedo_gpu_effect) {
     w.add<runtime::MeshComponent>(mesh_e, mc);
     NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Alb.nfscene", scene, err));
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/Alb.nfscene", err));
     auto handle = manager.load_mesh_sync(mesh_id);
@@ -509,7 +510,7 @@ NF_TEST(material_mip_mode_save_reload) {
                  .ok);
 
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     std::string err;
     NF_CHECK(runtime.material_for_path("content://Materials/M").valid());
@@ -576,7 +577,7 @@ NF_TEST(material_descriptor_set_is_cached) {
 
     auto cube = rendering::StaticMesh::create_cube(1.0f);
     const AssetId mesh_id = AssetId::generate();
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
     std::vector<uint8_t> bytes;
     asset->save_to_bytes(bytes);
     NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
@@ -614,7 +615,7 @@ NF_TEST(material_descriptor_set_is_cached) {
     }
     NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/MatCache.nfscene", scene, err));
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/MatCache.nfscene", err));
     auto handle = manager.load_mesh_sync(mesh_id);

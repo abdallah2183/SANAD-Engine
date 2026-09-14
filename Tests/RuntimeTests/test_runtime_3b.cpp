@@ -7,6 +7,7 @@
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/RHI/RHI.hpp>
@@ -41,7 +42,7 @@ NF_TEST(runtime_scene_loads_mesh_asset) {
     AssetId mesh_id = AssetId::generate();
     std::string logical = "content://Meshes/cube_test.nfmesh";
     std::string cooked = "cache://Meshes/cube_test.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, logical);
     std::vector<uint8_t> bytes; asset->save_to_bytes(bytes);
     NF_CHECK(vfs.write_bytes(cooked, std::span<const uint8_t>(bytes)).ok);
 
@@ -58,7 +59,7 @@ NF_TEST(runtime_scene_loads_mesh_asset) {
     world.add<MeshComponent>(e, MeshComponent{mesh_id, "default"});
     NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/TestMesh.nfscene", scene, err));
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     Runtime runtime(vfs, reg, manager, device, nullptr);
     bool ok = runtime.load_scene("content://Scenes/TestMesh.nfscene", err);
     NF_CHECK(ok);
@@ -69,8 +70,10 @@ NF_TEST(runtime_scene_loads_mesh_asset) {
         handle = manager.load_mesh_sync(mesh_id);
     }
     NF_CHECK(handle && handle->state == AssetState::Ready);
-    NF_CHECK(handle->mesh && handle->mesh->is_uploaded());
-    NF_CHECK(handle->mesh->vertex_buffer(0) != nullptr);
+    // The GPU copy now lives in Runtime's MeshLibrary, not on the asset handle
+    // (Phase 11, W1). mesh_count() is the observable that says the Runtime
+    // actually uploaded something rather than only loading bytes.
+    NF_CHECK(runtime.mesh_count() >= 1);
 
     // Ensure no validation errors
     NF_CHECK(rhi::validation_error_count() == 0);
@@ -100,7 +103,7 @@ NF_TEST(runtime_offscreen_scene_produces_pixels) {
     AssetId mesh_id = AssetId::generate();
     std::string logical = "content://Meshes/offscreen.nfmesh";
     std::string cooked = "cache://Meshes/offscreen.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, logical);
     std::vector<uint8_t> bytes; asset->save_to_bytes(bytes);
     vfs.write_bytes(cooked, std::span<const uint8_t>(bytes));
     AssetRegistry reg;
@@ -126,7 +129,7 @@ NF_TEST(runtime_offscreen_scene_produces_pixels) {
     world.add<MeshComponent>(mesh_e, MeshComponent{mesh_id, "default"});
     save_scene_to_vfs(vfs, "content://Scenes/Offscreen.nfscene", scene, err);
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     Runtime runtime(vfs, reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/Offscreen.nfscene", err));
     // Ensure mesh is loaded
@@ -187,7 +190,7 @@ NF_TEST(runtime_camera_changes_output) {
     auto cube = rendering::StaticMesh::create_cube(2.0f);
     AssetId mesh_id = AssetId::generate();
     std::string logical="content://Meshes/cam.nfmesh", cooked="cache://Meshes/cam.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, logical);
     std::vector<uint8_t> bytes; asset->save_to_bytes(bytes);
     vfs.write_bytes(cooked, std::span<const uint8_t>(bytes));
     AssetRegistry reg; AssetMetadata meta; meta.id=mesh_id; meta.type=AssetType::Mesh; meta.logical_path=logical; meta.cooked_path=cooked; meta.fingerprint="cam123"; meta.format="nfmesh-v1";
@@ -216,7 +219,7 @@ NF_TEST(runtime_camera_changes_output) {
     ecs::Entity mesh_e2 = w2.create_entity(); w2.add<scene::Transform>(mesh_e2, scene::Transform{}); w2.add<MeshComponent>(mesh_e2, MeshComponent{mesh_id, ""});
     save_scene_to_vfs(vfs, "content://Scenes/Cam2.nfscene", scene2, err);
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     auto h = manager.load_mesh_sync(mesh_id); NF_CHECK(h->state==AssetState::Ready);
 
     auto render_to_pixels = [&](const std::string& scene_path) -> std::vector<Pixel> {
@@ -270,7 +273,7 @@ NF_TEST(runtime_missing_mesh_fails_safely) {
     std::filesystem::create_directories(tmp / "Content" / "Scenes");
     vfs.mount("content://", tmp / "Content");
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
 
     scene::Scene scene("MissingTest");
     auto& w = scene.world();
@@ -328,7 +331,7 @@ NF_TEST(runtime_failed_mesh_reported_once_not_per_frame) {
     std::filesystem::create_directories(tmp / "Content" / "Scenes");
     vfs.mount("content://", tmp / "Content");
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
 
     scene::Scene scene("FailedOnce");
     auto& w = scene.world();
@@ -407,7 +410,7 @@ NF_TEST(runtime_clean_shutdown_no_vk_leaks) {
         if (!device->init(desc)) { std::filesystem::remove_all(tmp); NF_SKIP("headless Vulkan device init failed"); }
         {
             AssetRegistry reg;
-            AssetManager mgr(vfs, reg, device.get());
+            AssetManager mgr(vfs, reg);
             Runtime rt(vfs, reg, mgr, *device, nullptr);
             std::string load_err;
             NF_CHECK(rt.load_scene("content://Scenes/Clean.nfscene", load_err));

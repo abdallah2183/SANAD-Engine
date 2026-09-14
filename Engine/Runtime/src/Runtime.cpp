@@ -2,6 +2,7 @@
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Rendering/ImageDecode.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/Core/Logger.hpp>
@@ -276,7 +277,9 @@ void Runtime::sync_meshes_from_assets() {
             continue;
         }
         if (handle->state == assets::AssetState::Ready && handle->asset) {
-            auto static_mesh = handle->asset->to_static_mesh(handle->asset->logical_path);
+            // Phase 11 W1: the conversion lives on the rendering side now
+            // (Assets is CPU-pure and must not know the mesh type).
+            auto static_mesh = rendering::make_static_mesh(*handle->asset, handle->asset->logical_path);
             if (!static_mesh) {
                 NF_LOG_WARN(LogCategory::Core, "Runtime: failed to convert mesh asset {}",
                             comp->mesh_id.to_string());
@@ -425,7 +428,9 @@ void Runtime::mark_scene_edited() {
 }
 
 void Runtime::update(float dt) {
-    // AssetManager.update(): async CPU → GPU upload on this (render) thread.
+    // AssetManager.update(): finalize async loads finished on workers
+    // (Loading -> Ready). The GPU upload is sync_meshes_from_assets' business
+    // via rendering::MeshLibrary, since Phase 11 W1.
     m_manager.update();
     sync_meshes_from_assets();
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
@@ -1760,7 +1765,7 @@ bool Runtime::hot_reload_mesh(const assets::AssetId& id, std::string& out_error)
         out_error = "Reloaded mesh unavailable: " + (handle ? handle->error : std::string("no handle"));
         return false;
     }
-    auto fresh = handle->asset->to_static_mesh(handle->asset->logical_path);
+    auto fresh = rendering::make_static_mesh(*handle->asset, handle->asset->logical_path);
     if (!fresh || !fresh->upload(m_device)) {
         out_error = "Reloaded mesh upload failed";
         return false;

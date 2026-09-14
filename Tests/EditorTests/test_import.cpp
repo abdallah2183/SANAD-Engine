@@ -7,6 +7,7 @@
 #include <NF/Editor/ImportQueue.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -64,7 +65,7 @@ static std::vector<uint8_t> make_bmp_solid(int w, int h, uint8_t r, uint8_t g, u
 
 static std::vector<uint8_t> make_cube_nfmesh(const AssetId& id, const std::string& logical) {
     auto cube = rendering::StaticMesh::create_cube(1.0f);
-    auto asset = MeshAsset::from_static_mesh(*cube, id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, id, logical);
     std::vector<uint8_t> bytes;
     asset->save_to_bytes(bytes);
     return bytes;

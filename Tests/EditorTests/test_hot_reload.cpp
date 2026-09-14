@@ -12,6 +12,7 @@
 #include <NF/Editor/FileWatcher.hpp>
 #include <NF/Editor/HotReload.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 
@@ -127,7 +128,7 @@ struct HotScene {
 
         auto cube = rendering::StaticMesh::create_cube(cube_size);
         mesh_id = AssetId::generate();
-        auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+        auto asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
         std::vector<uint8_t> bytes;
         asset->save_to_bytes(bytes);
         // Source (watched) and cooked (loaded) start identical.
@@ -257,7 +258,7 @@ NF_TEST(hotreload_texture_goes_live) {
 
     HotScene hs;
     NF_CHECK(hs.setup("nf_ed_hottex", 2.0f));
-    AssetManager manager(hs.vfs, hs.reg, &device);
+    AssetManager manager(hs.vfs, hs.reg);
     runtime::Runtime runtime(hs.vfs, hs.reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/Hot.nfscene", hs.err));
     auto handle = manager.load_mesh_sync(hs.mesh_id);
@@ -294,7 +295,7 @@ NF_TEST(hotreload_material_goes_live_and_dirty_wins) {
 
     HotScene hs;
     NF_CHECK(hs.setup("nf_ed_hotmat", 2.0f));
-    AssetManager manager(hs.vfs, hs.reg, &device);
+    AssetManager manager(hs.vfs, hs.reg);
     runtime::Runtime runtime(hs.vfs, hs.reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/Hot.nfscene", hs.err));
     auto handle = manager.load_mesh_sync(hs.mesh_id);
@@ -357,7 +358,7 @@ NF_TEST(hotreload_mesh_rebuilds_live) {
 
     HotScene hs;
     NF_CHECK(hs.setup("nf_ed_hotmesh", 2.0f));
-    AssetManager manager(hs.vfs, hs.reg, &device);
+    AssetManager manager(hs.vfs, hs.reg);
     runtime::Runtime runtime(hs.vfs, hs.reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/Hot.nfscene", hs.err));
     auto handle = manager.load_mesh_sync(hs.mesh_id);
@@ -373,7 +374,7 @@ NF_TEST(hotreload_mesh_rebuilds_live) {
 
     // External edit: shrink the source cube; poll rebuilds the live copy.
     auto small = rendering::StaticMesh::create_cube(0.5f);
-    auto small_asset = MeshAsset::from_static_mesh(*small, hs.mesh_id, "content://Meshes/cube.nfmesh");
+    auto small_asset = rendering::make_mesh_asset(*small, hs.mesh_id, "content://Meshes/cube.nfmesh");
     std::vector<uint8_t> small_bytes;
     small_asset->save_to_bytes(small_bytes);
     write_bytes(hs.tmp / "Content" / "Meshes" / "cube.nfmesh", small_bytes);

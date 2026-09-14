@@ -5,6 +5,7 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 #include <NF/Test/RHITestCommon.hpp>
@@ -29,7 +30,7 @@ NF_TEST(asset_loading_cooked_nfmesh) {
     AssetId id = AssetId::generate();
     std::string logical = "content://Meshes/cube.nfmesh";
     std::string cooked = "cache://Meshes/cube.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, id, logical);
     std::string err;
     // Save via VFS
     auto data_res = std::vector<uint8_t>{};
@@ -43,19 +44,23 @@ NF_TEST(asset_loading_cooked_nfmesh) {
     NF_CHECK(reg.save(vfs, "content://AssetRegistry.nfreg", err));
 
     // Load via AssetManager
-    AssetManager mgr(vfs, reg, &device);
+    AssetManager mgr(vfs, reg);
     auto handle = mgr.load_mesh_sync(id);
     NF_CHECK(handle && handle->state == AssetState::Ready);
-    NF_CHECK(handle->mesh && handle->mesh->vertex_buffer(0) != nullptr);
     NF_CHECK(handle->asset && handle->asset->vertices.size()==24);
+    // The GPU upload is no longer AssetManager's job (Phase 11, W1). A loaded
+    // asset must still yield a drawable mesh, so that claim is checked where it
+    // now belongs -- on the rendering side, from the same bytes.
+    auto mesh = rendering::make_static_mesh(*handle->asset, handle->asset->logical_path);
+    NF_CHECK(mesh && mesh->upload(device));
+    NF_CHECK(mesh->vertex_buffer(0) != nullptr);
 
     std::filesystem::remove_all(tmp);
 }
 
+// CPU-only since Phase 11, W1: AssetManager no longer uploads, so this test no
+// longer needs a device -- and therefore runs everywhere instead of skipping.
 NF_TEST(asset_cache_identity) {
-    const GpuFixture& f = require_gpu();
-    auto& device = *f.device;
-
     VirtualFileSystem vfs;
     auto tmp = std::filesystem::temp_directory_path() / "nf_asset_cache_test";
     std::filesystem::create_directories(tmp / "Content");
@@ -67,17 +72,19 @@ NF_TEST(asset_cache_identity) {
     AssetId id = AssetId::generate();
     std::string logical = "content://Meshes/cube2.nfmesh";
     std::string cooked = "cache://Meshes/cube2.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, id, logical);
     std::vector<uint8_t> bytes; asset->save_to_bytes(bytes);
     vfs.write_bytes(cooked, std::span<const uint8_t>(bytes));
     AssetRegistry reg;
     AssetMetadata meta; meta.id=id; meta.type=AssetType::Mesh; meta.logical_path=logical; meta.cooked_path=cooked; meta.fingerprint="abc"; meta.format="nfmesh-v1";
     std::string err; reg.add(meta, err);
-    AssetManager mgr(vfs, reg, &device);
+    AssetManager mgr(vfs, reg);
     auto h1 = mgr.load_mesh_sync(id);
     auto h2 = mgr.load_mesh_sync(id);
     NF_CHECK(h1 == h2); // same handle (cache identity)
-    NF_CHECK(h1->mesh == h2->mesh);
+    // The cached thing is the CPU asset. There is no second, GPU-side cache in
+    // this class to compare any more -- that duplication is what W1 removed.
+    NF_CHECK(h1->asset == h2->asset);
 
     std::filesystem::remove_all(tmp);
 }
@@ -88,7 +95,7 @@ NF_TEST(asset_missing_fails_safely) {
     std::filesystem::create_directories(tmp / "Content");
     vfs.mount("content://", tmp / "Content");
     AssetRegistry reg;
-    AssetManager mgr(vfs, reg, nullptr); // headless
+    AssetManager mgr(vfs, reg); // headless
     AssetId missing = AssetId::generate();
     auto handle = mgr.load_mesh_sync(missing);
     NF_CHECK(handle && handle->state == AssetState::Failed);
@@ -112,13 +119,13 @@ NF_TEST(asset_async_cpu_then_gpu_upload) {
     AssetId id = AssetId::generate();
     std::string logical = "content://Meshes/async.nfmesh";
     std::string cooked = "cache://Meshes/async.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, id, logical);
     std::vector<uint8_t> bytes; asset->save_to_bytes(bytes);
     vfs.write_bytes(cooked, std::span<const uint8_t>(bytes));
     AssetRegistry reg;
     AssetMetadata meta; meta.id=id; meta.type=AssetType::Mesh; meta.logical_path=logical; meta.cooked_path=cooked; meta.fingerprint="async123"; meta.format="nfmesh-v1";
     std::string err; reg.add(meta, err);
-    AssetManager mgr(vfs, reg, &device);
+    AssetManager mgr(vfs, reg);
     auto handle = mgr.load_mesh(id);
     NF_CHECK(handle && handle->state == AssetState::Loading);
     // Pump until ready (async CPU + GPU)
@@ -128,15 +135,15 @@ NF_TEST(asset_async_cpu_then_gpu_upload) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     NF_CHECK(handle->state == AssetState::Ready);
-    NF_CHECK(handle->mesh && handle->mesh->is_uploaded());
+    NF_CHECK(handle->asset != nullptr);
+    auto mesh = rendering::make_static_mesh(*handle->asset, handle->asset->logical_path);
+    NF_CHECK(mesh && mesh->upload(device) && mesh->is_uploaded());
 
     std::filesystem::remove_all(tmp);
 }
 
+// CPU-only since Phase 11, W1, same as asset_cache_identity above.
 NF_TEST(asset_unloading_and_reload_no_leaks) {
-    const GpuFixture& f = require_gpu();
-    auto& device = *f.device;
-
     VirtualFileSystem vfs;
     auto tmp = std::filesystem::temp_directory_path() / "nf_asset_unload_test";
     std::filesystem::create_directories(tmp / "Content");
@@ -148,13 +155,13 @@ NF_TEST(asset_unloading_and_reload_no_leaks) {
     AssetId id = AssetId::generate();
     std::string logical = "content://Meshes/unload.nfmesh";
     std::string cooked = "cache://Meshes/unload.nfmesh";
-    auto asset = MeshAsset::from_static_mesh(*cube, id, logical);
+    auto asset = rendering::make_mesh_asset(*cube, id, logical);
     std::vector<uint8_t> bytes; asset->save_to_bytes(bytes);
     vfs.write_bytes(cooked, std::span<const uint8_t>(bytes));
     AssetRegistry reg;
     AssetMetadata meta; meta.id=id; meta.type=AssetType::Mesh; meta.logical_path=logical; meta.cooked_path=cooked; meta.fingerprint="unload123"; meta.format="nfmesh-v1";
     std::string err; reg.add(meta, err);
-    AssetManager mgr(vfs, reg, &device);
+    AssetManager mgr(vfs, reg);
     auto h1 = mgr.load_mesh_sync(id);
     NF_CHECK(h1->state==AssetState::Ready);
     size_t before = mgr.cached_count();
@@ -163,7 +170,7 @@ NF_TEST(asset_unloading_and_reload_no_leaks) {
     auto h2 = mgr.load_mesh_sync(id);
     NF_CHECK(h2->state==AssetState::Ready);
     NF_CHECK(h1 != h2); // new handle after unload
-    NF_CHECK(h2->mesh != nullptr);
+    NF_CHECK(h2->asset != nullptr);
 
     std::filesystem::remove_all(tmp);
 }

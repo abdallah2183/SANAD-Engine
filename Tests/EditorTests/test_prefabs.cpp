@@ -152,7 +152,7 @@ NF_TEST(prefab_app_create_apply_revert) {
     NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Work.nfscene", scene, err));
 
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     editor::ConsoleBuffer console;
     editor::EditorApp app(vfs, reg, manager, console);

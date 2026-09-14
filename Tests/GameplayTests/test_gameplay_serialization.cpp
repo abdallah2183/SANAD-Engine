@@ -299,7 +299,7 @@ NF_TEST(module_state_reaches_the_live_module_after_a_scene_load) {
 
     {
         AssetRegistry reg;
-        AssetManager manager(harness.vfs(), reg, device.get());
+        AssetManager manager(harness.vfs(), reg);
         Runtime rt(harness.vfs(), reg, manager, *device, nullptr);
 
         auto probe = std::make_unique<SerializationProbeModule>();

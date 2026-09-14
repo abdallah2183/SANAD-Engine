@@ -193,7 +193,7 @@ public:
             m_device.reset();
             return false;
         }
-        m_manager = std::make_unique<AssetManager>(m_vfs, m_reg, m_device.get());
+        m_manager = std::make_unique<AssetManager>(m_vfs, m_reg);
         m_rt = std::make_unique<Runtime>(m_vfs, m_reg, *m_manager, *m_device, nullptr);
         return true;
     }

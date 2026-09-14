@@ -10,7 +10,8 @@
 #include <NF/Core/Logger.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
-#include <NF/Rendering/MeshAsset.hpp>
+#include <NF/Assets/MeshAsset.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Rendering/MeshLibrary.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
 #include <NF/Rendering/Components.hpp>
@@ -41,6 +42,8 @@ using namespace nf::ecs;
 namespace ecs = nf::ecs;
 namespace scene = nf::scene;
 namespace rhi = nf::rhi;
+namespace rendering = nf::rendering;
+namespace assets = nf::assets;
 namespace fs = std::filesystem;
 
 #ifndef NF_BASIC3D_SHADER_DIR
@@ -218,15 +221,40 @@ NF_TEST(mesh_submesh_layout) {
 }
 
 NF_TEST(mesh_asset_cook_import) {
-    // Mesh Asset → Cook (save) → Import (load) → Runtime Mesh — byte-exact round trip
+    // Runtime mesh -> MeshAsset -> NFME bytes -> MeshAsset -> Runtime mesh.
+    //
+    // This used to round-trip through rendering::mesh_asset, which wrote a
+    // second, incompatible format ("NFM1") that the cooker rejects. There is one
+    // format now (assets::MeshAsset, "NFME"), so the test that proves the round
+    // trip is byte-exact is also the test that proves the format the cooker
+    // writes is the one the runtime reads.
     auto cube = StaticMesh::create_cube(1.0f);
-    cube->set_name("cooked_cube");
 
-    const fs::path tmp = fs::temp_directory_path() / "nfmesh_roundtrip.nfmesh";
-    NF_CHECK(mesh_asset::save_mesh_asset(*cube, tmp));
+    const fs::path tmp = fs::temp_directory_path() / "nfme_roundtrip.nfmesh";
+    auto asset = rendering::make_mesh_asset(*cube, assets::AssetId::generate(),
+                                            "content://Meshes/rt.nfmesh");
+    NF_CHECK(asset != nullptr);
+    std::string err;
+    NF_CHECK(asset->save_to_file(tmp.string(), err));
 
-    auto loaded = mesh_asset::load_mesh_asset(tmp);
+    auto reloaded = assets::MeshAsset::load_from_file(tmp.string(), err);
+    NF_CHECK(reloaded != nullptr);
+    if (reloaded == nullptr) {
+        std::error_code ec;
+        fs::remove(tmp, ec);
+        return;
+    }
+    NF_CHECK_EQ(reloaded->vertices.size(), cube->lods()[0].vertices.size());
+    NF_CHECK_EQ(reloaded->indices.size(), cube->lods()[0].indices.size());
+    NF_CHECK_EQ(reloaded->submeshes.size(), cube->lods()[0].submeshes.size());
+
+    auto loaded = rendering::make_static_mesh(*reloaded, "cooked_cube");
     NF_CHECK(loaded != nullptr);
+    if (loaded == nullptr) {
+        std::error_code ec;
+        fs::remove(tmp, ec);
+        return;
+    }
     NF_CHECK_EQ(loaded->name(), std::string("cooked_cube"));
     NF_CHECK_EQ(loaded->lods().size(), cube->lods().size());
     NF_CHECK_EQ(loaded->lods()[0].vertices.size(), cube->lods()[0].vertices.size());
@@ -242,6 +270,7 @@ NF_TEST(mesh_asset_cook_import) {
     const AABB loaded_bounds = loaded->bounds();
     const AABB cube_bounds = cube->bounds();
     NF_CHECK(std::memcmp(&loaded_bounds, &cube_bounds, sizeof(AABB)) == 0);
+
     // The GPU half of this round trip lives in
     // mesh_asset_cook_import_gpu_upload below, so it can be reported SKIPPED
     // on a GPU-less runner instead of being silently skipped inside this test.
@@ -256,12 +285,16 @@ NF_TEST(mesh_asset_cook_import_gpu_upload) {
     const GpuFixture& f = require_gpu();
 
     auto cube = StaticMesh::create_cube(1.0f);
-    cube->set_name("cooked_cube_gpu");
 
-    const fs::path tmp = fs::temp_directory_path() / "nfmesh_roundtrip_gpu.nfmesh";
-    NF_CHECK(mesh_asset::save_mesh_asset(*cube, tmp));
+    const fs::path tmp = fs::temp_directory_path() / "nfme_roundtrip_gpu.nfmesh";
+    auto asset = rendering::make_mesh_asset(*cube, assets::AssetId::generate(),
+                                            "content://Meshes/rt_gpu.nfmesh");
+    std::string err;
+    NF_CHECK(asset->save_to_file(tmp.string(), err));
 
-    auto loaded = mesh_asset::load_mesh_asset(tmp);
+    auto reloaded = assets::MeshAsset::load_from_file(tmp.string(), err);
+    NF_CHECK(reloaded != nullptr);
+    auto loaded = rendering::make_static_mesh(*reloaded, "cooked_cube_gpu");
     NF_CHECK(loaded != nullptr);
     NF_CHECK(loaded->upload(*f.device));
     NF_CHECK(loaded->vertex_buffer(0) != nullptr);
@@ -269,6 +302,7 @@ NF_TEST(mesh_asset_cook_import_gpu_upload) {
     std::error_code ec;
     fs::remove(tmp, ec);
 }
+
 
 // ---------------------------------------------------------------------------
 // Camera + frustum

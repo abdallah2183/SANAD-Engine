@@ -11,6 +11,7 @@
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -54,7 +55,7 @@ struct CookSandbox {
     bool write_valid_mesh(const std::string& rel) const {
         auto cube = rendering::StaticMesh::create_cube(1.0f);
         if (!cube) return false;
-        auto asset = assets::MeshAsset::from_static_mesh(*cube, AssetId::generate(),
+        auto asset = rendering::make_mesh_asset(*cube, AssetId::generate(),
                                                          "content://" + rel);
         if (!asset) return false;
         std::string err;

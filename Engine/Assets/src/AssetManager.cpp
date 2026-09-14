@@ -1,15 +1,15 @@
 #include <NF/Assets/AssetManager.hpp>
-#include <NF/Rendering/StaticMesh.hpp>
 
 #include <NF/Core/Logger.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 
+#include <algorithm>
 #include <filesystem>
 
 namespace nf::assets {
 
-AssetManager::AssetManager(VirtualFileSystem& vfs, AssetRegistry& registry, rhi::IGraphicsDevice* device)
-    : m_vfs(vfs), m_registry(registry), m_device(device) {}
+AssetManager::AssetManager(VirtualFileSystem& vfs, AssetRegistry& registry)
+    : m_vfs(vfs), m_registry(registry) {}
 
 AssetManager::~AssetManager() = default;
 
@@ -63,12 +63,16 @@ std::shared_ptr<MeshHandle> AssetManager::load_mesh(AssetId id) {
 
 std::shared_ptr<MeshHandle> AssetManager::load_mesh_sync(AssetId id) {
     auto handle = load_mesh(id);
-    // If it was already cached and Ready/Failed, return immediately
-    if (handle->state == AssetState::Ready || handle->state == AssetState::Failed) return handle;
+    // Already cached and terminal -> nothing to do.
+    if (handle->state == AssetState::Ready || handle->state == AssetState::Failed) {
+        return handle;
+    }
 
-    // For sync, we do the CPU load directly on this thread (not via JobSystem) and then GPU upload via update
-    // But load_mesh already started an async job, so we need to wait for it
-    // For simplicity, do a synchronous load here: directly read and parse
+    // load_mesh already kicked off an async job. For the sync path, do the CPU
+    // read+parse directly here so the caller observes Ready/Failed on return.
+    // The async job, when it lands, will see a handle that is no longer Loading
+    // and will not overwrite a terminal state (it pushes a CompletedLoad; the
+    // finalizer only flips Loading -> Ready, never the reverse).
     const AssetMetadata* meta = m_registry.find(id);
     if (!meta) return handle;
 
@@ -88,39 +92,33 @@ std::shared_ptr<MeshHandle> AssetManager::load_mesh_sync(AssetId id) {
     }
 
     handle->asset = std::shared_ptr<MeshAsset>(std::move(asset));
-    // Now do GPU upload on this thread (since we're sync, we're on main thread, so it's safe)
-    if (m_device) {
-        auto mesh = handle->asset->to_static_mesh(meta->logical_path);
-        if (mesh && mesh->upload(*m_device)) {
-            handle->mesh = std::shared_ptr<rendering::StaticMesh>(std::move(mesh));
-            handle->state = AssetState::Ready;
-        } else {
-            handle->state = AssetState::Failed;
-            handle->error = "GPU upload failed";
-        }
-    } else {
-        // Headless: no GPU, just mark Ready with CPU asset only
-        handle->state = AssetState::Ready;
-    }
+    // Phase 11 W1: no GPU upload here. The caller (Runtime) turns the CPU asset
+    // into a StaticMesh via rendering::make_static_mesh and uploads it.
+    handle->state = AssetState::Ready;
 
-    // Remove from pending GPU queue if it was there (the async job may have also queued)
+    // Drain any CompletedLoad the racing async job may have queued for this id;
+    // a leftover would be a no-op (state is already terminal) but leaving it
+    // would grow m_completed for nothing.
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        // Remove any pending that matches this handle (to avoid double upload)
-        m_pending_gpu.erase(std::remove_if(m_pending_gpu.begin(), m_pending_gpu.end(),
-            [&](const PendingGpuUpload& p){ return p.handle->id == id; }), m_pending_gpu.end());
+        m_completed.erase(std::remove_if(m_completed.begin(), m_completed.end(),
+            [&](const CompletedLoad& c){ return c.handle->id == id; }), m_completed.end());
     }
 
     return handle;
 }
 
 void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<MeshHandle> handle) {
-    // Capture by value for the job
+    // Capture the cooked path and id by value; the job outlives `meta`.
     std::string cooked_path = meta.cooked_path;
     AssetId id = meta.id;
 
-    // Use JobSystem if initialized, otherwise do it synchronously
-    auto do_load = [this, cooked_path, handle]() {
+    auto do_load = [this, cooked_path, id, handle]() {
+        // A sync load may have already finalized this handle. Never overwrite a
+        // terminal state from a worker.
+        if (handle->state != AssetState::Loading) {
+            return;
+        }
         auto vfs_result = m_vfs.read_bytes(cooked_path);
         if (!vfs_result.ok) {
             handle->state = AssetState::Failed;
@@ -135,10 +133,12 @@ void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<M
             return;
         }
         handle->asset = std::shared_ptr<MeshAsset>(std::move(asset));
-        // Queue for GPU upload on main thread
+        // Do NOT flip to Ready here: the worker thread must not publish the
+        // state change without a memory fence the main thread observes. Queue
+        // a CompletedLoad; update() finalizes on the main thread.
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_pending_gpu.push_back({handle});
+            m_completed.push_back({handle});
         }
     };
 
@@ -150,46 +150,38 @@ void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<M
 }
 
 size_t AssetManager::update() {
-    std::vector<PendingGpuUpload> pending_copy;
+    std::vector<CompletedLoad> completed_copy;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        pending_copy.swap(m_pending_gpu);
+        completed_copy.swap(m_completed);
     }
 
-    size_t completed = 0;
-    for (auto& p : pending_copy) {
-        auto handle = p.handle;
-        if (!handle || handle->state != AssetState::Loading) continue;
+    size_t finalized = 0;
+    for (auto& c : completed_copy) {
+        auto handle = c.handle;
+        if (!handle) continue;
+        // Only finalize a load that is still pending. A sync path or a later
+        // unload may have changed the state already; do not clobber it.
+        if (handle->state != AssetState::Loading) continue;
         if (!handle->asset) {
             handle->state = AssetState::Failed;
-            handle->error = "No CPU asset for GPU upload";
-            ++completed;
+            handle->error = "CPU parse produced no asset";
+            ++finalized;
             continue;
         }
-        if (m_device) {
-            auto mesh = handle->asset->to_static_mesh(handle->asset->logical_path);
-            if (mesh && mesh->upload(*m_device)) {
-                handle->mesh = std::shared_ptr<rendering::StaticMesh>(std::move(mesh));
-                handle->state = AssetState::Ready;
-            } else {
-                handle->state = AssetState::Failed;
-                handle->error = "GPU upload failed in update()";
-            }
-        } else {
-            // Headless: no GPU, just mark Ready
-            handle->state = AssetState::Ready;
-        }
-        ++completed;
+        handle->state = AssetState::Ready;
+        ++finalized;
     }
-    return completed;
+    return finalized;
 }
 
 void AssetManager::unload(AssetId id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_cache.erase(id);
-    // Also remove any pending GPU uploads for this id
-    m_pending_gpu.erase(std::remove_if(m_pending_gpu.begin(), m_pending_gpu.end(),
-        [&](const PendingGpuUpload& p){ return p.handle->id == id; }), m_pending_gpu.end());
+    // Also drop any in-flight completed loads for this id; their handle would
+    // otherwise be finalized into Ready for an id the caller just evicted.
+    m_completed.erase(std::remove_if(m_completed.begin(), m_completed.end(),
+        [&](const CompletedLoad& c){ return c.handle && c.handle->id == id; }), m_completed.end());
 }
 
 std::shared_ptr<MeshHandle> AssetManager::find(AssetId id) const {
@@ -206,7 +198,7 @@ size_t AssetManager::cached_count() const {
 void AssetManager::clear() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_cache.clear();
-    m_pending_gpu.clear();
+    m_completed.clear();
 }
 
 } // namespace nf::assets

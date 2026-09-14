@@ -1,6 +1,6 @@
 # Phase 11 — Foundation: break the layering inversions and pay down the debt
 
-**Status**: **in progress 2026-09-14** — W2 ✅, W3 ✅, W4 ✅, W5 (seam) ✅, W1 re-scoped and pending, W6 partial.
+**Status**: **in progress 2026-09-14** — W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 (seam) ✅, W6 partial. All five work items landed; W6 (verify/CI/docs) is the remainder.
 Suite: **534 passed / 0 failed / 1 skipped across 14 suites** (was 515/0/1 across 13).
 **Design doc reference**: §2 (core principles: "clean separation between systems", "Render/Game World separation", "dedicated-server path"), §246 R6 (world streaming), §247 E5.
 
@@ -8,12 +8,12 @@ Suite: **534 passed / 0 failed / 1 skipped across 14 suites** (was 515/0/1 acros
 
 | W | Item | Status |
 |---|---|---|
-| W1 | Break `Assets → Rendering`, unify the mesh format | **re-scoped, not started** — it is a responsibility split, not an include cleanup. ~35 constructor sites + 6 assertions + 24 conversions, and it must land in one piece |
+| W1 | Break `Assets → Rendering`, unify the mesh format | **done** — AssetManager is CPU-pure (VFS+registry+parse+cache); `MeshUpload` lives in NFRendering; Runtime owns the GPU upload via `make_static_mesh`+`StaticMesh::upload`. Assets links `NFCore NFJobs` only; layering guard + Rule 0 verified. 534/0/1 held. |
 | W2 | Break `Rendering → ECS/Scene` | **done** — one function moved, `Rendering` now links `NFCore NFRHI NFJobs`, guard + Rule 0 |
 | W3 | Delete the dead RHI handle types | **done** — 6 structs removed, build clean |
 | W4 | Benchmark thresholds | **done** — baseline measured, ceiling asserted, Rule 0 verified |
 | W5 | World streaming: the seam | **done** — grid + policy + 19 tests, Rule 0 verified |
-| W6 | Verify, CI, docs | **partial** — layering guard and all suite guards are in CI; the W1 rules are written but commented out until W1 lands |
+| W6 | Verify, CI, docs | **partial** — layering guard (W1+W2 rules live) and all suite guards are in CI |
 
 ## Motivation
 
@@ -63,7 +63,7 @@ stated project goal:
 
 ## Work Breakdown
 
-### W1 — Break `Assets → Rendering`, unify the mesh format
+### W1 — Break `Assets → Rendering`, unify the mesh format ✅ DONE
 
 > **⚠️ Re-scoped 2026-09-14 after reconnaissance. This is the largest item in the phase, not the
 > smallest.** The reviews called it a "layering inversion", which reads like a header leak. It is not.
@@ -109,6 +109,14 @@ would leave the tree not building, which is worse than not starting it.
 Acceptance (unchanged): `grep -r "NF/Rendering/" Engine/Assets/` and
 `grep -r "NF/RHI/" Engine/Assets/` both return nothing; `Assets` links only `NFCore NFJobs`; the
 cooker, the runtime scene load, and the RHI mesh tests all still pass.
+
+**Verified 2026-09-14.** `check_layering.sh` reports `ok` for both Assets rules; `Assets/CMakeLists.txt`
+DEPENDS is `NFCore NFJobs`; `build/verify` is clean; full suite **534/0/1** (AssetTests 45, RHITests 69,
+RuntimeTests 33 all intact); Basic3D logs `StaticMesh 'Cube' uploaded (24 verts, 36 indices)` and renders
+60 frames; editor headless reports `Scene geometry drawn OK` + `Validation errors: 0`. **Rule 0:**
+re-adding `#include <NF/Rendering/StaticMesh.hpp>` to `MeshAsset.hpp` is caught by the guard (exit 1,
+exact line printed); reverting returns to PASS. The two `.nfmesh` formats collapsed to one
+(`NFME`/`assets::MeshAsset`); `rendering::mesh_asset` (`NFM1`) is deleted.
 
 ### W2 — Break `Rendering → ECS/Scene`
 Also two files:

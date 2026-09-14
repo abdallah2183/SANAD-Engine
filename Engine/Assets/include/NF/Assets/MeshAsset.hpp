@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-namespace nf::rendering { class StaticMesh; }
-
 namespace nf::assets {
 
 // Cooked mesh vertex — must match rendering::Vertex layout (position, normal, tangent, uv0, uv1)
@@ -41,7 +39,13 @@ struct AssetSubMesh {
     AssetSphere sphere{};
 };
 
-// Cooked mesh format .nfmesh (v1)
+// Cooked mesh format .nfmesh (v1) — CPU-pure data since Phase 11 W1.
+//
+// The conversions to and from rendering::StaticMesh deliberately do NOT live
+// here: they are rendering::make_mesh_asset / rendering::make_static_mesh
+// (NF/Rendering/MeshUpload.hpp), because a class that turns meshes into assets
+// has to know the mesh type, and this module must not. Before W1 the
+// conversions were members and dragged Engine/Rendering into Engine/Assets.
 struct MeshAsset {
     AssetId id;
     std::string logical_path;
@@ -51,10 +55,6 @@ struct MeshAsset {
     AssetAABB bounds;
     AssetSphere sphere;
     uint32_t format_version = 1;
-
-    // Create a StaticMesh runtime object (CPU) from this asset
-    std::unique_ptr<rendering::StaticMesh> to_static_mesh(const std::string& name = "") const;
-    static std::unique_ptr<MeshAsset> from_static_mesh(const rendering::StaticMesh& mesh, AssetId id, const std::string& logical_path);
 
     bool save_to_bytes(std::vector<uint8_t>& out) const;
     static std::unique_ptr<MeshAsset> load_from_bytes(std::span<const uint8_t> data, std::string& out_error);

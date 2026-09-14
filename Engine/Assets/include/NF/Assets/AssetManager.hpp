@@ -4,9 +4,7 @@
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/MeshAsset.hpp>
-#include <NF/RHI/RHI.hpp>
 
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -24,21 +22,30 @@ enum class AssetState : uint8_t {
 
 struct MeshHandle {
     AssetId id;
-    std::shared_ptr<MeshAsset> asset; // CPU data
-    std::shared_ptr<rendering::StaticMesh> mesh; // GPU (after upload)
+    // CPU data — the only copy this class holds. Before Phase 11 W1 a second,
+    // GPU-side StaticMesh lived here too, which is what dragged RHI and
+    // Rendering into this header. The GPU copy is Runtime's business now
+    // (rendering::MeshLibrary).
+    std::shared_ptr<MeshAsset> asset;
     AssetState state = AssetState::Unloaded;
     std::string error;
     bool operator==(const MeshHandle& o) const { return id == o.id; }
 };
 
+// CPU-pure asset loading (Phase 11, W1).
+//
+// This class reads bytes and parses them; that is all it does. Before W1 it
+// also held an rhi::IGraphicsDevice and uploaded meshes itself, duplicating the
+// upload path that rendering::MeshLibrary already owned — and that duplication
+// is what forced Engine/Assets to depend on Engine/Rendering. Turning a cached
+// asset into a drawable mesh is rendering::make_static_mesh (Rendering/
+// MeshUpload.hpp), on the renderer's side of the boundary.
 class AssetManager {
 public:
-    AssetManager(VirtualFileSystem& vfs, AssetRegistry& registry, rhi::IGraphicsDevice* device = nullptr);
+    AssetManager(VirtualFileSystem& vfs, AssetRegistry& registry);
     ~AssetManager();
 
-    void set_device(rhi::IGraphicsDevice* device) { m_device = device; }
-
-    // Load a mesh by AssetId (async CPU, GPU upload on update)
+    // Load a mesh by AssetId (async CPU read + parse; finalized by update()).
     // Returns a handle (shared_ptr) that will be updated as loading progresses.
     // If the asset is already cached, returns the same handle (cache identity).
     std::shared_ptr<MeshHandle> load_mesh(AssetId id);
@@ -46,11 +53,13 @@ public:
     // Synchronous load for tests / simple use (blocks until Ready or Failed)
     std::shared_ptr<MeshHandle> load_mesh_sync(AssetId id);
 
-    // Unload an asset (removes from cache, GPU resources will be freed when handle is released)
+    // Unload an asset (removes from cache)
     void unload(AssetId id);
 
-    // Must be called on main/render thread to process GPU uploads and completions
-    // Returns number of assets that transitioned to Ready/Failed
+    // Finalizes loads whose worker job finished: flips Loading -> Ready.
+    // Returns the number of assets finalized this call. Before Phase 11 W1
+    // this is where the GPU upload happened; the renderer owns that now, so
+    // this is a state transition, not a transfer.
     size_t update();
 
     // For testing: get the handle if it exists (even if not Ready)
@@ -60,7 +69,10 @@ public:
     void clear();
 
 private:
-    struct PendingGpuUpload {
+    // A worker job that finished its read + parse and is waiting for the main
+    // thread to flip its state. (Replaces the pre-W1 PendingGpuUpload queue,
+    // which existed only because the upload had to happen on this thread.)
+    struct CompletedLoad {
         std::shared_ptr<MeshHandle> handle;
     };
 
@@ -68,11 +80,10 @@ private:
 
     VirtualFileSystem& m_vfs;
     AssetRegistry& m_registry;
-    rhi::IGraphicsDevice* m_device = nullptr;
 
     mutable std::mutex m_mutex;
     std::unordered_map<AssetId, std::shared_ptr<MeshHandle>> m_cache;
-    std::vector<PendingGpuUpload> m_pending_gpu;
+    std::vector<CompletedLoad> m_completed;
 };
 
 } // namespace nf::assets

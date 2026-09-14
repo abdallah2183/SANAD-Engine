@@ -11,6 +11,7 @@
 #include <NF/Editor/EditorApp.hpp>
 #include <NF/Editor/Viewport.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 
@@ -79,7 +80,7 @@ NF_TEST(editor_viewport_resize_lifecycle) {
 
     auto cube = rendering::StaticMesh::create_cube(2.0f);
     const AssetId mesh_id = AssetId::generate();
-    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
     std::vector<uint8_t> bytes;
     asset->save_to_bytes(bytes);
     NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
@@ -109,7 +110,7 @@ NF_TEST(editor_viewport_resize_lifecycle) {
     w.add<runtime::MeshComponent>(mesh_e, mc);
     NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/View.nfscene", scene, err));
 
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     NF_CHECK(runtime.load_scene("content://Scenes/View.nfscene", err));
     auto handle = manager.load_mesh_sync(mesh_id);

@@ -84,18 +84,18 @@ check_depends "Rendering must not link NFEcs/NFScene" \
     "Engine/Rendering/CMakeLists.txt" \
     "NFEcs NFScene"
 
-# Phase 11, W1 — NOT YET ENFORCED. Engine/Assets still includes
-# <NF/Rendering/StaticMesh.hpp> and <NF/RHI/RHI.hpp>, because AssetManager also
-# does mesh GPU upload (which duplicates rendering::MeshLibrary). Enable these
-# two checks when W1 lands; leaving them commented out is deliberate, not an
-# oversight.
-#
-# check_no_dep "Assets must not depend on Rendering/RHI" \
-#     "Engine/Assets" 'NF/(Rendering|RHI)/' \
-#     "Assets is a lower layer than the renderer."
-#
-# check_depends "Assets must not link NFRendering" \
-#     "Engine/Assets/CMakeLists.txt" "NFRendering NFRHI"
+# Phase 11, W1. Assets is CPU-pure data: it reads bytes and parses them. The
+# mesh type and the GPU are the renderer's business — the StaticMesh/asset
+# conversions live in NFRendering (MeshUpload), which depends on NFAssets, never
+# the other way around. Before W1, AssetManager held an IGraphicsDevice and
+# duplicated the MeshLibrary upload path, which is what dragged both includes
+# into this module.
+check_no_dep "Assets must not depend on Rendering/RHI" \
+    "Engine/Assets" 'NF/(Rendering|RHI)/' \
+    "Assets is a lower layer than the renderer."
+
+check_depends "Assets must not link NFRendering" \
+    "Engine/Assets/CMakeLists.txt" "NFRendering NFRHI"
 
 echo
 if [ "$FAILED" -ne 0 ]; then

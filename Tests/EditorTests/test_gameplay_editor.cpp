@@ -70,7 +70,7 @@ NF_TEST(editor_attach_gameplay_module_requires_a_registered_module) {
     write_probe_scene(vfs, "content://Scenes/Work.nfscene");
 
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     editor::ConsoleBuffer console;
     editor::EditorApp app(vfs, reg, manager, console);
@@ -117,7 +117,7 @@ NF_TEST(editor_reattaching_the_same_module_preserves_its_state) {
     write_probe_scene(vfs, "content://Scenes/Work.nfscene");
 
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     editor::ConsoleBuffer console;
     editor::EditorApp app(vfs, reg, manager, console);
@@ -165,7 +165,7 @@ NF_TEST(editor_detach_gameplay_module_removes_the_component) {
     write_probe_scene(vfs, "content://Scenes/Work.nfscene");
 
     AssetRegistry reg;
-    AssetManager manager(vfs, reg, &device);
+    AssetManager manager(vfs, reg);
     runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
     editor::ConsoleBuffer console;
     editor::EditorApp app(vfs, reg, manager, console);

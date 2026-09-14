@@ -9,6 +9,7 @@
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
 
@@ -28,7 +29,7 @@ NF_TEST(runtime_headless_load_scene) {
     // 2.0 cube at distance 5 covers ~400px at 64x64, robustly above threshold.
     auto cube = rendering::StaticMesh::create_cube(2.0f);
     AssetId mesh_id = AssetId::generate();
-    auto cooked_asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    auto cooked_asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
     std::vector<uint8_t> mesh_bytes;
     cooked_asset->save_to_bytes(mesh_bytes);
     NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(mesh_bytes)).ok);
@@ -82,7 +83,7 @@ NF_TEST(runtime_headless_load_scene) {
 
     {
         AssetRegistry reg = registry;
-        AssetManager manager(vfs, reg, device.get());
+        AssetManager manager(vfs, reg);
         Runtime runtime(vfs, reg, manager, *device, nullptr);
         std::string load_err;
         bool ok = runtime.load_scene("content://Scenes/Headless.nfscene", load_err);

@@ -183,7 +183,9 @@ int Application::run() {
     size_t audio_sources_mixed_max = 0;
     float audio_peak_max = 0.0f;
     {
-        assets::AssetManager asset_manager(vfs, registry, device.get());
+        // CPU-pure since Phase 11 W1: no device here — the GPU copy of a mesh
+        // is Runtime's business (rendering::MeshLibrary).
+        assets::AssetManager asset_manager(vfs, registry);
         Runtime runtime(vfs, registry, asset_manager, *device, swapchain.get());
 
         std::string scene_err;
