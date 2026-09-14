@@ -93,6 +93,15 @@ bool MaterialAsset::load_from_text(const std::string& text, MaterialAsset& out, 
             }
         } else if (key == "albedo") {
             parsed.albedo = val;
+        } else if (key == "mip") {
+            if (val == "none") {
+                parsed.mip_mode = rhi::MipMapMode::None;
+            } else if (val == "nearest") {
+                parsed.mip_mode = rhi::MipMapMode::Nearest;
+            } else if (val == "linear") {
+                parsed.mip_mode = rhi::MipMapMode::Linear;
+            }
+            // Unknown values keep the default (tolerant, like every key).
         }
         // Unknown keys are ignored: forward compatibility.
     }
@@ -124,6 +133,11 @@ std::string MaterialAsset::save_to_text() const {
     if (!albedo.empty()) {
         out += "albedo: " + albedo + "\n";
     }
+    out += std::string("mip: ") +
+           (mip_mode == rhi::MipMapMode::None
+                ? "none"
+                : (mip_mode == rhi::MipMapMode::Nearest ? "nearest" : "linear")) +
+           "\n";
     return out;
 }
 

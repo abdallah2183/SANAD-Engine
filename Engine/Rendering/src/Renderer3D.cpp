@@ -497,6 +497,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     m_stats.extracted = static_cast<u32>(render_world.objects.size());
     m_stats.visible = static_cast<u32>(m_visible.size());
     m_stats.draw_calls = 0;
+    m_stats.material_sets_built = 0;
 
     // --- Frame uniforms (camera + lights) ---
     FrameUniforms fu{};
@@ -579,7 +580,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     struct PreparedDraw {
         const RenderObject* object;
         const StaticMesh* mesh;
-        std::unique_ptr<rhi::DescriptorSet> material_set;
+        const rhi::DescriptorSet* material_set; // non-owning: cached on the entry
     };
     std::vector<PreparedDraw> prepared;
     prepared.reserve(m_visible.size());
@@ -590,21 +591,36 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         if (!mesh || !mesh->is_uploaded()) continue;
 
         PreparedDraw pd{&ro, mesh, nullptr};
-        const MaterialEntry* entry = m_material_library->get(ro.material_handle);
+        MaterialEntry* entry = m_material_library->get(ro.material_handle);
         if (entry && entry->material && entry->material->valid()) {
-            pd.material_set = m_descriptor_allocator->allocate(*m_material_layout);
-            if (pd.material_set) {
-                const rhi::TextureView* albedo = entry->albedo_view ? entry->albedo_view : m_white_view.get();
+            // One set per material instance, reused every frame. Objects share
+            // material instances, so building per object meant N allocations
+            // and N vkUpdateDescriptorSets per frame for a handful of distinct
+            // materials. Rebuilding is safe here because the frame fence has
+            // already been waited on above, so nothing in flight references the
+            // set being replaced.
+            if (entry->set_dirty || !entry->cached_set) {
+                entry->cached_set = m_device->create_descriptor_set(*m_material_layout);
+                if (!entry->cached_set) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                                 "Renderer3D: material descriptor set creation failed");
+                    continue;
+                }
+                const rhi::TextureView* albedo =
+                    entry->albedo_view ? entry->albedo_view : m_white_view.get();
                 const std::array<rhi::DescriptorWrite, 2> material_writes{{
                     {0, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
                      12 * sizeof(float), nullptr, nullptr},
                     {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
                 }};
-                m_device->update_descriptor_set(*pd.material_set,
+                m_device->update_descriptor_set(*entry->cached_set,
                                                 std::span<const rhi::DescriptorWrite>(material_writes));
+                entry->set_dirty = false;
+                ++m_stats.material_sets_built;
             }
+            pd.material_set = entry->cached_set.get();
         }
-        prepared.push_back(std::move(pd));
+        prepared.push_back(pd);
     }
     m_stats.draw_prep_us = prep_clock.elapsed_us();
 
@@ -666,7 +682,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             if (!pd.material_set) continue;
             std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
-            const std::array<const rhi::DescriptorSet*, 1> sets{pd.material_set.get()};
+            const std::array<const rhi::DescriptorSet*, 1> sets{pd.material_set};
             gcmd.bind_descriptor_sets(*m_material_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
             const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.object->lod);
             const rhi::Buffer* ib = pd.mesh->index_buffer(pd.object->lod);

@@ -29,13 +29,21 @@ Windows desktop with a GPU.
 logs: outliner labels, inspector edit + undo + redo, UI overlay proof,
 play/stop, save-copy + reload round-trip, asset filter + drop + undo-drop,
 material edit visible + save + undo, texture import + albedo + hot reload,
-mesh import + drop + hot-reload growth, prefab create/instantiate/revert,
-artifact cleanup, viewport lit pixels, `Validation errors: 0`,
-`Alive RHI objects before shutdown: 0`, exit 0.
+mesh import + drop + hot-reload growth, GPU pick hit + miss, prefab
+create/instantiate/revert, artifact cleanup, viewport lit pixels,
+`Validation errors: 0`, `Alive RHI objects before shutdown: 0`, exit 0.
+
+The same command with `--headless` is what CI runs (no display on a runner).
+The harness waits for async imports to land instead of assuming a frame count:
+imports commit on worker threads, and headless frames have no sleep, so a
+frame-counted assumption passes windowed and fails headless.
+
+A failing step logs `Automation: <what> FAILED — <reason>`. `--scene` is
+required; without it the drop/prefab steps have no scene and fail.
 
 ## Explicit Phase 5 limits
-No physics, animation, networking, scripting, thumbnails, GPU picking, async
-import workers, or OS file dialogs (logical-path inputs instead).
+No physics, animation, networking, scripting, thumbnails, or OS file dialogs
+(logical-path inputs instead).
 Rotation/scale compose into the render matrix but do not yet accumulate
 through hierarchy world transforms. Texture filtering is fixed
 (Linear/Clamp, no mip control in the UI). Prefab overrides are free edits

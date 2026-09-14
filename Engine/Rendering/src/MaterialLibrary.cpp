@@ -66,6 +66,9 @@ void MaterialLibrary::clear_albedo_texture(MaterialHandle handle) {
     }
     entry->albedo_view = nullptr;
     entry->sampler = nullptr;
+    // Binding changed: the cached descriptor set no longer matches. Marked, not
+    // destroyed — the renderer rebuilds it after it has waited on the fence.
+    entry->set_dirty = true;
     PBRMaterialParams p = entry->params;
     p.use_base_color_texture = 0.0f;
     set_params(handle, p);
@@ -77,6 +80,7 @@ void MaterialLibrary::set_albedo_texture(MaterialHandle handle, const rhi::Textu
     if (!entry) return;
     entry->albedo_view = &view;
     entry->sampler = &sampler;
+    entry->set_dirty = true; // see clear_albedo_texture
 
     // Tell the shader to sample the texture instead of the scalar base color
     PBRMaterialParams p = entry->params;

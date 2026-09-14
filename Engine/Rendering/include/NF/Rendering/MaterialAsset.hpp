@@ -24,6 +24,9 @@ struct MaterialAsset {
     PBRMaterialParams params;
     // Optional albedo image (content:// logical path, "" = scalar only).
     std::string albedo;
+    // Sampler mip filtering for the albedo ("none", "nearest", "linear").
+    // Anything else loads as linear; unknown keys are ignored as usual.
+    rhi::MipMapMode mip_mode = rhi::MipMapMode::Linear;
 
     // Parses .nfmat text. Returns false with err only when the header is not
     // a material file at all; unknown/partial content loads with defaults.

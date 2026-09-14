@@ -8,6 +8,7 @@
 #include <NF/Rendering/RenderGraph.hpp>
 #include <NF/Rendering/PipelineCache.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
+#include <NF/Rendering/GpuPicker.hpp>
 #include <NF/Rendering/MeshLibrary.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
 #include <NF/Scene/Scene.hpp>
@@ -15,6 +16,7 @@
 #include <NF/Scene/Transform.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -74,6 +76,21 @@ public:
     size_t mesh_count() const { return m_mesh_library ? m_mesh_library->size() : 0; }
     const rendering::Renderer3D* renderer() const { return m_renderer.get(); }
 
+    // --- GPU picking ---
+    //
+    // Resolves the entity under a pixel of the last rendered frame, using an
+    // id pass so occlusion is respected (unlike the CPU ray/AABB path, which
+    // tests world bounds and cannot tell what is in front of what).
+    //
+    // `x`/`y` are in pixels, origin top-left, in the space of the rendered
+    // target. Returns false — leaving `out_entity_id` untouched — when there is
+    // no scene, the picker is unavailable, or no object covers that pixel, so
+    // callers can fall back to the CPU path.
+    bool pick_entity_gpu(uint32_t x, uint32_t y, uint32_t& out_entity_id);
+
+    // True when GPU picking is usable (pick shaders present and loaded).
+    bool gpu_picking_available() const { return m_picker != nullptr; }
+
     // --- Shared material assets (Phase 5) ---
     // MeshComponent::material names a .nfmat logical path; every entity with
     // the same path shares one renderer instance (one 48-byte UBO). Edits
@@ -109,6 +126,12 @@ public:
                              std::string& out_error);
     std::string material_albedo(const std::string& material_path) const;
     std::vector<std::string> known_texture_paths() const;
+    // Sampler mip filtering per material ("none"|"nearest"|"linear" in the
+    // .nfmat "mip:" key; Linear when the file is silent). Changing it rebinds
+    // the material to the matching cached sampler — no re-upload. Marks dirty.
+    bool set_material_mip_mode(const std::string& material_path, rhi::MipMapMode mode,
+                               std::string& out_error);
+    rhi::MipMapMode material_mip_mode(const std::string& material_path) const;
     bool material_dirty(const std::string& logical_path) const;
     bool any_material_dirty() const;
 
@@ -139,6 +162,9 @@ private:
 
     // Renderer3D integration (owns its own PipelineCache, RenderGraph, etc.)
     std::unique_ptr<rendering::Renderer3D> m_renderer;
+    // Built lazily on the first GPU pick, so a run that never picks never pays
+    // for the id pass. Null when unavailable — callers fall back to CPU picking.
+    std::unique_ptr<rendering::GpuPicker> m_picker;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;
@@ -154,16 +180,28 @@ private:
     std::unordered_map<std::string, bool> m_material_dirty;
     // Material path -> albedo texture path ("" = scalar only).
     std::unordered_map<std::string, std::string> m_material_albedo;
+    // Material path -> sampler mip mode (Linear when the file is silent).
+    std::unordered_map<std::string, rhi::MipMapMode> m_material_mip;
 
-    // Owned GPU texture + view + sampler. Destruction order matters (view
-    // before texture), hence declaration order: reverse destruction frees the
-    // sampler, then the view, then the texture. All destroyed after wait_idle.
+    // Owned GPU texture + full-mip view + one sampler per mip mode (at most
+    // three, created lazily). Destruction order matters (samplers/views before
+    // texture); reverse destruction frees samplers, then the view, then the
+    // texture. All destroyed after wait_idle.
     struct TextureObjects {
         std::unique_ptr<rhi::Texture> texture;
         std::unique_ptr<rhi::TextureView> view;
-        std::unique_ptr<rhi::Sampler> sampler;
+        u32 mip_levels = 1;
+        // Indexed by static_cast<int>(rhi::MipMapMode): None=0, Nearest=1, Linear=2.
+        std::unique_ptr<rhi::Sampler> samplers[3];
     };
     std::unordered_map<std::string, std::unique_ptr<TextureObjects>> m_textures;
+    // Sampler for (texture entry, mode), creating and caching on demand.
+    // max_lod follows the texture's real chain (or 0 when mode is None).
+    rhi::Sampler* sampler_for_mode(TextureObjects& entry, rhi::MipMapMode mode);
+    // (Re)binds a material instance to its recorded albedo+mode, if any.
+    // Returns false only when the renderer is down.
+    bool rebind_material_sampling(const std::string& material_path, rendering::MaterialHandle handle,
+                                  std::string& out_error);
 
     static std::string normalize_material_path(const std::string& p);
     static rendering::PBRMaterialParams default_material_params();
@@ -180,6 +218,8 @@ private:
 
     bool ensure_renderer_initialized();
     bool ensure_renderer_initialized_for(uint32_t width, uint32_t height);
+    /// Locates the compiled renderer shaders (also used by the GPU picker).
+    std::filesystem::path resolve_shader_dir() const;
     void sync_meshes_from_assets();
     void ensure_default_material();
     bool extract_camera(uint32_t target_width, uint32_t target_height, rendering::Camera& out);

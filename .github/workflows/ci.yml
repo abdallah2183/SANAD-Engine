@@ -73,6 +73,39 @@ jobs:
         shell: bash
         run: bash Scripts/run_tests.sh "$BUILD_DIR"
 
+      # The editor acceptance harness, run headless so it works on a runner with
+      # no display. It exercises the real workflows (outliner, inspector, undo,
+      # play/stop, save round-trip, import + hot reload, prefabs, GPU picking)
+      # and fails the build on any FAILED line, a validation error, or a leaked
+      # RHI object. The harness waits for async imports rather than assuming
+      # frame timing, which is what makes the frame-counted script survive a
+      # machine that runs frames far faster than a vsync'd desktop.
+      - name: Editor acceptance (headless)
+        shell: bash
+        run: |
+          set -o pipefail
+          exe="$BUILD_DIR/bin/NOVAForgeEditor.exe"
+          [ -f "$exe" ] || exe="$BUILD_DIR/bin/NOVAForgeEditor"
+          if [ ! -f "$exe" ]; then echo "Editor not built"; exit 1; fi
+          "$exe" --scene content://Scenes/Example.nfscene --frames 120 --validation --headless \
+            > editor_acceptance.log 2>&1
+          code=$?
+          echo "--- automation summary ---"
+          grep -E 'Automation:' editor_acceptance.log | tail -12
+          grep -E 'Validation errors|Alive RHI' editor_acceptance.log || true
+          failed=$(grep -c 'Automation:.*FAILED' editor_acceptance.log || true)
+          vkerr=$(grep -c 'ERROR \[RHI\]' editor_acceptance.log || true)
+          if [ "$code" -ne 0 ]; then echo "Acceptance exited $code"; exit 1; fi
+          if [ "$failed" -ne 0 ]; then
+            echo "$failed automation step(s) failed:"
+            grep 'Automation:.*FAILED' editor_acceptance.log
+            exit 1
+          fi
+          if [ "$vkerr" -ne 0 ]; then echo "$vkerr Vulkan validation error(s)"; exit 1; fi
+          if ! grep -q 'Alive RHI objects before shutdown: 0' editor_acceptance.log; then
+            echo "RHI objects leaked"; exit 1
+          fi
+
       # The triangle sample is the v0.1 milestone artifact. Rendering it with
       # the validation layer on and asserting zero errors is what makes the
       # "validation clean" claim meaningful.

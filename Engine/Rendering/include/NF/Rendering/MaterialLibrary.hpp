@@ -64,6 +64,21 @@ struct MaterialEntry {
     const rhi::TextureView* albedo_view = nullptr; // optional texture binding
     const rhi::Sampler* sampler = nullptr;
     std::string name;
+
+    /// Descriptor set binding (params_ubo, albedo_view), cached across frames.
+    ///
+    /// Material instances are shared by every object that references them, so
+    /// building this set per object per frame meant N allocations and N
+    /// vkUpdateDescriptorSets for what is a handful of distinct materials.
+    /// The set is built by the renderer (which owns the layout) and only
+    /// rebuilt when the binding changes.
+    ///
+    /// `set_dirty` is set here rather than destroying the set directly, because
+    /// a material edit can happen mid-frame while the previous frame's command
+    /// buffer still references it. The renderer rebuilds at a point where it
+    /// has already waited on the frame fence.
+    std::unique_ptr<rhi::DescriptorSet> cached_set;
+    bool set_dirty = true;
 };
 
 class MaterialLibrary {
@@ -75,8 +90,8 @@ public:
     MaterialLibrary& operator=(const MaterialLibrary&) = delete;
 
     /// Registers an instance sharing `material`'s pipeline. Allocates only the
-    /// 48-byte parameter buffer — never a pipeline, never a descriptor set
-    /// (sets are per-frame and allocated by the renderer).
+    /// 48-byte parameter buffer — never a pipeline, never a descriptor set at
+    /// creation time (the renderer builds `cached_set` lazily, on first draw).
     MaterialHandle create_instance(Material& material, const PBRMaterialParams& params,
                                    std::string name = "material");
 

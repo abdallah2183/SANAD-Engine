@@ -811,6 +811,36 @@ ecs::Entity EditorApp::pick(const ViewCamera& cam, float ndc_x, float ndc_y) {
     if (w == nullptr) {
         return ecs::kInvalidEntity;
     }
+
+    // GPU path first. It resolves through an id pass, so it honours occlusion
+    // and true pixel coverage — the CPU ray/AABB test below picks against world
+    // bounds and cannot tell what is in front of what. Falls through when the
+    // picker is unavailable (no pick shaders) or the pixel is empty, so the CPU
+    // path stays the safety net rather than a dead alternative.
+    if (m_runtime != nullptr && m_viewport.width > 0 && m_viewport.height > 0) {
+        const auto fw = static_cast<float>(m_viewport.width);
+        const auto fh = static_cast<float>(m_viewport.height);
+        // NDC (-1..1, +y up) -> pixels (0..size-1, +y down).
+        const float px = (ndc_x * 0.5f + 0.5f) * fw;
+        const float py = (0.5f - ndc_y * 0.5f) * fh;
+        if (px >= 0.0f && py >= 0.0f && px < fw && py < fh) {
+            uint32_t picked_id = 0;
+            if (m_runtime->pick_entity_gpu(static_cast<uint32_t>(px), static_cast<uint32_t>(py),
+                                           picked_id)) {
+                // The id pass carries the raw entity id; a usable handle also
+                // needs the live generation, which only the world knows.
+                for (ecs::Entity e : w->all_entities()) {
+                    if (e.id == picked_id) {
+                        return e;
+                    }
+                }
+                // Stale id (the entity was destroyed after the frame was drawn):
+                // report a miss rather than inventing a handle.
+                return ecs::kInvalidEntity;
+            }
+        }
+    }
+
     auto bounds_of = [this, w](ecs::Entity e) -> std::optional<AABB> {
         const auto* mc = w->get<runtime::MeshComponent>(e);
         const auto* tr = w->get<scene::Transform>(e);

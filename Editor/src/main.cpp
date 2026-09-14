@@ -444,11 +444,38 @@ int main(int argc, char** argv) {
 
         const bool automation = (cfg.max_frames != 0);
         bool auto_failed = false;
-        auto auto_check = [&](bool ok, const std::string& what) {
-            NF_LOG_INFO(nf::LogCategory::Editor, "Automation: {} {}", what, ok ? "OK" : "FAILED");
-            if (!ok) {
-                auto_failed = true;
+        // `detail` is reported only on failure, so the OK line keeps its
+        // historical shape ("Automation: <what> OK") for existing greps while a
+        // failure now says why instead of just that it happened.
+        auto auto_check = [&](bool ok, const std::string& what, const std::string& detail = {}) {
+            if (ok) {
+                NF_LOG_INFO(nf::LogCategory::Editor, "Automation: {} OK", what);
+                return;
             }
+            auto_failed = true;
+            if (detail.empty()) {
+                NF_LOG_WARN(nf::LogCategory::Editor, "Automation: {} FAILED", what);
+            } else {
+                NF_LOG_WARN(nf::LogCategory::Editor, "Automation: {} FAILED — {}", what, detail);
+            }
+        };
+
+        // Steps below are indexed by frame number, but imports commit on worker
+        // threads and therefore finish on wall-clock time. Headless frames have
+        // no sleep, so they run ~20x faster than vsync'd ones and a fixed frame
+        // budget can expire before a worker finishes — the harness would pass
+        // windowed and fail headless for reasons that have nothing to do with
+        // the code under test. Pump until the real condition holds instead,
+        // bounded so a genuine failure still fails.
+        auto pump_until = [&](auto&& ready, int max_iters = 500) -> bool {
+            for (int i = 0; i < max_iters; ++i) {
+                if (ready()) return true;
+                app.process_one_import();
+                manager.update();
+                runtime.update(0.0f);
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return ready();
         };
 
         nf::Clock clock;
@@ -985,38 +1012,54 @@ int main(int argc, char** argv) {
                     auto_check(ok, "Texture import submit");
                 }
                 if (f == 72) {
-                    // Import completes one frame later; bind as Default albedo.
+                    // The import commits on a worker thread, so wait for it to
+                    // register instead of assuming it lands within a frame.
+                    const bool imported = pump_until([&] {
+                        return registry.find_by_path("content://Textures/nf_auto_tex.bmp") != nullptr;
+                    });
                     std::string e;
-                    const bool ok = app.set_material_albedo("content://Materials/Default",
+                    const bool ok =
+                        imported && app.set_material_albedo("content://Materials/Default",
                                                             "content://Textures/nf_auto_tex.bmp", e);
-                    auto_check(ok, "Imported texture albedo assign");
+                    auto_check(ok, "Imported texture albedo assign",
+                               imported ? e : std::string("import never registered the texture"));
                 }
                 if (f == 74) {
                     force_measure = true;
                 }
                 if (f == 75) {
-                    auto_check(viewport_red > 1000, "Imported texture visible in viewport");
+                    auto_check(viewport_red > 1000, "Imported texture visible in viewport",
+                               "red pixels = " + std::to_string(viewport_red));
                     // Overwrite the SOURCE on disk: hot reload must pick it up.
                     const auto bmp = make_bmp_solid(8, 8, 0, 0, 255);
                     auto wr = vfs.write_bytes("content://Textures/nf_auto_tex.bmp",
                                               std::span<const uint8_t>(bmp));
                     std::string e;
-                    auto_check(wr.ok, "External texture overwrite");
+                    auto_check(wr.ok, "External texture overwrite", e);
                     if (wr.ok) {
-                        const size_t n = app.poll_hot_reload();
-                        auto_check(n > 0, "Hot reload picked up texture");
-                    } else {
-                        (void)e;
+                        // Detection is a poll, so allow a bounded window instead
+                        // of a single attempt: a coarse filesystem timestamp
+                        // must not be able to make this flaky.
+                        size_t n = 0;
+                        for (int i = 0; i < 60 && n == 0; ++i) {
+                            n = app.poll_hot_reload();
+                            if (n == 0) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                            }
+                        }
+                        auto_check(n > 0, "Hot reload picked up texture",
+                                   "watcher reported no change");
                     }
                 }
                 if (f == 76) {
                     force_measure = true;
                 }
                 if (f == 77) {
-                    auto_check(viewport_blue > 1000, "Hot-reloaded texture visible");
+                    auto_check(viewport_blue > 1000, "Hot-reloaded texture visible",
+                               "blue pixels = " + std::to_string(viewport_blue));
                     std::string e;
                     auto_check(app.set_material_albedo("content://Materials/Default", "", e),
-                               "Albedo unbind restores scalar");
+                               "Albedo unbind restores scalar", e);
                 }
                 if (f == 84) {
                     // External procedural cube -> import as mesh (3.0 so the
@@ -1045,6 +1088,12 @@ int main(int argc, char** argv) {
                 if (f == 86) {
                     // Single-cube baseline first (measured fresh at f==87).
                     lit_single_cube = viewport_lit;
+                    // The mesh import commits on a worker thread. Wait for it to
+                    // register before dropping, otherwise the drop races the
+                    // import and every dependent prefab step fails behind it.
+                    pump_until([&] {
+                        return registry.find_by_path("content://Meshes/nf_auto_cube.nfmesh") != nullptr;
+                    });
                     // Drop the imported mesh; pump below makes it resident.
                     std::string e;
                     bool ok = false;
@@ -1058,7 +1107,7 @@ int main(int argc, char** argv) {
                     } else {
                         e = "imported mesh missing from registry";
                     }
-                    auto_check(ok, "Drop imported mesh");
+                    auto_check(ok, "Drop imported mesh", e);
                 }
                 if (f == 88) {
                     // The 3.0 cube must be GPU-resident before it can cover
@@ -1083,7 +1132,31 @@ int main(int argc, char** argv) {
                     // imported mesh rendered (shrink direction is covered by
                     // the hotreload_mesh_rebuilds_live unit test).
                     auto_check(viewport_lit > lit_single_cube * 2,
-                               "Hot-loaded mesh visibly larger");
+                               "Hot-loaded mesh visibly larger",
+                               "lit = " + std::to_string(viewport_lit) + ", baseline = " +
+                                   std::to_string(lit_single_cube));
+                }
+                if (f == 92) {
+                    // GPU picking, end-to-end through the editor's own entry
+                    // point. By now a cube sits under the camera, so the
+                    // viewport centre must resolve to an entity while an empty
+                    // corner must not — that pair is what distinguishes real
+                    // coverage from "always returns something".
+                    const auto& vps = app.viewport();
+                    const float aspect = (vps.height != 0)
+                                             ? (static_cast<float>(vps.width) /
+                                                static_cast<float>(vps.height))
+                                             : 16.0f / 9.0f;
+                    const nf::editor::ViewCamera vc =
+                        view_camera_from_scene(runtime.scene(), aspect);
+                    const nf::ecs::Entity centre = app.pick(vc, 0.0f, 0.0f);
+                    auto_check(centre.valid(), "GPU pick hits the viewport centre",
+                               "no entity resolved under the centre");
+                    const nf::ecs::Entity corner = app.pick(vc, -0.97f, 0.97f);
+                    auto_check(!corner.valid(), "GPU pick misses the empty corner",
+                               "corner reported entity " + std::to_string(corner.id));
+                    auto_check(runtime.gpu_picking_available(), "GPU picker is active",
+                               "picker unavailable — CPU fallback in use");
                 }
                 if (f == 102) {
                     // Prefab round-trip on the dropped entity's subtree.
@@ -1091,12 +1164,14 @@ int main(int argc, char** argv) {
                     nf::ecs::Entity dropped = app.stack().last_target();
                     bool ok = dropped.valid() &&
                               app.create_prefab(dropped, "content://Prefabs/AutoProof.nfscene", e);
-                    auto_check(ok, "Prefab create from entity");
+                    auto_check(ok, "Prefab create from entity",
+                               dropped.valid() ? e
+                                               : std::string("no dropped entity — the drop step failed"));
                     if (ok) {
                         ok = app.instantiate_prefab("content://Prefabs/AutoProof.nfscene",
                                                     nf::ecs::kInvalidEntity, e);
                     }
-                    auto_check(ok, "Prefab instantiate");
+                    auto_check(ok, "Prefab instantiate", e);
                 }
                 if (f == 104) {
                     std::string e;
@@ -1112,7 +1187,7 @@ int main(int argc, char** argv) {
                     } else {
                         e = "no instance to diverge";
                     }
-                    auto_check(ok, "Prefab revert restores template");
+                    auto_check(ok, "Prefab revert restores template", e);
                 }
                 if (f == 110) {
                     // Tidy up automation artifacts (files + registry); the
@@ -1121,6 +1196,7 @@ int main(int argc, char** argv) {
                                            "content://Meshes/nf_auto_cube.nfmesh",
                                            "content://Prefabs/AutoProof.nfscene"};
                     bool all_gone = true;
+                    std::string leftover;
                     for (const char* p : paths) {
                         if (const auto* meta = registry.find_by_path(p)) {
                             const nf::assets::AssetId gone = meta->id;
@@ -1141,9 +1217,12 @@ int main(int argc, char** argv) {
                         auto still = vfs.exists(p);
                         if (still.ok && still.value) {
                             all_gone = false;
+                            leftover += std::string(leftover.empty() ? "" : ", ") + p;
                         }
                     }
-                    auto_check(all_gone, "Automation artifacts cleaned");
+                    auto_check(all_gone, "Automation artifacts cleaned",
+                               leftover.empty() ? std::string{}
+                                                : "still present: " + leftover);
                 }
             }
 

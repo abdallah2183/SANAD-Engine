@@ -40,6 +40,9 @@ Runtime::~Runtime() {
 
 void Runtime::shutdown() {
     m_device.wait_idle();
+    // The picker owns its own targets/pipeline/framebuffer; drop them while the
+    // device is still alive. Rebuilt lazily if a pick happens after shutdown.
+    m_picker.reset();
     if (m_renderer && m_renderer_initialized) {
         m_renderer->shutdown();
     }
@@ -85,6 +88,43 @@ bool Runtime::ensure_renderer_initialized() {
     return ensure_renderer_initialized_for(width, height);
 }
 
+std::filesystem::path Runtime::resolve_shader_dir() const {
+    // Resolution order: the compile-time define (set by the build), then paths
+    // relative to the working directory, then content://, then the two known
+    // build trees. Extracted from ensure_renderer_initialized_for so the GPU
+    // picker can find the same shaders without duplicating this search.
+#ifdef NF_BASIC3D_SHADER_DIR
+    {
+        std::filesystem::path p = NF_BASIC3D_SHADER_DIR;
+        if (std::filesystem::exists(p)) {
+            return p;
+        }
+    }
+#endif
+    const std::array<std::filesystem::path, 6> candidates{
+        std::filesystem::path("Samples/Basic3D/shaders"),
+        std::filesystem::path("../Samples/Basic3D/shaders"),
+        std::filesystem::path("Shaders/Basic3D"),
+        std::filesystem::path("../Shaders/Basic3D"),
+        std::filesystem::path("build/DebugNinja/Shaders/Basic3D"),
+        std::filesystem::path("build/debug/Shaders/Basic3D"),
+    };
+    for (const auto& cand : candidates) {
+        if (std::filesystem::exists(cand)) {
+            return cand;
+        }
+    }
+    auto r = m_vfs.resolve("content://Shaders/Basic3D");
+    if (r.ok && std::filesystem::exists(r.value)) {
+        return r.value;
+    }
+    std::filesystem::path fallback("build/DebugNinja/Shaders/Basic3D");
+    if (!std::filesystem::exists(fallback)) {
+        fallback = std::filesystem::path("build/debug/Shaders/Basic3D");
+    }
+    return fallback;
+}
+
 bool Runtime::ensure_renderer_initialized_for(uint32_t width, uint32_t height) {
     if (m_renderer_initialized) {
         if (m_renderer && (m_renderer->width() != width || m_renderer->height() != height)) {
@@ -105,43 +145,7 @@ bool Runtime::ensure_renderer_initialized_for(uint32_t width, uint32_t height) {
         width = 1280;
         height = 720;
     }
-    std::filesystem::path shader_dir;
-#ifdef NF_BASIC3D_SHADER_DIR
-    {
-        std::filesystem::path p = NF_BASIC3D_SHADER_DIR;
-        if (std::filesystem::exists(p)) {
-            shader_dir = p;
-        }
-    }
-#endif
-    if (shader_dir.empty()) {
-        const std::array<std::filesystem::path, 6> candidates{
-            std::filesystem::path("Samples/Basic3D/shaders"),
-            std::filesystem::path("../Samples/Basic3D/shaders"),
-            std::filesystem::path("Shaders/Basic3D"),
-            std::filesystem::path("../Shaders/Basic3D"),
-            std::filesystem::path("build/DebugNinja/Shaders/Basic3D"),
-            std::filesystem::path("build/debug/Shaders/Basic3D"),
-        };
-        for (const auto& cand : candidates) {
-            if (std::filesystem::exists(cand)) {
-                shader_dir = cand;
-                break;
-            }
-        }
-    }
-    if (shader_dir.empty()) {
-        auto r = m_vfs.resolve("content://Shaders/Basic3D");
-        if (r.ok && std::filesystem::exists(r.value)) {
-            shader_dir = r.value;
-        }
-    }
-    if (shader_dir.empty() || !std::filesystem::exists(shader_dir)) {
-        shader_dir = std::filesystem::path("build/DebugNinja/Shaders/Basic3D");
-        if (!std::filesystem::exists(shader_dir)) {
-            shader_dir = std::filesystem::path("build/debug/Shaders/Basic3D");
-        }
-    }
+    const std::filesystem::path shader_dir = resolve_shader_dir();
     if (!m_renderer->init(m_device, shader_dir, width, height)) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime: failed to init Renderer3D (shader_dir='{}')", shader_dir.string());
         return false;
@@ -601,6 +605,59 @@ void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd) {
                  stats.extracted, stats.visible, stats.draw_calls);
 }
 
+bool Runtime::pick_entity_gpu(uint32_t x, uint32_t y, uint32_t& out_entity_id) {
+    out_entity_id = 0;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false;
+    }
+
+    // Pick at the size the frame was rendered at, so pixel coordinates line up
+    // with the image the user clicked on.
+    uint32_t w = m_renderer ? m_renderer->width() : 0;
+    uint32_t h = m_renderer ? m_renderer->height() : 0;
+    if (w == 0 || h == 0) {
+        w = 1280;
+        h = 720;
+    }
+
+    if (!m_picker) {
+        m_picker = std::make_unique<rendering::GpuPicker>();
+        if (!m_picker->init(m_device, resolve_shader_dir(), w, h)) {
+            // No pick shaders, no device support, or a failed RHI object: drop
+            // the picker and let the caller fall back to CPU picking rather
+            // than leaving a half-built one behind.
+            m_picker.reset();
+            return false;
+        }
+    } else if (m_picker->width() != w || m_picker->height() != h) {
+        m_device.wait_idle();
+        if (!m_picker->resize(w, h)) {
+            m_picker.reset();
+            return false;
+        }
+    }
+
+    // Rebuild the same render world the frame builds, so what is pickable is
+    // exactly what was drawn — culling and upload state included.
+    sync_meshes_from_assets();
+    rendering::Camera cam{};
+    extract_camera(w, h, cam);
+    rendering::RenderWorld world{};
+    build_render_world(world);
+
+    auto cmd = m_device.create_command_buffer();
+    if (!cmd) {
+        return false;
+    }
+    const rendering::PickHit hit =
+        m_picker->pick(*cmd, world.objects, cam, *m_mesh_library, x, y);
+    if (!hit.hit) {
+        return false;
+    }
+    out_entity_id = hit.object_id;
+    return true;
+}
+
 // --- Shared material assets -------------------------------------------------
 
 std::string Runtime::normalize_material_path(const std::string& p) {
@@ -682,24 +739,45 @@ rendering::MaterialHandle Runtime::material_for_path(const std::string& logical_
         return rendering::kInvalidMaterialHandle;
     }
     m_material_instances.emplace(path, h);
+    m_material_mip[path] =
+        have_file ? file_asset.mip_mode : rhi::MipMapMode::Linear;
     // Albedo binding follows the file; failures stay scalar (never fatal).
+    // Record first: rebind_material_sampling reads the recorded binding.
+    m_material_albedo[path] = (have_file ? file_asset.albedo : "");
     if (have_file && !file_asset.albedo.empty()) {
         std::string tex_err;
-        if (ensure_texture(file_asset.albedo, tex_err)) {
-            auto tit = m_textures.find(file_asset.albedo);
-            if (tit != m_textures.end() && tit->second->view && tit->second->sampler) {
-                m_renderer->materials().set_albedo_texture(h, *tit->second->view,
-                                                           *tit->second->sampler);
-            }
-        } else {
+        if (!rebind_material_sampling(path, h, tex_err)) {
             NF_LOG_WARN(LogCategory::Core, "Runtime: material '{}' albedo unreachable ({}), scalar",
                         path, tex_err);
         }
-        m_material_albedo[path] = file_asset.albedo;
-    } else {
-        m_material_albedo[path] = "";
     }
     return h;
+}
+
+bool Runtime::set_material_mip_mode(const std::string& material_path, rhi::MipMapMode mode,
+                                    std::string& out_error) {
+    const std::string path = normalize_material_path(material_path);
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx > 2) {
+        out_error = "Invalid mip mode";
+        return false;
+    }
+    rendering::MaterialHandle h = material_for_path(path);
+    if (!h.valid()) {
+        out_error = "Renderer unavailable for material '" + path + "'";
+        return false;
+    }
+    m_material_mip[path] = mode;
+    if (!rebind_material_sampling(path, h, out_error)) {
+        return false;
+    }
+    m_material_dirty[path] = true;
+    return true;
+}
+
+rhi::MipMapMode Runtime::material_mip_mode(const std::string& material_path) const {
+    auto it = m_material_mip.find(normalize_material_path(material_path));
+    return (it != m_material_mip.end()) ? it->second : rhi::MipMapMode::Linear;
 }
 
 bool Runtime::set_material_params(const std::string& logical_path,
@@ -782,6 +860,7 @@ bool Runtime::save_material(const std::string& src_path, const std::string& dst_
     }
     asset.params = params;
     asset.albedo = material_albedo(src);
+    asset.mip_mode = material_mip_mode(src);
     auto r = m_vfs.write_text(dst, asset.save_to_text());
     if (!r.ok) {
         out_error = r.error;
@@ -795,6 +874,67 @@ bool Runtime::save_material(const std::string& src_path, const std::string& dst_
     return true;
 }
 
+static u32 full_mip_count(u32 w, u32 h) {
+    u32 levels = 1;
+    while (w > 1 || h > 1) {
+        if (w > 1) {
+            w /= 2;
+        }
+        if (h > 1) {
+            h /= 2;
+        }
+        ++levels;
+    }
+    return levels;
+}
+
+rhi::Sampler* Runtime::sampler_for_mode(TextureObjects& entry, rhi::MipMapMode mode) {
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx > 2) {
+        return nullptr;
+    }
+    if (!entry.samplers[idx]) {
+        rhi::SamplerDesc sd{};
+        sd.address_u = rhi::AddressMode::ClampToEdge;
+        sd.address_v = rhi::AddressMode::ClampToEdge;
+        sd.mip = mode;
+        sd.min_lod = 0.0f;
+        sd.max_lod = (mode == rhi::MipMapMode::None || entry.mip_levels <= 1)
+                         ? 0.0f
+                         : static_cast<float>(entry.mip_levels - 1);
+        entry.samplers[idx] = m_device.create_sampler(sd);
+    }
+    return entry.samplers[idx].get();
+}
+
+bool Runtime::rebind_material_sampling(const std::string& material_path,
+                                       rendering::MaterialHandle handle, std::string& out_error) {
+    if (m_renderer == nullptr) {
+        out_error = "Renderer unavailable";
+        return false;
+    }
+    const std::string tex_path = material_albedo(material_path);
+    if (tex_path.empty()) {
+        m_renderer->materials().clear_albedo_texture(handle);
+        return true;
+    }
+    if (!ensure_texture(tex_path, out_error)) {
+        return false;
+    }
+    auto tit = m_textures.find(tex_path);
+    if (tit == m_textures.end() || !tit->second->view) {
+        out_error = "Texture objects missing for '" + tex_path + "'";
+        return false;
+    }
+    rhi::Sampler* sampler = sampler_for_mode(*tit->second, material_mip_mode(material_path));
+    if (sampler == nullptr) {
+        out_error = "Sampler creation failed for '" + tex_path + "'";
+        return false;
+    }
+    m_renderer->materials().set_albedo_texture(handle, *tit->second->view, *sampler);
+    return true;
+}
+
 std::unique_ptr<Runtime::TextureObjects> Runtime::upload_texture_objects(
     const std::string& logical_path, const rendering::DecodedImage& img, std::string& out_error) {
     const size_t px = static_cast<size_t>(img.width) * static_cast<size_t>(img.height);
@@ -802,11 +942,13 @@ std::unique_ptr<Runtime::TextureObjects> Runtime::upload_texture_objects(
         out_error = "Texture '" + logical_path + "' has unreasonable dimensions";
         return nullptr;
     }
+    const u32 levels = full_mip_count(static_cast<u32>(img.width), static_cast<u32>(img.height));
     rhi::TextureDesc td{};
     td.width = static_cast<u32>(img.width);
     td.height = static_cast<u32>(img.height);
     td.format = rhi::Format::R8G8B8A8_UNorm;
-    td.usage = rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferDst;
+    td.mip_levels = levels;
+    td.usage = rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferDst | rhi::ImageUsage::TransferSrc;
     auto tex = m_device.create_texture(td);
     rhi::BufferDesc staging_desc{};
     staging_desc.size = img.rgba.size();
@@ -825,31 +967,45 @@ std::unique_ptr<Runtime::TextureObjects> Runtime::upload_texture_objects(
             fence->wait();
         }
     }
+    u32 generated_levels = 1;
     if (auto trans_cmd = m_device.create_command_buffer()) {
         if (auto trans_fence = m_device.create_fence(false)) {
             trans_cmd->begin();
-            trans_cmd->transition_texture_for_sampling(*tex);
+            if (levels <= 1) {
+                // Single level: plain upload transition (generate_mipmaps is a
+                // no-op below one extra level and would skip the transition).
+                trans_cmd->transition_texture_for_sampling(*tex);
+            } else if (trans_cmd->generate_mipmaps(*tex)) {
+                // Full chain live, every level SHADER_READ already.
+                generated_levels = levels;
+            } else {
+                // Blits unsupported (level 0 is still valid uploaded data):
+                // finish the standard upload transition.
+                NF_LOG_WARN(LogCategory::Core, "Runtime: mip generation failed for '{}'",
+                            logical_path);
+                trans_cmd->transition_texture_for_sampling(*tex);
+            }
             trans_cmd->end();
             m_device.submit(*trans_cmd, rhi::SubmitInfo{.signal_fence = trans_fence.get()});
             trans_fence->wait();
+            // If blits were unsupported the upper levels are garbage: sample
+            // level 0 only. Samplers read mip_levels for their max_lod.
+            auto entry = std::make_unique<TextureObjects>();
+            entry->texture = std::move(tex);
+            entry->mip_levels = generated_levels;
+            rhi::TextureViewDesc vd{};
+            vd.texture = entry->texture.get();
+            vd.mip_count = entry->mip_levels;
+            entry->view = m_device.create_texture_view(vd);
+            if (!entry->view) {
+                out_error = "View creation failed for texture '" + logical_path + "'";
+                return nullptr;
+            }
+            return entry;
         }
     }
-    rhi::TextureViewDesc vd{};
-    vd.texture = tex.get();
-    auto view = m_device.create_texture_view(vd);
-    rhi::SamplerDesc sd{};
-    sd.address_u = rhi::AddressMode::ClampToEdge;
-    sd.address_v = rhi::AddressMode::ClampToEdge;
-    auto sampler = m_device.create_sampler(sd);
-    if (!view || !sampler) {
-        out_error = "View/sampler creation failed for texture '" + logical_path + "'";
-        return nullptr;
-    }
-    auto entry = std::make_unique<TextureObjects>();
-    entry->texture = std::move(tex);
-    entry->view = std::move(view);
-    entry->sampler = std::move(sampler);
-    return entry;
+    out_error = "Command recording failed for texture '" + logical_path + "'";
+    return nullptr;
 }
 
 bool Runtime::ensure_texture(const std::string& logical_path, std::string& out_error) {
@@ -899,7 +1055,8 @@ bool Runtime::reload_texture(const std::string& logical_path, std::string& out_e
     // Swap under wait_idle: in-flight frames may still reference the old view.
     m_device.wait_idle();
     m_textures[logical_path] = std::move(entry);
-    // Rebind every material sampling this path (raw pointers changed).
+    // Rebind every material sampling this path (raw pointers changed), each
+    // with its own recorded mip mode.
     if (m_renderer != nullptr) {
         for (const auto& kv : m_material_albedo) {
             if (kv.second != logical_path) {
@@ -909,8 +1066,10 @@ bool Runtime::reload_texture(const std::string& logical_path, std::string& out_e
             if (mit == m_material_instances.end()) {
                 continue;
             }
-            m_renderer->materials().set_albedo_texture(mit->second, *m_textures[logical_path]->view,
-                                                       *m_textures[logical_path]->sampler);
+            std::string rerr;
+            if (!rebind_material_sampling(kv.first, mit->second, rerr)) {
+                NF_LOG_WARN(LogCategory::Core, "Runtime: rebind after reload failed ({})", rerr);
+            }
         }
     }
     NF_LOG_INFO(LogCategory::Core, "Runtime: texture reloaded '{}'", logical_path);
@@ -931,16 +1090,15 @@ bool Runtime::set_material_albedo(const std::string& material_path, const std::s
         m_material_dirty[path] = true;
         return true;
     }
+    // Pre-validate (warms the cache): a bad file fails here, before the map
+    // or the renderer is touched.
     if (!ensure_texture(texture_path, out_error)) {
         return false;
     }
-    auto tit = m_textures.find(texture_path);
-    if (tit == m_textures.end() || !tit->second->view || !tit->second->sampler) {
-        out_error = "Texture objects missing for '" + texture_path + "'";
+    m_material_albedo[path] = texture_path;
+    if (!rebind_material_sampling(path, h, out_error)) {
         return false;
     }
-    m_renderer->materials().set_albedo_texture(h, *tit->second->view, *tit->second->sampler);
-    m_material_albedo[path] = texture_path;
     m_material_dirty[path] = true;
     return true;
 }
@@ -1028,6 +1186,13 @@ bool Runtime::reload_material_file(const std::string& logical_path, std::string&
         m_material_dirty[path] = false;
         // set via file: ensure the recorded binding matches the file exactly.
         m_material_albedo[path] = file_asset.albedo;
+    }
+    if (material_mip_mode(path) != file_asset.mip_mode) {
+        if (!set_material_mip_mode(path, file_asset.mip_mode, out_error)) {
+            return false;
+        }
+        // set_material_mip_mode marks dirty; a file reload is not a user edit.
+        m_material_dirty[path] = false;
     }
     NF_LOG_INFO(LogCategory::Core, "Runtime: material hot-reloaded '{}'", path);
     return true;

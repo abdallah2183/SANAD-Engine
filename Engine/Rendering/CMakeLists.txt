@@ -16,6 +16,7 @@ set(NFRENDERING_SOURCES
     src/MeshAsset.cpp
     src/MeshLibrary.cpp
     src/Renderer3D.cpp
+    src/GpuPicker.cpp
     src/Camera.cpp
     src/Culling.cpp
     src/ResourceState.cpp

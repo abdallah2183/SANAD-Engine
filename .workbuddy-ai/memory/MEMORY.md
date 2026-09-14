@@ -52,10 +52,11 @@
 
 ## Milestone Status
 - ✅ **Triangle Rendering (v0.1 milestone 1): GREEN, re-verified 2026-09-13 after fixes.**
-  - Full suite: Core 36/36 | Jobs 4/4 | ECS 21/22 (1 opt-in skip) | Assets 13/13 | RHI 64/64 | Runtime 13/13 | Editor 52/52 → **203 passed, 0 failed, 1 skipped**.
+  - Full suite: Core 36/36 | Jobs 4/4 | ECS 21/22 (1 opt-in skip) | Assets 13/13 | RHI 64/64 | Runtime 13/13 | Editor 53/53 → **204 passed, 0 failed, 1 skipped** (working tree, 19:30).
   - Triangle + TexturedQuad samples: 60 frames, **0 Vulkan validation errors**.
-  - Verified from a clean checkout of commit `1fc62d0` in a separate `git worktree`, so the result reflects the committed state, not just the working tree.
+  - Verified from a clean checkout of commit `1fc62d0`/`0f9de23` in a separate `git worktree`, so the result reflects the committed state, not just the working tree.
   - Evaluation report (pre-fix state + reproduction commands): `Docs/Engine_Evaluation_2026-09-13.md`.
+- ✅ **Stale-framebuffer fix: acceptance-verified 2026-09-13 19:30** against `Docs/Engine_Evaluation_2026-09-13.md` §4.1. `material_albedo_gpu_effect`, `material_params_gpu_effect`, `hotreload_mesh_rebuilds_live` each exit 0 with **0 validation errors**. Change is confined to `Renderer3D.hpp`/`.cpp`; the identity primitive (`rhi::Texture::creation_serial()`) was already present in the RHI, so no RHI edit was needed. `Renderer3D::resize()` and `destroy_resolution_dependent()` are byte-identical to the pre-fix versions.
 - ✅ **Fixed 2026-09-13:** framebuffer cache now keyed on `rhi::Texture::creation_serial()` (monotonic, never reused) instead of the raw address, bounded to `kMaxTonemapFramebuffers` (8); `create_framebuffer` null-checked before deref; `present_source = true` added to the Triangle and TexturedQuad render passes; `test_viewport.cpp` compares `creation_serial()` instead of a recycled pointer.
 - ✅ **Fixed 2026-09-13 (test honesty):** added `NF_SKIP` + a `Skipped` bucket to the test framework; `require_gpu()` replaces the 58 silent `if (!f.available) return;` early-returns; 11 silent returns on missing shader assets became skips; `benchmark_1m_entities` now SKIPs instead of reporting OK without running; `NF_TEST_LOG_LEVEL` env var exposes benchmark timings.
 - ✅ **Version control + CI added 2026-09-13:** git repo initialised (3 commits, `main`), `.gitignore`/`.gitattributes`, `Scripts/run_tests.sh`, `.github/workflows/ci.yml` (installs Lavapipe so GPU tests execute headlessly).

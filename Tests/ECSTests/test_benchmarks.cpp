@@ -5,6 +5,7 @@
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Time.hpp>
 
+#include <cstdio>
 #include <vector>
 
 namespace {
@@ -52,9 +53,14 @@ void benchmark_world(World& world, size_t count, const char* label) {
     for (Entity e : all) world.destroy_entity(e);
     double destroy_ms = clock.elapsed_ms();
 
-    NF_LOG_INFO(LogCategory::Core, "[Benchmark] {}: {} entities — create {:.2f}ms, query {:.2f}ms (sum {}), add/remove {:.2f}ms, destroy {:.2f}ms, memory ~{} KB",
+    // Metrics go to stdout unconditionally: the test runner defaults to
+    // set_min_level(Warn), which would silently swallow an Info-level report
+    // and leave a "green" run with no observable numbers (green-by-skip).
+    std::printf("[Benchmark] %s: %zu entities — create %.2fms, query %.2fms (sum %zu), "
+                "add/remove %.2fms, destroy %.2fms, memory ~%zu KB\n",
                 label, count, create_ms, query_ms, sum, add_remove_ms, destroy_ms,
-                (count * (sizeof(Position)+sizeof(Entity))) / 1024);
+                (count * (sizeof(Position) + sizeof(Entity))) / 1024);
+    std::fflush(stdout);
 
     // Ensure world is empty after
     NF_CHECK(world.alive_entity_count()==0);

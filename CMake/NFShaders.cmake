@@ -89,6 +89,11 @@ if(NF_GLSLC_EXECUTABLE)
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "lighting")
     nf_compile_shaders(NFBasic3DTonemapShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "tonemap")
+    # GPU picking id pass (GpuPicker). Deliberately lives beside the other
+    # renderer shaders: it reuses their vertex layout and transform path, and
+    # picking is only correct if the id image lines up with the rendered one.
+    nf_compile_shaders(NFBasic3DPickShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "pick")
 
     set(NF_TRIANGLE_SHADER_DIR "${NF_TRIANGLE_SHADER_OUT_DIR}")
     set(NF_QUAD_SHADER_DIR     "${NF_QUAD_SHADER_OUT_DIR}")

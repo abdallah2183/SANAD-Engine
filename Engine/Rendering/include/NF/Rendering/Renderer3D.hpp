@@ -74,6 +74,11 @@ public:
         u32 draw_calls = 0;
         f64 cull_us = 0;         // CPU time spent culling
         f64 draw_prep_us = 0;    // CPU time composing draws
+        // Material descriptor sets built this frame. Material instances are
+        // shared and their sets are cached, so in steady state this stays at 0
+        // regardless of object count — that is the point of the cache, and the
+        // number exists so a test can assert it.
+        u32 material_sets_built = 0;
     };
 
     Renderer3D() = default;

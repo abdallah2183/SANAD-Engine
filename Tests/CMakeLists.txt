@@ -61,6 +61,7 @@ add_executable(RHITests
     RHITests/test_rendering_pipeline.cpp
     RHITests/test_render_world.cpp
     RHITests/test_3d_renderer.cpp
+    RHITests/test_gpu_picking.cpp
     RHITests/test_benchmarks_3d.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -78,7 +79,8 @@ target_compile_definitions(RHITests PRIVATE
 
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(RHITests NFTriangleShaders NFQuadShaders NFRHIPushShaders
-        NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DTonemapShaders)
+        NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DTonemapShaders
+        NFBasic3DPickShaders)
 endif()
 
 add_executable(AssetTests

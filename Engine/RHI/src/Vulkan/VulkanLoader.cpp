@@ -275,6 +275,7 @@ bool load_device_functions(VkDevice device) {
     failed |= !load_dev_fn(vkCmdCopyBufferToImage,       vkGetDeviceProcAddr, device, "vkCmdCopyBufferToImage");
     failed |= !load_dev_fn(vkCmdCopyImageToBuffer,       vkGetDeviceProcAddr, device, "vkCmdCopyImageToBuffer");
     failed |= !load_dev_fn(vkCmdPipelineBarrier,         vkGetDeviceProcAddr, device, "vkCmdPipelineBarrier");
+    failed |= !load_dev_fn(vkCmdBlitImage,              vkGetDeviceProcAddr, device, "vkCmdBlitImage");
     failed |= !load_dev_fn(vkCmdPushConstants,           vkGetDeviceProcAddr, device, "vkCmdPushConstants");
     failed |= !load_dev_fn(vkCreateDescriptorSetLayout,    vkGetDeviceProcAddr, device, "vkCreateDescriptorSetLayout");
     failed |= !load_dev_fn(vkDestroyDescriptorSetLayout,   vkGetDeviceProcAddr, device, "vkDestroyDescriptorSetLayout");
