@@ -59,15 +59,19 @@ NF_TEST(rhi_descriptor_allocator_grows_and_resets) {
         dev.update_descriptor_set(*s, std::span<const rhi::DescriptorWrite>(w));
     }
 
+    // reset() recycles pools via vkResetDescriptorPool instead of destroying
+    // them, so the pool count is unchanged — only the allocation counter clears.
+    const u32 pools_before_reset = allocator->pool_count();
     allocator->reset();
-    NF_CHECK_EQ(allocator->pool_count(), 0u);
+    NF_CHECK_EQ(allocator->pool_count(), pools_before_reset);
     NF_CHECK_EQ(allocator->allocated_count(), 0u);
-    sets.clear(); // old sets are now invalid (pool destroyed), but wrappers are destroyed here (no Vulkan free)
+    sets.clear(); // sets were freed by the pool reset; the wrappers own nothing
 
-    // After reset, allocation must still work
+    // After reset, allocation must still work — and must reuse a recycled pool
+    // rather than creating another one.
     auto s2 = allocator->allocate(*layout);
     NF_CHECK(s2 != nullptr);
-    NF_CHECK_EQ(allocator->pool_count(), 1u);
+    NF_CHECK_EQ(allocator->pool_count(), pools_before_reset);
     NF_CHECK_EQ(allocator->allocated_count(), 1u);
 }
 

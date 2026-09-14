@@ -159,6 +159,7 @@ namespace nf::rhi {
     X(vkDestroyDescriptorSetLayout)          \
     X(vkCreateDescriptorPool)                \
     X(vkDestroyDescriptorPool)               \
+    X(vkResetDescriptorPool)                 \
     X(vkAllocateDescriptorSets)             \
     X(vkFreeDescriptorSets)                 \
     X(vkUpdateDescriptorSets)               \

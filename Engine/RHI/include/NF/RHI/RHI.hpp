@@ -539,7 +539,7 @@ public:
 // Frame lifecycle:
 //   allocator->allocate(layout)  // may grow (new VkDescriptorPool)
 //   ... bind / draw ...
-//   allocator->reset()           // destroys all pools, frees all sets at once
+//   allocator->reset()           // recycles all pools (no destroy/create churn)
 class DescriptorAllocator {
 public:
     virtual ~DescriptorAllocator() = default;
@@ -678,6 +678,16 @@ public:
     /// (mips, array layers) and transitioning after every piece would be pure
     /// overhead.
     virtual void transition_texture_for_sampling(Texture& texture) = 0;
+
+    /// Generates a full mip chain with linear blits. Contract: mip level 0
+    /// holds valid data in TRANSFER_DST layout (i.e. call immediately after
+    /// copy_buffer_to_texture, before transition_texture_for_sampling) and
+    /// every other level is UNDEFINED. On success every level ends in
+    /// SHADER_READ layout (so the transition call becomes a no-op) and the
+    /// function returns true. Textures with a single mip level succeed
+    /// trivially. Returns false (logs) when the format cannot be blitted —
+    /// the caller must then keep single-mip sampling.
+    virtual bool generate_mipmaps(Texture& texture) = 0;
 
     // Generic barrier: transitions a texture from one usage to another.
     // This is the foundation for RenderGraph's automatic barrier inference.

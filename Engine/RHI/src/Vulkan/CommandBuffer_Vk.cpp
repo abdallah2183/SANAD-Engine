@@ -366,6 +366,100 @@ void VulkanCommandBuffer::copy_buffer_to_texture(const Buffer& src, Texture& dst
     vk_dst.set_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 }
 
+bool VulkanCommandBuffer::generate_mipmaps(Texture& texture) {
+    auto& vk_tex = static_cast<VulkanTexture&>(texture);
+    if (!vk_tex.valid()) {
+        NF_LOG_ERROR(LogCategory::RHI, "generate_mipmaps: invalid texture");
+        return false;
+    }
+    const u32 mips = vk_tex.mip_levels();
+    if (mips <= 1) {
+        return true; // nothing to do
+    }
+    if (vk_tex.format() != Format::R8G8B8A8_UNorm && vk_tex.format() != Format::R8G8B8A8_sRGB &&
+        vk_tex.format() != Format::B8G8R8A8_UNorm) {
+        NF_LOG_ERROR(LogCategory::RHI, "generate_mipmaps: unsupported format for blitting");
+        return false;
+    }
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(m_device->context().physical_device, vk_tex.vk_format(),
+                                        &props);
+    const VkFormatFeatureFlags need =
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+    if ((props.optimalTilingFeatures & need) != need) {
+        NF_LOG_ERROR(LogCategory::RHI, "generate_mipmaps: format lacks blit support");
+        return false;
+    }
+
+    // Per-mip barrier (the shared helper only handles whole-image ranges).
+    auto mip_barrier = [&](u32 mip, VkImageLayout old_layout, VkImageLayout new_layout,
+                           VkAccessFlags src_access, VkAccessFlags dst_access,
+                           VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage) {
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = old_layout;
+        barrier.newLayout = new_layout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = vk_tex.image();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = mip;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = src_access;
+        barrier.dstAccessMask = dst_access;
+        vkCmdPipelineBarrier(m_cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    };
+
+    u32 w = vk_tex.width();
+    u32 h = vk_tex.height();
+    for (u32 i = 1; i < mips; ++i) {
+        // Blit source: previous level finished writing (or was just copied).
+        mip_barrier(i - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        // Blit destination: undefined to transfer-destination.
+        mip_barrier(i, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkImageBlit blit{};
+        blit.srcOffsets[0] = {0, 0, 0};
+        blit.srcOffsets[1] = {static_cast<i32>(w), static_cast<i32>(h), 1};
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.srcSubresource.baseArrayLayer = 0;
+        blit.srcSubresource.layerCount = 1;
+        blit.dstOffsets[0] = {0, 0, 0};
+        blit.dstOffsets[1] = {static_cast<i32>(w > 1 ? w / 2 : 1), static_cast<i32>(h > 1 ? h / 2 : 1),
+                              1};
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.mipLevel = i;
+        blit.dstSubresource.baseArrayLayer = 0;
+        blit.dstSubresource.layerCount = 1;
+        vkCmdBlitImage(m_cmd, vk_tex.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_tex.image(),
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        // Source level is done being blitted from: make it shader-readable.
+        mip_barrier(i - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        if (w > 1) {
+            w /= 2;
+        }
+        if (h > 1) {
+            h /= 2;
+        }
+    }
+    // The last level never became a blit source: transition it for sampling.
+    mip_barrier(mips - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    vk_tex.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return true;
+}
+
 void VulkanCommandBuffer::transition_texture_for_sampling(Texture& texture) {
     auto& vk_tex = static_cast<VulkanTexture&>(texture);
     if (!vk_tex.valid()) {

@@ -325,7 +325,18 @@ VulkanDescriptorAllocator::VulkanDescriptorAllocator(VulkanDevice* device, u32 s
 }
 
 VulkanDescriptorAllocator::~VulkanDescriptorAllocator() {
-    reset();
+    if (!m_device) return;
+    const VkDevice vk_device = m_device->context().device;
+    if (vk_device != VK_NULL_HANDLE) {
+        for (Pool& p : m_pools) {
+            if (p.pool != VK_NULL_HANDLE) {
+                vkDestroyDescriptorPool(vk_device, p.pool, nullptr);
+                p.pool = VK_NULL_HANDLE;
+            }
+        }
+    }
+    m_pools.clear();
+    m_allocated = 0;
 }
 
 bool VulkanDescriptorAllocator::create_pool_for_layout(const VulkanDescriptorSetLayout& layout, Pool& out) {
@@ -431,15 +442,19 @@ void VulkanDescriptorAllocator::reset() {
         m_allocated = 0;
         return;
     }
+    // Recycle pools instead of destroying them: vkResetDescriptorPool returns
+    // every set to the pool in one call, so steady-state frames allocate with
+    // zero vkCreate/vkDestroy churn. Same safety contract as before — the
+    // caller must guarantee no submitted work still references these sets
+    // (fence discipline), since reset frees them for immediate reuse.
     for (Pool& p : m_pools) {
         if (p.pool != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(vk_device, p.pool, nullptr);
-            p.pool = VK_NULL_HANDLE;
+            vkResetDescriptorPool(vk_device, p.pool, 0);
+            p.remaining = m_sets_per_pool;
         }
     }
-    m_pools.clear();
     m_allocated = 0;
-    NF_LOG_TRACE(LogCategory::RHI, "Descriptor allocator reset");
+    NF_LOG_TRACE(LogCategory::RHI, "Descriptor allocator reset ({} pools recycled)", m_pools.size());
 }
 
 // ---------------------------------------------------------------------------

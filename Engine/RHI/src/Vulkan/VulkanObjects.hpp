@@ -79,6 +79,7 @@ public:
     VkImage image() const { return m_image; }
     VkImageView view() const { return m_view; }
     VkFormat vk_format() const { return m_vk_format; }
+    u32 mip_levels() const { return m_mip_levels; }
     u64 creation_serial() const override { return m_serial; }
 
     /// Current layout — required to emit correct image memory barriers.
@@ -344,6 +345,7 @@ public:
     void copy_texture_to_buffer(const Texture& src, Buffer& dst,
                                 u32 tex_x, u32 tex_y, u32 tex_w, u32 tex_h,
                                 usize buffer_offset = 0) override;
+    bool generate_mipmaps(Texture& texture) override;
 
     VkCommandBuffer handle() const { return m_cmd; }
 

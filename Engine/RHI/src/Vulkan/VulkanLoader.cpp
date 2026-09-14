@@ -280,6 +280,11 @@ bool load_device_functions(VkDevice device) {
     failed |= !load_dev_fn(vkDestroyDescriptorSetLayout,   vkGetDeviceProcAddr, device, "vkDestroyDescriptorSetLayout");
     failed |= !load_dev_fn(vkCreateDescriptorPool,         vkGetDeviceProcAddr, device, "vkCreateDescriptorPool");
     failed |= !load_dev_fn(vkDestroyDescriptorPool,        vkGetDeviceProcAddr, device, "vkDestroyDescriptorPool");
+    // Adding a function to NF_VK_DEVICE_FUNCS in VulkanLoader.hpp only declares
+    // and zero-initialises the pointer — this hand-written list is what actually
+    // resolves it. A missing entry here leaves a null pointer that crashes on
+    // first call instead of failing to load.
+    failed |= !load_dev_fn(vkResetDescriptorPool,          vkGetDeviceProcAddr, device, "vkResetDescriptorPool");
     failed |= !load_dev_fn(vkAllocateDescriptorSets,      vkGetDeviceProcAddr, device, "vkAllocateDescriptorSets");
     failed |= !load_dev_fn(vkFreeDescriptorSets,           vkGetDeviceProcAddr, device, "vkFreeDescriptorSets");
     failed |= !load_dev_fn(vkUpdateDescriptorSets,        vkGetDeviceProcAddr, device, "vkUpdateDescriptorSets");
