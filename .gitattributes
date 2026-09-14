@@ -1,0 +1,13 @@
+# Normalize line endings: LF in the repository, native in the working tree.
+* text=auto
+
+# Windows-only files keep CRLF so they behave in cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary — never touch.
+*.png binary
+*.jpg binary
+*.spv binary
+*.nfmesh binary

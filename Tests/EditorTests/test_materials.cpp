@@ -1,0 +1,476 @@
+// Editor materials: .nfmat round-trip, assignment undo, GPU-visible parameter
+// edits, missing-file fallback, and save/reload.
+
+#include <NF/Test/TestFramework.hpp>
+#include <NF/Test/RHITestCommon.hpp>
+#include <NF/Assets/AssetManager.hpp>
+#include <NF/Assets/AssetRegistry.hpp>
+#include <NF/Assets/MeshAsset.hpp>
+#include <NF/Assets/VirtualFileSystem.hpp>
+#include <NF/Editor/Commands.hpp>
+#include <NF/Editor/Console.hpp>
+#include <NF/Editor/EditorApp.hpp>
+#include <NF/Editor/Inspector.hpp>
+#include <NF/Rendering/MaterialAsset.hpp>
+#include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Scene/NameComponent.hpp>
+#include <NF/Scene/Scene.hpp>
+
+#include <filesystem>
+#include <limits>
+
+using namespace nf;
+using namespace nf::test;
+using namespace nf::assets;
+
+static std::filesystem::path temp_dir_for(const std::string& name) {
+    auto p = std::filesystem::temp_directory_path() / name;
+    std::filesystem::create_directories(p);
+    return p;
+}
+
+// Minimal 24-bit BMP writer (solid color) — avoids any test-time encoder dep.
+static std::vector<uint8_t> make_bmp_solid(int w, int h, uint8_t r, uint8_t g, uint8_t b) {
+    const int stride = ((w * 3 + 3) / 4) * 4;
+    std::vector<uint8_t> out(static_cast<size_t>(54) + static_cast<size_t>(stride) * static_cast<size_t>(h),
+                             0);
+    auto put32 = [&](size_t off, uint32_t v) {
+        out[off] = static_cast<uint8_t>(v & 0xFF);
+        out[off + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+        out[off + 2] = static_cast<uint8_t>((v >> 16) & 0xFF);
+        out[off + 3] = static_cast<uint8_t>((v >> 24) & 0xFF);
+    };
+    auto put16 = [&](size_t off, uint16_t v) {
+        out[off] = static_cast<uint8_t>(v & 0xFF);
+        out[off + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+    };
+    out[0] = 'B';
+    out[1] = 'M';
+    put32(2, static_cast<uint32_t>(out.size()));
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, static_cast<uint32_t>(w));
+    put32(22, static_cast<uint32_t>(h));
+    put16(26, 1);
+    put16(28, 24);
+    for (int y = 0; y < h; ++y) {
+        uint8_t* row = out.data() + 54 + static_cast<size_t>(h - 1 - y) * static_cast<size_t>(stride);
+        for (int x = 0; x < w; ++x) {
+            row[x * 3] = b;
+            row[x * 3 + 1] = g;
+            row[x * 3 + 2] = r;
+        }
+    }
+    return out;
+}
+
+NF_TEST(material_asset_roundtrip) {
+    rendering::MaterialAsset a;
+    a.name = "TestMat";
+    a.params.base_color[0] = 0.9f;
+    a.params.base_color[1] = 0.1f;
+    a.params.base_color[2] = 0.1f;
+    a.params.metallic = 1.0f;
+    a.params.roughness = 0.25f;
+    const std::string text = a.save_to_text();
+    rendering::MaterialAsset b;
+    std::string err;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(text, b, err));
+    NF_CHECK(b.name == "TestMat");
+    NF_CHECK_NEAR(b.params.base_color[0], 0.9f, 1e-6f);
+    NF_CHECK_NEAR(b.params.metallic, 1.0f, 1e-6f);
+    NF_CHECK_NEAR(b.params.roughness, 0.25f, 1e-6f);
+
+    // Tolerant: unknown keys ignored, missing keys keep defaults.
+    rendering::MaterialAsset c;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(
+        "# NOVAForge Material v1\nname: Sparse\nfuture_key: 42\nroughness: 0.5\n", c, err));
+    NF_CHECK(c.name == "Sparse");
+    NF_CHECK_NEAR(c.params.roughness, 0.5f, 1e-6f);
+    NF_CHECK_NEAR(c.params.metallic, 0.0f, 1e-6f);
+
+    // Not a material at all: hard failure, never garbage.
+    rendering::MaterialAsset d;
+    NF_CHECK(!rendering::MaterialAsset::load_from_text("hello world", d, err));
+    NF_CHECK(!err.empty());
+}
+
+NF_TEST(material_assignment_undo) {
+    scene::Scene scene("Assign");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    runtime::MeshComponent mc;
+    mc.mesh_id = AssetId::generate();
+    mc.material = "content://Materials/Default";
+    scene.world().add<runtime::MeshComponent>(e, mc);
+
+    editor::CommandStack stack;
+    std::string err;
+    auto cmd =
+        editor::make_material_assignment_command(scene.world(), e, "content://Materials/Red", err);
+    NF_CHECK(cmd != nullptr);
+    stack.push(std::move(cmd), scene.world());
+    NF_CHECK(scene.world().get<runtime::MeshComponent>(e)->material == "content://Materials/Red");
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::MeshComponent>(e)->material == "content://Materials/Default");
+    NF_CHECK(stack.redo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::MeshComponent>(e)->material == "content://Materials/Red");
+
+    // Entities without a mesh reject assignment without touching the scene.
+    ecs::Entity bare = scene.world().create_entity();
+    scene.world().add<scene::Transform>(bare, scene::Transform{});
+    NF_CHECK(editor::make_material_assignment_command(scene.world(), bare, "x", err) == nullptr);
+    NF_CHECK(!err.empty());
+}
+
+NF_TEST(material_params_invalid_rejected) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_matinvalid");
+    vfs.mount("content://", tmp);
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg, &device);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    // No scene needed: range validation rejects before any renderer touch.
+    std::string err;
+    editor::MaterialEdit bad;
+    bad.roughness = 42.0f;
+    NF_CHECK(!app.set_material_params("content://Materials/Default", bad, err));
+    NF_CHECK(!err.empty());
+    editor::MaterialEdit nan;
+    nan.metallic = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(!app.set_material_params("content://Materials/Default", nan, err));
+    editor::MaterialEdit neg;
+    neg.emission_strength = -1.0f;
+    NF_CHECK(!app.set_material_params("content://Materials/Default", neg, err));
+
+    NF_CHECK(rhi::validation_error_count() == 0);
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}
+
+NF_TEST(material_params_gpu_effect) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_matgpu");
+    std::filesystem::create_directories(tmp / "Content" / "Scenes");
+    std::filesystem::create_directories(tmp / "Content" / "Materials");
+    std::filesystem::create_directories(tmp / "Cache" / "Meshes");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+
+    auto cube = rendering::StaticMesh::create_cube(2.0f);
+    const AssetId mesh_id = AssetId::generate();
+    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    std::vector<uint8_t> bytes;
+    asset->save_to_bytes(bytes);
+    NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
+    AssetRegistry reg;
+    AssetMetadata meta;
+    meta.id = mesh_id;
+    meta.type = AssetType::Mesh;
+    meta.logical_path = "content://Meshes/cube.nfmesh";
+    meta.cooked_path = "cache://Meshes/cube.nfmesh";
+    std::string err;
+    NF_CHECK(reg.add(meta, err));
+    NF_CHECK(vfs.write_text("content://Materials/Default.nfmat",
+                            "# NOVAForge Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\n"
+                            "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
+                            "emission_strength: 0\n")
+                 .ok);
+
+    scene::Scene scene("MatGpu");
+    auto& w = scene.world();
+    ecs::Entity cam_e = w.create_entity();
+    w.add<scene::Transform>(cam_e, scene::Transform{});
+    w.get<scene::Transform>(cam_e)->local_z = 5.0f;
+    runtime::CameraComponent cam;
+    cam.is_active = true;
+    w.add<runtime::CameraComponent>(cam_e, cam);
+    ecs::Entity light_e = w.create_entity();
+    w.add<runtime::DirectionalLight>(light_e, runtime::DirectionalLight{});
+    ecs::Entity mesh_e = w.create_entity();
+    w.add<scene::Transform>(mesh_e, scene::Transform{});
+    runtime::MeshComponent mc;
+    mc.mesh_id = mesh_id;
+    mc.material = "content://Materials/Default";
+    w.add<runtime::MeshComponent>(mesh_e, mc);
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Mat.nfscene", scene, err));
+
+    AssetManager manager(vfs, reg, &device);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    NF_CHECK(runtime.load_scene("content://Scenes/Mat.nfscene", err));
+    auto handle = manager.load_mesh_sync(mesh_id);
+    NF_CHECK(handle && handle->state == AssetState::Ready);
+    manager.update();
+    runtime.update(0.016f);
+
+    auto render_lit = [&](uint32_t& out_lit, uint64_t& out_red) {
+        out_lit = 0;
+        out_red = 0;
+        rhi::TextureDesc td{};
+        td.width = 64;
+        td.height = 64;
+        td.format = rhi::Format::R8G8B8A8_UNorm;
+        td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
+        auto target = device.create_texture(td);
+        rhi::BufferDesc bd{};
+        bd.size = static_cast<usize>(64) * 64 * 4;
+        bd.usage = rhi::BufferUsage::TransferDst;
+        bd.memory = rhi::MemoryUsage::GPUToCPU;
+        auto rb = device.create_buffer(bd);
+        auto cmd = device.create_command_buffer();
+        auto fence = device.create_fence(false);
+        if (!target || !rb || !cmd || !fence) {
+            return false;
+        }
+        cmd->begin();
+        runtime.render_offscreen(*target, *cmd);
+        cmd->copy_texture_to_buffer(*target, *rb, 0, 0, 64, 64, 0);
+        cmd->end();
+        device.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+        if (!fence->wait(5000000000ULL)) {
+            return false;
+        }
+        const auto* px = static_cast<const uint8_t*>(rb->map());
+        if (px == nullptr) {
+            return false;
+        }
+        for (size_t i = 0; i < 64u * 64u; ++i) {
+            if (px[i * 4] > 10 || px[i * 4 + 1] > 10 || px[i * 4 + 2] > 10) {
+                ++out_lit;
+            }
+            if (px[i * 4] > px[i * 4 + 1] + 40 && px[i * 4] > px[i * 4 + 2] + 40) {
+                ++out_red;
+            }
+        }
+        rb->unmap();
+        device.wait_idle();
+        return true;
+    };
+
+    // Gray default first.
+    uint32_t lit0 = 0;
+    uint64_t red0 = 0;
+    NF_CHECK(render_lit(lit0, red0));
+    NF_CHECK(lit0 > 100);
+
+    // Turn the shared material red through the editor path (validated cmd).
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+    editor::MaterialEdit red;
+    red.base_color[0] = 0.9f;
+    red.base_color[1] = 0.1f;
+    red.base_color[2] = 0.1f;
+    red.base_color[3] = 1.0f;
+    red.metallic = 0.0f;
+    red.roughness = 0.4f;
+    NF_CHECK(app.set_material_params("content://Materials/Default", red, err));
+    uint32_t lit1 = 0;
+    uint64_t red1 = 0;
+    NF_CHECK(render_lit(lit1, red1));
+    NF_CHECK(red1 > 100); // viewport visibly red now
+
+    // Undo restores gray.
+    NF_CHECK(app.undo(err));
+    uint32_t lit2 = 0;
+    uint64_t red2 = 0;
+    NF_CHECK(render_lit(lit2, red2));
+    NF_CHECK(red2 * 4 < red1); // red essentially gone
+
+    // Invalid values never reach the renderer.
+    editor::MaterialEdit bad;
+    bad.roughness = 5.0f;
+    NF_CHECK(!app.set_material_params("content://Materials/Default", bad, err));
+    NF_CHECK(!err.empty());
+
+    // Missing material file: gray fallback, still renders, no crash.
+    runtime::MeshComponent* mmc = runtime.edit_scene()->world().get<runtime::MeshComponent>(mesh_e);
+    NF_CHECK(mmc != nullptr);
+    mmc->material = "content://Materials/DoesNotExist";
+    runtime.mark_scene_edited();
+    uint32_t lit3 = 0;
+    uint64_t red3 = 0;
+    NF_CHECK(render_lit(lit3, red3));
+    NF_CHECK(lit3 > 100);
+    (void)red0;
+    (void)lit2;
+    (void)red3;
+
+    // Save edited params (re-apply red first) and reload from disk.
+    NF_CHECK(app.set_material_params("content://Materials/Default", red, err));
+    NF_CHECK(app.materials_dirty()); // the edit dirtied the material
+    NF_CHECK(runtime.save_material("content://Materials/Default", "cache://RedCopy.nfmat", err));
+    auto rd = vfs.read_text("cache://RedCopy.nfmat");
+    NF_CHECK(rd.ok);
+    rendering::MaterialAsset reparsed;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(rd.value, reparsed, err));
+    NF_CHECK_NEAR(reparsed.params.base_color[0], 0.9f, 1e-5f);
+    NF_CHECK_NEAR(reparsed.params.base_color[1], 0.1f, 1e-5f);
+
+    NF_CHECK(rhi::validation_error_count() == 0);
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}
+
+NF_TEST(material_albedo_gpu_effect) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_matalbedo");
+    std::filesystem::create_directories(tmp / "Content" / "Scenes");
+    std::filesystem::create_directories(tmp / "Content" / "Materials");
+    std::filesystem::create_directories(tmp / "Content" / "Textures");
+    std::filesystem::create_directories(tmp / "Cache" / "Meshes");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+
+    // Solid red 4x4 texture + gray material referencing it.
+    const auto bmp = make_bmp_solid(4, 4, 255, 0, 0);
+    NF_CHECK(vfs.write_bytes("content://Textures/red.bmp", std::span<const uint8_t>(bmp)).ok);
+    NF_CHECK(vfs.write_text("content://Materials/Default.nfmat",
+                            "# NOVAForge Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\n"
+                            "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
+                            "emission_strength: 0\nalbedo: content://Textures/red.bmp\n")
+                 .ok);
+
+    auto cube = rendering::StaticMesh::create_cube(2.0f);
+    const AssetId mesh_id = AssetId::generate();
+    auto asset = MeshAsset::from_static_mesh(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    std::vector<uint8_t> bytes;
+    asset->save_to_bytes(bytes);
+    NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
+    AssetRegistry reg;
+    AssetMetadata meta;
+    meta.id = mesh_id;
+    meta.type = AssetType::Mesh;
+    meta.logical_path = "content://Meshes/cube.nfmesh";
+    meta.cooked_path = "cache://Meshes/cube.nfmesh";
+    std::string err;
+    NF_CHECK(reg.add(meta, err));
+
+    scene::Scene scene("MatAlbedo");
+    auto& w = scene.world();
+    ecs::Entity cam_e = w.create_entity();
+    w.add<scene::Transform>(cam_e, scene::Transform{});
+    w.get<scene::Transform>(cam_e)->local_z = 5.0f;
+    runtime::CameraComponent cam;
+    cam.is_active = true;
+    w.add<runtime::CameraComponent>(cam_e, cam);
+    ecs::Entity light_e = w.create_entity();
+    w.add<runtime::DirectionalLight>(light_e, runtime::DirectionalLight{});
+    ecs::Entity mesh_e = w.create_entity();
+    w.add<scene::Transform>(mesh_e, scene::Transform{});
+    runtime::MeshComponent mc;
+    mc.mesh_id = mesh_id;
+    mc.material = "content://Materials/Default";
+    w.add<runtime::MeshComponent>(mesh_e, mc);
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Alb.nfscene", scene, err));
+
+    AssetManager manager(vfs, reg, &device);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    NF_CHECK(runtime.load_scene("content://Scenes/Alb.nfscene", err));
+    auto handle = manager.load_mesh_sync(mesh_id);
+    NF_CHECK(handle && handle->state == AssetState::Ready);
+    manager.update();
+    runtime.update(0.016f);
+
+    auto render_red = [&]() -> uint64_t {
+        rhi::TextureDesc td{};
+        td.width = 64;
+        td.height = 64;
+        td.format = rhi::Format::R8G8B8A8_UNorm;
+        td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
+        auto target = device.create_texture(td);
+        rhi::BufferDesc bd{};
+        bd.size = static_cast<usize>(64) * 64 * 4;
+        bd.usage = rhi::BufferUsage::TransferDst;
+        bd.memory = rhi::MemoryUsage::GPUToCPU;
+        auto rb = device.create_buffer(bd);
+        auto cmd = device.create_command_buffer();
+        auto fence = device.create_fence(false);
+        if (!target || !rb || !cmd || !fence) {
+            return 0;
+        }
+        cmd->begin();
+        runtime.render_offscreen(*target, *cmd);
+        cmd->copy_texture_to_buffer(*target, *rb, 0, 0, 64, 64, 0);
+        cmd->end();
+        device.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+        if (!fence->wait(5000000000ULL)) {
+            return 0;
+        }
+        const auto* px = static_cast<const uint8_t*>(rb->map());
+        if (px == nullptr) {
+            return 0;
+        }
+        uint64_t red = 0;
+        for (size_t i = 0; i < 64u * 64u; ++i) {
+            if (px[i * 4] > px[i * 4 + 1] + 40 && px[i * 4] > px[i * 4 + 2] + 40) {
+                ++red;
+            }
+        }
+        rb->unmap();
+        device.wait_idle();
+        return red;
+    };
+
+    // File-declared albedo applies on load: red-dominant cube.
+    NF_CHECK(render_red() > 100);
+
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    // Unbind through the editor path: back to scalar gray.
+    NF_CHECK(app.set_material_albedo("content://Materials/Default", "", err));
+    NF_CHECK(app.material_albedo("content://Materials/Default").empty());
+    NF_CHECK(render_red() < 50);
+    NF_CHECK(app.undo(err)); // rebinds red
+    NF_CHECK(app.material_albedo("content://Materials/Default") == "content://Textures/red.bmp");
+    NF_CHECK(render_red() > 100);
+
+    // Missing texture file: clean rejection, binding untouched.
+    NF_CHECK(!app.set_material_albedo("content://Materials/Default", "content://Textures/nope.png", err));
+    NF_CHECK(!err.empty());
+    NF_CHECK(app.material_albedo("content://Materials/Default") == "content://Textures/red.bmp");
+
+    // Save round-trip preserves the albedo line.
+    NF_CHECK(runtime.save_material("content://Materials/Default", "cache://AlbCopy.nfmat", err));
+    auto rd = vfs.read_text("cache://AlbCopy.nfmat");
+    NF_CHECK(rd.ok);
+    rendering::MaterialAsset reparsed;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(rd.value, reparsed, err));
+    NF_CHECK(reparsed.albedo == "content://Textures/red.bmp");
+
+    NF_CHECK(rhi::validation_error_count() == 0);
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}

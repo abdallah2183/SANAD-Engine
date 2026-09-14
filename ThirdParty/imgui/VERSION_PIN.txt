@@ -1,0 +1,15 @@
+Dear ImGui — pinned source snapshot
+Upstream: https://github.com/ocornut/imgui
+Branch: docking (docking is required by the NOVAForge editor layout)
+Pinned commit: 367b2c24f399988ddafc0bb4628da0106bcc09be
+imgui.h reports: 1.93.0 WIP (IMGUI_VERSION_NUM 19297)
+
+Files vendored (core + Win32/Vulkan backends + stb deps only):
+  imgui.h, imgui.cpp, imgui_draw.cpp, imgui_tables.cpp, imgui_widgets.cpp,
+  imgui_internal.h, imstb_rectpack.h, imstb_textedit.h, imstb_truetype.h,
+  imconfig.h, LICENSE.txt,
+  backends/imgui_impl_win32.h, backends/imgui_impl_win32.cpp,
+  backends/imgui_impl_vulkan.h, backends/imgui_impl_vulkan.cpp
+
+To refresh: download the same paths at a newer commit, update this file,
+and rebuild. No other integration changes should be needed.

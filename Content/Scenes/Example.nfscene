@@ -1,0 +1,16 @@
+# NOVAForge Scene v1
+version: 1
+name: Example
+entity_count: 3
+---
+entity: 1:0
+  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+---
+entity: 2:0
+  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
+  Light: type=Directional dir(-0.5,-1,-0.3) color(1,1,1) intensity=1
+---
+entity: 3:0
+  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default

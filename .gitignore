@@ -1,0 +1,65 @@
+# Build outputs
+build/
+out/
+bin/
+lib/
+obj/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+*.cmake.user
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.vcxproj
+*.vcxproj.filters
+*.sln
+*.suo
+*.user
+*.pdb
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.so
+*.a
+*.dylib
+
+# Shaders cache
+*.spv
+*.pipelinestate
+
+# Asset cache
+Saved/
+Cache/
+dumps/
+
+# Editor / tooling state
+imgui.ini
+
+# Scratch output kept on disk but not tracked
+/build_log.txt
+/env_log.txt
+/out.txt
+/probe_out.txt
+/t1.txt
+/test_out.txt
+*.tmp
+*.bak
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Python (scripts)
+__pycache__/
+*.pyc

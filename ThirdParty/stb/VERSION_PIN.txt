@@ -1,0 +1,8 @@
+stb_image — pinned source snapshot (decode only)
+Upstream: https://github.com/nothings/stb
+Pinned commit: 2c980bb59875b0d32144a71867fbdebb2f77cd20 (master at pin time)
+Files vendored: stb_image.h (public domain / MIT, see header)
+
+Usage: STB_IMAGE_IMPLEMENTATION is defined once in
+Engine/Rendering/src/StbImage.cpp, which compiles warning-lenient
+(the header is not /W4-/WX-clean by design).
