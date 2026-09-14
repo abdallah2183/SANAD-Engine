@@ -1,0 +1,100 @@
+name: CI
+
+# Build the engine and run the full test suite on every push and pull request.
+# Until this existed there was nothing gating regressions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build + test (Windows, Debug)
+    runs-on: windows-latest
+
+    env:
+      BUILD_DIR: build/ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Lavapipe is Mesa's software Vulkan implementation. Installing it means
+      # the headless GPU tests actually execute on a runner with no GPU instead
+      # of reporting SKIPPED, so the RHI/rendering suites get real coverage.
+      # The SDK is left unpinned to track the latest release; pin
+      # `vulkan_version` if reproducible SDK versions matter more than freshness.
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: true
+          cache: true
+          stripdown: true
+          install_lavapipe: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B $env:BUILD_DIR -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DNF_USE_VULKAN=ON
+          -DNF_BUILD_TESTS=ON
+          -DNF_BUILD_SAMPLES=ON
+          -DNF_BUILD_EDITOR=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build $env:BUILD_DIR
+
+      # Point the Vulkan loader at Lavapipe so a device is available headlessly.
+      # Non-fatal: without it the GPU suites degrade to SKIPPED, which the test
+      # runner reports honestly rather than as a pass.
+      - name: Select Lavapipe as the Vulkan device
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $icd = Get-ChildItem -Path C:\lavapipe -Recurse -Filter 'lvp_icd*.json' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if ($icd) {
+            "VK_ICD_FILENAMES=$($icd.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            Write-Host "Using Vulkan ICD: $($icd.FullName)"
+          } else {
+            Write-Host "Lavapipe ICD not found; GPU tests will report SKIPPED."
+          }
+
+      - name: Run test suites
+        shell: bash
+        run: bash Scripts/run_tests.sh "$BUILD_DIR"
+
+      # The triangle sample is the v0.1 milestone artifact. Rendering it with
+      # the validation layer on and asserting zero errors is what makes the
+      # "validation clean" claim meaningful.
+      - name: Triangle sample smoke test (validation on)
+        shell: bash
+        env:
+          NF_TRIANGLE_FRAMES: "60"
+          NF_TRIANGLE_VALIDATION: "1"
+        run: |
+          set -o pipefail
+          exe="$BUILD_DIR/bin/NFSampleTriangle.exe"
+          [ -f "$exe" ] || exe="$BUILD_DIR/bin/NFSampleTriangle"
+          if [ ! -f "$exe" ]; then
+            echo "Triangle sample not built"; exit 1
+          fi
+          "$exe" > triangle.log 2>&1
+          code=$?
+          echo "--- sample output (tail) ---"
+          tail -20 triangle.log
+          errors=$(grep -c 'ERROR \[RHI\]' triangle.log || true)
+          echo "Vulkan validation errors: $errors"
+          if [ "$code" -ne 0 ]; then echo "Sample exited $code"; exit 1; fi
+          if [ "$errors" -ne 0 ]; then
+            echo "Validation is not clean"; grep 'ERROR \[RHI\]' triangle.log | head -10; exit 1
+          fi
