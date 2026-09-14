@@ -120,6 +120,35 @@ jobs:
             echo "No RuntimeTests executed — runtime suite is missing or broken."
             exit 1
           fi
+          # Phase 10: gameplay modules and save slots. Both suites are new, and a
+          # new suite that silently fails to build is the easiest way to ship a
+          # phase whose tests never ran. Note that the reflection tests live in
+          # CoreTests (the reflection module lives in NFCore), not in a suite of
+          # their own.
+          gameplay_passed=$(sed -n 's/^PASS  GameplayTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "GameplayTests passed: ${gameplay_passed:-0}"
+          if [ "${gameplay_passed:-0}" -eq 0 ]; then
+            echo "No GameplayTests executed — gameplay suite is missing or broken."
+            exit 1
+          fi
+          save_passed=$(sed -n 's/^PASS  SaveTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "SaveTests passed: ${save_passed:-0}"
+          if [ "${save_passed:-0}" -eq 0 ]; then
+            echo "No SaveTests executed — save suite is missing or broken."
+            exit 1
+          fi
+          # The reflection tests are the only guard against a property table that
+          # points at the wrong offset — a defect that compiles, links and
+          # silently corrupts data. They live in CoreTests (the reflection module
+          # is in NFCore), and the runner only prints per-suite totals, so run the
+          # name filter directly and require a non-zero pass count.
+          reflection_out=$("$BUILD_DIR/bin/CoreTests.exe" reflection 2>&1 || true)
+          reflection_passed=$(printf '%s\n' "$reflection_out" | sed -n 's/.*Passed: \([0-9]*\).*/\1/p' | tail -1)
+          echo "Reflection tests passed: ${reflection_passed:-0}"
+          if [ "${reflection_passed:-0}" -eq 0 ]; then
+            echo "No reflection tests executed — the reflection suite is missing or broken."
+            exit 1
+          fi
           exit "$code"
 
       # The registry maps meshes to cache:// paths that only exist after cooking.

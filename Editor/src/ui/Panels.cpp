@@ -6,12 +6,17 @@
 #include <NF/Editor/UiShell.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
+#include <NF/Editor/ReflectedInspector.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/PrefabLink.hpp>
+#include <NF/Scene/Transform.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Animation/Components.hpp>
 #include <NF/Audio/Components.hpp>
+#include <NF/Gameplay/Components.hpp>
+#include <NF/Gameplay/GameplayModule.hpp>
+#include <NF/Gameplay/GameplayModuleRegistry.hpp>
 
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
@@ -86,6 +91,11 @@ InspectorCache& inspector_cache() {
     return cache;
 }
 
+void push_info(ConsoleBuffer& console, const std::string& what) {
+    console.push(LogMessage{LogLevel::Info, LogCategory::Editor, what,
+                            std::chrono::system_clock::now(), __FILE__, __LINE__});
+}
+
 void push_error(ConsoleBuffer& console, const std::string& what, const std::string& err) {
     console.push(LogMessage{LogLevel::Error, LogCategory::Editor, what + ": " + err,
                             std::chrono::system_clock::now(), __FILE__, __LINE__});
@@ -122,10 +132,140 @@ const char* entity_label_ptr(EditorApp& app, ecs::Entity e) {
     return scratch.c_str();
 }
 
+// --- Reflection-driven widgets ---------------------------------------------
+//
+// The widget dispatch is a direct translation of ReflectedWidgetKind; all the
+// policy (which properties are visible, which widget, how they group) lives in
+// ReflectedObjectView, which is covered by EditorTests. Keeping the ImGui side
+// free of decisions is the point: there is nothing here worth testing that is
+// not already tested one layer down.
+//
+// Returns true when the user changed the value; the write goes through the view,
+// which validates before touching the object.
+bool draw_reflected_field(ReflectedObjectView& view, usize index) {
+    const ReflectedField& field = view.fields()[index];
+    const std::string current = view.value_of(index);
+    bool changed = false;
+
+    ImGui::PushID(static_cast<int>(index));
+
+    switch (field.widget) {
+        case ReflectedWidgetKind::FloatDrag: {
+            float v = std::strtof(current.c_str(), nullptr);
+            if (ImGui::DragFloat(field.label.c_str(), &v, 0.01f)) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(v));
+                changed = view.set_value(index, buf);
+            }
+            break;
+        }
+        case ReflectedWidgetKind::IntDrag: {
+            int v = static_cast<int>(std::strtol(current.c_str(), nullptr, 10));
+            if (ImGui::DragInt(field.label.c_str(), &v)) {
+                changed = view.set_value(index, std::to_string(v));
+            }
+            break;
+        }
+        case ReflectedWidgetKind::BoolCheckbox: {
+            bool v = current == "true";
+            if (ImGui::Checkbox(field.label.c_str(), &v)) {
+                changed = view.set_value(index, v ? "true" : "false");
+            }
+            break;
+        }
+        case ReflectedWidgetKind::TextInput: {
+            char buffer[256]{};
+            std::strncpy(buffer, current.c_str(), sizeof(buffer) - 1);
+            if (ImGui::InputText(field.label.c_str(), buffer, sizeof(buffer))) {
+                changed = view.set_value(index, buffer);
+            }
+            break;
+        }
+        case ReflectedWidgetKind::Vec3Drag: {
+            float v[3] = {0.0f, 0.0f, 0.0f};
+            std::sscanf(current.c_str(), "%f %f %f", &v[0], &v[1], &v[2]);
+            if (ImGui::DragFloat3(field.label.c_str(), v, 0.01f)) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "%.9g %.9g %.9g",
+                              static_cast<double>(v[0]), static_cast<double>(v[1]),
+                              static_cast<double>(v[2]));
+                changed = view.set_value(index, buf);
+            }
+            break;
+        }
+        case ReflectedWidgetKind::QuatEulerDrag: {
+            // Edited in degrees, stored as a quaternion. The conversion is the
+            // engine's own pair in NF/Scene/Transform.hpp rather than a second
+            // implementation here, so the inspector and the physics write-back
+            // cannot disagree about what a rotation means.
+            float qv[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            std::sscanf(current.c_str(), "%f %f %f %f", &qv[0], &qv[1], &qv[2], &qv[3]);
+            float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+            scene::euler_xyz_degrees_from_quat(Quat{qv[0], qv[1], qv[2], qv[3]}, rx, ry, rz);
+
+            float degrees[3] = {rx, ry, rz};
+            if (ImGui::DragFloat3(field.label.c_str(), degrees, 0.5f)) {
+                const Quat q = scene::quat_from_euler_xyz_degrees(degrees[0], degrees[1], degrees[2]);
+                char buf[200];
+                std::snprintf(buf, sizeof(buf), "%.9g %.9g %.9g %.9g",
+                              static_cast<double>(q.x), static_cast<double>(q.y),
+                              static_cast<double>(q.z), static_cast<double>(q.w));
+                changed = view.set_value(index, buf);
+            }
+            break;
+        }
+        case ReflectedWidgetKind::EntityPicker: {
+            // An id field, not a real picker: a click-to-pick control needs the
+            // viewport's selection flow, and a half-wired picker that silently
+            // clears the reference is worse than an explicit id box.
+            char buffer[32]{};
+            std::strncpy(buffer, current.c_str(), sizeof(buffer) - 1);
+            if (ImGui::InputText(field.label.c_str(), buffer, sizeof(buffer))) {
+                changed = view.set_value(index, buffer);
+            }
+            break;
+        }
+        case ReflectedWidgetKind::EnumCombo: {
+            if (field.enum_variants.empty()) {
+                ImGui::TextDisabled("%s: (unregistered enum)", field.label.c_str());
+                break;
+            }
+            int selected = 0;
+            for (usize i = 0; i < field.enum_variants.size(); ++i) {
+                if (field.enum_variants[i] == current) selected = static_cast<int>(i);
+            }
+            std::vector<const char*> names;
+            names.reserve(field.enum_variants.size());
+            for (const std::string& name : field.enum_variants) names.push_back(name.c_str());
+
+            if (ImGui::Combo(field.label.c_str(), &selected, names.data(),
+                             static_cast<int>(names.size()))) {
+                changed = view.set_value(index, field.enum_variants[static_cast<usize>(selected)]);
+            }
+            break;
+        }
+        case ReflectedWidgetKind::Unsupported:
+            // Shown read-only rather than hidden: a reflected property with no
+            // widget is a gap in the editor, and a gap that renders as nothing is
+            // indistinguishable from a property that was never declared.
+            ImGui::TextDisabled("%s = %s (no widget for this type)",
+                                field.label.c_str(), current.c_str());
+            break;
+    }
+
+    ImGui::PopID();
+    return changed;
+}
+
 } // namespace
 
 UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     UiIntents intents;
+
+    // Autosave runs off the frame clock, before any panel draws. Ticking it here
+    // rather than from Runtime::update keeps the Runtime unaware of save slots.
+    app.tick_autosave(stats.dt_seconds);
+
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
@@ -197,6 +337,64 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 if (!app.stop(err)) {
                     push_error(app.console(), "Stop failed", err);
                 }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Game##save_menu")) {
+                ImGui::OpenPopup("GameSaves");
+            }
+            if (ImGui::BeginPopup("GameSaves")) {
+                static char slot[64] = "slot1";
+                ImGui::InputText("Slot", slot, sizeof(slot));
+
+                if (ImGui::Button("Save Game")) {
+                    std::string err;
+                    if (!app.save_game(slot, err)) {
+                        push_error(app.console(), "Save game failed", err);
+                    } else {
+                        push_info(app.console(), std::string("Saved game to '") + slot + "'");
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Load Game")) {
+                    std::string err;
+                    if (!app.load_game(slot, err)) {
+                        push_error(app.console(), "Load game failed", err);
+                    } else {
+                        push_info(app.console(), std::string("Loaded game from '") + slot + "'");
+                    }
+                }
+                ImGui::SameLine();
+                if (!app.has_save(slot)) {
+                    ImGui::TextDisabled("(no such slot)");
+                }
+
+                // Autosave. The interval is a real duration rather than a frame
+                // count, so the behaviour does not change with frame rate.
+                static float interval = 120.0f;
+                bool enabled = app.autosave_enabled();
+                if (ImGui::Checkbox("Autosave", &enabled)) {
+                    app.set_autosave(enabled ? interval : 0.0f, "autosave_");
+                }
+                if (enabled) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(120.0f);
+                    if (ImGui::DragFloat("Interval (s)", &interval, 5.0f, 5.0f, 3600.0f)) {
+                        app.set_autosave(interval, "autosave_");
+                    }
+                    ImGui::TextDisabled("autosaves written: %u", app.autosaves_performed());
+                }
+
+                ImGui::Separator();
+                const std::vector<runtime::SaveSystem::SlotInfo> slots = app.list_saves();
+                if (slots.empty()) {
+                    ImGui::TextDisabled("no save slots");
+                }
+                for (const runtime::SaveSystem::SlotInfo& info : slots) {
+                    ImGui::Text("%s  (%s, schema %u, %s)", info.name.c_str(),
+                                info.scene_name.c_str(), info.schema_version,
+                                info.saved_at.c_str());
+                }
+                ImGui::EndPopup();
             }
             ImGui::SameLine();
             ImGui::TextUnformatted("|");
@@ -967,6 +1165,77 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                             push_error(app.console(), "Audio edit failed", err);
                         } else {
                             ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Gameplay modules (reflection-driven) ---
+            //
+            // The *live module's* reflected state is what gets edited, not the
+            // component's map. During a session the module owns its state and the
+            // component is the saved snapshot, so editing the map would show the
+            // user a value the module would immediately overwrite.
+            if (ImGui::CollapsingHeader("Gameplay", ImGuiTreeNodeFlags_DefaultOpen)) {
+                const std::vector<std::string> candidates = gameplay_module_candidates();
+                if (candidates.empty()) {
+                    ImGui::TextDisabled("no gameplay modules are registered in this build");
+                } else {
+                    static int chosen = 0;
+                    std::vector<const char*> names;
+                    names.reserve(candidates.size());
+                    for (const std::string& candidate : candidates) names.push_back(candidate.c_str());
+                    if (chosen >= static_cast<int>(names.size())) chosen = 0;
+
+                    ImGui::Combo("Module", &chosen, names.data(), static_cast<int>(names.size()));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Attach##gameplay")) {
+                        std::string err;
+                        if (!app.attach_gameplay_module(
+                                sel, candidates[static_cast<usize>(chosen)], err)) {
+                            push_error(app.console(), "Attach gameplay module failed", err);
+                        } else {
+                            ic.valid = false;
+                        }
+                    }
+                }
+
+                if (const auto* gmc = w->get<gameplay::GameplayModuleComponent>(sel)) {
+                    ImGui::TextDisabled("attached: %s (%s)", gmc->module_name.c_str(),
+                                        gmc->enabled ? "enabled" : "disabled");
+                    ImGui::SameLine();
+                    if (ImGui::Button("Detach##gameplay")) {
+                        std::string err;
+                        if (!app.detach_gameplay_module(sel, err)) {
+                            push_error(app.console(), "Detach gameplay module failed", err);
+                        } else {
+                            ic.valid = false;
+                        }
+                    }
+
+                    runtime::Runtime* rt = app.runtime();
+                    gameplay::GameplayModule* module =
+                        rt != nullptr ? rt->find_gameplay_module(gmc->module_name) : nullptr;
+                    if (module == nullptr) {
+                        ImGui::TextDisabled("module '%s' is not registered in this build",
+                                            gmc->module_name.c_str());
+                    } else {
+                        const gameplay::GameplayStateBinding binding = module->state();
+                        if (!binding.valid()) {
+                            ImGui::TextDisabled("module declares no reflected state");
+                        } else {
+                            ReflectedObjectView view =
+                                ReflectedObjectView::build(binding.instance, binding.meta);
+                            if (view.empty()) {
+                                ImGui::TextDisabled("module declares no editable properties");
+                            }
+                            for (const ReflectedGroup& group : view.groups()) {
+                                if (!group.category.empty()) {
+                                    ImGui::SeparatorText(group.category.c_str());
+                                }
+                                for (usize index : group.field_indices) {
+                                    (void)draw_reflected_field(view, index);
+                                }
+                            }
                         }
                     }
                 }

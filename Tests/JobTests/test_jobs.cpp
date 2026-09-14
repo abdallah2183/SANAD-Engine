@@ -3,6 +3,9 @@
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 
+#include <chrono>
+#include <thread>
+
 using namespace nf;
 
 NF_TEST(test_job_system_init) {
@@ -60,5 +63,35 @@ NF_TEST(test_job_dispatch_and_wait) {
     JobSystem::instance().dispatch_and_wait(std::move(tasks));
 
     NF_CHECK_EQ(counter.load(), 100);
+    JobSystem::instance().shutdown();
+}
+
+// JobGroup was never exercised by this suite, which is how it shipped with
+// add() incrementing the pending counter without ever handing it to the job —
+// so wait() spun forever and the group was unusable by anyone who waited on it.
+NF_TEST(test_job_group_wait_returns) {
+    JobSystem::instance().init(2);
+
+    JobGroup group;
+    std::atomic<u32> ran{0};
+
+    for (u32 i = 0; i < 8; ++i) {
+        group.add([&ran] { ran.fetch_add(1, std::memory_order_relaxed); });
+    }
+
+    // Bounded poll before calling wait(): a group whose counter is never
+    // decremented would hang wait() forever, and a hanging test blocks the whole
+    // suite instead of failing it. Polling first turns the hang into a failure.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (group.pending() != 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+
+    NF_CHECK_EQ(ran.load(), 8u);
+    NF_CHECK_EQ(group.pending(), 0u);
+
+    // Must return rather than spin.
+    group.wait();
+
     JobSystem::instance().shutdown();
 }

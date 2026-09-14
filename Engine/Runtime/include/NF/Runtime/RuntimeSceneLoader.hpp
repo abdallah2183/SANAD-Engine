@@ -27,4 +27,12 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
 bool save_scene_to_vfs(assets::VirtualFileSystem& vfs, const std::string& logical_path, const scene::Scene& scene, std::string& out_error);
 bool save_scene_to_physical(const std::filesystem::path& physical_path, const scene::Scene& scene, std::string& out_error);
 
+/// The scene's on-disk text, without touching the filesystem.
+///
+/// Split out so the save system can take a snapshot on the main thread and hand
+/// the bytes to a worker. Serializing the live scene off-thread would race with
+/// the frame that is still running, and the alternative — holding the main
+/// thread while a file is written — is what makes a save stutter.
+std::string serialize_scene_to_text(const scene::Scene& scene);
+
 } // namespace nf::runtime

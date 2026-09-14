@@ -294,19 +294,6 @@ Quat Quat::from_axis_angle(const Vec3& axis, f32 angle) {
     return {n.x * s, n.y * s, n.z * s, std::cos(half)};
 }
 
-Quat Quat::from_euler(f32 pitch, f32 yaw, f32 roll) {
-    f32 cp = std::cos(pitch * 0.5f), sp = std::sin(pitch * 0.5f);
-    f32 cy = std::cos(yaw * 0.5f),   sy = std::sin(yaw * 0.5f);
-    f32 cr = std::cos(roll * 0.5f),  sr = std::sin(roll * 0.5f);
-
-    return {
-        sp * cy * cr - cp * sy * sr,
-        cp * sy * cr + sp * cy * sr,
-        cp * cy * sr - sp * sy * cr,
-        cp * sy * sr + sp * cy * cr
-    };
-}
-
 Quat Quat::operator*(const Quat& o) const {
     return {
         w * o.x + x * o.w + y * o.z - z * o.y,

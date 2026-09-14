@@ -5,12 +5,16 @@ set(NFRUNTIME_SOURCES
     src/RunConfigResolver.cpp
     src/Runtime.cpp
     src/RuntimeSceneLoader.cpp
+    src/SaveSystem.cpp
 )
 
 nf_engine_library(NFRuntime
     SOURCES ${NFRUNTIME_SOURCES}
-    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFAnimation NFAudio
+    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFAnimation NFAudio NFGameplay
 )
 
 target_include_directories(NFRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(NFRuntime PRIVATE "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\"")
+# The save format stamps the engine version into every slot's meta.txt. Taken
+# from the CMake project version so the stamp cannot drift from the binary.
+target_compile_definitions(NFRuntime PRIVATE "NF_ENGINE_VERSION=\"${PROJECT_VERSION}\"")

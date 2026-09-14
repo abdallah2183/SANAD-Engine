@@ -13,6 +13,7 @@ set(NFCORE_SOURCES
     src/Threading.cpp
     src/Memory.cpp
     src/Containers.cpp
+    src/Reflection.cpp
 )
 
 nf_engine_library(NFCore

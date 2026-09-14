@@ -5,6 +5,8 @@
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Scene.hpp>
+#include <NF/Gameplay/Components.hpp>
+#include <NF/Gameplay/GameplayModuleRegistry.hpp>
 
 namespace nf::editor {
 
@@ -483,9 +485,135 @@ bool EditorApp::set_audio(ecs::Entity e, const audio::AudioComponent& aud, std::
     return true;
 }
 
-bool EditorApp::require_materials(std::string& out_err) const {
-    if (m_runtime == nullptr) {
+bool EditorApp::attach_gameplay_module(ecs::Entity e, const std::string& module_name,
+                                       std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (module_name.empty()) {
+        out_err = "Module name is empty";
+        return false;
+    }
+    // Checked against the registry rather than merely non-empty: a component
+    // naming a module no build can construct is data the scene can never use, and
+    // letting the inspector create one would make that a one-click mistake.
+    if (!gameplay::GameplayModuleRegistry::instance().contains(module_name)) {
+        out_err = "No gameplay module named '" + module_name + "' is registered in this build";
+        return false;
+    }
+
+    if (auto* existing = w->get<gameplay::GameplayModuleComponent>(e)) {
+        if (existing->module_name == module_name) {
+            return true;  // already attached; do not discard the saved state
+        }
+        existing->module_name = module_name;
+        existing->properties.clear();
+        existing->enabled = true;
+        after_mutation(e);
+        return true;
+    }
+
+    gameplay::GameplayModuleComponent comp;
+    comp.module_name = module_name;
+    w->add<gameplay::GameplayModuleComponent>(e, std::move(comp));
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_gameplay_module(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<gameplay::GameplayModuleComponent>(e)) {
+        out_err = "Entity has no GameplayModuleComponent";
+        return false;
+    }
+    w->remove<gameplay::GameplayModuleComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+runtime::SaveSystem* EditorApp::save_system() {
+    if (m_save_system == nullptr && m_runtime != nullptr) {
+        m_save_system = std::make_unique<runtime::SaveSystem>(m_vfs, *m_runtime);
+    }
+    return m_save_system.get();
+}
+
+bool EditorApp::save_game(const std::string& slot, std::string& out_err) {
+    runtime::SaveSystem* saves = save_system();
+    if (saves == nullptr) {
         out_err = "Runtime not attached";
+        return false;
+    }
+    if (!saves->save_game(slot, out_err)) {
+        return false;
+    }
+    // A save slot is not the scene file, so m_dirty is deliberately untouched:
+    // saving progress does not mean the scene has been written anywhere.
+    return true;
+}
+
+bool EditorApp::load_game(const std::string& slot, std::string& out_err) {
+    runtime::SaveSystem* saves = save_system();
+    if (saves == nullptr) {
+        out_err = "Runtime not attached";
+        return false;
+    }
+    if (!saves->load_game(slot, out_err)) {
+        return false;
+    }
+    // The world was replaced wholesale, so selection and undo history no longer
+    // refer to anything that exists.
+    m_selection.clear();
+    m_dirty = false;
+    return true;
+}
+
+std::vector<runtime::SaveSystem::SlotInfo> EditorApp::list_saves() {
+    runtime::SaveSystem* saves = save_system();
+    return saves != nullptr ? saves->list_saves() : std::vector<runtime::SaveSystem::SlotInfo>{};
+}
+
+bool EditorApp::has_save(const std::string& slot) {
+    runtime::SaveSystem* saves = save_system();
+    return saves != nullptr && saves->has_save(slot);
+}
+
+void EditorApp::set_autosave(float interval_seconds, const std::string& slot_prefix) {
+    if (runtime::SaveSystem* saves = save_system()) {
+        saves->set_autosave(interval_seconds, slot_prefix);
+    }
+}
+
+bool EditorApp::autosave_enabled() {
+    runtime::SaveSystem* saves = save_system();
+    return saves != nullptr && saves->autosave_enabled();
+}
+
+unsigned EditorApp::autosaves_performed() {
+    runtime::SaveSystem* saves = save_system();
+    return saves != nullptr ? saves->autosaves_performed() : 0u;
+}
+
+void EditorApp::tick_autosave(float dt) {
+    if (m_save_system != nullptr) {
+        m_save_system->tick(dt);
+    }
+}
+
+bool EditorApp::require_materials(std::string& out_err) const {
+    if (m_runtime == nullptr) {        out_err = "Runtime not attached";
         return false;
     }
     if (m_play.playing()) {

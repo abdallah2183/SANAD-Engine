@@ -8,6 +8,8 @@
 #include <NF/Physics/Components.hpp>
 #include <NF/Animation/Components.hpp>
 #include <NF/Audio/Components.hpp>
+#include <NF/Gameplay/Components.hpp>
+#include <NF/Gameplay/GameplayState.hpp>
 #include <NF/Core/Logger.hpp>
 #include <fstream>
 #include <set>
@@ -57,6 +59,17 @@ static const char* axis_name(const Vec3& axis) {
     if (axis.z > 0.5f) return "z";
     return "y";
 }
+
+// --- Module property encoding ----------------------------------------------
+//
+// A component line is a sequence of space-separated `key=value` tokens, and
+// `field_value` stops at the first space. Module state is user data, so the
+// values are escaped rather than assumed clean — without that, `label=hello
+// world` would silently truncate to `hello` on the round trip.
+//
+// The encoding itself lives in NF/Gameplay/GameplayState.hpp, shared with the
+// save system. A second copy here would be free to drift, and the failure mode
+// of a drifted escape is silent data corruption rather than an error.
 
 SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_path) {
     SceneLoadResult result;
@@ -343,6 +356,25 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                 aud.spatial = line.find("spatial=true") != std::string::npos;
                 aud.autoplay = line.find("autoplay=true") != std::string::npos;
                 scene->world().add<audio::AudioComponent>(e, std::move(aud));
+            } else if (line.rfind("  Module:",0)==0) {
+                gameplay::GameplayModuleComponent comp;
+                comp.module_name = field_value(line, "name=");
+                comp.enabled = line.find("enabled=false") == std::string::npos;
+
+                // The state is whatever the module's class declared as
+                // SerializeField; the loader does not need to know the type.
+                const std::string encoded = field_value(line, "props=");
+                if (!encoded.empty()) {
+                    gameplay::decode_properties(encoded, comp.properties);
+                }
+
+                if (comp.module_name.empty()) {
+                    // A nameless module cannot be matched to a factory, so it is
+                    // reported rather than stored as an orphan component.
+                    result.warnings.push_back("Module line without a name was ignored: " + line);
+                } else {
+                    scene->world().add<gameplay::GameplayModuleComponent>(e, std::move(comp));
+                }
             } else {
                 result.warnings.push_back("Unknown component line: " + line);
             }
@@ -382,14 +414,8 @@ SceneLoadResult load_scene_from_vfs(assets::VirtualFileSystem& vfs, const std::s
     return load_scene_from_physical(r.value);
 }
 
-bool save_scene_to_physical(const std::filesystem::path& physical_path, const scene::Scene& scene_obj, std::string& out_error) {
-    std::filesystem::path tmp = physical_path;
-    tmp += ".tmp";
-    std::error_code ec;
-    std::filesystem::create_directories(tmp.parent_path(), ec);
-    if (ec) { out_error = ec.message(); return false; }
-    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-    if (!out) { out_error = "Failed to open file for writing: " + tmp.string(); return false; }
+std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
+    std::ostringstream out;
     out << "# NOVAForge Scene v1\n";
     out << "version: 1\n";
     out << "name: " << scene_obj.name() << "\n";
@@ -494,9 +520,34 @@ bool save_scene_to_physical(const std::filesystem::path& physical_path, const sc
             }
             out << "\n";
         }
+        const auto* mod = scene_obj.world().get<gameplay::GameplayModuleComponent>(e);
+        if (mod && !mod->module_name.empty()) {
+            out << "  Module: name=" << mod->module_name
+                << " enabled=" << (mod->enabled ? "true" : "false")
+                << " props=" << gameplay::encode_properties(mod->properties)
+                << "\n";
+        }
     }
-    out.close();
-    if (!out) { out_error = "Failed to write scene file"; std::filesystem::remove(tmp, ec); return false; }
+    return out.str();
+}
+
+bool save_scene_to_physical(const std::filesystem::path& physical_path, const scene::Scene& scene_obj, std::string& out_error) {
+    const std::string text = serialize_scene_to_text(scene_obj);
+
+    std::filesystem::path tmp = physical_path;
+    tmp += ".tmp";
+    std::error_code ec;
+    std::filesystem::create_directories(tmp.parent_path(), ec);
+    if (ec) { out_error = ec.message(); return false; }
+
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) { out_error = "Failed to open file for writing: " + tmp.string(); return false; }
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        out.close();
+        if (!out) { out_error = "Failed to write scene file"; std::filesystem::remove(tmp, ec); return false; }
+    }
+
     std::filesystem::rename(tmp, physical_path, ec);
     if (ec) {
         std::filesystem::remove(physical_path, ec);

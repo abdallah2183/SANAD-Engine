@@ -19,6 +19,7 @@ add_executable(CoreTests
     CoreTests/test_hash.cpp
     CoreTests/test_time.cpp
     CoreTests/test_filesystem.cpp
+    CoreTests/test_reflection.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)
@@ -138,6 +139,28 @@ target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
 nf_target_set_warnings(AudioTests)
 
+# --- Gameplay tests (module registry, state bridge, Runtime integration) ---
+# Links NFRuntime because the interesting half of the suite is whether the
+# Runtime actually instantiates and steps modules — a registry test alone cannot
+# see that, and that is precisely how Phase 9 shipped a dead subsystem.
+add_executable(GameplayTests
+    TestFramework.cpp
+    GameplayTests/test_gameplay.cpp
+    GameplayTests/test_gameplay_serialization.cpp
+)
+target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
+nf_target_set_warnings(GameplayTests)
+
+# --- Save tests (slots, async save, autosave, schema migration) ---
+add_executable(SaveTests
+    TestFramework.cpp
+    SaveTests/test_save.cpp
+)
+target_include_directories(SaveTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(SaveTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio NFJobs)
+nf_target_set_warnings(SaveTests)
+
 # --- Tool tests (project scaffold, cooker, packager) ---
 add_executable(ToolTests
     TestFramework.cpp
@@ -176,9 +199,12 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_import.cpp
         EditorTests/test_hot_reload.cpp
         EditorTests/test_prefabs.cpp
+        EditorTests/test_reflected_inspector.cpp
+        EditorTests/test_gameplay_editor.cpp
+        EditorTests/test_orbit_camera_module.cpp
     )
     target_include_directories(EditorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering)
+    target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering NFGameplay)
     target_compile_definitions(EditorTests PRIVATE
         "NF_EDITOR_IMGUI_SHADER_DIR=\"${NF_EDITOR_IMGUI_SHADER_DIR}\""
     )
@@ -208,7 +234,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests ToolTests HeadlessProbe)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests ToolTests HeadlessProbe)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -225,6 +251,8 @@ add_test(NAME RHITests  COMMAND RHITests)
 add_test(NAME PhysicsTests COMMAND PhysicsTests)
 add_test(NAME AnimationTests COMMAND AnimationTests)
 add_test(NAME AudioTests COMMAND AudioTests)
+add_test(NAME GameplayTests COMMAND GameplayTests)
+add_test(NAME SaveTests COMMAND SaveTests)
 add_test(NAME ToolTests  COMMAND ToolTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)

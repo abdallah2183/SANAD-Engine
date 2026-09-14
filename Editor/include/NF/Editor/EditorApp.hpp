@@ -23,6 +23,7 @@
 #include <NF/Editor/Selection.hpp>
 #include <NF/Editor/Viewport.hpp>
 #include <NF/Physics/Components.hpp>
+#include <NF/Runtime/SaveSystem.hpp>
 #include <NF/Animation/Components.hpp>
 #include <NF/Audio/Components.hpp>
 #include <NF/Runtime/Runtime.hpp>
@@ -99,6 +100,37 @@ public:
     bool set_animation(ecs::Entity e, const animation::AnimationComponent& anim,
                        std::string& out_err);
     bool set_audio(ecs::Entity e, const audio::AudioComponent& aud, std::string& out_err);
+
+    // --- Gameplay modules (Phase 10) ----------------------------------------
+    // Attaches a GameplayModuleComponent naming a registered module to `e`.
+    // Re-attaching the module that is already there is a no-op rather than a
+    // wipe, so a stray click cannot silently discard the saved state. The
+    // component starts with an empty property map: the live module is the source
+    // of truth during a session, and Runtime::capture_gameplay_state() fills the
+    // snapshot in at save time.
+    bool attach_gameplay_module(ecs::Entity e, const std::string& module_name, std::string& out_err);
+    bool detach_gameplay_module(ecs::Entity e, std::string& out_err);
+
+    // --- Save slots (Phase 10) ----------------------------------------------
+    // Distinct from save()/open_scene(), which persist the *scene* to a path the
+    // user names. A save slot is player data: scene + gameplay module state +
+    // version metadata, written under `saves://`.
+    bool save_game(const std::string& slot, std::string& out_err);
+    bool load_game(const std::string& slot, std::string& out_err);
+    std::vector<runtime::SaveSystem::SlotInfo> list_saves();
+    bool has_save(const std::string& slot);
+
+    /// Autosave interval in seconds. A value <= 0 turns autosave off; "every
+    /// frame" is not a save policy.
+    void set_autosave(float interval_seconds, const std::string& slot_prefix);
+    bool autosave_enabled();
+    unsigned autosaves_performed();
+    /// Accumulates frame time and autosaves when due. Driven from the editor's
+    /// frame, since the Runtime has no business knowing about save slots.
+    void tick_autosave(float dt);
+
+    /// The save system, created on first use. Never null after a call.
+    runtime::SaveSystem* save_system();
 
     // --- Shared materials (undoable; visible in the viewport next frame) ---
     bool set_entity_material(ecs::Entity e, const std::string& material_path, std::string& out_err);
@@ -186,6 +218,9 @@ private:
     assets::AssetManager& m_manager;
     ConsoleBuffer& m_console;
     runtime::Runtime* m_runtime = nullptr;
+    // Created on first use: most editor sessions never touch a save slot, and a
+    // SaveSystem needs a mounted `saves://` to be useful.
+    std::unique_ptr<runtime::SaveSystem> m_save_system;
 
     std::string m_scene_path;
     std::string m_project_path;

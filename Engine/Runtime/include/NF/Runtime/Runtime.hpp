@@ -21,6 +21,10 @@
 #include <NF/Animation/Skeleton.hpp>
 #include <NF/Audio/AudioEngine.hpp>
 #include <NF/Audio/Components.hpp>
+#include <NF/Gameplay/Components.hpp>
+#include <NF/Gameplay/GameplayModule.hpp>
+#include <NF/Gameplay/GameplayModuleRegistry.hpp>
+#include <NF/Gameplay/GameplayState.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 
 #include <filesystem>
@@ -56,6 +60,16 @@ public:
     // Load a scene from a logical path (e.g. content://Scenes/Example.nfscene)
     // Returns true on success (even if some assets are missing, it will log and continue)
     bool load_scene(const std::string& logical_path, std::string& out_error);
+
+    /// Installs an already-built scene as the live one, running everything
+    /// load_scene does *after* parsing: display naming, physics rebuild, gameplay
+    /// init plus the on_scene_load hooks, mesh loads, and lazy renderer init.
+    ///
+    /// Used by the save system, whose scene comes from a slot directory rather
+    /// than from a single file. `logical_path` is recorded as the scene's origin
+    /// — for a loaded save that is the slot's own scene file, which keeps the
+    /// "where did this scene come from" answer honest.
+    void adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string& logical_path);
 
     // Per-frame update: handles async asset GPU uploads, transform propagation, culling, etc.
     void update(float dt);
@@ -166,6 +180,61 @@ public:
     /// The audio backend. Never null; a NullAudioDevice until one is installed.
     audio::AudioDevice* audio_device() const { return m_audio_device.get(); }
 
+    // --- Gameplay modules (Phase 10) ----------------------------------------
+    //
+    // Modules come from GameplayModuleRegistry, so the Runtime only ever sees
+    // the ones linked into the build. Each is instantiated once, given on_init,
+    // and then stepped every frame by step_gameplay().
+    //
+    // Placement in the frame is deliberate: gameplay runs after physics,
+    // animation and audio, and before transform propagation. A module therefore
+    // observes this frame's simulation results, and an entity it repositions is
+    // rendered at the new place in the same frame. A module that wants to steer
+    // *physics* writes velocities, which take effect on the next fixed step —
+    // the alternative (running gameplay first) would trade that for a module
+    // that cannot see where the frame actually put anything.
+    //
+    // Ordering between modules is by update_priority(), lower first, ties broken
+    // by name so the sequence does not depend on registration timing.
+    u32 step_gameplay(f32 dt);
+
+    /// Instantiates every registered module and calls on_init on each. Invoked
+    /// by load_scene(); calling it again once modules exist is a no-op.
+    void init_gameplay();
+
+    /// Calls on_shutdown on every module and destroys them. Invoked by
+    /// shutdown(); safe to call repeatedly.
+    void shutdown_gameplay();
+
+    [[nodiscard]] size_t gameplay_module_count() const { return m_gameplay_modules.size(); }
+
+    /// Total on_update calls across all modules. The observable that separates
+    /// "modules exist" from "modules are actually being driven" — a registry
+    /// count alone cannot tell those apart.
+    [[nodiscard]] size_t gameplay_updates() const { return m_gameplay_updates; }
+
+    [[nodiscard]] gameplay::GameplayModule* find_gameplay_module(std::string_view name);
+
+    /// Takes ownership of an already-built module. For a game that wants an
+    /// instance the registry cannot construct, and for tests that need a probe
+    /// with a known behaviour. Returns the module, or null if `module` was null.
+    gameplay::GameplayModule* add_gameplay_module(std::unique_ptr<gameplay::GameplayModule> module);
+
+    /// Copies each module's reflected state into its GameplayModuleComponent.
+    /// Call before saving: the module holds live state, the component is the
+    /// snapshot the scene file carries.
+    void capture_gameplay_state();
+
+    /// Reads each GameplayModuleComponent back into its module. Call after
+    /// loading. A component naming a module this build does not have is left
+    /// alone rather than dropped, so the scene keeps its data.
+    void apply_gameplay_state();
+
+    /// The input source handed to modules. Non-owning; null means no input, and
+    /// modules are expected to check.
+    void set_input_source(gameplay::IInputSource* source) { m_input_source = source; }
+    [[nodiscard]] gameplay::IInputSource* input_source() const { return m_input_source; }
+
     // Distinct meshes that failed to load. A failed asset is terminal, so this
     // is one entry per bad asset regardless of frame count.
     size_t failed_mesh_count() const { return m_failed_meshes.size(); }
@@ -270,6 +339,31 @@ private:
     /// 1/60 s is the conventional choice: fine enough that a fast-moving body
     /// does not tunnel through a thin one, coarse enough to stay cheap.
     physics::FixedTimestep m_physics_clock{1.0f / 60.0f, 8};
+
+    // Gameplay modules (Phase 10). Sorted by (priority, name) at init so the
+    // per-frame loop is a straight walk.
+    //
+    // `initialized` is tracked per module rather than as a single flag for the
+    // whole set. A module added after the first scene load still has to receive
+    // on_init, and a set-wide flag would silently skip it — which is exactly the
+    // "registered but never driven" failure this phase exists to avoid.
+    struct GameplaySlot {
+        std::unique_ptr<gameplay::GameplayModule> module;
+        bool initialized = false;
+    };
+    std::vector<GameplaySlot> m_gameplay_modules;
+    gameplay::IInputSource* m_input_source = nullptr;
+    u64 m_gameplay_frame = 0;
+    size_t m_gameplay_updates = 0;
+    void sort_gameplay_modules();
+    /// Fills a context from the current scene/physics/audio state.
+    gameplay::GameplayContext build_gameplay_context(f32 dt);
+    /// Entity that owns the GameplayModuleComponent for `name`, or an invalid
+    /// Entity when the scene has none.
+    ecs::Entity find_gameplay_owner(std::string_view name) const;
+    /// Module name -> enabled, read from the scene's components in one pass so
+    /// the step loop does not re-query the world per module.
+    std::unordered_map<std::string, bool> collect_gameplay_enabled() const;
 
     // Animation (Phase 9). `m_anim_clip_table` is a scratch view the state
     // machine needs (name -> clip*); rebuilt per entity because the state

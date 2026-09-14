@@ -61,6 +61,9 @@ Runtime::~Runtime() {
 }
 
 void Runtime::shutdown() {
+    // Gameplay first: a module may still want to write through the scene, and
+    // the scene outlives the GPU resources below.
+    shutdown_gameplay();
     m_device.wait_idle();
     // The picker owns its own targets/pipeline/framebuffer; drop them while the
     // device is still alive. Rebuilt lazily if a pick happens after shutdown.
@@ -315,8 +318,21 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
     for (const auto& w : result.warnings) {
         NF_LOG_WARN(LogCategory::Core, "Runtime: scene '{}' warning: {}", logical_path, w);
     }
+    // A previous scene's modules get a chance to release what they hold while
+    // the world they were pointing at is still alive.
+    if (m_scene_data_ptr && m_scene_data_ptr->scene && !m_gameplay_modules.empty()) {
+        gameplay::GameplayContext unload_ctx = build_gameplay_context(0.0f);
+        for (GameplaySlot& slot : m_gameplay_modules) {
+            slot.module->on_scene_unload(unload_ctx);
+        }
+    }
+    adopt_scene(std::move(result.scene), logical_path);
+    return true;
+}
+
+void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string& logical_path) {
     m_scene_data_ptr = std::make_unique<SceneRuntimeData>();
-    m_scene_data_ptr->scene = std::move(result.scene);
+    m_scene_data_ptr->scene = std::move(scene);
     m_loaded_scene_path = logical_path;
     // A freshly loaded scene gets a fresh attempt at every mesh. Failure was
     // recorded per-asset, and the asset may have been cooked since it last
@@ -347,6 +363,18 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
     // Build the physics world from the scene that was just loaded, so a scene
     // containing physics is live as soon as it opens.
     rebuild_physics_from_scene();
+    // Gameplay: instantiate the registered modules on the first load, let the
+    // scene's components restore their state, then announce the new scene.
+    // apply_gameplay_state() must follow init_gameplay() — there is nothing to
+    // restore into until the module instances exist.
+    init_gameplay();
+    apply_gameplay_state();
+    {
+        gameplay::GameplayContext ctx = build_gameplay_context(0.0f);
+        for (GameplaySlot& slot : m_gameplay_modules) {
+            slot.module->on_scene_load(ctx);
+        }
+    }
     ++m_scene_version;
     NF_LOG_INFO(LogCategory::Core, "Runtime: scene loaded '{}' with {} entities", logical_path,
                 m_scene_data_ptr->scene->world().alive_entity_count());
@@ -364,7 +392,6 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
     sync_meshes_from_assets();
     // Renderer init is lazy per target size, but try now so load failures surface early.
     (void)ensure_renderer_initialized();
-    return true;
 }
 
 scene::Scene* Runtime::edit_scene() {
@@ -416,6 +443,10 @@ void Runtime::update(float dt) {
     // a moving entity is spatialised where it will actually be rendered rather
     // than one frame behind.
     step_audio(dt);
+    // Gameplay runs last, so a module observes where this frame actually put
+    // everything, and before propagation, so whatever it writes is what gets
+    // rendered rather than a frame late.
+    step_gameplay(dt);
     auto& world = m_scene_data_ptr->scene->world();
     scene::propagate_transforms(world);
 }
@@ -678,6 +709,194 @@ u32 Runtime::step_audio(float dt) {
     }
 
     return blocks;
+}
+
+// --- Gameplay modules (Phase 10) --------------------------------------------
+
+void Runtime::sort_gameplay_modules() {
+    std::stable_sort(
+        m_gameplay_modules.begin(), m_gameplay_modules.end(),
+        [](const GameplaySlot& a, const GameplaySlot& b) {
+            const f32 pa = a.module->update_priority();
+            const f32 pb = b.module->update_priority();
+            if (pa != pb) return pa < pb;
+            // Tie-break on name, so the order is a property of the modules
+            // rather than of registration or link order — both of which vary.
+            return std::string_view(a.module->name()) < std::string_view(b.module->name());
+        });
+}
+
+void Runtime::init_gameplay() {
+    auto& registry = gameplay::GameplayModuleRegistry::instance();
+    for (const std::string& name : registry.names()) {
+        if (auto module = registry.create(name)) {
+            m_gameplay_modules.push_back(GameplaySlot{std::move(module), false});
+        }
+    }
+    sort_gameplay_modules();
+
+    // Only modules that have not been through on_init yet. A module handed in by
+    // add_gameplay_module() after the first load is picked up here rather than
+    // skipped, and a second call is a no-op for the ones already initialised.
+    gameplay::GameplayContext ctx = build_gameplay_context(0.0f);
+    u32 newly_initialised = 0;
+    for (GameplaySlot& slot : m_gameplay_modules) {
+        if (slot.initialized) continue;
+        slot.module->on_init(ctx);
+        slot.initialized = true;
+        ++newly_initialised;
+    }
+
+    if (newly_initialised != 0) {
+        NF_LOG_INFO(LogCategory::Core, "Runtime: {} gameplay module(s) initialised ({})",
+                    newly_initialised, m_gameplay_modules.size());
+    }
+}
+
+void Runtime::shutdown_gameplay() {
+    if (m_gameplay_modules.empty()) {
+        return;
+    }
+    gameplay::GameplayContext ctx = build_gameplay_context(0.0f);
+    for (GameplaySlot& slot : m_gameplay_modules) {
+        slot.module->on_shutdown(ctx);
+    }
+    m_gameplay_modules.clear();
+    m_gameplay_updates = 0;
+    m_gameplay_frame = 0;
+}
+
+gameplay::GameplayModule* Runtime::find_gameplay_module(std::string_view name) {
+    for (GameplaySlot& slot : m_gameplay_modules) {
+        if (name == slot.module->name()) return slot.module.get();
+    }
+    return nullptr;
+}
+
+gameplay::GameplayModule* Runtime::add_gameplay_module(
+    std::unique_ptr<gameplay::GameplayModule> module) {
+    if (!module) return nullptr;
+    gameplay::GameplayModule* raw = module.get();
+    m_gameplay_modules.push_back(GameplaySlot{std::move(module), false});
+    sort_gameplay_modules();
+    return raw;
+}
+
+gameplay::GameplayContext Runtime::build_gameplay_context(f32 dt) {
+    gameplay::GameplayContext ctx{};
+    ctx.dt      = dt;
+    ctx.frame   = m_gameplay_frame;
+    ctx.input   = m_input_source;
+    ctx.audio   = &m_audio_bus;
+    ctx.physics = m_physics.get();
+    if (m_scene_data_ptr && m_scene_data_ptr->scene) {
+        ctx.scene         = m_scene_data_ptr->scene.get();
+        ctx.world         = &m_scene_data_ptr->scene->world();
+        ctx.scene_version = static_cast<u32>(m_scene_version);
+    }
+    return ctx;
+}
+
+ecs::Entity Runtime::find_gameplay_owner(std::string_view name) const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return ecs::Entity{};
+    const ecs::World& world = m_scene_data_ptr->scene->world();
+    for (ecs::Entity e : world.query<gameplay::GameplayModuleComponent>()) {
+        const auto* comp = world.get<gameplay::GameplayModuleComponent>(e);
+        if (comp != nullptr && comp->module_name == name) return e;
+    }
+    return ecs::Entity{};
+}
+
+std::unordered_map<std::string, bool> Runtime::collect_gameplay_enabled() const {
+    std::unordered_map<std::string, bool> enabled;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return enabled;
+
+    const ecs::World& world = m_scene_data_ptr->scene->world();
+    for (ecs::Entity e : world.query<gameplay::GameplayModuleComponent>()) {
+        const auto* comp = world.get<gameplay::GameplayModuleComponent>(e);
+        if (comp == nullptr) continue;
+        // Two components naming one module is contradictory; disabled wins,
+        // because silently running a module the scene asked to switch off is
+        // the more surprising of the two failures.
+        const auto it = enabled.find(comp->module_name);
+        if (it == enabled.end()) {
+            enabled.emplace(comp->module_name, comp->enabled);
+        } else {
+            it->second = it->second && comp->enabled;
+        }
+    }
+    return enabled;
+}
+
+u32 Runtime::step_gameplay(float dt) {
+    if (m_gameplay_modules.empty()) {
+        return 0;
+    }
+
+    const std::unordered_map<std::string, bool> enabled = collect_gameplay_enabled();
+    gameplay::GameplayContext ctx = build_gameplay_context(dt);
+
+    u32 stepped = 0;
+    for (GameplaySlot& slot : m_gameplay_modules) {
+        const auto it = enabled.find(slot.module->name());
+        if (it != enabled.end() && !it->second) continue;
+        slot.module->on_update(ctx);
+        ++stepped;
+    }
+
+    ++m_gameplay_frame;
+    m_gameplay_updates += stepped;
+    return stepped;
+}
+
+void Runtime::capture_gameplay_state() {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return;
+    ecs::World& world = m_scene_data_ptr->scene->world();
+
+    for (GameplaySlot& slot : m_gameplay_modules) {
+        const gameplay::GameplayStateBinding binding = slot.module->state();
+        if (!binding.valid()) continue;
+
+        std::unordered_map<std::string, std::string> properties;
+        gameplay::capture_state(binding, properties);
+
+        ecs::Entity owner = find_gameplay_owner(slot.module->name());
+        if (!owner.valid()) {
+            // A module added at runtime has no component yet. Create one so its
+            // state has somewhere to live, otherwise the save would silently
+            // drop it.
+            owner = world.create_entity();
+            world.add<gameplay::GameplayModuleComponent>(
+                owner, gameplay::GameplayModuleComponent{std::string(slot.module->name()), {}, true});
+            world.add<scene::NameComponent>(
+                owner, scene::NameComponent{std::string(slot.module->name()) + " (gameplay)"});
+        }
+        if (auto* comp = world.get<gameplay::GameplayModuleComponent>(owner)) {
+            comp->properties = std::move(properties);
+        }
+    }
+    ++m_scene_version;
+}
+
+void Runtime::apply_gameplay_state() {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return;
+    const ecs::World& world = m_scene_data_ptr->scene->world();
+
+    for (ecs::Entity e : world.query<gameplay::GameplayModuleComponent>()) {
+        const auto* comp = world.get<gameplay::GameplayModuleComponent>(e);
+        if (comp == nullptr) continue;
+
+        gameplay::GameplayModule* module = find_gameplay_module(comp->module_name);
+        if (module == nullptr) {
+            // Not an error: a scene authored with a module this build does not
+            // have keeps its data and simply does not run that module.
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: scene references gameplay module '{}', which is not registered",
+                        comp->module_name);
+            continue;
+        }
+        (void)gameplay::apply_state(module->state(), comp->properties);
+    }
 }
 
 void Runtime::rebuild_physics_from_scene() {

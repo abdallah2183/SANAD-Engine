@@ -89,8 +89,12 @@ void WorkerThread::run() {
 // --- JobGroup ---
 
 void JobGroup::add(std::function<void()> task, JobPriority priority) {
+    // The counter has to travel *with* the job: wait() spins until it reaches
+    // zero, and a worker only decrements a counter it was handed. Enqueueing the
+    // bare task left m_pending incremented forever, so wait() never returned and
+    // the group was unusable by any caller that actually waited on it.
     m_pending.fetch_add(1, std::memory_order_relaxed);
-    JobSystem::instance().enqueue(std::move(task), priority);
+    JobSystem::instance().enqueue(Job(std::move(task), priority, &m_pending));
 }
 
 void JobGroup::wait() {

@@ -28,6 +28,8 @@ set(NFEDITOR_CORE_SOURCES
     src/Prefabs.cpp
     src/Viewport.cpp
     src/Console.cpp
+    src/ReflectedInspector.cpp
+    src/OrbitCameraModule.cpp
     src/EditorApp.cpp
     src/ui/UiRenderer.cpp
 )
@@ -36,7 +38,7 @@ add_library(NFEditorCore STATIC
     ${NFEDITOR_CORE_SOURCES}
 )
 target_include_directories(NFEditorCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics imgui)
+target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics NFGameplay imgui)
 nf_target_set_warnings(NFEditorCore)
 
 add_executable(NOVAForgeEditor

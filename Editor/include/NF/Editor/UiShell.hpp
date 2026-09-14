@@ -65,6 +65,9 @@ struct UiFrameStats {
     uint32_t validation_errors = 0;
     uint32_t alive_objects = 0;
     uint32_t viewport_lit = 0; // last readback proof (0 = not measured yet)
+    // Frame delta in seconds. Carried here rather than read from ImGui so the
+    // headless path drives the same autosave clock as the windowed one.
+    float dt_seconds = 0.0f;
 };
 
 UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats);

@@ -215,7 +215,14 @@ struct Quat {
     constexpr Quat(f32 x, f32 y, f32 z, f32 w) : x(x), y(y), z(z), w(w) {}
 
     static Quat from_axis_angle(const Vec3& axis, f32 angle);
-    static Quat from_euler(f32 pitch, f32 yaw, f32 roll);
+    // NOTE: there is deliberately no Quat::from_euler here. One existed, was
+    // never called, and was wrong: it returned the zero quaternion for (0,0,0),
+    // which is not a rotation at all. The engine's euler<->quaternion pair lives
+    // in NF/Scene/Transform.hpp (`quat_from_euler_xyz_degrees` and
+    // `euler_xyz_degrees_from_quat`), is tested for forward/inverse consistency,
+    // and is the only place the convention is defined. A second, differently
+    // ordered helper in Core is how the project ended up with two incompatible
+    // .nfmesh formats; it was removed rather than repaired.
     /// Extracts the rotation from a pure-rotation matrix (no scale). Uses the
     /// Shepperd branch selection, which stays accurate near 180 degrees where a
     /// naive trace-based form loses precision.

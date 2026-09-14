@@ -730,6 +730,7 @@ int main(int argc, char** argv) {
                 fst.validation_errors = nf::rhi::validation_error_count();
                 fst.alive_objects = device->alive_objects();
                 fst.viewport_lit = viewport_lit;
+                fst.dt_seconds = (dt > 0.0f) ? dt : (1.0f / 60.0f);
                 ui_in = nf::editor::ui_frame(app, fst);
                 have_ui_intents = true;
                 nf::editor::ui_end_frame();

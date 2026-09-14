@@ -2,13 +2,13 @@
 
 High-performance C++23 game engine designed with a modern data-oriented architecture and low-overhead Vulkan RHI.
 
-## Current Status (Phase 9 — animation + audio)
+## Current Status (Phase 10 — scripting foundation + save system)
 
-NOVAForge is at **Phase 9**. The core runtime pipeline (`Windows + Vulkan + Jobs + ECS + Deferred 3D Renderer`) is verified, test-hardened, and passes 100% of automated unit and rendering tests with zero validation errors. A project can be created, built, packaged and run as a standalone program. A self-contained deterministic rigid-body solver (`PhysicsWorld`) and a skeletal animation system (`Skeleton`, `AnimationClip`, `AnimationPlayer`, `AnimationStateMachine`) and an audio engine (`AudioDevice`, `AudioBus`, `AudioSource`) are integrated into the ECS, runtime, editor, and serialized scene format.
+NOVAForge is at **Phase 10**. The core runtime pipeline (`Windows + Vulkan + Jobs + ECS + Deferred 3D Renderer`) is verified, test-hardened, and passes 100% of automated unit and rendering tests with zero validation errors. A project can be created, built, packaged and run as a standalone program. A self-contained deterministic rigid-body solver (`PhysicsWorld`), a skeletal animation system (`Skeleton`, `AnimationClip`, `AnimationPlayer`, `AnimationStateMachine`), an audio engine (`AudioDevice`, `AudioBus`, `AudioSource`), a reflection layer (`PropertyInfo`, `ClassInfo`, `ReflectionRegistry`), a C++ gameplay module system (`GameplayModule`, `GameplayModuleRegistry`), and a versioned save system (`SaveSystem`) are integrated into the ECS, runtime, editor, and serialized scene format.
 
-Integration is end-to-end, not just API-level: `Runtime::update()` steps physics → animation → audio → transform propagation, so an animated entity's transform is actually written every frame and audio is mixed where the frame will render it. Because the asset import pipelines (mesh/WAV) are still future work, both subsystems ship a deterministic generator — `make_procedural_clip()` and `make_tone_buffer()` — so a scene can name a clip and a buffer that produce real motion and real samples without a cooked asset. Both components have editor inspector panels, and the default template scene contains an animated, audible entity.
+Integration is end-to-end, not just API-level: `Runtime::update()` steps physics → animation → audio → gameplay → transform propagation, so an animated entity's transform is actually written every frame, audio is mixed where the frame will render it, and a gameplay module's writes reach the renderer in the frame it made them. Because the asset import pipelines (mesh/WAV) are still future work, the animation and audio subsystems ship deterministic generators — `make_procedural_clip()` and `make_tone_buffer()` — so a scene can name a clip and a buffer that produce real motion and real samples without a cooked asset. Every component has an editor inspector panel, and the gameplay module state is edited through reflection rather than a hand-written panel.
 
-**Verified 2026-09-14**: build clean under `/W4 /WX`; **439 passed / 0 failed / 1 skipped / 440**; the packaged `NFPlayer` runs the template scene — a falling box on a static plane plus an entity driven by a procedural clip and a generated tone — with 0 validation errors and 0 leaked RHI objects.
+**Verified 2026-09-14**: build clean under `/W4 /WX`; **515 passed / 0 failed / 1 skipped / 516 across 13 suites**; the packaged `NFPlayer` runs the template scene — a falling box on a static plane plus an entity driven by a procedural clip and a generated tone — with 0 validation errors and 0 leaked RHI objects.
 
 ### Implemented & Stabilized Modules
 - **Core**: Custom math library (`Vec2`, `Vec3`, `Vec4`, `Mat4`, `Quat`), custom memory allocators (Linear, Pool, Stack), fast containers, high-resolution time, GUID/UUID, and thread-safe logging.
@@ -22,7 +22,10 @@ Integration is end-to-end, not just API-level: `Runtime::update()` steps physics
 - **Physics**: Self-contained deterministic rigid-body solver behind a `PhysicsWorld` seam. Sequential impulses with warm starting, Coulomb friction, restitution, Baumgarte position correction (split impulse), and island-based sleeping. Shapes: sphere, oriented box, infinite plane. Broadphase: uniform spatial hash grid. Narrowphase: SAT + Sutherland-Hodgman clipping for box–box. Fixed-timestep accumulator with deterministic state hashing. Generation-checked `BodyHandle`. `RigidBodyComponent`/`ColliderComponent` in the ECS; runtime steps physics on the fixed clock and writes transforms back; scene serialization round-trip.
 - **Animation**: Skeletal animation system with `Skeleton` (hierarchy of bones, parent indices, rest poses), `AnimationClip` (tracks with keyframes, binary-search sampling, lerp translation/scale + slerp rotation), `AnimationPlayer` (play/pause/stop, speed, loop/ping-pong), `AnimationStateMachine` (states, transitions with parameter conditions, cross-fade), N-way blend and additive blend. `AnimationComponent` in the ECS; `Runtime::step_animation()` samples it each frame and writes the posed bone delta onto the entity's `Transform` relative to an authored base offset, so animating an entity never teleports it to the rig origin. `make_procedural_clip()` generates a spin/bob clip from a `ProceduralClipSpec`, which is what lets an `Animation:` scene line drive motion before the mesh import pipeline exists. Scene serialization round-trip; editor inspector panel.
 - **Audio**: Audio engine with `AudioDevice` (abstract, `NullAudioDevice` for headless/CI), `AudioSource` (buffer, volume, pitch, looping), `AudioBus` (mixer), `AudioListener` (position + orientation). 3D positional audio with linear/inverse/exponential distance attenuation and equal-power stereo panning. All math is pure and testable without hardware. `Runtime::step_audio()` mixes sources into the bus each frame and reports the output peak; `make_tone_buffer()` generates a deterministic PCM sine so an `Audio:` line is audible before the WAV/OGG import pipeline exists. `AudioComponent` in the ECS; scene serialization round-trip; editor inspector panel.
-- **Assets**: VFS (`content://`, `cache://`, `engine://`, `project://`), UUID-keyed asset registry, and a CLI cooker.
+- **Reflection**: `PropertyInfo` / `ClassInfo` / `EnumInfo` metadata with `NF_CLASS` / `NF_PROPERTY` / `NF_ENUM` macros — no codegen step, so a property declaration sits next to the member it describes and nothing else has to be kept in sync. `ReflectionRegistry` registers classes during static initialisation, so the editor can enumerate types it has never instantiated. `property_to_string` / `property_from_string` are the single text form shared by the inspector, the scene format, and the save format — nine significant digits, so an `f32` survives a round trip exactly.
+- **Gameplay (scripting S0–S1)**: `GameplayModule` with `on_init` / `on_update` / `on_shutdown` / `on_scene_load` / `on_scene_unload`, registered by `NF_GAMEPLAY_MODULE` and driven by `Runtime::step_gameplay()`. Ordering is by `update_priority()` with a name tie-break, so it does not depend on static-init order. A module reaches the engine only through `GameplayContext` (world, scene, physics, audio, input), and its settings are a plain reflected struct, which is what makes them editable in the inspector and serializable without hand-written code. `OrbitCameraModule` is a worked example.
+- **Save system**: `SaveSystem` with named slots under `saves://`, each a directory of `scene.nfscene` + `modules.txt` + `meta.txt`. `save_game` builds into a staging directory and swaps it in with rollback, so a failed save cannot destroy a good one. `save_game_async` snapshots on the calling thread and writes on a worker — the scene is never serialized off-thread. Autosave is interval-driven, and `meta.txt` carries a schema version with a chained migration registry.
+- **Assets**: VFS (`content://`, `cache://`, `engine://`, `project://`, `saves://`), UUID-keyed asset registry, and a CLI cooker.
 - **Samples**:
   - `NFSampleTriangle`: Bare-bones Vulkan RHI clear and pipeline verification.
   - `NFSampleTexturedQuad`: Texture upload, descriptor set binding, and sampler verification.
@@ -152,9 +155,10 @@ blank frame.
 
 ### Running Automated Tests
 
-**439 passed / 0 failed / 1 skipped** across eleven suites (the skip is the opt-in 1M-entity
+**515 passed / 0 failed / 1 skipped** across thirteen suites (the skip is the opt-in 1M-entity
 benchmark). A skipped test is never counted as a pass. The runtime integration is covered by tests
-that assert a transform *actually moved* and audio *actually mixed* after `Runtime::update()` —
+that assert a transform *actually moved*, audio *actually mixed*, and a gameplay module *actually
+stepped* after `Runtime::update()` —
 not merely that component fields survive a serialization round-trip.
 
 ```bash
@@ -195,6 +199,7 @@ NOVAForge/
 │   ├── Physics/     — Deterministic rigid-body solver (shapes, broadphase, narrowphase, solver, world)
 │   ├── Animation/   — Skeletal animation (skeleton, clips, player, state machine, blending)
 │   ├── Audio/       — Audio engine (attenuation, 3D pan/gain, mixer, null device for headless)
+│   ├── Gameplay/    — C++ gameplay modules: lifecycle, registry, reflected state bridge
 │   ├── Runtime/     — Runtime + Application: device ownership, frame loop, asset sync, physics stepping
 │   └── Shaders/     — GLSL shaders compiled to SPIR-V (Depth, GBuffer, Lighting, Tonemap, Pick)
 ├── Editor/          — Dear ImGui + Win32 + Vulkan editor, with a headless acceptance harness

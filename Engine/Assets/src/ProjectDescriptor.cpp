@@ -41,6 +41,10 @@ constexpr DefaultMount kDefaultMounts[] = {
     {"content://", "Content"},
     {"cache://", "Cache"},
     {"shaders://", "Shaders"},
+    // Save slots. Declared by default so a packaged game can write saves
+    // without the engine guessing a location, and kept out of `content://`
+    // because a save is player data while content is shipped data.
+    {"saves://", "Saves"},
 };
 
 bool is_known_logical(std::string_view logical) {
