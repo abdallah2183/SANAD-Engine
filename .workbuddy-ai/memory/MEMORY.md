@@ -60,6 +60,18 @@ Plan: `Docs/Phase10_Plan.md`. Design doc §70 + §71–74 + §249 (S0–S1).
 - Phases 7–9 committed first as `13e79da` (106 files, parent `421511f`).
 - Deferred on purpose: migrating the existing hand-written components (`RigidBody`, `Collider`, `Animation`, `Audio`) onto the generic reflected path — it would change the on-disk format of every existing scene, and two serializers for one component is two sources of truth.
 
+## Phase 11 — Foundation: layering, debt, world streaming COMPLETE (2026-09-14)
+Plan: `Docs/Phase11_Plan.md`. No new feature area — three things removed that were actively wrong, one seam landed.
+- **W1** `Engine/Assets` no longer depends on `NFRendering`. `AssetManager` was doing two jobs (load/parse/cache **and** GPU-upload meshes); it is now CPU-pure (VFS + registry + parse + cache, links only `NFCore NFJobs`). The `StaticMesh` conversion moved to `NFRendering/MeshUpload`; `Runtime` owns the device and the upload. The second `.nfmesh` format (`rendering::mesh_asset`, magic `NFM1`) is deleted — `NFME`/`assets::MeshAsset` is the only one.
+- **W2** `Engine/Rendering` no longer depends on `NFEcs`/`NFScene`. The inversion was one function (`extract_render_objects`); the ECS bridge moved to `NF/Runtime/SceneExtraction.hpp`. `Rendering` links only `NFCore NFRHI NFJobs`, so the renderer builds standalone — which is what the dedicated-server path needs.
+- **W3** The six dead RHI handle types are deleted (`BufferHandle`, `TextureHandle`, `PipelineHandle`, `ShaderModuleHandle`, `RenderPassHandle`, `FramebufferHandle`); zero references, replaced by an explanatory comment at `RHI.hpp:400`.
+- **W4** ECS benchmarks assert a ceiling (10,000 ns/entity, ~12× the measured Debug baseline) instead of printing numbers nobody reads.
+- **W5** World-streaming seam: `scene::StreamingVolume` (grid: `ChunkCoord`, `chunk_at`, `distance_to_chunk`, `chunks_in_radius`) + `runtime::WorldStreamer` (range, hysteresis, per-update load cap). Distance is to the chunk **AABB**, not its centre; `chunk_at` **floors**; `chunks_in_radius` returns **nearest-first** (order is load-bearing wherever a cap exists). 19 tests.
+- **W6** Rule 0 executed for W1–W5 (each defect reintroduced, the matching test/guard confirmed to fail, then reverted). `Scripts/check_layering.sh` runs in CI right after the build; the CI per-suite guards became one `require_suite` loop over the runner's list plus a "a suite did not build" check. README + plan marked complete.
+- **Final Phase-11 suite: 534 passed / 0 failed / 1 skipped across 14 suites** (Core 59, Jobs 5, ECS 25+1skip, Assets 45, RHI 69, Physics 86, Animation 38, Audio 27, Gameplay 24, Save 16, **Streaming 19**, Runtime 33, Editor 74, Tools 14).
+- Commits on `workbuddy/main-9da20c25`: `5b63eb5` (W2–W5), `7fbe65f` (W1), `0b2e769` (W6), `b6b5546` (repair-script fix).
+- **Fixed a pre-existing defect found by W6 verification:** the editor's headless acceptance was **failing** (`Physics: body moved under gravity FAILED — world_y = 0`, editor exit 1, which would make the CI acceptance step red). Bodies are built from the scene only on load, so a `RigidBody`/`Collider` added through the inspector never became a body and Play simulated the on-disk scene. `EditorApp::play()` now calls `Runtime::rebuild_physics_from_scene()` before simulating. Not a Phase 11 regression — the physics rebuild/step are byte-identical to Phase 10.
+
 ## Lessons that cost real time
 - **A green suite says nothing about integration.** `Runtime::update()` is the ground truth for what runs in a shipped frame; anything unreachable from it is dead in a game no matter how many unit tests pass. See the `novaforge-verify` skill, Step 3c.
 - **A content assertion only covers the subsystem it names.** CI asserted `physics world created`, which stayed true while animation/audio were never stepped — the falling box is physics-driven.
@@ -70,18 +82,17 @@ Plan: `Docs/Phase10_Plan.md`. Design doc §70 + §71–74 + §249 (S0–S1).
 - **`grep "a\|b"` under this MSYS shell gave false negatives** on `Main.nfscene` (reported no `Animation:` line while the file had one). Confirm with `Read` before concluding a file lacks something.
 - **The main `.git` lives inside OneDrive, and OneDrive deletes new ref files under `.git/refs/`.** A commit can print a success hash and then leave the branch unborn. The commit object survives; recover the sha from the reflog and recreate the ref with the full 40 characters. Re-check `git rev-parse HEAD` after every commit. Detail in the `novaforge-verify` skill.
 - **`f32` needs 9 significant digits to round-trip through text.** `%.6g` looks fine and silently loses the low bits; the loss shows up as drift after a save/load, not as a failure.
+- **"Does HEAD resolve?" is not enough to detect a lost ref here.** Once a branch has been packed, deleting the new loose ref leaves the *previous* tip in `packed-refs`, so HEAD keeps resolving — to the old commit — and a fresh commit looks applied while being unreferenced. `Scripts/git_repair_ref.sh` now compares HEAD against the **reflog tip** (the reflog is written first and is the only record of the truth) and reports `STALE`. This bit the W6 commit.
+- **A file the engine writes only on load cannot see an edit made while it is open.** Physics bodies were built in `Runtime::load_scene`; the inspector writes components into the live ECS, so a `RigidBody` added in the editor had no body and Play simulated the on-disk scene. When a comment says "the runtime rebuilds this on the next play/step", grep for the call — nothing did.
+- **A generated file checked into git must be deterministic.** `Content/AssetRegistry.nfreg` is rewritten by the cooker; it is stable across repeated runs, so a cook no longer dirties the tree. Verify with two consecutive cooks before assuming a diff is noise.
 
 ## Open architectural debt
-- Assets→Rendering and Rendering→ECS/Scene layering inversions.
-- RHI declares six unused handle types while device APIs return pointers.
-- Custom containers mostly unused; benchmark thresholds unasserted; world streaming still deferred.
+- **Two `Mat4`s with the same name and different layouts**: `nf::Mat4` (Core, `f32 m[4][4]`, row-major) vs `nf::rendering::Mat4` (`Camera.hpp`, `float m[16]`, column-major). A `memcpy`/`reinterpret_cast` between them silently transposes every transform in the scene. Needs the same "one type, one owner" treatment W1 gave the mesh formats. `Rendering` also has its own `Vec3` (hence `Runtime.cpp`'s `from_rendering()`).
+- **`Runtime::load_scene` replaces the world**, so a scene cannot be merged into a live one — W5's seam is complete but its real chunk loader (a scene merge) is still outstanding. The merge belongs next to the scene loader.
 - Audio backend swap (MiniAudio behind `AudioDevice` seam) — planned, not yet implemented.
-- Animation lacks skinning GPU pipeline (CPU-only sampling); no animation asset cooker yet.
+- Animation lacks a skinning GPU pipeline (CPU-only sampling); no animation asset cooker yet.
 
 ## Working tree convention
-- Changes were historically left uncommitted. **On 2026-09-14 Abdal directed a commit before Phase 10
-  ("عمّر أولاً ثم المرحلة 10"), so a phase may now be committed on request — ask rather than assuming
-  either way.** Phase 10 itself is still uncommitted.
-- **After any commit here, verify the ref survived** (`git rev-parse HEAD`). OneDrive deletes new ref
-  files under the main `.git/refs/`; the commit object is fine but the branch can end up unborn.
+- Phases 7–11 are all committed on `workbuddy/main-9da20c25` (`13e79da`, `4312645`, `5b63eb5`, `7fbe65f`, `0b2e769`, `b6b5546`). **The `main` branch is still at `421511f` (Phase 6)** — session branches have never been merged into it, so a worktree branched from `main` starts at Phase 6 and looks like the work is missing. Merge the session branch into `main` (or branch from it) before starting the next phase.
+- **After any commit here, run `bash Scripts/git_repair_ref.sh`.** OneDrive deletes new ref files under the main `.git/refs/`; the commit object survives but the branch can end up unborn. The script is worktree- and branch-agnostic and detects the stale-packed-ref case.
 - Never delete `.workbuddy-ai`.
