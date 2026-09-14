@@ -1,6 +1,7 @@
 #include <NF/Scene/Transform.hpp>
 #include <NF/Core/Logger.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <queue>
@@ -124,6 +125,58 @@ void propagate_transforms(ecs::World& world) {
 
 void transform_system(ecs::World& world) {
     propagate_transforms(world);
+}
+
+Quat quat_from_euler_xyz_degrees(float rx_deg, float ry_deg, float rz_deg) {
+    // Built through compose_trs rather than by composing axis rotations here:
+    // that keeps the convention in exactly one function, so the forward and
+    // inverse directions cannot drift apart.
+    float m16[16];
+    compose_trs(0.0f, 0.0f, 0.0f, rx_deg, ry_deg, rz_deg, 1.0f, 1.0f, 1.0f, m16);
+    Mat4 m = Mat4::identity();
+    for (int i = 0; i < 16; ++i) {
+        m.m[i / 4][i % 4] = m16[i]; // m16 is column-major: [col * 4 + row]
+    }
+    return Quat::from_matrix(m);
+}
+
+void euler_xyz_degrees_from_quat(const Quat& q, float& out_rx, float& out_ry, float& out_rz) {
+    // Mat4 is column-major, so m[col][row] is R[row][col].
+    const Mat4 m = q.to_matrix();
+
+    // From R = Ry * Rx * Rz:
+    //   R[1][2] = -sin(x)
+    //   R[0][2] = sin(y)cos(x),  R[2][2] = cos(y)cos(x)
+    //   R[1][0] = cos(x)sin(z),  R[1][1] = cos(x)cos(z)
+    const float r12 = m.m[2][1];
+    const float r02 = m.m[2][0];
+    const float r22 = m.m[2][2];
+    const float r10 = m.m[0][1];
+    const float r11 = m.m[1][1];
+
+    // asin is only defined on [-1, 1]; a quaternion that has drifted off the
+    // unit sphere can push r12 just outside it and produce a NaN rotation.
+    const float sin_x = std::clamp(-r12, -1.0f, 1.0f);
+    const float rx = std::asin(sin_x);
+    const float cy_cx = std::sqrt(r02 * r02 + r22 * r22);
+
+    float ry;
+    float rz;
+    if (cy_cx > 1e-6f) {
+        ry = std::atan2(r02, r22);
+        rz = std::atan2(r10, r11);
+    } else {
+        // Gimbal lock: cos(x) == 0, so Y and Z rotate the same axis and only
+        // their sum is determined. Pin Z to zero and put the whole turn in Y,
+        // which reproduces the same orientation.
+        ry = std::atan2(-m.m[0][2], m.m[0][0]);
+        rz = 0.0f;
+    }
+
+    constexpr float kRadToDeg = 180.0f / 3.14159265358979323846f;
+    out_rx = rx * kRadToDeg;
+    out_ry = ry * kRadToDeg;
+    out_rz = rz * kRadToDeg;
 }
 
 void compose_trs(float px, float py, float pz,

@@ -64,17 +64,19 @@ NF_TEST(runtime_headless_load_scene) {
     NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/Headless.nfscene", scene, err));
 
     // Headless device with validation when the layer is available.
+    // NF_SKIP (not a bare return) so a GPU-less machine reports SKIPPED rather
+    // than a PASS that verified nothing.
     auto device = rhi::create_device();
     if (!device) {
         std::filesystem::remove_all(tmp);
-        return;
+        NF_SKIP("no Vulkan device available");
     }
     rhi::DeviceDesc desc{};
     desc.window_handle = nullptr;
     desc.enable_validation = true;
     if (!device->init(desc)) {
         std::filesystem::remove_all(tmp);
-        return; // no GPU, skip
+        NF_SKIP("headless Vulkan device init failed");
     }
     rhi::reset_validation_error_count();
 

@@ -242,12 +242,30 @@ NF_TEST(mesh_asset_cook_import) {
     const AABB loaded_bounds = loaded->bounds();
     const AABB cube_bounds = cube->bounds();
     NF_CHECK(std::memcmp(&loaded_bounds, &cube_bounds, sizeof(AABB)) == 0);
-    // Imported runtime mesh uploads cleanly → GPU
-    const GpuFixture& f = gpu();
-    if (f.available) {
-        NF_CHECK(loaded->upload(*f.device));
-        NF_CHECK(loaded->vertex_buffer(0) != nullptr);
-    }
+    // The GPU half of this round trip lives in
+    // mesh_asset_cook_import_gpu_upload below, so it can be reported SKIPPED
+    // on a GPU-less runner instead of being silently skipped inside this test.
+    std::error_code ec;
+    fs::remove(tmp, ec);
+}
+
+NF_TEST(mesh_asset_cook_import_gpu_upload) {
+    // Split from mesh_asset_cook_import so the GPU upload is a first-class
+    // result: a bare `if (f.available) { ... }` around these assertions made
+    // them no-op while the test still reported PASS.
+    const GpuFixture& f = require_gpu();
+
+    auto cube = StaticMesh::create_cube(1.0f);
+    cube->set_name("cooked_cube_gpu");
+
+    const fs::path tmp = fs::temp_directory_path() / "nfmesh_roundtrip_gpu.nfmesh";
+    NF_CHECK(mesh_asset::save_mesh_asset(*cube, tmp));
+
+    auto loaded = mesh_asset::load_mesh_asset(tmp);
+    NF_CHECK(loaded != nullptr);
+    NF_CHECK(loaded->upload(*f.device));
+    NF_CHECK(loaded->vertex_buffer(0) != nullptr);
+
     std::error_code ec;
     fs::remove(tmp, ec);
 }
@@ -1226,18 +1244,19 @@ NF_TEST(resource_lifetime_zero_leaks) {
 }
 
 NF_TEST(validation_clean_full_pipeline) {
+    // NF_SKIP rather than `return`: a bare return is recorded as PASS, so a
+    // machine without validation layers would report this test green while
+    // nothing was verified.
     auto dev = rhi::create_device();
-    NF_CHECK(dev);
+    if (!dev) NF_SKIP("no Vulkan device available");
     rhi::DeviceDesc ddesc{};
     ddesc.enable_validation = true;
     if (!dev->init(ddesc)) {
-        NF_LOG_WARN(nf::LogCategory::RHI, "validation test: device init failed, skipping");
-        return;
+        NF_SKIP("validation test: device init failed");
     }
     if (!dev->validation_enabled()) {
-        NF_LOG_WARN(nf::LogCategory::RHI, "validation test: layers unavailable, skipping");
         dev->shutdown();
-        return;
+        NF_SKIP("validation test: validation layers unavailable");
     }
 
     rhi::reset_validation_error_count();

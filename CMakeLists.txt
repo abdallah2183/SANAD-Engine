@@ -76,7 +76,20 @@ add_subdirectory(Engine/ECS)
 add_subdirectory(Engine/Scene)
 add_subdirectory(Engine/Rendering)
 add_subdirectory(Engine/Assets)
+add_subdirectory(Engine/Physics)
+add_subdirectory(Engine/Animation)
+add_subdirectory(Engine/Audio)
 add_subdirectory(Engine/Runtime)
+
+# ---------------------------------------------------------------------------
+# Project tooling library
+#
+# Deliberately NOT gated behind NF_BUILD_TOOLS: this is a library, and both the
+# asset cooker and the `nf` CLI are thin front ends over it. The test suite links
+# it too, so it must exist whenever tests are built.
+# ---------------------------------------------------------------------------
+
+add_subdirectory(Tools/ProjectTool)
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -96,7 +109,12 @@ if(NF_BUILD_SAMPLES)
 endif()
 
 if(NF_BUILD_TOOLS)
+    # NFProjectTool is added above, unconditionally.
     add_subdirectory(Tools/AssetCooker)
+    add_subdirectory(Tools/BuildTool)
+    # NFPlayer is what packaging copies into a package, so it is built alongside
+    # the tool that needs it.
+    add_subdirectory(Tools/Player)
 endif()
 
 # ---------------------------------------------------------------------------

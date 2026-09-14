@@ -80,3 +80,99 @@ NF_TEST(test_quat_rotation) {
     NF_CHECK_NEAR(r.y, 0.0f, 0.001f);
     NF_CHECK_NEAR(r.z, 0.0f, 0.001f);
 }
+
+// --- Quaternion helpers added for the physics phase ------------------------
+
+NF_TEST(test_quat_rotate_matches_matrix) {
+    // q.rotate(v) exists because it is the hot path in the solver; it must agree
+    // with the matrix form exactly, or one of the two is wrong.
+    const Quat q = Quat::from_axis_angle(Vec3(0.3f, 1.0f, -0.2f), to_radians(37.0f));
+    const Mat4 m = q.to_matrix();
+    const Vec3 probes[4] = {Vec3::right, Vec3::up, Vec3::forward, Vec3(1.5f, -2.5f, 0.75f)};
+    for (const Vec3& v : probes) {
+        const Vec3 via_quat = q.rotate(v);
+        const Vec3 via_matrix = m.transform_direction(v);
+        NF_CHECK(via_quat.nearly_equals(via_matrix, 1e-4f));
+    }
+}
+
+NF_TEST(test_quat_conjugate_undoes_a_rotation) {
+    const Quat q = Quat::from_axis_angle(Vec3(1.0f, 2.0f, 3.0f), to_radians(120.0f));
+    const Vec3 v(0.4f, -1.2f, 3.3f);
+    const Vec3 rotated = q.rotate(v);
+    const Vec3 restored = q.conjugate().rotate(rotated);
+    NF_CHECK(restored.nearly_equals(v, 1e-4f));
+}
+
+NF_TEST(test_quat_inverse_handles_a_non_unit_quaternion) {
+    // Integration produces slightly non-unit quaternions between
+    // normalisations, so inverse() must divide by the squared norm rather than
+    // merely flipping the vector part.
+    //
+    // Checked algebraically (q * q⁻¹ == identity) and NOT by rotating a vector:
+    // rotate() deliberately assumes a unit quaternion because it is the solver's
+    // hot path and normalising there would cost it a sqrt. Feeding it a non-unit
+    // input would be testing a precondition violation, not inverse().
+    const Quat unit = Quat::from_axis_angle(Vec3::up, to_radians(45.0f));
+    const Quat scaled = unit * 3.0f;
+    const Quat product = scaled * scaled.inverse();
+    NF_CHECK_NEAR(product.x, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(product.y, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(product.z, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(product.w, 1.0f, 1e-5f);
+}
+
+NF_TEST(test_quat_from_matrix_round_trips) {
+    const f32 angles[4] = {0.0f, 15.0f, 90.0f, 175.0f};
+    for (f32 deg : angles) {
+        const Quat q = Quat::from_axis_angle(Vec3(0.5f, 1.0f, 0.25f), to_radians(deg));
+        const Quat back = Quat::from_matrix(q.to_matrix());
+        const Vec3 probe(0.3f, -0.7f, 0.5f);
+        NF_CHECK(q.rotate(probe).nearly_equals(back.rotate(probe), 1e-3f));
+    }
+}
+
+NF_TEST(test_quat_from_matrix_exercises_every_branch) {
+    // Exactly 180 degrees is the case a trace-only extraction gets wrong, and it
+    // is where Shepperd's x/y/z branches are selected instead of the w branch.
+    // A physics body that flipped over lands here.
+    const Vec3 axes[3] = {Vec3::right, Vec3::up, Vec3::forward};
+    for (const Vec3& axis : axes) {
+        const Quat q = Quat::from_axis_angle(axis, PI);
+        const Quat back = Quat::from_matrix(q.to_matrix());
+        // q and -q describe the same rotation, so compare the effect.
+        const Vec3 probe(0.3f, -0.7f, 0.5f);
+        NF_CHECK(q.rotate(probe).nearly_equals(back.rotate(probe), 1e-4f));
+    }
+}
+
+NF_TEST(test_quat_identity_is_a_no_op) {
+    const Vec3 v(2.0f, -3.0f, 4.0f);
+    NF_CHECK(Quat::identity().rotate(v).nearly_equals(v, 1e-6f));
+    NF_CHECK_NEAR(Quat::identity().length_sq(), 1.0f, 1e-6f);
+}
+
+// --- Vec3 component-wise helpers -------------------------------------------
+
+NF_TEST(test_vec3_component_wise_ops) {
+    const Vec3 a(1.0f, -5.0f, 3.0f);
+    const Vec3 b(-2.0f, 4.0f, 3.0f);
+
+    NF_CHECK(a.min(b).nearly_equals(Vec3(-2.0f, -5.0f, 3.0f)));
+    NF_CHECK(a.max(b).nearly_equals(Vec3(1.0f, 4.0f, 3.0f)));
+    NF_CHECK(a.abs().nearly_equals(Vec3(1.0f, 5.0f, 3.0f)));
+    NF_CHECK(a.scaled(b).nearly_equals(Vec3(-2.0f, -20.0f, 9.0f)));
+
+    NF_CHECK_NEAR(a.max_component(), 3.0f, 1e-6f);
+    NF_CHECK_NEAR(a.min_component(), -5.0f, 1e-6f);
+    // max_abs_component is what a box-extent or SAT projection needs.
+    NF_CHECK_NEAR(a.max_abs_component(), 5.0f, 1e-6f);
+}
+
+NF_TEST(test_vec3_nearly_equals_respects_the_tolerance) {
+    const Vec3 a(1.0f, 2.0f, 3.0f);
+    NF_CHECK(a.nearly_equals(Vec3(1.0f, 2.0f, 3.0f)));
+    NF_CHECK(a.nearly_equals(Vec3(1.00005f, 2.0f, 3.0f), 1e-3f));
+    NF_CHECK(!a.nearly_equals(Vec3(1.001f, 2.0f, 3.0f), 1e-5f));
+    NF_CHECK(!a.nearly_equals(Vec3(1.0f, 2.0f, 3.5f)));
+}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <NF/Core/Math.hpp>
 #include <NF/ECS/ECS.hpp>
 
 namespace nf::scene {
@@ -36,6 +37,20 @@ void transform_system(ecs::World& world);
 // out[12..14] hold translation) from translation + XYZ euler rotation
 // (degrees, applied as R = Ry * Rx * Rz) + scale: M = T * R * S.
 // Shared by the Runtime (render matrix) and the Editor gizmo so both agree.
+/// The inverse of compose_trs's rotation: the XYZ euler angles in degrees
+/// (R = Ry * Rx * Rz) that reproduce a quaternion's rotation.
+///
+/// Used to write a physics body's orientation back into a Transform. It lives
+/// here, next to compose_trs, because the two must agree on the convention — a
+/// mismatch would make a rotating body drift or spin the wrong way, and the
+/// round-trip test is what keeps them honest.
+void euler_xyz_degrees_from_quat(const Quat& q, float& out_rx, float& out_ry, float& out_rz);
+
+/// The forward direction: the quaternion equivalent of compose_trs's rotation
+/// for the given XYZ euler degrees. Exists so a physics body can be created from
+/// a Transform without either side guessing the convention.
+Quat quat_from_euler_xyz_degrees(float rx_deg, float ry_deg, float rz_deg);
+
 void compose_trs(float px, float py, float pz,
                  float rx_deg, float ry_deg, float rz_deg,
                  float sx, float sy, float sz,

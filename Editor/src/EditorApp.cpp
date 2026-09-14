@@ -236,6 +236,13 @@ bool EditorApp::set_transform(ecs::Entity e, const TransformEdit& edit, std::str
     }
     m_stack.push(std::move(cmd), *w);
     after_mutation(e);
+    // An animated entity's transform is owned by its pose, which is applied as
+    // an offset from a placement captured on the first step. Without re-capturing
+    // it here, the move the user just made would be silently undone next frame.
+    // No-op for entities that are not animated.
+    if (m_runtime != nullptr) {
+        m_runtime->rebase_animation(e);
+    }
     return true;
 }
 
@@ -360,6 +367,119 @@ bool EditorApp::drop_mesh_asset(const AssetEntry& entry, std::string& out_err) {
     // Start the asset load immediately.
     m_manager.load_mesh(entry.id);
     after_mutation(m_stack.last_target());
+    return true;
+}
+
+bool EditorApp::set_rigid_body(ecs::Entity e, const physics::RigidBodyComponent& rb,
+                                std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    // Add or replace the component directly. Physics components are not
+    // undo-tracked in this phase — they are leaf data, and the runtime
+    // rebuilds bodies from the scene on the next play/step.
+    if (auto* existing = w->get<physics::RigidBodyComponent>(e)) {
+        *existing = rb;
+    } else {
+        w->add<physics::RigidBodyComponent>(e, rb);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_collider(ecs::Entity e, const physics::ColliderComponent& col,
+                              std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (auto* existing = w->get<physics::ColliderComponent>(e)) {
+        *existing = col;
+    } else {
+        w->add<physics::ColliderComponent>(e, col);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_animation(ecs::Entity e, const animation::AnimationComponent& anim,
+                              std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    auto* existing = w->get<animation::AnimationComponent>(e);
+    if (existing == nullptr) {
+        out_err = "Entity has no AnimationComponent";
+        return false;
+    }
+    // Playback fields only. `clips`, `skeleton` and the procedural spec are the
+    // scene's data and are left alone, so an inspector edit can never produce a
+    // component that the save path cannot reproduce on the next load.
+    existing->speed = anim.speed;
+    existing->paused = anim.paused;
+    existing->use_state_machine = anim.use_state_machine;
+    existing->player.set_speed(anim.speed);
+    existing->player.set_loop_mode(anim.player.loop_mode());
+    if (!anim.player.clip_name().empty() && anim.player.clip_name() != existing->player.clip_name()) {
+        existing->player.set_clip(anim.player.clip_name());
+    }
+    // Pausing and playing are player state, not just a flag: AnimationPlayer
+    // ignores update() unless it is Playing, so the two must move together or
+    // the checkbox would appear to do nothing.
+    if (existing->paused) {
+        existing->player.pause();
+    } else {
+        existing->player.play();
+    }
+    // The pose is applied as an offset from the placement captured on the first
+    // step, so re-capture it here: otherwise the next frame would undo whatever
+    // the user just did to the transform.
+    if (m_runtime != nullptr) {
+        m_runtime->rebase_animation(e);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_audio(ecs::Entity e, const audio::AudioComponent& aud, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    auto* existing = w->get<audio::AudioComponent>(e);
+    if (existing == nullptr) {
+        out_err = "Entity has no AudioComponent";
+        return false;
+    }
+    // As above: the buffer and the procedural tone spec belong to the scene.
+    existing->volume = aud.volume;
+    existing->pitch = aud.pitch;
+    existing->looping = aud.looping;
+    existing->spatial = aud.spatial;
+    existing->autoplay = aud.autoplay;
+    existing->spatial_settings = aud.spatial_settings;
+    if (existing->autoplay) {
+        existing->playing = true;
+    }
+    after_mutation(e);
     return true;
 }
 

@@ -1,5 +1,6 @@
 #include <NF/Runtime/Application.hpp>
 #include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/RunConfigResolver.hpp>
 #include <NF/Platform/Platform.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/Core/Logger.hpp>
@@ -10,11 +11,14 @@
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/RHI/RHI.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <span>
 #include <thread>
+#include <vector>
 
 namespace nf::runtime {
 
@@ -27,44 +31,33 @@ int Application::run() {
     Logger::instance().set_min_level(LogLevel::Info);
 
     NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Runtime ===");
-    NF_LOG_INFO(LogCategory::Core, "Scene: {} Frames: {} Validation: {} Headless: {}",
-                m_config.scene_path, m_config.max_frames, m_config.validation, m_config.headless);
+    NF_LOG_INFO(LogCategory::Core, "Project: '{}' Frames: {} Validation: {} Headless: {}",
+                m_config.project_path.empty() ? std::string("<none — engine tree fallback>")
+                                              : m_config.project_path,
+                m_config.max_frames, m_config.validation, m_config.headless);
 
     platform_init();
     JobSystem::instance().init(0);
 
-    // VFS setup
+    // --- VFS setup + effective run settings ---------------------------------
+    // Precedence and the engine-tree fallback live in resolve_run_config so they
+    // are unit-testable instead of buried in this function, which also opens a
+    // window and a Vulkan device.
     assets::VirtualFileSystem vfs;
-    // Auto-detect project root as current path's parent with Engine/
-    std::filesystem::path project_root = std::filesystem::current_path();
-    for (int i = 0; i < 5; ++i) {
-        if (std::filesystem::exists(project_root / "Engine") && std::filesystem::exists(project_root / "Content")) {
-            break;
+    ResolvedRunConfig run_cfg;
+    {
+        std::string cfg_err;
+        if (!resolve_run_config(m_config, vfs, run_cfg, cfg_err)) {
+            NF_LOG_ERROR(LogCategory::Core, "{}", cfg_err);
+            JobSystem::instance().shutdown();
+            platform_shutdown();
+            return 1;
         }
-        auto parent = project_root.parent_path();
-        if (parent == project_root) {
-            break;
-        }
-        project_root = parent;
     }
-    // Fallback to executable dir's parent
-    if (!std::filesystem::exists(project_root / "Content")) {
-        project_root = std::filesystem::current_path();
-    }
-    auto setup_mount = [&](const std::string& logical, const std::filesystem::path& physical) {
-        std::error_code ec;
-        std::filesystem::create_directories(physical, ec);
-        auto r = vfs.mount(logical, physical);
-        if (!r.ok) {
-            NF_LOG_WARN(LogCategory::Core, "VFS mount failed {} -> {}: {}", logical, physical.string(), r.error);
-        } else {
-            NF_LOG_INFO(LogCategory::Core, "VFS mount {} -> {}", logical, physical.string());
-        }
-    };
-    setup_mount("engine://", project_root / "Engine");
-    setup_mount("project://", project_root);
-    setup_mount("content://", project_root / "Content");
-    setup_mount("cache://", project_root / "Cache");
+    const std::string& resolved_scene = run_cfg.scene_path;
+    const std::string& resolved_title = run_cfg.title;
+    const uint32_t resolved_width = run_cfg.width;
+    const uint32_t resolved_height = run_cfg.height;
 
     // Asset Registry
     assets::AssetRegistry registry;
@@ -96,9 +89,9 @@ int Application::run() {
     Window window;
     if (!m_config.headless) {
         WindowDesc wdesc{};
-        wdesc.width = m_config.width;
-        wdesc.height = m_config.height;
-        wdesc.title = m_config.title;
+        wdesc.width = resolved_width;
+        wdesc.height = resolved_height;
+        wdesc.title = resolved_title;
         wdesc.vsync = m_config.vsync;
         if (!window.create(wdesc)) {
             NF_LOG_ERROR(LogCategory::Platform, "Failed to create window");
@@ -164,16 +157,41 @@ int Application::run() {
     // before swapchain/device shutdown below. Destroying them after
     // vkDestroyDevice would leak and trip validation.
     uint32_t frame_count = 0;
+    // Set when a scene loaded successfully but nothing was ever drawn. That is
+    // the signature of an uncooked asset cache: every mesh reference resolves to
+    // a missing cache:// file, so the run would otherwise exit 0 with zero
+    // validation errors and a completely empty frame. Declared outside the GPU
+    // scope below so the exit code can still see it.
+    bool geometry_missing = false;
+    // Animation acceptance. A scene that carries an animated entity must show
+    // that entity's driven transform actually moving: "an AnimationComponent
+    // exists" and "the pose reached the transform" are different claims, and
+    // only the second one would have caught the defect this phase exists to fix
+    // (a pose computed every frame and then dropped on the floor).
+    //
+    // The observable is the largest deviation from the first sampled frame
+    // across the whole run, not a first-vs-last comparison: a looping clip that
+    // completes a whole number of revolutions returns to its starting transform,
+    // so a first-vs-last test would report "no motion" for a perfectly good
+    // spin.
+    bool animation_stalled = false;
+    std::vector<Runtime::AnimatedTransformSample> first_anim_sample;
+    float anim_max_deviation = 0.0f;
+    // Audio is mixed in whole device blocks, so a single frame may mix nothing
+    // (the accumulator has not filled yet). Track the maxima over the run rather
+    // than reading the last frame, which would be a coin flip.
+    size_t audio_sources_mixed_max = 0;
+    float audio_peak_max = 0.0f;
     {
         assets::AssetManager asset_manager(vfs, registry, device.get());
         Runtime runtime(vfs, registry, asset_manager, *device, swapchain.get());
 
         std::string scene_err;
         bool scene_ok = true;
-        if (!m_config.scene_path.empty()) {
-            scene_ok = runtime.load_scene(m_config.scene_path, scene_err);
+        if (!resolved_scene.empty()) {
+            scene_ok = runtime.load_scene(resolved_scene, scene_err);
             if (!scene_ok) {
-                NF_LOG_ERROR(LogCategory::Core, "Failed to load scene '{}': {}", m_config.scene_path, scene_err);
+                NF_LOG_ERROR(LogCategory::Core, "Failed to load scene '{}': {}", resolved_scene, scene_err);
                 // Missing scene is a hard failure for the sample: exit non-zero
                 // after cleaning up GPU resources below.
                 device->wait_idle();
@@ -269,6 +287,36 @@ int Application::run() {
 
             runtime.update(dt);
 
+            // Track how far every animated entity's driven transform has moved
+            // from where it started. Recorded every frame so any motion at any
+            // point counts, not just motion still present on the last frame.
+            {
+                const auto now = runtime.animated_transform_samples();
+                if (first_anim_sample.empty()) {
+                    first_anim_sample = now;
+                } else if (now.size() == first_anim_sample.size()) {
+                    for (size_t i = 0; i < now.size(); ++i) {
+                        const auto& a = first_anim_sample[i];
+                        const auto& b = now[i];
+                        const float d = std::max({
+                            std::abs(a.translation.x - b.translation.x),
+                            std::abs(a.translation.y - b.translation.y),
+                            std::abs(a.translation.z - b.translation.z),
+                            std::abs(a.rotation_euler_degrees.x - b.rotation_euler_degrees.x),
+                            std::abs(a.rotation_euler_degrees.y - b.rotation_euler_degrees.y),
+                            std::abs(a.rotation_euler_degrees.z - b.rotation_euler_degrees.z),
+                            std::abs(a.scale.x - b.scale.x),
+                            std::abs(a.scale.y - b.scale.y),
+                            std::abs(a.scale.z - b.scale.z),
+                        });
+                        anim_max_deviation = std::max(anim_max_deviation, d);
+                    }
+                }
+                audio_sources_mixed_max =
+                    std::max(audio_sources_mixed_max, runtime.audio_sources_mixed());
+                audio_peak_max = std::max(audio_peak_max, runtime.audio_output_peak());
+            }
+
             if (!m_config.headless && swapchain) {
                 frame_fence->wait();
                 frame_fence->reset();
@@ -323,7 +371,41 @@ int Application::run() {
             const auto& stats = runtime.renderer()->last_stats();
             NF_LOG_INFO(LogCategory::Core, "Last frame: extracted={} visible={} draws={}", stats.extracted,
                         stats.visible, stats.draw_calls);
+            // A scene that loaded but drew no geometry is a failure, not a
+            // quiet success. Without this the sample reported a clean exit for a
+            // run that rendered an empty frame.
+            if (scene_ok && !resolved_scene.empty() && runtime.mesh_count() == 0) {
+                NF_LOG_ERROR(LogCategory::Core,
+                             "Scene '{}' loaded but drew no geometry (draws={}) — the asset cache is "
+                             "probably not cooked. Run NFAssetCooker on Content/ (see README).",
+                             resolved_scene, stats.draw_calls);
+                geometry_missing = true;
+            }
         }
+        // Animation acceptance: the scene carried an animated entity, so its
+        // driven transform has to have moved. See the note where
+        // `animation_stalled` is declared for why this is a max-deviation test
+        // rather than a first-vs-last one.
+        if (!first_anim_sample.empty()) {
+            NF_LOG_INFO(LogCategory::Core,
+                        "Animated entities: {} (max transform deviation over {} frames: {})",
+                        first_anim_sample.size(), frame_count, anim_max_deviation);
+            if (anim_max_deviation <= 1e-4f) {
+                NF_LOG_ERROR(LogCategory::Core,
+                             "Scene has {} animated entit{} but no driven transform moved over {} "
+                             "frames (max deviation {}). The animation pose is being computed but "
+                             "not reaching the entity, so the animation is not actually running.",
+                             first_anim_sample.size(),
+                             first_anim_sample.size() == 1 ? "y" : "ies", frame_count,
+                             anim_max_deviation);
+                animation_stalled = true;
+            }
+        }
+        // Audio is reported but not asserted: the plan's acceptance covers the
+        // animated entity's motion, and a scene legitimately may have no audio.
+        // The test suite asserts the mixing path directly instead.
+        NF_LOG_INFO(LogCategory::Core, "Audio sources mixed (peak): {} ({})",
+                    audio_sources_mixed_max, audio_peak_max);
         if (m_config.validation) {
             const uint32_t verrs = rhi::validation_error_count();
             NF_LOG_INFO(LogCategory::RHI, "Validation errors: {}", verrs);
@@ -366,6 +448,17 @@ int Application::run() {
     }
     if (leaked != 0) {
         NF_LOG_ERROR(LogCategory::RHI, "Exiting with leaked RHI objects present");
+        return 1;
+    }
+    if (geometry_missing) {
+        NF_LOG_ERROR(LogCategory::Core,
+                     "Exiting: the scene produced no geometry. Cook the asset cache first "
+                     "(NFAssetCooker — see README).");
+        return 1;
+    }
+    if (animation_stalled) {
+        NF_LOG_ERROR(LogCategory::Core,
+                     "Exiting: the scene has an animated entity that never moved.");
         return 1;
     }
     NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Runtime exited cleanly ===");

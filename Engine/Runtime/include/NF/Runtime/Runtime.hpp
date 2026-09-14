@@ -14,12 +14,20 @@
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Physics/FixedTimestep.hpp>
+#include <NF/Physics/PhysicsWorld.hpp>
+#include <NF/Animation/Components.hpp>
+#include <NF/Animation/Skeleton.hpp>
+#include <NF/Audio/AudioEngine.hpp>
+#include <NF/Audio/Components.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace nf::runtime {
@@ -74,6 +82,99 @@ public:
 
     bool has_scene() const { return m_scene_data_ptr && m_scene_data_ptr->scene; }
     size_t mesh_count() const { return m_mesh_library ? m_mesh_library->size() : 0; }
+
+    // --- Physics ------------------------------------------------------------
+    //
+    // The world is created and populated from the scene when the scene loads,
+    // and stepped on a fixed clock so the result does not depend on frame rate.
+    // Null until a scene containing physics is loaded.
+    physics::PhysicsWorld* physics_world() const { return m_physics.get(); }
+
+    /// Advances physics by however many whole fixed steps `frame_delta` covers,
+    /// then writes the results back into the scene's Transforms. Returns the
+    /// number of steps taken.
+    u32 step_physics(f32 frame_delta);
+
+    /// Creates bodies for every entity that has a rigid body, a collider and a
+    /// transform. Called on scene load; safe to call again to resynchronise.
+    void rebuild_physics_from_scene();
+
+    // --- Animation (Phase 9) ------------------------------------------------
+    //
+    // Animation is a function of time, not of state, so unlike physics it needs
+    // no fixed clock: it advances by the frame delta and is deterministic for
+    // the same sequence of deltas.
+    //
+    // For every entity with an AnimationComponent this advances the player (or
+    // the state machine), samples the clip into `last_local_pose`, computes
+    // `last_world_pose`, and drives the entity's transform from the root bone
+    // so the motion reaches the renderer and the editor.
+    //
+    // Runs after step_physics. An entity carrying both a rigid body and an
+    // animation is driven by the animation (last writer wins) — documented
+    // rather than accidental.
+    u32 step_animation(f32 dt);
+
+    /// Entities whose animation was advanced by the last step_animation().
+    /// 0 when the scene has no animated entity.
+    size_t animated_entity_count() const { return m_animated_entities; }
+
+    /// Re-captures the placement an animated entity's pose is applied as an
+    /// offset from. Call after moving an animated entity by hand: the animation
+    /// owns the entity's transform, so without this the next step_animation()
+    /// would undo the edit. No-op when the entity has no AnimationComponent.
+    void rebase_animation(ecs::Entity entity);
+
+    /// One animated entity's driven transform, in the same decomposed form the
+    /// scene stores.
+    struct AnimatedTransformSample {
+        u32 entity_id = 0;
+        Vec3 translation;
+        Vec3 rotation_euler_degrees;
+        Vec3 scale;
+    };
+
+    /// Snapshot of every animated entity's transform, ordered by entity id.
+    ///
+    /// This is what lets a caller tell "the animation ran" from "the animation
+    /// produced a pose that never reached the transform". Those are different
+    /// claims and only the second one is worth asserting: the phase's original
+    /// defect was exactly a pose that was computed and then dropped, and a
+    /// component-present check would have called that a pass.
+    std::vector<AnimatedTransformSample> animated_transform_samples() const;
+
+    // --- Audio (Phase 9) ----------------------------------------------------
+    //
+    // Builds the listener from the active camera, starts autoplay sources, takes
+    // each source's world position from its entity transform, and mixes every
+    // playing source through the master bus.
+    //
+    // The device's own output is the base of the mix: the null backend
+    // contributes silence, so a non-zero peak is the scene's audio and not the
+    // backend's.
+    u32 step_audio(f32 dt);
+
+    /// Sources actually mixed by the last step_audio().
+    size_t audio_sources_mixed() const { return m_audio_sources_mixed; }
+    /// Largest absolute sample in the last mixed block. This is the observable
+    /// that separates "the scene produced audio" from "the mixer ran and
+    /// produced zeros" — an exit code cannot tell those apart.
+    f32 audio_output_peak() const { return m_audio_output_peak; }
+    /// Frames in the last mixed block (0 when the step covered no whole block).
+    size_t audio_output_frames() const { return m_audio_left.size(); }
+    const audio::AudioListener& audio_listener() const { return m_audio_listener; }
+    /// The audio backend. Never null; a NullAudioDevice until one is installed.
+    audio::AudioDevice* audio_device() const { return m_audio_device.get(); }
+
+    // Distinct meshes that failed to load. A failed asset is terminal, so this
+    // is one entry per bad asset regardless of frame count.
+    size_t failed_mesh_count() const { return m_failed_meshes.size(); }
+    // How many times a mesh failure has been reported. This is the observable
+    // that makes the once-per-asset contract assertable: the bug it guards
+    // against re-reported the same dead asset on every frame (2 per frame, so
+    // 32 after 16 frames), which a distinct-id count cannot detect because
+    // re-inserting an existing id does not grow the set.
+    size_t failed_mesh_reports() const { return m_failed_mesh_reports; }
     const rendering::Renderer3D* renderer() const { return m_renderer.get(); }
 
     // --- GPU picking ---
@@ -165,11 +266,48 @@ private:
     // Built lazily on the first GPU pick, so a run that never picks never pays
     // for the id pass. Null when unavailable — callers fall back to CPU picking.
     std::unique_ptr<rendering::GpuPicker> m_picker;
+    std::unique_ptr<physics::PhysicsWorld> m_physics;
+    /// 1/60 s is the conventional choice: fine enough that a fast-moving body
+    /// does not tunnel through a thin one, coarse enough to stay cheap.
+    physics::FixedTimestep m_physics_clock{1.0f / 60.0f, 8};
+
+    // Animation (Phase 9). `m_anim_clip_table` is a scratch view the state
+    // machine needs (name -> clip*); rebuilt per entity because the state
+    // machine takes the table by reference, not a lookup.
+    size_t m_animated_entities = 0;
+    std::unordered_map<std::string, const animation::AnimationClip*> m_anim_clip_table;
+
+    // Audio (Phase 9). The device is a NullAudioDevice until a real backend is
+    // installed behind the seam, which keeps headless runs and CI silent but
+    // still exercises the whole mixing path.
+    std::unique_ptr<audio::AudioDevice> m_audio_device;
+    audio::AudioBus m_audio_bus;
+    audio::AudioListener m_audio_listener;
+    std::vector<f32> m_audio_left;
+    std::vector<f32> m_audio_right;
+    /// Seconds owed to the mixer. The device runs in fixed-size blocks while
+    /// frames arrive at arbitrary deltas, so the remainder carries over; without
+    /// it the mixed block length would track the frame time and a fast machine
+    /// would silently mix less audio per second than a slow one.
+    f32 m_audio_accumulator = 0.0f;
+    size_t m_audio_sources_mixed = 0;
+    f32 m_audio_output_peak = 0.0f;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;
     bool m_renderer_initialized = false;
     std::unordered_map<assets::AssetId, rendering::StaticMeshHandle> m_mesh_handles;
+    // Mesh ids whose load already failed and was reported. A Failed handle is
+    // terminal in AssetManager, so without this the sync loop re-queried and
+    // re-warned for the same dead asset on every pass — twice per frame, forever
+    // (a scene with one uncooked mesh produced 120 identical warnings over 60
+    // frames). Erased on hot reload and on scene load so a re-cooked asset is
+    // picked up again.
+    std::unordered_set<assets::AssetId> m_failed_meshes;
+    // Total failure reports emitted. Kept separate from the set above because
+    // re-inserting an existing id does not change the set's size, so the set
+    // alone cannot distinguish "reported once" from "reported every frame".
+    size_t m_failed_mesh_reports = 0;
     rendering::MaterialHandle m_default_material{};
     std::string m_loaded_scene_path;
     uint64_t m_scene_version = 0;

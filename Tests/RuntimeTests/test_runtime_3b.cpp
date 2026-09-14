@@ -309,6 +309,83 @@ NF_TEST(runtime_missing_mesh_fails_safely) {
     rhi::reset_validation_error_count();
 }
 
+// A permanently unloadable mesh must be reported once and then skipped, not
+// re-queried and re-warned on every frame.
+//
+// The bug this pins: sync_meshes_from_assets() warned on AssetState::Failed and
+// `continue`d without recording the failure. Failed is terminal in AssetManager,
+// and the sync runs from the render paths, so one uncooked mesh produced two
+// identical warnings per frame — measured 20 over 10 frames and 120 over 60.
+// The count of recorded failures is the observable, frame-count-independent
+// contract; log volume is not assertable, this is.
+NF_TEST(runtime_failed_mesh_reported_once_not_per_frame) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    auto tmp = temp_dir_for("nf_rt_failed_once");
+    std::filesystem::create_directories(tmp / "Content" / "Scenes");
+    vfs.mount("content://", tmp / "Content");
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg, &device);
+
+    scene::Scene scene("FailedOnce");
+    auto& w = scene.world();
+    ecs::Entity e = w.create_entity();
+    w.add<scene::Transform>(e, scene::Transform{});
+    // A generated id is guaranteed absent from the registry, so the load fails
+    // deterministically and stays failed.
+    w.add<MeshComponent>(e, MeshComponent{AssetId::generate(), ""});
+    ecs::Entity cam_e = w.create_entity();
+    w.add<scene::Transform>(cam_e, scene::Transform{});
+    w.get<scene::Transform>(cam_e)->local_z = 5;
+    w.add<CameraComponent>(cam_e, CameraComponent{60, 1, 0.1f, 100, true});
+    w.add<DirectionalLight>(w.create_entity(), DirectionalLight{});
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/FailedOnce.nfscene", scene, err));
+
+    Runtime runtime(vfs, reg, manager, device, nullptr);
+    NF_CHECK(runtime.load_scene("content://Scenes/FailedOnce.nfscene", err));
+
+    rhi::TextureDesc td{};
+    td.width = 32; td.height = 32;
+    td.format = rhi::Format::R8G8B8A8_UNorm;
+    td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
+    auto target = device.create_texture(td);
+    auto cmd = device.create_command_buffer();
+    auto fence = device.create_fence(false);
+
+    constexpr int kFrames = 16;
+    for (int frame = 0; frame < kFrames; ++frame) {
+        // Reusing one fence across frames requires an explicit reset; a signaled
+        // fence handed to vkQueueSubmit is a validation error.
+        fence->reset();
+        cmd->begin();
+        runtime.render_offscreen(*target, *cmd);
+        cmd->end();
+        device.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+        NF_CHECK(fence->wait(kGpuTimeoutNs));
+    }
+
+    // One bad asset, reported exactly once across kFrames frames. Without the
+    // fix this was 2 per frame, so 32 here and 120 warnings over 60 frames.
+    // The report count is the signal, not the distinct-id count: re-inserting
+    // an already-failed id does not grow the set, so the set size is 1 either way.
+    NF_CHECK_EQ(runtime.failed_mesh_count(), size_t{1});
+    NF_CHECK_EQ(runtime.failed_mesh_reports(), size_t{1});
+    NF_CHECK(runtime.mesh_count() == 0);
+    // Rendering without the mesh must stay validation-clean.
+    NF_CHECK(rhi::validation_error_count() == 0);
+
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}
+
 NF_TEST(runtime_clean_shutdown_no_vk_leaks) {
     require_gpu();
     rhi::reset_validation_error_count();
@@ -325,8 +402,9 @@ NF_TEST(runtime_clean_shutdown_no_vk_leaks) {
         save_scene_to_vfs(vfs, "content://Scenes/Clean.nfscene", scene, err);
 
         auto device = rhi::create_device();
+        if (!device) { std::filesystem::remove_all(tmp); NF_SKIP("no Vulkan device available"); }
         rhi::DeviceDesc desc{}; desc.window_handle=nullptr; desc.enable_validation=true;
-        if (!device->init(desc)) { std::filesystem::remove_all(tmp); return; }
+        if (!device->init(desc)) { std::filesystem::remove_all(tmp); NF_SKIP("headless Vulkan device init failed"); }
         {
             AssetRegistry reg;
             AssetManager mgr(vfs, reg, device.get());

@@ -35,11 +35,10 @@ using namespace nf::test;
 } // namespace
 
 NF_TEST(rhi_offscreen_triangle_writes_colored_pixels) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) {
-        NF_LOG_WARN(LogCategory::RHI, "No GPU available — skipping RHI triangle test");
-        return;
-    }
+    // require_gpu() marks the test SKIPPED when no device exists. A bare
+    // `gpu()` + `return` would be recorded as a PASS, so a GPU-less runner
+    // would report the whole suite green while verifying nothing.
+    const GpuFixture& fixture = require_gpu();
 
     auto& device = *fixture.device;
 
@@ -190,8 +189,7 @@ NF_TEST(rhi_offscreen_triangle_writes_colored_pixels) {
 }
 
 NF_TEST(rhi_clear_fills_entire_attachment) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) return;
+    const GpuFixture& fixture = require_gpu();
 
     auto& device = *fixture.device;
 
@@ -273,8 +271,7 @@ NF_TEST(rhi_clear_fills_entire_attachment) {
 }
 
 NF_TEST(rhi_rejects_framebuffer_that_does_not_match_render_pass) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) return;
+    const GpuFixture& fixture = require_gpu();
 
     auto& device = *fixture.device;
 

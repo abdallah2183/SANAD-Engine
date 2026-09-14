@@ -49,6 +49,15 @@ struct UiIntents {
     bool viewport_pick = false;
     float pick_ndc_x = 0.0f;
     float pick_ndc_y = 0.0f;
+
+    // --- Project actions -----------------------------------------------------
+    // Scaffolding and building happen in main.cpp, not here: this layer only
+    // records what the user asked for, so the panels stay free of filesystem and
+    // process work.
+    bool new_project_confirm = false;
+    std::string new_project_dir;
+    std::string new_project_name;
+    bool build_project = false;
 };
 
 struct UiFrameStats {

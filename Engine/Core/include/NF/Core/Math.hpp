@@ -116,6 +116,31 @@ struct Vec3 {
         return len > EPSILON ? *this / len : *this;
     }
 
+    // --- Component-wise helpers -------------------------------------------
+    // Used by AABB unions, SAT projections and shape extents. Component-wise
+    // rather than reduction, because the callers almost always want the vector
+    // back, not a scalar.
+    constexpr Vec3 min(const Vec3& o) const {
+        return {x < o.x ? x : o.x, y < o.y ? y : o.y, z < o.z ? z : o.z};
+    }
+    constexpr Vec3 max(const Vec3& o) const {
+        return {x > o.x ? x : o.x, y > o.y ? y : o.y, z > o.z ? z : o.z};
+    }
+    constexpr Vec3 abs() const { return {x < 0 ? -x : x, y < 0 ? -y : y, z < 0 ? -z : z}; }
+    constexpr Vec3 scaled(const Vec3& o) const { return {x * o.x, y * o.y, z * o.z}; }
+
+    constexpr f32 max_component() const { return x > y ? (x > z ? x : z) : (y > z ? y : z); }
+    constexpr f32 min_component() const { return x < y ? (x < z ? x : z) : (y < z ? y : z); }
+    constexpr f32 max_abs_component() const { return abs().max_component(); }
+
+    /// True when every component is within `tol` of the other. Named rather
+    /// than an operator== because float equality in physics code is almost
+    /// always a bug and should have to be spelled out.
+    bool nearly_equals(const Vec3& o, f32 tol = 1e-5f) const {
+        return std::fabs(x - o.x) <= tol && std::fabs(y - o.y) <= tol &&
+               std::fabs(z - o.z) <= tol;
+    }
+
     static const Vec3 up;
     static const Vec3 forward;
     static const Vec3 right;
@@ -191,11 +216,38 @@ struct Quat {
 
     static Quat from_axis_angle(const Vec3& axis, f32 angle);
     static Quat from_euler(f32 pitch, f32 yaw, f32 roll);
+    /// Extracts the rotation from a pure-rotation matrix (no scale). Uses the
+    /// Shepperd branch selection, which stays accurate near 180 degrees where a
+    /// naive trace-based form loses precision.
+    static Quat from_matrix(const Mat4& m);
+
+    static constexpr Quat identity() { return {0, 0, 0, 1}; }
 
     Quat operator*(const Quat& o) const;
+    Quat operator*(f32 s) const { return {x * s, y * s, z * s, w * s}; }
+    Quat operator+(const Quat& o) const { return {x + o.x, y + o.y, z + o.z, w + o.w}; }
+    Quat& operator+=(const Quat& o) { x += o.x; y += o.y; z += o.z; w += o.w; return *this; }
+
+    Quat conjugate() const { return {-x, -y, -z, w}; }
+    /// Inverse. For a unit quaternion this equals the conjugate; dividing by the
+    /// squared norm makes it correct for the slightly-off-unit quaternions that
+    /// integration produces between normalisations.
+    Quat inverse() const;
+    f32 length_sq() const { return x * x + y * y + z * z + w * w; }
+
+    /// Rotates a vector: v' = q v q*. Assumes a unit quaternion — the callers
+    /// keep it unit, and normalising here would cost the hot path a sqrt.
+    Vec3 rotate(const Vec3& v) const;
+
     Quat normalized() const;
     f32 dot(const Quat& o) const;
     Mat4 to_matrix() const;
+    /// Spherical linear interpolation. Takes the shortest path (negates `b`
+    /// if the dot product is negative). `t` is clamped to [0,1].
+    static Quat slerp(const Quat& a, const Quat& b, f32 t);
+    /// Normalized linear interpolation — faster than slerp, good enough for
+    /// small angular differences. Takes the shortest path.
+    static Quat nlerp(const Quat& a, const Quat& b, f32 t);
 };
 
 } // namespace nf

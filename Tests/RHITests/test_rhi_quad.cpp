@@ -143,11 +143,9 @@ struct OffscreenTarget {
 } // namespace
 
 NF_TEST(rhi_textured_quad_samples_uploaded_texture) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) {
-        NF_LOG_WARN(LogCategory::RHI, "No GPU available — skipping textured quad test");
-        return;
-    }
+    // require_gpu() marks the test SKIPPED when no device exists; a bare
+    // `gpu()` + `return` would be recorded as a PASS.
+    const GpuFixture& fixture = require_gpu();
 
     auto& device = *fixture.device;
 
@@ -433,8 +431,7 @@ NF_TEST(rhi_textured_quad_samples_uploaded_texture) {
 }
 
 NF_TEST(rhi_staging_buffer_roundtrips_vertex_data) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) return;
+    const GpuFixture& fixture = require_gpu();
 
     auto& device = *fixture.device;
 
@@ -491,8 +488,7 @@ NF_TEST(rhi_staging_buffer_roundtrips_vertex_data) {
 }
 
 NF_TEST(rhi_descriptor_set_rejects_empty_layout) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) return;
+    const GpuFixture& fixture = require_gpu();
 
     auto& device = *fixture.device;
 

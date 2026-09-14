@@ -1,10 +1,11 @@
-# NFAssets — Virtual File System, Asset Registry, Asset Manager, Mesh Asset
+# NFAssets — Virtual File System, Asset Registry, Asset Manager, Mesh Asset, Project Descriptor
 
 set(NFASSETS_SOURCES
     src/VirtualFileSystem.cpp
     src/AssetRegistry.cpp
     src/AssetManager.cpp
     src/MeshAsset.cpp
+    src/ProjectDescriptor.cpp
 )
 
 nf_engine_library(NFAssets

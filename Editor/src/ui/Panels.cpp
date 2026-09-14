@@ -9,6 +9,9 @@
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/PrefabLink.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Animation/Components.hpp>
+#include <NF/Audio/Components.hpp>
 
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
@@ -47,6 +50,34 @@ struct InspectorCache {
     float mat_estr = 0.0f;
     int mat_choice = 0;
     int albedo_choice = 0;
+    // Physics: RigidBody
+    int rb_type = 1;       // 0=Static, 1=Dynamic, 2=Kinematic
+    float rb_mass = 1.0f;
+    float rb_friction = 0.5f;
+    float rb_restitution = 0.1f;
+    float rb_lin_damp = 0.05f;
+    float rb_ang_damp = 0.05f;
+    bool rb_allow_sleep = true;
+    // Physics: Collider
+    int col_shape = 0;     // 0=Sphere, 1=Box, 2=Plane
+    float col_radius = 0.5f;
+    float col_half[3]{0.5f, 0.5f, 0.5f};
+    float col_normal[3]{0.0f, 1.0f, 0.0f};
+    // Animation
+    int anim_clip = 0;     // index into the component's clip table
+    float anim_speed = 1.0f;
+    int anim_loop = 1;     // 0=None, 1=Loop, 2=PingPong
+    bool anim_paused = false;
+    bool anim_state_machine = false;
+    std::vector<std::string> anim_clip_names;
+    // Audio
+    float aud_volume = 1.0f;
+    float aud_pitch = 1.0f;
+    bool aud_looping = false;
+    bool aud_spatial = false;
+    bool aud_autoplay = false;
+    float aud_min_dist = 1.0f;
+    float aud_max_dist = 50.0f;
     std::string error;
 };
 
@@ -166,6 +197,41 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 if (!app.stop(err)) {
                     push_error(app.console(), "Stop failed", err);
                 }
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted("|");
+            ImGui::SameLine();
+            // Project actions. Building only makes sense with a project open:
+            // started straight into the engine tree there is nothing to package.
+            if (app.has_project()) {
+                ImGui::Text("Project: %s", app.project_name().c_str());
+                ImGui::SameLine();
+                if (ImGui::Button("Build")) {
+                    intents.build_project = true;
+                }
+            } else {
+                ImGui::TextDisabled("Project: (engine tree)");
+            }
+            ImGui::SameLine();
+            static char newproj_dir[256]{};
+            static char newproj_name[128]{};
+            if (ImGui::Button("New Project...")) {
+                ImGui::OpenPopup("NewProject");
+            }
+            if (ImGui::BeginPopupModal("NewProject", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::InputText("directory", newproj_dir, sizeof(newproj_dir));
+                ImGui::InputText("name", newproj_name, sizeof(newproj_name));
+                if (ImGui::Button("Create")) {
+                    intents.new_project_confirm = true;
+                    intents.new_project_dir = newproj_dir;
+                    intents.new_project_name = newproj_name;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
             ImGui::SameLine();
             ImGui::TextUnformatted(stats.validation_on ? "[Validation ON]" : "[Validation OFF]");
@@ -419,6 +485,52 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.mesh_id[0] = '\0';
                     ic.mesh_mat[0] = '\0';
                     ic.mat_path[0] = '\0';
+                }
+                // Physics cache init
+                if (const auto* rb = w->get<physics::RigidBodyComponent>(sel)) {
+                    ic.rb_type = static_cast<int>(rb->type);
+                    ic.rb_mass = rb->mass;
+                    ic.rb_friction = rb->friction;
+                    ic.rb_restitution = rb->restitution;
+                    ic.rb_lin_damp = rb->linear_damping;
+                    ic.rb_ang_damp = rb->angular_damping;
+                    ic.rb_allow_sleep = rb->allow_sleep;
+                }
+                if (const auto* col = w->get<physics::ColliderComponent>(sel)) {
+                    ic.col_shape = static_cast<int>(col->shape.type);
+                    ic.col_radius = col->shape.sphere.radius;
+                    ic.col_half[0] = col->shape.box.half_extents.x;
+                    ic.col_half[1] = col->shape.box.half_extents.y;
+                    ic.col_half[2] = col->shape.box.half_extents.z;
+                    ic.col_normal[0] = col->shape.plane.normal.x;
+                    ic.col_normal[1] = col->shape.plane.normal.y;
+                    ic.col_normal[2] = col->shape.plane.normal.z;
+                }
+                // Animation cache init. The clip list comes from the component's
+                // own table, so the dropdown can only offer clips that exist.
+                ic.anim_clip_names.clear();
+                ic.anim_clip = 0;
+                if (const auto* anim = w->get<animation::AnimationComponent>(sel)) {
+                    ic.anim_speed = anim->speed;
+                    ic.anim_loop = static_cast<int>(anim->player.loop_mode());
+                    ic.anim_paused = anim->paused;
+                    ic.anim_state_machine = anim->use_state_machine;
+                    ic.anim_clip_names.reserve(anim->clips.size());
+                    for (const auto& entry : anim->clips) {
+                        if (entry.first == anim->player.clip_name()) {
+                            ic.anim_clip = static_cast<int>(ic.anim_clip_names.size());
+                        }
+                        ic.anim_clip_names.push_back(entry.first);
+                    }
+                }
+                if (const auto* aud = w->get<audio::AudioComponent>(sel)) {
+                    ic.aud_volume = aud->volume;
+                    ic.aud_pitch = aud->pitch;
+                    ic.aud_looping = aud->looping;
+                    ic.aud_spatial = aud->spatial;
+                    ic.aud_autoplay = aud->autoplay;
+                    ic.aud_min_dist = aud->spatial_settings.min_distance;
+                    ic.aud_max_dist = aud->spatial_settings.max_distance;
                 }
             }
             if (!ic.error.empty()) {
@@ -689,6 +801,173 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         push_error(app.console(), "Light edit failed", err);
                     } else {
                         ic.error.clear();
+                    }
+                }
+            }
+            // --- Physics: RigidBody ---
+            if (w->has<physics::RigidBodyComponent>(sel) &&
+                ImGui::CollapsingHeader("Rigid Body", ImGuiTreeNodeFlags_DefaultOpen)) {
+                const char* types[] = {"Static", "Dynamic", "Kinematic"};
+                ImGui::Combo("Type", &ic.rb_type, types, 3);
+                if (ic.rb_type != 0) { // mass only matters for Dynamic/Kinematic
+                    ImGui::DragFloat("Mass", &ic.rb_mass, 0.1f, 0.001f, 10000.0f);
+                }
+                ImGui::SliderFloat("Friction", &ic.rb_friction, 0.0f, 2.0f);
+                ImGui::SliderFloat("Restitution", &ic.rb_restitution, 0.0f, 1.0f);
+                ImGui::SliderFloat("Linear Damping", &ic.rb_lin_damp, 0.0f, 1.0f);
+                ImGui::SliderFloat("Angular Damping", &ic.rb_ang_damp, 0.0f, 1.0f);
+                ImGui::Checkbox("Allow Sleep", &ic.rb_allow_sleep);
+                if (ImGui::Button("Apply##rigidbody")) {
+                    auto* rb = w->get<physics::RigidBodyComponent>(sel);
+                    if (rb) {
+                        physics::RigidBodyComponent edited = *rb;
+                        edited.type = static_cast<physics::BodyType>(ic.rb_type);
+                        edited.mass = ic.rb_mass;
+                        edited.friction = ic.rb_friction;
+                        edited.restitution = ic.rb_restitution;
+                        edited.linear_damping = ic.rb_lin_damp;
+                        edited.angular_damping = ic.rb_ang_damp;
+                        edited.allow_sleep = ic.rb_allow_sleep;
+                        std::string err;
+                        if (!app.set_rigid_body(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Rigid body edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Physics: Collider ---
+            if (w->has<physics::ColliderComponent>(sel) &&
+                ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+                const char* shapes[] = {"Sphere", "Box", "Plane"};
+                ImGui::Combo("Shape", &ic.col_shape, shapes, 3);
+                if (ic.col_shape == 0) {
+                    ImGui::DragFloat("Radius", &ic.col_radius, 0.05f, 0.001f, 100.0f);
+                } else if (ic.col_shape == 1) {
+                    ImGui::DragFloat3("Half Extents", ic.col_half, 0.05f, 0.001f, 100.0f);
+                } else {
+                    ImGui::DragFloat3("Normal", ic.col_normal, 0.05f, -1.0f, 1.0f);
+                }
+                if (ImGui::Button("Apply##collider")) {
+                    auto* col = w->get<physics::ColliderComponent>(sel);
+                    if (col) {
+                        physics::ColliderComponent edited;
+                        if (ic.col_shape == 0) {
+                            edited.shape = physics::Shape::make_sphere(ic.col_radius);
+                        } else if (ic.col_shape == 1) {
+                            edited.shape = physics::Shape::make_box(
+                                Vec3(ic.col_half[0], ic.col_half[1], ic.col_half[2]));
+                        } else {
+                            edited.shape = physics::Shape::make_plane(
+                                Vec3(ic.col_normal[0], ic.col_normal[1], ic.col_normal[2]));
+                        }
+                        std::string err;
+                        if (!app.set_collider(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Collider edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Animation ---
+            if (w->has<animation::AnimationComponent>(sel) &&
+                ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (const auto* anim = w->get<animation::AnimationComponent>(sel)) {
+                    ImGui::TextDisabled("bones: %d", static_cast<int>(anim->skeleton.bones.size()));
+                    if (anim->has_procedural) {
+                        ImGui::TextDisabled("procedural: %s (%s, %.2fs)",
+                                            anim->procedural_clip_name.c_str(),
+                                            anim->procedural.kind ==
+                                                    animation::ProceduralClipSpec::Kind::Spin
+                                                ? "spin"
+                                                : "bob",
+                                            static_cast<double>(anim->procedural.duration));
+                    }
+                    ImGui::TextDisabled("time: %.3fs  state: %s", static_cast<double>(anim->player.time()),
+                                        anim->use_state_machine
+                                            ? anim->state_machine.current_state().c_str()
+                                            : "-");
+                }
+                if (!ic.anim_clip_names.empty()) {
+                    std::vector<const char*> names;
+                    names.reserve(ic.anim_clip_names.size());
+                    for (const auto& n : ic.anim_clip_names) {
+                        names.push_back(n.c_str());
+                    }
+                    ImGui::Combo("Clip", &ic.anim_clip, names.data(),
+                                 static_cast<int>(names.size()));
+                } else {
+                    ImGui::TextDisabled("no clips (see the Animation: line in the scene file)");
+                }
+                ImGui::DragFloat("Speed", &ic.anim_speed, 0.05f, -10.0f, 10.0f);
+                const char* loops[] = {"None", "Loop", "Ping-Pong"};
+                ImGui::Combo("Loop", &ic.anim_loop, loops, 3);
+                ImGui::Checkbox("Paused", &ic.anim_paused);
+                ImGui::Checkbox("State machine", &ic.anim_state_machine);
+                if (ImGui::Button("Apply##animation")) {
+                    if (auto* src = w->get<animation::AnimationComponent>(sel)) {
+                        animation::AnimationComponent edited = *src;
+                        edited.speed = ic.anim_speed;
+                        edited.paused = ic.anim_paused;
+                        edited.use_state_machine = ic.anim_state_machine;
+                        edited.player.set_loop_mode(static_cast<animation::LoopMode>(ic.anim_loop));
+                        if (ic.anim_clip >= 0 &&
+                            ic.anim_clip < static_cast<int>(ic.anim_clip_names.size())) {
+                            edited.player.set_clip(
+                                ic.anim_clip_names[static_cast<size_t>(ic.anim_clip)]);
+                        }
+                        std::string err;
+                        if (!app.set_animation(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Animation edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Audio ---
+            if (w->has<audio::AudioComponent>(sel) &&
+                ImGui::CollapsingHeader("Audio", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (const auto* aud = w->get<audio::AudioComponent>(sel)) {
+                    ImGui::TextDisabled("buffer: %s%s",
+                                        aud->buffer_name.empty() ? "(generated)"
+                                                                 : aud->buffer_name.c_str(),
+                                        aud->resolved_buffer() == nullptr ? "  [no data]" : "");
+                    ImGui::TextDisabled("cursor: %d frames, playing: %s",
+                                        static_cast<int>(aud->sample_cursor),
+                                        aud->playing ? "yes" : "no");
+                }
+                ImGui::SliderFloat("Volume", &ic.aud_volume, 0.0f, 2.0f);
+                ImGui::DragFloat("Pitch", &ic.aud_pitch, 0.01f, 0.01f, 4.0f);
+                ImGui::Checkbox("Looping", &ic.aud_looping);
+                ImGui::Checkbox("Autoplay", &ic.aud_autoplay);
+                ImGui::Checkbox("3D (spatial)", &ic.aud_spatial);
+                if (ic.aud_spatial) {
+                    ImGui::DragFloat("Min distance", &ic.aud_min_dist, 0.1f, 0.01f, 1000.0f);
+                    ImGui::DragFloat("Max distance", &ic.aud_max_dist, 0.5f, 0.01f, 10000.0f);
+                }
+                if (ImGui::Button("Apply##audio")) {
+                    if (auto* src = w->get<audio::AudioComponent>(sel)) {
+                        audio::AudioComponent edited = *src;
+                        edited.volume = ic.aud_volume;
+                        edited.pitch = ic.aud_pitch;
+                        edited.looping = ic.aud_looping;
+                        edited.spatial = ic.aud_spatial;
+                        edited.autoplay = ic.aud_autoplay;
+                        edited.spatial_settings.min_distance = ic.aud_min_dist;
+                        edited.spatial_settings.max_distance = ic.aud_max_dist;
+                        std::string err;
+                        if (!app.set_audio(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Audio edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
                     }
                 }
             }

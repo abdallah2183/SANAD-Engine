@@ -1,0 +1,217 @@
+#pragma once
+
+#include <NF/Physics/Broadphase.hpp>
+#include <NF/Physics/Narrowphase.hpp>
+#include <NF/Physics/Shapes.hpp>
+
+#include <vector>
+
+namespace nf::physics {
+
+/// Generation-checked body handle.
+///
+/// A bare index would let a stale handle address whatever body was created into
+/// the recycled slot — the same class of bug the renderer's framebuffer cache
+/// had before it was keyed on a creation serial. The generation makes a dead
+/// handle detectably dead.
+struct BodyHandle {
+    u32 index = u32_max;
+    u32 generation = 0;
+
+    bool valid() const { return index != u32_max; }
+    bool operator==(const BodyHandle& o) const {
+        return index == o.index && generation == o.generation;
+    }
+    bool operator!=(const BodyHandle& o) const { return !(*this == o); }
+};
+
+enum class BodyType : u8 {
+    Static = 0,    // never moves; infinite mass
+    Dynamic = 1,   // moved by forces and contacts
+    Kinematic = 2, // moved only by setting its state; pushes dynamics, is not pushed
+};
+
+struct BodyDesc {
+    BodyType type = BodyType::Dynamic;
+    Shape shape = Shape::make_sphere(0.5f);
+    Vec3 position{0.0f, 0.0f, 0.0f};
+    Quat orientation = Quat::identity();
+    Vec3 linear_velocity{0.0f, 0.0f, 0.0f};
+    Vec3 angular_velocity{0.0f, 0.0f, 0.0f};
+    f32 mass = 1.0f; // ignored for Static and Kinematic
+    f32 friction = 0.5f;
+    f32 restitution = 0.1f;
+    f32 linear_damping = 0.05f;
+    f32 angular_damping = 0.05f;
+    bool allow_sleep = true;
+};
+
+/// Everything that affects the simulation. Changing any of these changes the
+/// result, so they are all in one place rather than scattered as literals.
+struct PhysicsSettings {
+    Vec3 gravity{0.0f, -9.81f, 0.0f};
+    /// Sequential impulse converges slowly on a chain of contacts: a three-box
+    /// stack needs roughly a dozen passes before its residual velocity falls
+    /// below the sleep threshold. At 8 the stack is visually stable but never
+    /// comes to rest, so it never sleeps and never settles bit-identically.
+    /// Measured: 12/4 settles and sleeps, 8/3 does not.
+    u32 velocity_iterations = 12;
+    u32 position_iterations = 4;
+    /// Baumgarte factor: how aggressively penetration is corrected through the
+    /// velocity solve. Too low and objects sink; too high and they pop.
+    f32 baumgarte = 0.2f;
+    /// Penetration tolerated without correction. Without a slop every resting
+    /// contact is corrected every step and stacks buzz.
+    f32 penetration_slop = 0.005f;
+    f32 restitution_threshold = 1.0f; // below this speed, no bounce
+    f32 sleep_linear_threshold = 0.05f;
+    f32 sleep_angular_threshold = 0.05f;
+    f32 sleep_time_required = 0.5f;
+    /// Caps so one bad contact cannot launch a body to infinity (and then NaN).
+    f32 max_linear_velocity = 200.0f;
+    f32 max_angular_velocity = 100.0f;
+    /// Below this relative speed a contact is treated as resting and gets no
+    /// restitution. Without it, a bouncing ball never settles.
+    f32 min_restitution_speed = 0.5f;
+};
+
+struct BodyState {
+    Vec3 position{0.0f, 0.0f, 0.0f};
+    Quat orientation = Quat::identity();
+    Vec3 linear_velocity{0.0f, 0.0f, 0.0f};
+    Vec3 angular_velocity{0.0f, 0.0f, 0.0f};
+    bool asleep = false;
+};
+
+/// The engine's only entry point to physics.
+///
+/// Everything above this — components, serialization, the editor, the runtime —
+/// talks to `PhysicsWorld` and to `BodyHandle`. A Jolt backend would implement
+/// the same surface; nothing outside this header knows how contacts are solved.
+class PhysicsWorld {
+public:
+    explicit PhysicsWorld(const PhysicsSettings& settings = PhysicsSettings{});
+
+    // --- Bodies -------------------------------------------------------------
+
+    BodyHandle add_body(const BodyDesc& desc);
+    void remove_body(BodyHandle handle);
+    bool is_alive(BodyHandle handle) const;
+
+    BodyState state(BodyHandle handle) const;
+    void set_state(BodyHandle handle, const BodyState& state);
+    void set_velocity(BodyHandle handle, const Vec3& linear, const Vec3& angular);
+
+    /// Impulse applied at a world-space offset from the centre of mass, so it
+    /// produces torque as well as linear motion.
+    void apply_impulse(BodyHandle handle, const Vec3& impulse, const Vec3& world_offset);
+
+    // --- Simulation ---------------------------------------------------------
+
+    /// One fixed step. Deterministic: it reads no wall clock, allocates in a
+    /// stable order, and solves bodies in index order. The same inputs always
+    /// produce the same output.
+    void step(f32 dt);
+
+    size_t body_count() const { return m_bodies.size(); }
+    size_t awake_count() const;
+
+    /// Hash of every body's position and orientation in index order. The
+    /// determinism guarantee is only meaningful if it is assertable, and this is
+    /// what makes it so.
+    u64 state_hash() const;
+
+    /// Contacts generated by the last step, for debug draw and tests.
+    const std::vector<Manifold>& last_manifolds() const { return m_manifolds; }
+
+    const PhysicsSettings& settings() const { return m_settings; }
+    PhysicsSettings& settings() { return m_settings; }
+
+private:
+    struct RigidBody {
+        BodyType type = BodyType::Dynamic;
+        Shape shape;
+        Vec3 position{0.0f, 0.0f, 0.0f};
+        Quat orientation = Quat::identity();
+        Vec3 linear_velocity{0.0f, 0.0f, 0.0f};
+        Vec3 angular_velocity{0.0f, 0.0f, 0.0f};
+        f32 inv_mass = 1.0f;
+        Vec3 inv_inertia{1.0f, 1.0f, 1.0f}; // body space, diagonal
+        f32 friction = 0.5f;
+        f32 restitution = 0.1f;
+        f32 linear_damping = 0.05f;
+        f32 angular_damping = 0.05f;
+        /// Position-only velocities, zeroed after the position update. They
+        /// push bodies out of penetration without contaminating the real
+        /// velocity that the next frame's solver and the sleep test read.
+        Vec3 pseudo_linear_velocity{0.0f, 0.0f, 0.0f};
+        Vec3 pseudo_angular_velocity{0.0f, 0.0f, 0.0f};
+        bool allow_sleep = true;
+        bool asleep = false;
+        f32 sleep_timer = 0.0f;
+        u32 generation = 0;
+        bool alive = false;
+    };
+
+    /// World-space inverse inertia applied to a vector. The tensor is diagonal
+    /// in body space, so this is two rotations and a component-wise scale —
+    /// cheaper and more stable than building and inverting a 3x3.
+    Vec3 world_inv_inertia_mul(const RigidBody& body, const Vec3& v) const;
+
+    /// One contact point's precomputed solver data. Everything that does not
+    /// change between iterations is computed once here, because the velocity
+    /// loop runs it eight times a step and the effective-mass term is the
+    /// expensive part.
+    struct ContactPointConstraint {
+        Vec3 r_a{0.0f, 0.0f, 0.0f}; // contact offset from each centre of mass
+        Vec3 r_b{0.0f, 0.0f, 0.0f};
+        f32 normal_mass = 0.0f;     // 1 / effective mass along the normal
+        f32 tangent_mass[2] = {0.0f, 0.0f};
+        f32 target_velocity = 0.0f; // restitution only — see bias_velocity
+        /// Penetration correction, solved against pseudo-velocities rather than
+        /// the real ones. Feeding Baumgarte into the real velocity leaves a
+        /// resting body moving at the correction speed every step, which is
+        /// exactly the jitter that stops a stack from ever settling or sleeping.
+        f32 bias_velocity = 0.0f;
+        f32 normal_impulse = 0.0f;  // accumulated, warm started from last frame
+        f32 tangent_impulse[2] = {0.0f, 0.0f};
+        f32 position_impulse = 0.0f;
+    };
+
+    struct ContactConstraint {
+        u32 body_a = 0;
+        u32 body_b = 0;
+        Vec3 normal{0.0f, 1.0f, 0.0f};
+        Vec3 tangent[2];
+        f32 friction = 0.0f;
+        ContactPointConstraint points[Manifold::kMaxPoints];
+        u32 count = 0;
+    };
+
+    void integrate_velocities(f32 dt);
+    void generate_contacts();
+    void prepare_constraints(f32 dt);
+    void warm_start();
+    void solve_contacts();
+    void solve_position_correction();
+    void integrate_positions(f32 dt);
+    /// Sleeping is decided per island, not per body. Union-find scratch, reused
+    /// across steps so the step allocates nothing.
+    void update_sleep(f32 dt);
+
+    PhysicsSettings m_settings;
+    std::vector<RigidBody> m_bodies;
+    std::vector<u32> m_free_slots;
+
+    SpatialGrid m_grid;
+    std::vector<BroadphasePair> m_pairs;
+    std::vector<Manifold> m_manifolds;
+    /// Last step's manifolds, kept only so this step's contacts can inherit the
+    /// impulses that were accumulated for them.
+    std::vector<Manifold> m_prev_manifolds;
+    std::vector<ContactConstraint> m_constraints;
+    std::vector<Aabb> m_aabbs;
+    std::vector<u32> m_island_parent;
+};
+
+} // namespace nf::physics

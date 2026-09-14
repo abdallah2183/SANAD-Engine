@@ -15,6 +15,9 @@
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
+#include <NF/Assets/ProjectDescriptor.hpp>
+#include <NF/Project/ProjectPackager.hpp>
+#include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Time.hpp>
 #include <NF/Platform/Platform.hpp>
@@ -26,6 +29,7 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
+#include <NF/Physics/Components.hpp>
 
 #include <imgui.h>
 
@@ -54,10 +58,15 @@
 namespace {
 
 struct EditorConfig {
-    std::string scene_path = "content://Scenes/Example.nfscene";
+    // Empty means "not specified": a project's startup scene is used when one
+    // is open, otherwise the historical default.
+    std::string scene_path;
     uint32_t max_frames = 0;
     bool validation = false;
     bool headless = false;
+    // Empty means "open the engine tree", which is how the editor has always
+    // been launched. With a project, the mounts come from its descriptor.
+    std::string project_path;
 };
 
 EditorConfig parse_args(int argc, char** argv) {
@@ -78,12 +87,17 @@ EditorConfig parse_args(int argc, char** argv) {
             c.max_frames = static_cast<uint32_t>(std::atoi(argv[++i]));
         } else if (!value_of("--frames=").empty()) {
             c.max_frames = static_cast<uint32_t>(std::atoi(value_of("--frames=").c_str()));
+        } else if (arg == "--project" && i + 1 < argc) {
+            c.project_path = argv[++i];
+        } else if (!value_of("--project=").empty()) {
+            c.project_path = value_of("--project=");
         } else if (arg == "--validation") {
             c.validation = true;
         } else if (arg == "--headless") {
             c.headless = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("NOVAForgeEditor (Phase 5)\n"
+                        "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
                         "  --scene <logical>   Scene to open (default content://Scenes/Example.nfscene)\n"
                         "  --frames N          Run N frames then exit (0 = interactive until close)\n"
                         "  --validation        Enable Vulkan validation\n"
@@ -228,27 +242,65 @@ int main(int argc, char** argv) {
     nf::Logger::instance().add_sink(nf::editor::make_console_sink(console));
 
     NF_LOG_INFO(nf::LogCategory::Editor, "=== NOVAForge Editor (Phase 4) ===");
-    NF_LOG_INFO(nf::LogCategory::Editor, "Scene: {} Frames: {} Validation: {} Headless: {}", cfg.scene_path,
+    NF_LOG_INFO(nf::LogCategory::Editor, "Project: '{}' Frames: {} Validation: {} Headless: {}",
+                cfg.project_path.empty() ? std::string("<engine tree>") : cfg.project_path,
                 cfg.max_frames, cfg.validation, cfg.headless);
 
     nf::platform_init();
     nf::JobSystem::instance().init(0);
 
     nf::assets::VirtualFileSystem vfs;
-    const std::filesystem::path project_root = find_project_root();
-    auto mount = [&](const std::string& logical, const std::filesystem::path& physical) {
-        std::error_code ec;
-        std::filesystem::create_directories(physical, ec);
-        auto r = vfs.mount(logical, physical);
-        if (!r.ok) {
-            NF_LOG_WARN(nf::LogCategory::Editor, "VFS mount failed {} -> {}: {}", logical,
-                        physical.string(), r.error);
+    std::string active_project_path;
+    std::string active_project_name;
+    std::string resolved_scene = cfg.scene_path;
+    if (!cfg.project_path.empty()) {
+        // A project declares its own mounts, so the engine-tree walk-up is not
+        // consulted at all. Without this the editor could only ever open the
+        // repository it was built in.
+        std::string perr;
+        auto desc = nf::assets::ProjectDescriptor::load_from_file(cfg.project_path, perr);
+        if (!desc) {
+            NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to load project '{}': {}",
+                         cfg.project_path, perr);
+            nf::JobSystem::instance().shutdown();
+            nf::platform_shutdown();
+            return 1;
         }
-    };
-    mount("engine://", project_root / "Engine");
-    mount("project://", project_root);
-    mount("content://", project_root / "Content");
-    mount("cache://", project_root / "Cache");
+        if (!desc->apply_mounts(vfs, perr)) {
+            NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to mount project '{}': {}",
+                         desc->name(), perr);
+            nf::JobSystem::instance().shutdown();
+            nf::platform_shutdown();
+            return 1;
+        }
+        active_project_path = cfg.project_path;
+        active_project_name = desc->name();
+        NF_LOG_INFO(nf::LogCategory::Editor, "Project '{}' — {} mounts", desc->name(),
+                    desc->mounts().size());
+        // A project knows which scene it starts in. Using the engine default here
+        // would mean opening a project and immediately failing to find its scene.
+        if (resolved_scene.empty()) {
+            resolved_scene = desc->startup_scene();
+        }
+    } else {
+        const std::filesystem::path project_root = find_project_root();
+        auto mount = [&](const std::string& logical, const std::filesystem::path& physical) {
+            std::error_code ec;
+            std::filesystem::create_directories(physical, ec);
+            auto r = vfs.mount(logical, physical);
+            if (!r.ok) {
+                NF_LOG_WARN(nf::LogCategory::Editor, "VFS mount failed {} -> {}: {}", logical,
+                            physical.string(), r.error);
+            }
+        };
+        mount("engine://", project_root / "Engine");
+        mount("project://", project_root);
+        mount("content://", project_root / "Content");
+        mount("cache://", project_root / "Cache");
+        if (resolved_scene.empty()) {
+            resolved_scene = "content://Scenes/Example.nfscene";
+        }
+    }
 
     nf::assets::AssetRegistry registry;
     {
@@ -315,10 +367,14 @@ int main(int argc, char** argv) {
         nf::runtime::Runtime runtime(vfs, registry, manager, *device, swapchain.get());
         nf::editor::EditorApp app(vfs, registry, manager, console);
         app.attach_runtime(&runtime);
+        app.set_project(active_project_path, active_project_name);
+        if (app.has_project()) {
+            NF_LOG_INFO(nf::LogCategory::Editor, "Editor opened in project '{}'", app.project_name());
+        }
 
         std::string err;
-        if (!app.open_scene(cfg.scene_path, err)) {
-            NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to open scene '{}': {}", cfg.scene_path, err);
+        if (!app.open_scene(resolved_scene, err)) {
+            NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to open scene '{}': {}", resolved_scene, err);
             return 1;
         }
         {
@@ -441,6 +497,12 @@ int main(int argc, char** argv) {
         uint32_t viewport_blue = 0;
         uint32_t lit_single_cube = 0;
         bool force_measure = false;
+        // Highest draw_calls / visible-object count seen on any viewport frame.
+        // The acceptance used to pass while the scene rendered nothing at all —
+        // exit 0, zero validation errors, zero leaks, zero geometry — so the
+        // "did it actually draw?" question needs an explicit answer.
+        uint32_t max_draw_calls = 0;
+        uint32_t max_visible = 0;
 
         const bool automation = (cfg.max_frames != 0);
         bool auto_failed = false;
@@ -599,6 +661,15 @@ int main(int argc, char** argv) {
             cmd_view->reset();
             cmd_view->begin();
             runtime.render_offscreen(*vp_res.target, *cmd_view);
+            // Record the strongest viewport frame. Sampled every frame (not only
+            // on the readback cadence) so the end-of-run check answers "did this
+            // session ever draw geometry" rather than "what did the last
+            // measured frame happen to draw".
+            if (const auto* rend = runtime.renderer()) {
+                const auto& st = rend->last_stats();
+                if (st.draw_calls > max_draw_calls) max_draw_calls = st.draw_calls;
+                if (st.visible > max_visible) max_visible = st.visible;
+            }
             // Periodic readback proof that the viewport holds a real scene
             // (plus on-demand automation measures via force_measure).
             const bool measure = (frame_count == 10) || (automation && frame_count % 30 == 0) ||
@@ -815,6 +886,53 @@ int main(int argc, char** argv) {
 
             // Intent processing for the recorded ImGui frame (windowed only).
             if (!cfg.headless && have_ui_intents) {
+                // --- Project actions -------------------------------------
+                // Scaffolding and packaging run here rather than in the panel
+                // layer, so the panels stay free of filesystem work.
+                if (ui_in.new_project_confirm && !ui_in.new_project_dir.empty()) {
+                    nf::project::ScaffoldOptions so;
+                    so.root = ui_in.new_project_dir;
+                    so.name = ui_in.new_project_name.empty()
+                                  ? std::filesystem::path(ui_in.new_project_dir).filename().string()
+                                  : ui_in.new_project_name;
+                    so.template_dir = NF_TEMPLATE_DIR;
+                    std::string perr;
+                    if (nf::project::scaffold_project(so, perr)) {
+                        NF_LOG_INFO(nf::LogCategory::Editor, "Automation: New project OK");
+                        NF_LOG_INFO(nf::LogCategory::Editor,
+                                    "Created project '{}' at {} — reopen with --project to edit it",
+                                    so.name, so.root.string());
+                    } else {
+                        NF_LOG_WARN(nf::LogCategory::Editor, "New project failed: {}", perr);
+                    }
+                }
+                if (ui_in.build_project) {
+                    if (!app.has_project()) {
+                        NF_LOG_WARN(nf::LogCategory::Editor,
+                                    "Build requested with no project open (started in the engine tree)");
+                    } else {
+                        nf::project::BuildOptions bo;
+                        bo.project_file = app.project_path();
+                        bo.shader_dir = NF_BASIC3D_SHADER_DIR;
+                        // The player sits beside the editor in the build output.
+                        const auto exe_dir = std::filesystem::absolute(argv[0]).parent_path();
+                        bo.player_exe = exe_dir / "NFPlayer.exe";
+                        if (!std::filesystem::exists(bo.player_exe)) {
+                            bo.player_exe = exe_dir / "NFPlayer";
+                        }
+                        nf::project::BuildReport rep;
+                        std::string berr;
+                        if (nf::project::build_project(bo, rep, berr)) {
+                            NF_LOG_INFO(nf::LogCategory::Editor,
+                                        "Build OK: cooked {}, skipped {}, pruned {}, packaged {} file(s) -> {}",
+                                        rep.cook.cooked, rep.cook.skipped, rep.cook.pruned,
+                                        rep.files_packaged, rep.output_dir.string());
+                        } else {
+                            NF_LOG_ERROR(nf::LogCategory::Editor, "Build failed: {}", berr);
+                        }
+                    }
+                }
+
                 if (ui_in.open_scene_dialog_confirm && !ui_in.open_scene_path.empty()) {
                     std::string e;
                     if (!app.open_scene(ui_in.open_scene_path, e)) {
@@ -1189,6 +1307,120 @@ int main(int argc, char** argv) {
                     }
                     auto_check(ok, "Prefab revert restores template", e);
                 }
+                // --- Phase 8: Physics acceptance ---
+                if (f == 106) {
+                    // Add physics components to the selected entity (the cube).
+                    // This proves the inspector can add RigidBody + Collider.
+                    auto sel = app.selection().primary();
+                    if (!sel.valid()) {
+                        auto hit = find_first_mesh(app.world());
+                        if (hit.has_value()) {
+                            sel = *hit;
+                            app.selection().set_single(sel);
+                        }
+                    }
+                    std::string e;
+                    bool ok = false;
+                    if (sel.valid()) {
+                        // Set up as a dynamic box with mass 1.
+                        nf::physics::RigidBodyComponent rb;
+                        rb.type = nf::physics::BodyType::Dynamic;
+                        rb.mass = 1.0f;
+                        rb.friction = 0.5f;
+                        rb.restitution = 0.3f;
+                        ok = app.set_rigid_body(sel, rb, e);
+                        if (ok) {
+                            nf::physics::ColliderComponent col;
+                            col.shape = nf::physics::Shape::make_box(nf::Vec3(0.5f, 0.5f, 0.5f));
+                            ok = app.set_collider(sel, col, e);
+                        }
+                    } else {
+                        e = "no entity to add physics to";
+                    }
+                    auto_check(ok, "Physics: add RigidBody + Collider", e);
+                }
+                if (f == 108) {
+                    // Play mode must step the physics simulation. The cube should
+                    // have moved (fallen under gravity) by the time we stop.
+                    std::string e;
+                    bool ok = app.play(e);
+                    auto_check(ok, "Physics: Play (start simulation)", e);
+                    if (ok) {
+                        // Run a few frames so physics actually steps.
+                        for (int i = 0; i < 5; ++i) {
+                            runtime.update(1.0f / 60.0f);
+                        }
+                    }
+                }
+                if (f == 109) {
+                    // After stepping physics the body should have moved.
+                    auto sel = app.selection().primary();
+                    float py = 0.0f;
+                    bool moved = false;
+                    if (sel.valid()) {
+                        if (const auto* t = app.world()->get<nf::scene::Transform>(sel)) {
+                            py = t->world_y;
+                            // The body started at y=0 and gravity pulls it down.
+                            moved = (py != 0.0f);
+                        }
+                    }
+                    auto_check(moved, "Physics: body moved under gravity",
+                               "world_y = " + std::to_string(py));
+                    std::string e;
+                    app.stop(e);
+                }
+                if (f == 112) {
+                    // Project workflow: scaffold a real project and build it.
+                    // This is the design document's §262 chain (create project →
+                    // build → run outside the editor) exercised through the editor
+                    // rather than only through the CLI, so a break in either path
+                    // shows up here.
+                    const auto proj_root =
+                        std::filesystem::temp_directory_path() / "nf_editor_auto_project";
+                    std::error_code pec;
+                    std::filesystem::remove_all(proj_root, pec);
+
+                    nf::project::ScaffoldOptions so;
+                    so.root = proj_root;
+                    so.name = "AutoProject";
+                    so.template_dir = NF_TEMPLATE_DIR;
+                    std::string perr;
+                    const bool scaffolded = nf::project::scaffold_project(so, perr);
+                    auto_check(scaffolded, "Project scaffold", perr);
+                    if (scaffolded) {
+                        auto desc = nf::assets::ProjectDescriptor::load_from_file(
+                            proj_root / "AutoProject.nfproj", perr);
+                        auto_check(desc.has_value(), "Scaffolded project loads", perr);
+                    }
+                }
+                if (f == 114) {
+                    const auto proj_root =
+                        std::filesystem::temp_directory_path() / "nf_editor_auto_project";
+                    nf::project::BuildOptions bo;
+                    bo.project_file = proj_root / "AutoProject.nfproj";
+                    bo.shader_dir = NF_BASIC3D_SHADER_DIR;
+                    const auto exe_dir = std::filesystem::absolute(argv[0]).parent_path();
+                    bo.player_exe = exe_dir / "NFPlayer.exe";
+                    if (!std::filesystem::exists(bo.player_exe)) {
+                        bo.player_exe = exe_dir / "NFPlayer";
+                    }
+
+                    nf::project::BuildReport rep;
+                    std::string berr;
+                    const bool built = nf::project::build_project(bo, rep, berr);
+                    auto_check(built, "Project build", berr);
+                    if (built) {
+                        auto_check(std::filesystem::exists(rep.output_dir / "manifest.txt"),
+                                   "Package manifest written");
+                        auto_check(std::filesystem::exists(
+                                       rep.output_dir / "Cache" / "Meshes" / "cube.nfmesh"),
+                                   "Package contains the cooked mesh");
+                        auto_check(rep.cook.failed == 0, "Package cooked without failures");
+                    }
+                    // Leave no artifacts behind, matching the rest of the harness.
+                    std::error_code cec;
+                    std::filesystem::remove_all(proj_root, cec);
+                }
                 if (f == 110) {
                     // Tidy up automation artifacts (files + registry); the
                     // in-memory scene is discarded at exit anyway.
@@ -1233,6 +1465,17 @@ int main(int argc, char** argv) {
             if (!cfg.headless) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
+        }
+
+        // The scene must actually have been drawn. Without this the acceptance
+        // reported OK on a scene whose mesh never loaded (uncooked asset cache):
+        // exit 0, zero validation errors, zero leaks — and nothing on screen.
+        if (automation) {
+            auto_check(max_draw_calls > 0 && runtime.mesh_count() > 0, "Scene geometry drawn",
+                       "max draw_calls=" + std::to_string(max_draw_calls) +
+                           " max visible=" + std::to_string(max_visible) +
+                           " meshes=" + std::to_string(runtime.mesh_count()) +
+                           " — is the asset cache cooked? Run NFAssetCooker on Content/");
         }
 
         NF_LOG_INFO(nf::LogCategory::Editor, "Editor ran {} frames (entities={}, dirty={}, automation={})",

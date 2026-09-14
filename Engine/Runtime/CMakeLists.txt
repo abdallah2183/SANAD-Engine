@@ -2,13 +2,14 @@
 
 set(NFRUNTIME_SOURCES
     src/Application.cpp
+    src/RunConfigResolver.cpp
     src/Runtime.cpp
     src/RuntimeSceneLoader.cpp
 )
 
 nf_engine_library(NFRuntime
     SOURCES ${NFRUNTIME_SOURCES}
-    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets
+    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFAnimation NFAudio
 )
 
 target_include_directories(NFRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

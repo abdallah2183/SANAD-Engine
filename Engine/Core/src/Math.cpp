@@ -338,4 +338,106 @@ Mat4 Quat::to_matrix() const {
     return r;
 }
 
+Quat Quat::inverse() const {
+    const f32 n = length_sq();
+    if (n <= EPSILON) {
+        return identity();
+    }
+    const f32 inv = 1.0f / n;
+    return {-x * inv, -y * inv, -z * inv, w * inv};
+}
+
+Vec3 Quat::rotate(const Vec3& v) const {
+    // v' = q v q*, expanded as  v + w*t + qv x t  with  t = 2*(qv x v).
+    // Algebraically identical to two quaternion multiplications for a unit
+    // quaternion, at roughly half the cost.
+    const Vec3 qv{x, y, z};
+    const Vec3 t = qv.cross(v) * 2.0f;
+    return v + t * w + qv.cross(t);
+}
+
+Quat Quat::from_matrix(const Mat4& m) {
+    // Mat4 is column-major: m[col][row]. Reading the rotation out of it needs
+    // the row/column indices flipped, which is the easiest thing to get wrong
+    // here — a transposed read produces the inverse rotation and looks almost
+    // right on a symmetric test case.
+    const f32 r00 = m.m[0][0], r01 = m.m[1][0], r02 = m.m[2][0];
+    const f32 r10 = m.m[0][1], r11 = m.m[1][1], r12 = m.m[2][1];
+    const f32 r20 = m.m[0][2], r21 = m.m[1][2], r22 = m.m[2][2];
+
+    // Shepperd's method: pick the branch with the largest denominator so the
+    // division never amplifies rounding error. The naive trace-only form is
+    // accurate near identity and badly wrong near 180 degrees, which is exactly
+    // where a physics body that flipped over ends up.
+    const f32 trace = r00 + r11 + r22;
+    Quat q;
+    if (trace > 0.0f) {
+        const f32 s = std::sqrt(trace + 1.0f) * 2.0f; // 4w
+        q = {(r21 - r12) / s, (r02 - r20) / s, (r10 - r01) / s, 0.25f * s};
+    } else if (r00 > r11 && r00 > r22) {
+        const f32 s = std::sqrt(1.0f + r00 - r11 - r22) * 2.0f; // 4x
+        q = {0.25f * s, (r01 + r10) / s, (r02 + r20) / s, (r21 - r12) / s};
+    } else if (r11 > r22) {
+        const f32 s = std::sqrt(1.0f + r11 - r00 - r22) * 2.0f; // 4y
+        q = {(r01 + r10) / s, 0.25f * s, (r12 + r21) / s, (r02 - r20) / s};
+    } else {
+        const f32 s = std::sqrt(1.0f + r22 - r00 - r11) * 2.0f; // 4z
+        q = {(r02 + r20) / s, (r12 + r21) / s, 0.25f * s, (r10 - r01) / s};
+    }
+    return q.normalized();
+}
+
+Quat Quat::slerp(const Quat& a, const Quat& b, f32 t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    f32 cos_theta = a.dot(b);
+    Quat b_adj = b;
+    // Take the shortest path: if the dot is negative, negate one quaternion.
+    if (cos_theta < 0.0f) {
+        b_adj = {-b.x, -b.y, -b.z, -b.w};
+        cos_theta = -cos_theta;
+    }
+
+    // If the quaternions are very close, slerp degenerates — fall back to nlerp
+    // to avoid dividing by a near-zero sin(angle).
+    if (cos_theta > 0.9995f) {
+        return Quat{
+            a.x + (b_adj.x - a.x) * t,
+            a.y + (b_adj.y - a.y) * t,
+            a.z + (b_adj.z - a.z) * t,
+            a.w + (b_adj.w - a.w) * t,
+        }.normalized();
+    }
+
+    f32 theta = std::acos(cos_theta);
+    f32 sin_theta = std::sin(theta);
+    f32 w0 = std::sin((1.0f - t) * theta) / sin_theta;
+    f32 w1 = std::sin(t * theta) / sin_theta;
+
+    return {
+        a.x * w0 + b_adj.x * w1,
+        a.y * w0 + b_adj.y * w1,
+        a.z * w0 + b_adj.z * w1,
+        a.w * w0 + b_adj.w * w1,
+    };
+}
+
+Quat Quat::nlerp(const Quat& a, const Quat& b, f32 t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    Quat b_adj = b;
+    if (a.dot(b) < 0.0f) {
+        b_adj = {-b.x, -b.y, -b.z, -b.w};
+    }
+
+    return Quat{
+        a.x + (b_adj.x - a.x) * t,
+        a.y + (b_adj.y - a.y) * t,
+        a.z + (b_adj.z - a.z) * t,
+        a.w + (b_adj.w - a.w) * t,
+    }.normalized();
+}
+
 } // namespace nf

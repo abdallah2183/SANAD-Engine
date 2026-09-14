@@ -22,6 +22,9 @@
 #include <NF/Editor/PlayMode.hpp>
 #include <NF/Editor/Selection.hpp>
 #include <NF/Editor/Viewport.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Animation/Components.hpp>
+#include <NF/Audio/Components.hpp>
 #include <NF/Runtime/Runtime.hpp>
 
 #include <string>
@@ -56,6 +59,19 @@ public:
     bool scene_dirty() const { return m_dirty; }
     const std::string& scene_path() const { return m_scene_path; }
 
+    // --- Project ---
+    //
+    // The project the editor was opened in, if any. Empty when the editor was
+    // started from the engine tree without --project, which is how it has always
+    // worked; the toolbar shows the name and the Build action targets it.
+    void set_project(std::string path, std::string name) {
+        m_project_path = std::move(path);
+        m_project_name = std::move(name);
+    }
+    const std::string& project_path() const { return m_project_path; }
+    const std::string& project_name() const { return m_project_name; }
+    bool has_project() const { return !m_project_path.empty(); }
+
     // --- Structural edits (all undoable, all set dirty) ---
     bool create_entity(const std::string& name, ecs::Entity parent, std::string& out_err);
     void request_delete(ecs::Entity e);
@@ -70,6 +86,19 @@ public:
     bool set_mesh(ecs::Entity e, const std::string& asset_id_text, const std::string& material,
                   std::string& out_err);
     bool drop_mesh_asset(const AssetEntry& entry, std::string& out_err);
+
+    // --- Physics (direct component edit; marks dirty + rebuilds runtime bodies) ---
+    bool set_rigid_body(ecs::Entity e, const physics::RigidBodyComponent& rb, std::string& out_err);
+    bool set_collider(ecs::Entity e, const physics::ColliderComponent& col, std::string& out_err);
+
+    // --- Animation + Audio (direct component edit, same shape as physics) ---
+    // Playback fields only. The clip table and the generated buffer are not
+    // editable here: they come from the scene's procedural spec, and inventing
+    // them in the inspector would produce a component the save path could not
+    // reproduce.
+    bool set_animation(ecs::Entity e, const animation::AnimationComponent& anim,
+                       std::string& out_err);
+    bool set_audio(ecs::Entity e, const audio::AudioComponent& aud, std::string& out_err);
 
     // --- Shared materials (undoable; visible in the viewport next frame) ---
     bool set_entity_material(ecs::Entity e, const std::string& material_path, std::string& out_err);
@@ -159,6 +188,8 @@ private:
     runtime::Runtime* m_runtime = nullptr;
 
     std::string m_scene_path;
+    std::string m_project_path;
+    std::string m_project_name;
     bool m_dirty = false;
     Selection m_selection;
     OutlinerState m_outliner;

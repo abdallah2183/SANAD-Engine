@@ -88,20 +88,74 @@ add_executable(AssetTests
     AssetTests/test_vfs.cpp
     AssetTests/test_registry.cpp
     AssetTests/test_asset_manager.cpp
+    AssetTests/test_project_descriptor.cpp
+    AssetTests/test_project_cooker.cpp
 )
 target_include_directories(AssetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(AssetTests PRIVATE NFCore NFAssets NFRHI NFRendering)
+target_link_libraries(AssetTests PRIVATE NFCore NFAssets NFRHI NFRendering NFProjectTool)
 nf_target_set_warnings(AssetTests)
 
 add_executable(RuntimeTests
     TestFramework.cpp
     RuntimeTests/test_runtime_scene.cpp
+    RuntimeTests/test_runtime_anim_audio.cpp
     RuntimeTests/test_runtime.cpp
     RuntimeTests/test_runtime_3b.cpp
+    RuntimeTests/test_run_config.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI)
+target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
 nf_target_set_warnings(RuntimeTests)
+
+# --- Physics tests (shapes, broadphase, narrowphase, solver, determinism) ---
+add_executable(PhysicsTests
+    TestFramework.cpp
+    PhysicsTests/test_shapes.cpp
+    PhysicsTests/test_broadphase.cpp
+    PhysicsTests/test_narrowphase.cpp
+    PhysicsTests/test_solver.cpp
+    PhysicsTests/test_determinism.cpp
+)
+target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)
+nf_target_set_warnings(PhysicsTests)
+
+# --- Animation tests (skeleton, clips, sampling, blending, player, state machine) ---
+add_executable(AnimationTests
+    TestFramework.cpp
+    AnimationTests/test_animation.cpp
+)
+target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
+nf_target_set_warnings(AnimationTests)
+
+# --- Audio tests (attenuation, 3D pan/gain, mixing, null device) ---
+add_executable(AudioTests
+    TestFramework.cpp
+    AudioTests/test_audio.cpp
+)
+target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
+nf_target_set_warnings(AudioTests)
+
+# --- Tool tests (project scaffold, cooker, packager) ---
+add_executable(ToolTests
+    TestFramework.cpp
+    ToolTests/test_project_scaffold.cpp
+    ToolTests/test_project_packager.cpp
+)
+target_include_directories(ToolTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ToolTests PRIVATE NFCore NFAssets NFProjectTool NFRendering)
+target_compile_definitions(ToolTests PRIVATE
+    "NF_TEMPLATE_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Default\""
+    "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
+)
+nf_target_set_warnings(ToolTests)
+if(NF_GLSLC_EXECUTABLE)
+    # The packager copies these, so they must exist before the tests run.
+    add_dependencies(ToolTests NFBasic3DDepthShaders NFBasic3DGBufferShaders
+        NFBasic3DLightingShaders NFBasic3DTonemapShaders NFBasic3DPickShaders)
+endif()
 
 # --- Editor tests (window-independent editor logic + headless GPU viewport) ---
 if(NF_BUILD_EDITOR)
@@ -154,7 +208,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests HeadlessProbe)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests ToolTests HeadlessProbe)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -168,6 +222,10 @@ add_test(NAME ECSTests  COMMAND ECSTests)
 add_test(NAME AssetTests COMMAND AssetTests)
 add_test(NAME RuntimeTests COMMAND RuntimeTests)
 add_test(NAME RHITests  COMMAND RHITests)
+add_test(NAME PhysicsTests COMMAND PhysicsTests)
+add_test(NAME AnimationTests COMMAND AnimationTests)
+add_test(NAME AudioTests COMMAND AudioTests)
+add_test(NAME ToolTests  COMMAND ToolTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()

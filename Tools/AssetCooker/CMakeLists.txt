@@ -4,7 +4,7 @@ add_executable(NFAssetCooker
     main.cpp
 )
 
-target_link_libraries(NFAssetCooker PRIVATE NFCore NFAssets)
+target_link_libraries(NFAssetCooker PRIVATE NFCore NFAssets NFProjectTool)
 nf_target_set_warnings(NFAssetCooker)
 
 target_include_directories(NFAssetCooker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

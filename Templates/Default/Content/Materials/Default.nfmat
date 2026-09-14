@@ -1,0 +1,8 @@
+# NOVAForge Material v1
+name: Default
+base_color: 0.8 0.8 0.8 1
+metallic: 0
+roughness: 0.4
+ao: 1
+emission: 0 0 0
+emission_strength: 0

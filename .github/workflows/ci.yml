@@ -48,6 +48,7 @@ jobs:
           -DNF_BUILD_TESTS=ON
           -DNF_BUILD_SAMPLES=ON
           -DNF_BUILD_EDITOR=ON
+          -DNF_BUILD_TOOLS=ON
 
       - name: Build
         shell: pwsh
@@ -71,7 +72,70 @@ jobs:
 
       - name: Run test suites
         shell: bash
-        run: bash Scripts/run_tests.sh "$BUILD_DIR"
+        run: |
+          set -o pipefail
+          bash Scripts/run_tests.sh "$BUILD_DIR" | tee test_suites.log
+          code=${PIPESTATUS[0]}
+          # run_tests.sh exits 0 when nothing FAILED — including when every GPU
+          # test was SKIPPED. A green build that exercised no GPU is not a green
+          # build, so assert the RHI suite actually executed.
+          rhi_passed=$(sed -n 's/^PASS  RHITests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "RHITests passed: ${rhi_passed:-0}"
+          if [ "${rhi_passed:-0}" -eq 0 ]; then
+            echo "No RHI test executed. Lavapipe is probably missing — GPU coverage was not verified."
+            exit 1
+          fi
+          # Phase 8: physics tests are pure computation (no GPU), so they must
+          # always execute. A zero here means the physics suite was not built
+          # or did not run, which is a hard regression.
+          phys_passed=$(sed -n 's/^PASS  PhysicsTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "PhysicsTests passed: ${phys_passed:-0}"
+          if [ "${phys_passed:-0}" -eq 0 ]; then
+            echo "No PhysicsTests executed — physics suite is missing or broken."
+            exit 1
+          fi
+          # Phase 9: animation and audio tests are pure computation (no GPU),
+          # so they must always execute.
+          anim_passed=$(sed -n 's/^PASS  AnimationTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "AnimationTests passed: ${anim_passed:-0}"
+          if [ "${anim_passed:-0}" -eq 0 ]; then
+            echo "No AnimationTests executed — animation suite is missing or broken."
+            exit 1
+          fi
+          audio_passed=$(sed -n 's/^PASS  AudioTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "AudioTests passed: ${audio_passed:-0}"
+          if [ "${audio_passed:-0}" -eq 0 ]; then
+            echo "No AudioTests executed — audio suite is missing or broken."
+            exit 1
+          fi
+          # Phase 9: the runtime suite is where "the subsystems are actually
+          # stepped" is asserted. A green AnimationTests/AudioTests only proves
+          # the modules work in isolation; RuntimeTests is the only suite that
+          # would catch Runtime::update() no longer calling them. Its
+          # scene-loading and run-config tests are pure computation, so a zero
+          # here means the suite did not run at all.
+          runtime_passed=$(sed -n 's/^PASS  RuntimeTests .*Passed: \([0-9]*\).*/\1/p' test_suites.log | tail -1)
+          echo "RuntimeTests passed: ${runtime_passed:-0}"
+          if [ "${runtime_passed:-0}" -eq 0 ]; then
+            echo "No RuntimeTests executed — runtime suite is missing or broken."
+            exit 1
+          fi
+          exit "$code"
+
+      # The registry maps meshes to cache:// paths that only exist after cooking.
+      # Without this the editor renders an empty scene, and the acceptance below
+      # now asserts that geometry was actually drawn, so it would (correctly)
+      # fail. Cooking is a prerequisite of running, not an optional extra.
+      - name: Cook assets
+        shell: bash
+        run: |
+          exe="$BUILD_DIR/bin/NFAssetCooker.exe"
+          [ -f "$exe" ] || exe="$BUILD_DIR/bin/NFAssetCooker"
+          if [ ! -f "$exe" ]; then echo "Asset cooker not built (needs -DNF_BUILD_TOOLS=ON)"; exit 1; fi
+          "$exe" --input content://Meshes/cube.nfmesh \
+                 --output cache://Meshes/cube.nfmesh \
+                 --registry content://AssetRegistry.nfreg
+          ls -l Cache/Meshes/
 
       # The editor acceptance harness, run headless so it works on a runner with
       # no display. It exercises the real workflows (outliner, inspector, undo,
@@ -131,3 +195,78 @@ jobs:
           if [ "$errors" -ne 0 ]; then
             echo "Validation is not clean"; grep 'ERROR \[RHI\]' triangle.log | head -10; exit 1
           fi
+
+      # The design document's §262 chain, end to end: create a project, build it,
+      # and run it as a standalone program. This is the Phase 7 acceptance, and
+      # the only check that proves the whole path works outside the editor.
+      #
+      # The build tree's Shaders/ directory is moved aside before the player runs,
+      # so the hardcoded `build/<cfg>/Shaders/Basic3D` search cannot be what makes
+      # it work. If the package is not genuinely self-contained, this fails.
+      - name: End-to-end — create, build, run a project
+        shell: bash
+        run: |
+          set -uo pipefail
+          # $BUILD_DIR is relative; this step cds into the package, so resolve it
+          # to an absolute path first or every later reference breaks.
+          BUILD_ABS="$(cd "$BUILD_DIR" && pwd)"
+          NF="$BUILD_ABS/bin/nf.exe";           [ -f "$NF" ] || NF="$BUILD_ABS/bin/nf"
+          PLAYER="$BUILD_ABS/bin/NFPlayer.exe"; [ -f "$PLAYER" ] || PLAYER="$BUILD_ABS/bin/NFPlayer"
+          if [ ! -f "$NF" ];     then echo "nf not built (needs -DNF_BUILD_TOOLS=ON)"; exit 1; fi
+          if [ ! -f "$PLAYER" ]; then echo "NFPlayer not built"; exit 1; fi
+
+          DEMO="$RUNNER_TEMP/NfCiDemo"
+          rm -rf "$DEMO"
+          "$NF" new "$DEMO" --name CiDemo    || exit 1
+          "$NF" build --project "$DEMO/CiDemo.nfproj" || exit 1
+          "$NF" verify --project "$DEMO/CiDemo.nfproj" || exit 1
+
+          for f in manifest.txt Cache/Meshes/cube.nfmesh Shaders/Basic3D/gbuffer_vert.spv CiDemo.nfproj; do
+            if [ ! -f "$DEMO/dist/$f" ]; then echo "package is missing $f"; exit 1; fi
+          done
+
+          # Hide the engine's compiled shaders: the package must carry its own.
+          mv "$BUILD_ABS/Shaders" "$BUILD_ABS/Shaders.hidden"
+
+          # Run the player that SHIPPED IN THE PACKAGE, from inside the package,
+          # with no --project argument. The build tree's player would find its
+          # project beside itself, which is not what a shipped game does.
+          cd "$DEMO/dist"
+          "./$(basename "$PLAYER")" --frames 60 --validation > player.log 2>&1
+          code=$?
+          mv "$BUILD_ABS/Shaders.hidden" "$BUILD_ABS/Shaders"
+          tail -20 player.log
+
+          if [ "$code" -ne 0 ]; then echo "player exited $code"; exit 1; fi
+          if ! grep -q 'Rendered 60 frames' player.log; then echo "did not render"; exit 1; fi
+          if grep -q 'meshes=0' player.log; then echo "rendered no geometry"; exit 1; fi
+          if ! grep -q 'Validation errors: 0' player.log; then echo "validation not clean"; exit 1; fi
+          if ! grep -q 'Alive RHI objects before shutdown: 0' player.log; then echo "leaked RHI objects"; exit 1; fi
+          # Phase 8: the template scene has physics entities (a falling box on
+          # a static plane). The runtime must create the physics world and
+          # register both bodies. Without this line the physics system is dead
+          # code that no CI step touches.
+          if ! grep -q 'physics world created' player.log; then echo "physics world not created"; exit 1; fi
+          # Phase 9: the template scene also carries an entity driven by a
+          # procedural animation clip and a generated audio tone. The physics
+          # assertion above would still pass if Runtime::update() stopped
+          # calling step_animation()/step_audio(), because the falling box is
+          # driven by physics alone — so assert the animated transform actually
+          # moved and the mixer actually produced signal.
+          anim_line=$(grep 'Animated entities:' player.log | tail -1)
+          echo "$anim_line"
+          if ! printf '%s' "$anim_line" | grep -q 'Animated entities: 1'; then
+            echo "animated entity not registered"; exit 1
+          fi
+          if printf '%s' "$anim_line" | grep -qE 'deviation over [0-9]+ frames: 0(\.0*)?\)'; then
+            echo "animated entity never moved — animation is not being stepped"; exit 1
+          fi
+          audio_line=$(grep 'Audio sources mixed' player.log | tail -1)
+          echo "$audio_line"
+          if ! printf '%s' "$audio_line" | grep -q 'Audio sources mixed (peak): 1'; then
+            echo "no audio source was mixed"; exit 1
+          fi
+          if printf '%s' "$audio_line" | grep -qE '\(0(\.0*)?\)$'; then
+            echo "audio mixed to silence — audio is not being stepped"; exit 1
+          fi
+          echo "End-to-end OK: project created, built, packaged and run standalone with physics, animation and audio."

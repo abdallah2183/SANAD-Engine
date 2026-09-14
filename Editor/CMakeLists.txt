@@ -36,7 +36,7 @@ add_library(NFEditorCore STATIC
     ${NFEDITOR_CORE_SOURCES}
 )
 target_include_directories(NFEditorCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs imgui)
+target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics imgui)
 nf_target_set_warnings(NFEditorCore)
 
 add_executable(NOVAForgeEditor
@@ -47,10 +47,16 @@ add_executable(NOVAForgeEditor
 target_include_directories(NOVAForgeEditor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NOVAForgeEditor PRIVATE
     NFEditorCore NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFRuntime
+    NFProjectTool
     imgui
 )
 target_compile_definitions(NOVAForgeEditor PRIVATE
     "NF_EDITOR_IMGUI_SHADER_DIR=\"${NF_EDITOR_IMGUI_SHADER_DIR}\""
+    # The Build action packages a project, which needs to know where the project
+    # template and the compiled renderer shaders live — the same definitions the
+    # `nf` CLI receives.
+    "NF_TEMPLATE_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Default\""
+    "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
 )
 nf_target_set_warnings(NOVAForgeEditor)
 

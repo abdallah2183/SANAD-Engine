@@ -5,10 +5,14 @@
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Animation/Components.hpp>
+#include <NF/Audio/Components.hpp>
 #include <NF/Core/Logger.hpp>
 #include <fstream>
 #include <set>
 #include <sstream>
+#include <cstring>
 
 namespace nf::runtime {
 
@@ -16,6 +20,42 @@ static std::string trim(const std::string& s) {
     size_t a=0; while(a<s.size() && std::isspace((unsigned char)s[a])) ++a;
     size_t b=s.size(); while(b>a && std::isspace((unsigned char)s[b-1])) --b;
     return s.substr(a,b-a);
+}
+
+// Value of a `key=value` token on a component line, up to the next space.
+// Returns "" when the key is absent. `key` must include the '='.
+static std::string field_value(const std::string& line, const char* key) {
+    const size_t p = line.find(key);
+    if (p == std::string::npos) return {};
+    const size_t start = p + std::strlen(key);
+    const size_t end = line.find(' ', start);
+    return trim(line.substr(start, end == std::string::npos ? std::string::npos : end - start));
+}
+
+// As above, parsed as a float. Returns false (leaving `out` untouched) when the
+// key is absent or the value is not a number, so callers keep their defaults
+// instead of silently reading a zero.
+static bool field_float(const std::string& line, const char* key, f32& out) {
+    const std::string v = field_value(line, key);
+    if (v.empty()) return false;
+    try {
+        size_t used = 0;
+        const f32 parsed = std::stof(v, &used);
+        if (used != v.size()) return false;
+        out = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Axis back to the single-letter form the loader reads. Only the three
+// cardinal axes are writable; anything else collapses to Y, which matches the
+// loader's own default and keeps save/load a fixed point.
+static const char* axis_name(const Vec3& axis) {
+    if (axis.x > 0.5f) return "x";
+    if (axis.z > 0.5f) return "z";
+    return "y";
 }
 
 SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_path) {
@@ -151,6 +191,158 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                 if (far_pos != std::string::npos) sscanf(line.c_str()+far_pos, "far=%f", &cam.far_plane);
                 cam.is_active = line.find("active=true") != std::string::npos;
                 scene->world().add<CameraComponent>(e, cam);
+            } else if (line.rfind("  RigidBody:",0)==0) {
+                physics::RigidBodyComponent rb;
+                if (line.find("type=Static") != std::string::npos) {
+                    rb.type = physics::BodyType::Static;
+                } else if (line.find("type=Kinematic") != std::string::npos) {
+                    rb.type = physics::BodyType::Kinematic;
+                }
+                // Parsed by substring rather than one big sscanf: the fields are
+                // all optional and a missing one must leave the default in place,
+                // not fail the whole line.  We search for the key prefix (e.g.
+                // "mass=") and then sscanf the value from that offset — the format
+                // string contains the prefix so sscanf matches it literally.
+                auto scan = [&](const char* prefix, f32& out) {
+                    const size_t p = line.find(prefix);
+                    if (p != std::string::npos) {
+                        sscanf(line.c_str() + p + std::strlen(prefix), "%f", &out);
+                    }
+                };
+                scan("mass=", rb.mass);
+                scan("friction=", rb.friction);
+                scan("restitution=", rb.restitution);
+                scan("linear_damping=", rb.linear_damping);
+                scan("angular_damping=", rb.angular_damping);
+                rb.allow_sleep = line.find("allow_sleep=false") == std::string::npos;
+                scene->world().add<physics::RigidBodyComponent>(e, rb);
+            } else if (line.rfind("  Collider:",0)==0) {
+                physics::ColliderComponent col;
+                if (line.find("shape=Box") != std::string::npos) {
+                    float hx=0.5f, hy=0.5f, hz=0.5f;
+                    const size_t hp = line.find("half(");
+                    if (hp != std::string::npos) {
+                        sscanf(line.c_str()+hp, "half(%f,%f,%f)", &hx,&hy,&hz);
+                    }
+                    col.shape = physics::Shape::make_box(Vec3(hx,hy,hz));
+                } else if (line.find("shape=Plane") != std::string::npos) {
+                    float nx=0.0f, ny=1.0f, nz=0.0f;
+                    const size_t np = line.find("normal(");
+                    if (np != std::string::npos) {
+                        sscanf(line.c_str()+np, "normal(%f,%f,%f)", &nx,&ny,&nz);
+                    }
+                    col.shape = physics::Shape::make_plane(Vec3(nx,ny,nz));
+                } else { // Sphere is the default shape
+                    float r = 0.5f;
+                    const size_t rp = line.find("radius=");
+                    if (rp != std::string::npos) {
+                        sscanf(line.c_str()+rp, "radius=%f", &r);
+                    }
+                    col.shape = physics::Shape::make_sphere(r);
+                }
+                scene->world().add<physics::ColliderComponent>(e, col);
+            } else if (line.rfind("  Animation:",0)==0) {
+                animation::AnimationComponent anim;
+
+                const std::string clip_name = field_value(line, "clip=");
+                if (!clip_name.empty()) {
+                    anim.player.set_clip(clip_name);
+                }
+
+                // `procedural=` names a clip the engine builds itself. Without
+                // it a clip name is only a label: the import pipeline is an
+                // explicit Phase 9 non-goal (§7), so there is nothing on disk to
+                // load and the entity would sample the rest pose forever.
+                const std::string procedural = field_value(line, "procedural=");
+                if (!procedural.empty() && !clip_name.empty()) {
+                    animation::ProceduralClipSpec spec;
+                    spec.kind = (procedural == "bob") ? animation::ProceduralClipSpec::Kind::Bob
+                                                      : animation::ProceduralClipSpec::Kind::Spin;
+                    const std::string axis = field_value(line, "axis=");
+                    if (axis == "x") {
+                        spec.axis = {1.0f, 0.0f, 0.0f};
+                    } else if (axis == "z") {
+                        spec.axis = {0.0f, 0.0f, 1.0f};
+                    } else {
+                        spec.axis = {0.0f, 1.0f, 0.0f};
+                    }
+                    (void)field_float(line, "turns=", spec.turns);
+                    (void)field_float(line, "amplitude=", spec.amplitude);
+                    (void)field_float(line, "duration=", spec.duration);
+
+                    // No skeleton import pipeline either, so a procedural clip
+                    // gets the minimal single-bone rig. Logged rather than
+                    // silent: a real rig would give a different result, and a
+                    // substitution the user cannot see is the kind of gap this
+                    // project keeps having to re-find.
+                    if (anim.skeleton.bones.empty()) {
+                        anim.skeleton = animation::make_default_skeleton();
+                        NF_LOG_INFO(LogCategory::Core,
+                                    "Runtime: entity {} has no skeleton data; using a single-bone root rig for procedural clip '{}'",
+                                    e.id, clip_name);
+                    }
+
+                    anim.clips[clip_name] =
+                        animation::make_procedural_clip(clip_name, anim.skeleton, spec);
+                    anim.has_procedural = true;
+                    anim.procedural = spec;
+                    anim.procedural_clip_name = clip_name;
+                } else if (!clip_name.empty()) {
+                    result.warnings.push_back(
+                        "Animation clip '" + clip_name +
+                        "' has no data (no procedural= spec, and there is no animation import pipeline yet); the entity will not move");
+                }
+
+                (void)field_float(line, "speed=", anim.speed);
+                anim.player.set_speed(anim.speed);
+
+                const std::string loop = field_value(line, "loop=");
+                if (loop == "none") {
+                    anim.player.set_loop_mode(animation::LoopMode::None);
+                } else if (loop == "pingpong") {
+                    anim.player.set_loop_mode(animation::LoopMode::PingPong);
+                } else {
+                    anim.player.set_loop_mode(animation::LoopMode::Loop);
+                }
+
+                anim.paused = line.find("paused=true") != std::string::npos;
+                anim.use_state_machine = line.find("state_machine=true") != std::string::npos;
+                // An AnimationComponent in a scene plays unless it says it is
+                // paused. AnimationPlayer::update() returns the current time
+                // unchanged unless the state is Playing, so without this a
+                // loaded scene would sit at t = 0 forever and the entity would
+                // look static even with a valid clip.
+                if (!anim.paused) {
+                    anim.player.play();
+                }
+                scene->world().add<animation::AnimationComponent>(e, std::move(anim));
+            } else if (line.rfind("  Audio:",0)==0) {
+                audio::AudioComponent aud;
+                aud.buffer_name = field_value(line, "buffer=");
+
+                // Same reasoning as the animation clip above: `tone=` is the
+                // only way a scene can carry real samples today, because the
+                // audio import pipeline is also a Phase 9 non-goal (§7).
+                f32 tone_hz = 0.0f;
+                if (field_float(line, "tone=", tone_hz) && tone_hz > 0.0f) {
+                    f32 tone_seconds = 0.5f;
+                    (void)field_float(line, "tone_duration=", tone_seconds);
+                    aud.owned_buffer =
+                        audio::make_tone_buffer(tone_hz, tone_seconds, audio::kDefaultSampleRate, 1);
+                    aud.tone_hz = tone_hz;
+                    aud.tone_duration = tone_seconds;
+                } else if (!aud.buffer_name.empty()) {
+                    result.warnings.push_back(
+                        "Audio buffer '" + aud.buffer_name +
+                        "' has no data (no tone= spec, and there is no audio import pipeline yet); the source will be silent");
+                }
+
+                (void)field_float(line, "volume=", aud.volume);
+                (void)field_float(line, "pitch=", aud.pitch);
+                aud.looping = line.find("looping=true") != std::string::npos;
+                aud.spatial = line.find("spatial=true") != std::string::npos;
+                aud.autoplay = line.find("autoplay=true") != std::string::npos;
+                scene->world().add<audio::AudioComponent>(e, std::move(aud));
             } else {
                 result.warnings.push_back("Unknown component line: " + line);
             }
@@ -229,6 +421,78 @@ bool save_scene_to_physical(const std::filesystem::path& physical_path, const sc
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {
             out << "  Camera: fov=" << c->fov_y << " aspect=" << c->aspect << " near=" << c->near_plane << " far=" << c->far_plane << " active=" << (c->is_active ? "true" : "false") << "\n";
+        }
+        // Physics. The runtime body handle is deliberately NOT written: it is a
+        // per-session identity (generation-checked), and a stale one from a
+        // previous run is meaningless — reloading rebuilds it from the scene.
+        const auto* rb = scene_obj.world().get<physics::RigidBodyComponent>(e);
+        if (rb) {
+            const char* type = (rb->type == physics::BodyType::Static) ? "Static"
+                             : (rb->type == physics::BodyType::Kinematic) ? "Kinematic"
+                                                                          : "Dynamic";
+            out << "  RigidBody: type=" << type
+                << " mass=" << rb->mass
+                << " friction=" << rb->friction
+                << " restitution=" << rb->restitution
+                << " linear_damping=" << rb->linear_damping
+                << " angular_damping=" << rb->angular_damping
+                << " allow_sleep=" << (rb->allow_sleep ? "true" : "false") << "\n";
+        }
+        const auto* col = scene_obj.world().get<physics::ColliderComponent>(e);
+        if (col) {
+            if (col->shape.type == physics::ShapeType::Box) {
+                out << "  Collider: shape=Box half("
+                    << col->shape.box.half_extents.x << ","
+                    << col->shape.box.half_extents.y << ","
+                    << col->shape.box.half_extents.z << ")\n";
+            } else if (col->shape.type == physics::ShapeType::Plane) {
+                out << "  Collider: shape=Plane normal("
+                    << col->shape.plane.normal.x << ","
+                    << col->shape.plane.normal.y << ","
+                    << col->shape.plane.normal.z << ")\n";
+            } else {
+                out << "  Collider: shape=Sphere radius=" << col->shape.sphere.radius << "\n";
+            }
+        }
+        const auto* anim = scene_obj.world().get<animation::AnimationComponent>(e);
+        if (anim) {
+            const char* loop = (anim->player.loop_mode() == animation::LoopMode::None) ? "none"
+                             : (anim->player.loop_mode() == animation::LoopMode::PingPong) ? "pingpong"
+                                                                                          : "loop";
+            out << "  Animation: clip=" << anim->player.clip_name()
+                << " speed=" << anim->speed
+                << " loop=" << loop
+                << " paused=" << (anim->paused ? "true" : "false")
+                << " state_machine=" << (anim->use_state_machine ? "true" : "false");
+            // The clip itself is generated at load time, never stored, so the
+            // spec is the only thing that can rebuild it. Writing only the clip
+            // name would reload the scene with an empty clip and the entity
+            // would silently stop moving.
+            if (anim->has_procedural) {
+                out << " procedural="
+                    << (anim->procedural.kind == animation::ProceduralClipSpec::Kind::Bob ? "bob"
+                                                                                         : "spin")
+                    << " axis=" << axis_name(anim->procedural.axis)
+                    << " turns=" << anim->procedural.turns
+                    << " amplitude=" << anim->procedural.amplitude
+                    << " duration=" << anim->procedural.duration;
+            }
+            out << "\n";
+        }
+        const auto* aud = scene_obj.world().get<audio::AudioComponent>(e);
+        if (aud) {
+            out << "  Audio: buffer=" << aud->buffer_name
+                << " volume=" << aud->volume
+                << " pitch=" << aud->pitch
+                << " looping=" << (aud->looping ? "true" : "false")
+                << " spatial=" << (aud->spatial ? "true" : "false")
+                << " autoplay=" << (aud->autoplay ? "true" : "false");
+            // Same as the animation spec above: the samples are generated, so
+            // the spec is what makes them survive a save/load.
+            if (aud->tone_hz > 0.0f) {
+                out << " tone=" << aud->tone_hz << " tone_duration=" << aud->tone_duration;
+            }
+            out << "\n";
         }
     }
     out.close();

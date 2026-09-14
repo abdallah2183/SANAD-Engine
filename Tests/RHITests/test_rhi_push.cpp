@@ -47,11 +47,9 @@ struct PushColor {
 } // namespace
 
 NF_TEST(rhi_push_constants_drive_fragment_color) {
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) {
-        NF_LOG_WARN(LogCategory::RHI, "No GPU — skipping push constant test");
-        return;
-    }
+    // require_gpu() marks the test SKIPPED when no device exists; a bare
+    // `gpu()` + `return` would be recorded as a PASS.
+    const GpuFixture& fixture = require_gpu();
     auto& device = *fixture.device;
 
     const std::filesystem::path shader_dir = NF_RHI_PUSH_SHADER_DIR;
@@ -192,8 +190,7 @@ NF_TEST(rhi_push_constants_require_bound_pipeline) {
     // Pushing without a bound pipeline must not crash — the backend logs an error
     // and returns. This is the negative path that guards against using a guessed
     // or stale pipeline layout.
-    const GpuFixture& fixture = gpu();
-    if (!fixture.available) return;
+    const GpuFixture& fixture = require_gpu();
     auto& device = *fixture.device;
 
     const std::filesystem::path shader_dir = NF_RHI_PUSH_SHADER_DIR;

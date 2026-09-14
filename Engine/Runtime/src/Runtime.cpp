@@ -17,6 +17,28 @@
 
 namespace nf::runtime {
 
+namespace {
+
+// Scale ratio for applying an animated pose as an offset on top of an authored
+// transform. A rest scale of zero is not a meaningful rig, but it is reachable
+// from a hand-edited scene, and dividing by it would poison the entity's
+// transform with inf/NaN for the rest of the session. Treat it as "no change".
+f32 safe_scale_ratio(f32 posed, f32 rest) {
+    if (std::abs(rest) < 1e-6f) {
+        return 1.0f;
+    }
+    return posed / rest;
+}
+
+// The rendering module carries its own minimal Vec3 (Rendering/Camera.hpp)
+// rather than the core one, so a camera position has to be converted, not
+// assigned.
+Vec3 from_rendering(const rendering::Vec3& v) {
+    return Vec3(v.x, v.y, v.z);
+}
+
+} // namespace
+
 Runtime::Runtime(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry, assets::AssetManager& manager,
                  rhi::IGraphicsDevice& device, rhi::Swapchain* swapchain)
     : m_vfs(vfs), m_registry(registry), m_manager(manager), m_device(device), m_swapchain(swapchain) {
@@ -50,6 +72,8 @@ void Runtime::shutdown() {
     m_fallback_fbs.clear();
     m_fallback_rps.clear();
     m_mesh_handles.clear();
+    m_failed_meshes.clear();
+    m_failed_mesh_reports = 0;
     // Renderer-owned material instances (and their raw albedo view pointers)
     // die with m_renderer->shutdown() above, so freeing the textures here is
     // safe: nothing references these views anymore.
@@ -89,7 +113,17 @@ bool Runtime::ensure_renderer_initialized() {
 }
 
 std::filesystem::path Runtime::resolve_shader_dir() const {
-    // Resolution order: the compile-time define (set by the build), then paths
+    // A project may declare a shaders:// mount, and that is the ONLY path that
+    // works for a packaged game: everything below resolves against the engine
+    // source tree or a build directory, neither of which ships. Consulted first
+    // so a project always wins.
+    {
+        auto via_project = m_vfs.resolve("shaders://Basic3D");
+        if (via_project.ok && std::filesystem::exists(via_project.value)) {
+            return via_project.value;
+        }
+    }
+    // In-repo fallback: the compile-time define (set by the build), then paths
     // relative to the working directory, then content://, then the two known
     // build trees. Extracted from ensure_renderer_initialized_for so the GPU
     // picker can find the same shaders without duplicating this search.
@@ -212,6 +246,11 @@ void Runtime::sync_meshes_from_assets() {
         if (m_mesh_handles.find(comp->mesh_id) != m_mesh_handles.end()) {
             continue;
         }
+        // Already reported as unloadable: skip in silence instead of re-logging
+        // the identical failure on every frame.
+        if (m_failed_meshes.find(comp->mesh_id) != m_failed_meshes.end()) {
+            continue;
+        }
         auto handle = m_manager.find(comp->mesh_id);
         if (!handle) {
             // Kick off an async load; the mesh will be picked up next frame.
@@ -222,8 +261,13 @@ void Runtime::sync_meshes_from_assets() {
             continue;
         }
         if (handle->state == assets::AssetState::Failed) {
-            // Missing/corrupt asset: warn once per frame is too noisy, so only
-            // warn here; render proceeds without this object (safe fallback).
+            // Missing/corrupt asset. Failed is terminal in AssetManager, so this
+            // would otherwise re-fire on every sync pass (twice per frame). Record
+            // it and warn exactly once; render proceeds without this object (safe
+            // fallback). Cleared on hot reload and scene load so a re-cooked asset
+            // is picked up again.
+            m_failed_meshes.insert(comp->mesh_id);
+            ++m_failed_mesh_reports;
             NF_LOG_WARN(LogCategory::Core, "Runtime: mesh asset {} failed: {}", comp->mesh_id.to_string(),
                         handle->error);
             continue;
@@ -274,6 +318,11 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
     m_scene_data_ptr = std::make_unique<SceneRuntimeData>();
     m_scene_data_ptr->scene = std::move(result.scene);
     m_loaded_scene_path = logical_path;
+    // A freshly loaded scene gets a fresh attempt at every mesh. Failure was
+    // recorded per-asset, and the asset may have been cooked since it last
+    // failed, so the previous scene's verdicts must not carry over.
+    m_failed_meshes.clear();
+    m_failed_mesh_reports = 0;
     // Assign display names to entities that have none (older scenes predate
     // NameComponent). Keeps the outliner meaningful without touching the file.
     {
@@ -295,6 +344,9 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
             world.add<scene::NameComponent>(e, scene::NameComponent{label});
         }
     }
+    // Build the physics world from the scene that was just loaded, so a scene
+    // containing physics is live as soon as it opens.
+    rebuild_physics_from_scene();
     ++m_scene_version;
     NF_LOG_INFO(LogCategory::Core, "Runtime: scene loaded '{}' with {} entities", logical_path,
                 m_scene_data_ptr->scene->world().alive_entity_count());
@@ -346,15 +398,366 @@ void Runtime::mark_scene_edited() {
 }
 
 void Runtime::update(float dt) {
-    (void)dt;
     // AssetManager.update(): async CPU → GPU upload on this (render) thread.
     m_manager.update();
     sync_meshes_from_assets();
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return;
     }
+    // Physics runs on its own fixed clock, so the scene's motion is the same
+    // whether the frame took 5 ms or 50. The render path then only reads the
+    // transforms physics produced.
+    step_physics(dt);
+    // Animation advances on the frame delta — it is a function of time, not of
+    // state, so it needs no fixed clock. Runs after physics, so an entity that
+    // carries both is driven by its animation.
+    step_animation(dt);
+    // Audio mixes after the transforms are final for this frame, so a source on
+    // a moving entity is spatialised where it will actually be rendered rather
+    // than one frame behind.
+    step_audio(dt);
     auto& world = m_scene_data_ptr->scene->world();
     scene::propagate_transforms(world);
+}
+
+u32 Runtime::step_animation(float dt) {
+    m_animated_entities = 0;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+
+    auto& world = m_scene_data_ptr->scene->world();
+    u32 stepped = 0;
+
+    for (auto e : world.query<animation::AnimationComponent>()) {
+        auto* anim = world.get<animation::AnimationComponent>(e);
+        if (anim == nullptr || anim->skeleton.bones.empty()) {
+            continue;
+        }
+        auto* transform = world.get<scene::Transform>(e);
+
+        // Capture the authored placement on the first run. Doing it lazily
+        // rather than at load keeps whatever the editor set before the first
+        // frame, and keeps the base and the transform consistent.
+        if (!anim->has_base_transform && transform != nullptr) {
+            anim->base_translation =
+                Vec3(transform->local_x, transform->local_y, transform->local_z);
+            anim->base_rotation = scene::quat_from_euler_xyz_degrees(
+                transform->rot_x, transform->rot_y, transform->rot_z);
+            anim->base_scale = Vec3(transform->scale_x, transform->scale_y, transform->scale_z);
+            anim->has_base_transform = true;
+        }
+
+        if (anim->use_state_machine) {
+            if (!anim->paused) {
+                m_anim_clip_table.clear();
+                for (const auto& entry : anim->clips) {
+                    m_anim_clip_table[entry.first] = &entry.second;
+                }
+                anim->state_machine.update(dt, anim->skeleton, m_anim_clip_table,
+                                           anim->last_local_pose);
+            }
+            if (anim->last_local_pose.size() != anim->skeleton.bones.size()) {
+                // Never produced a pose (paused from the start, or a machine
+                // with no states). Fall back to rest so the world pose below is
+                // well-defined instead of stale or empty.
+                animation::AnimationClip rest;
+                rest.sample(0.0f, anim->skeleton, anim->last_local_pose);
+            }
+        } else {
+            const auto it = anim->clips.find(anim->player.clip_name());
+            if (it == anim->clips.end() || it->second.tracks.empty()) {
+                // No clip data. The loader already warned about this; stepping
+                // would just re-sample the rest pose every frame.
+                continue;
+            }
+            const animation::AnimationClip& clip = it->second;
+            // A paused or stopped player returns its current time unchanged, so
+            // this is the same call in every state.
+            const f32 sample_time = anim->player.update(dt, clip.duration);
+            clip.sample(sample_time, anim->skeleton, anim->last_local_pose);
+        }
+
+        animation::compute_world_transforms(anim->skeleton, anim->last_local_pose,
+                                            anim->last_world_pose);
+        ++stepped;
+
+        // Drive the entity from the root bone so the motion reaches the renderer
+        // and the editor. The delta is taken from the rest pose, so a clip that
+        // leaves the root alone leaves the entity exactly where it was authored.
+        if (transform != nullptr && anim->has_base_transform && !anim->last_local_pose.empty()) {
+            const animation::LocalPose& bone = anim->last_local_pose[0];
+            const animation::Bone& rest = anim->skeleton.bones[0];
+
+            const Vec3 delta_t = bone.translation - rest.rest_translation;
+            const Quat delta_q = bone.rotation * rest.rest_rotation.inverse();
+            const Vec3 delta_s = {
+                safe_scale_ratio(bone.scale.x, rest.rest_scale.x),
+                safe_scale_ratio(bone.scale.y, rest.rest_scale.y),
+                safe_scale_ratio(bone.scale.z, rest.rest_scale.z),
+            };
+
+            // The delta lives in the model's space, so the authored rotation
+            // has to be applied to it before it is added to the placement.
+            const Vec3 offset = anim->base_rotation.rotate(delta_t);
+            transform->local_x = anim->base_translation.x + offset.x;
+            transform->local_y = anim->base_translation.y + offset.y;
+            transform->local_z = anim->base_translation.z + offset.z;
+
+            const Quat composed = (anim->base_rotation * delta_q).normalized();
+            scene::euler_xyz_degrees_from_quat(composed, transform->rot_x, transform->rot_y,
+                                               transform->rot_z);
+
+            transform->scale_x = anim->base_scale.x * delta_s.x;
+            transform->scale_y = anim->base_scale.y * delta_s.y;
+            transform->scale_z = anim->base_scale.z * delta_s.z;
+
+            transform->dirty = true;
+        }
+    }
+
+    m_animated_entities = stepped;
+    return stepped;
+}
+
+std::vector<Runtime::AnimatedTransformSample> Runtime::animated_transform_samples() const {
+    std::vector<AnimatedTransformSample> samples;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return samples;
+    }
+
+    const auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<animation::AnimationComponent>()) {
+        const auto* t = world.get<scene::Transform>(e);
+        if (t == nullptr) {
+            continue;
+        }
+        AnimatedTransformSample s;
+        s.entity_id = e.id;
+        s.translation = Vec3(t->local_x, t->local_y, t->local_z);
+        s.rotation_euler_degrees = Vec3(t->rot_x, t->rot_y, t->rot_z);
+        s.scale = Vec3(t->scale_x, t->scale_y, t->scale_z);
+        samples.push_back(s);
+    }
+
+    // query() walks the component pool, whose order is insertion order and so
+    // depends on how the scene was built. Sorting makes the snapshot comparable
+    // across runs and across load/save.
+    std::sort(samples.begin(), samples.end(),
+              [](const AnimatedTransformSample& a, const AnimatedTransformSample& b) {
+                  return a.entity_id < b.entity_id;
+              });
+    return samples;
+}
+
+void Runtime::rebase_animation(ecs::Entity entity) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    auto* anim = world.get<animation::AnimationComponent>(entity);
+    auto* transform = world.get<scene::Transform>(entity);
+    if (anim == nullptr || transform == nullptr) {
+        return;
+    }
+    anim->base_translation = Vec3(transform->local_x, transform->local_y, transform->local_z);
+    anim->base_rotation =
+        scene::quat_from_euler_xyz_degrees(transform->rot_x, transform->rot_y, transform->rot_z);
+    anim->base_scale = Vec3(transform->scale_x, transform->scale_y, transform->scale_z);
+    anim->has_base_transform = true;
+}
+
+u32 Runtime::step_audio(float dt) {
+    m_audio_sources_mixed = 0;
+    m_audio_output_peak = 0.0f;
+    m_audio_left.clear();
+    m_audio_right.clear();
+
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    if (!m_audio_device) {
+        m_audio_device = std::make_unique<audio::NullAudioDevice>();
+        m_audio_device->initialize(audio::kDefaultSampleRate, audio::kDefaultBufferFrames);
+    }
+    if (dt <= 0.0f) {
+        return 0;
+    }
+
+    auto& world = m_scene_data_ptr->scene->world();
+
+    // The listener follows the active camera, so a source pans relative to what
+    // the player is actually looking at.
+    {
+        rendering::Camera cam{};
+        if (extract_camera(0, 0, cam)) {
+            const Vec3 cam_pos = from_rendering(cam.position);
+            m_audio_listener.position = cam_pos;
+            const Vec3 forward = from_rendering(cam.target) - cam_pos;
+            const f32 len = forward.length();
+            if (len > 1e-6f) {
+                m_audio_listener.forward = forward * (1.0f / len);
+            }
+            m_audio_listener.up = from_rendering(cam.up);
+        }
+    }
+
+    // The device runs in fixed-size blocks while frames arrive at arbitrary
+    // deltas, so the remainder carries over. Without the accumulator a 240 fps
+    // machine would mix a quarter of the audio a 60 fps machine does for the
+    // same wall-clock second.
+    m_audio_accumulator += dt;
+    const f32 block_seconds =
+        static_cast<f32>(audio::kDefaultBufferFrames) / static_cast<f32>(audio::kDefaultSampleRate);
+    u32 blocks = 0;
+    while (m_audio_accumulator >= block_seconds && blocks < 4) {
+        m_audio_accumulator -= block_seconds;
+        ++blocks;
+    }
+    if (blocks == 0) {
+        return 0;
+    }
+
+    const usize frames = static_cast<usize>(blocks) * audio::kDefaultBufferFrames;
+    m_audio_left.assign(frames, 0.0f);
+    m_audio_right.assign(frames, 0.0f);
+
+    // The backend's own output is the base of the mix. The null device writes
+    // silence, so anything non-zero afterwards is the scene's audio.
+    m_audio_device->request_buffer(m_audio_left.data(), m_audio_right.data(), frames);
+
+    for (auto e : world.query<audio::AudioComponent>()) {
+        auto* comp = world.get<audio::AudioComponent>(e);
+        if (comp == nullptr) {
+            continue;
+        }
+        const audio::AudioBuffer* buffer = comp->resolved_buffer();
+        if (buffer == nullptr) {
+            continue;
+        }
+
+        if (comp->autoplay && !comp->playing) {
+            comp->playing = true;
+        }
+        if (!comp->playing) {
+            continue;
+        }
+
+        // Take the source's position from the entity, so a moving emitter
+        // spatialises correctly.
+        Vec3 position = Vec3(0.0f, 0.0f, 0.0f);
+        if (const auto* t = world.get<scene::Transform>(e)) {
+            position = Vec3(t->world_x, t->world_y, t->world_z);
+        }
+
+        audio::AudioSource source;
+        source.buffer = buffer;
+        source.volume = comp->volume;
+        source.pitch = comp->pitch;
+        source.looping = comp->looping;
+        source.playing = true;
+        source.sample_cursor = comp->sample_cursor;
+        source.spatial = comp->spatial;
+        source.position = position;
+        source.spatial_settings = comp->spatial_settings;
+
+        m_audio_bus.mix_source(source, m_audio_listener.position, m_audio_listener.forward,
+                               m_audio_listener.up, m_audio_left.data(), m_audio_right.data(),
+                               frames, audio::kDefaultSampleRate);
+
+        // The cursor is the one piece of playback state that has to survive the
+        // frame; everything else is re-derived from the component next time.
+        comp->sample_cursor = source.sample_cursor;
+        comp->playing = source.playing;
+        ++m_audio_sources_mixed;
+    }
+
+    for (usize i = 0; i < frames; ++i) {
+        m_audio_output_peak = std::max(m_audio_output_peak, std::abs(m_audio_left[i]));
+        m_audio_output_peak = std::max(m_audio_output_peak, std::abs(m_audio_right[i]));
+    }
+
+    return blocks;
+}
+
+void Runtime::rebuild_physics_from_scene() {
+    m_physics = std::make_unique<physics::PhysicsWorld>();
+    m_physics_clock.reset();
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+
+    auto& world = m_scene_data_ptr->scene->world();
+    size_t created = 0;
+    for (auto e : world.query<physics::RigidBodyComponent>()) {
+        auto* rb = world.get<physics::RigidBodyComponent>(e);
+        auto* collider = world.get<physics::ColliderComponent>(e);
+        auto* transform = world.get<scene::Transform>(e);
+        if (rb == nullptr || collider == nullptr || transform == nullptr) {
+            // An entity missing one of the three cannot be simulated. Leave its
+            // handle invalid rather than inventing a default: the editor shows
+            // the gap, and a silently-placed body is harder to explain.
+            continue;
+        }
+
+        physics::BodyDesc desc;
+        desc.type = rb->type;
+        desc.shape = collider->shape;
+        desc.position = Vec3(transform->local_x, transform->local_y, transform->local_z);
+        desc.orientation = scene::quat_from_euler_xyz_degrees(
+            transform->rot_x, transform->rot_y, transform->rot_z);
+        desc.linear_velocity = rb->linear_velocity;
+        desc.angular_velocity = rb->angular_velocity;
+        desc.mass = rb->mass;
+        desc.friction = rb->friction;
+        desc.restitution = rb->restitution;
+        desc.linear_damping = rb->linear_damping;
+        desc.angular_damping = rb->angular_damping;
+        desc.allow_sleep = rb->allow_sleep;
+
+        rb->body = m_physics->add_body(desc);
+        ++created;
+    }
+    if (created > 0) {
+        NF_LOG_INFO(LogCategory::Core, "Runtime: physics world created with {} bodies", created);
+    }
+}
+
+u32 Runtime::step_physics(float frame_delta) {
+    if (!m_physics || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+
+    const u32 steps = m_physics_clock.advance(frame_delta);
+    for (u32 i = 0; i < steps; ++i) {
+        m_physics->step(m_physics_clock.step());
+    }
+    if (steps == 0) {
+        return 0;
+    }
+
+    // Write the simulation back into the scene so rendering and the editor see
+    // it. Velocities go back too, so a body's state survives a save/load and the
+    // inspector can show it.
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<physics::RigidBodyComponent>()) {
+        auto* rb = world.get<physics::RigidBodyComponent>(e);
+        auto* transform = world.get<scene::Transform>(e);
+        if (rb == nullptr || transform == nullptr || !m_physics->is_alive(rb->body)) {
+            continue;
+        }
+        const physics::BodyState state = m_physics->state(rb->body);
+        transform->local_x = state.position.x;
+        transform->local_y = state.position.y;
+        transform->local_z = state.position.z;
+        scene::euler_xyz_degrees_from_quat(state.orientation, transform->rot_x,
+                                           transform->rot_y, transform->rot_z);
+        transform->dirty = true;
+
+        rb->linear_velocity = state.linear_velocity;
+        rb->angular_velocity = state.angular_velocity;
+    }
+    return steps;
 }
 
 bool Runtime::extract_camera(uint32_t target_width, uint32_t target_height, rendering::Camera& out) {
@@ -1120,6 +1523,10 @@ std::vector<std::string> Runtime::known_texture_paths() const {
 }
 
 bool Runtime::hot_reload_mesh(const assets::AssetId& id, std::string& out_error) {
+    // Clear the failure verdict first: the whole point of a reload is that the
+    // bytes changed, so an asset that previously could not be loaded deserves
+    // another attempt instead of staying silently skipped.
+    m_failed_meshes.erase(id);
     auto mit = m_mesh_handles.find(id);
     if (mit == m_mesh_handles.end()) {
         // Not resident (still loading or never synced): refresh the manager
