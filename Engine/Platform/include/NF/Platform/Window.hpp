@@ -22,6 +22,9 @@ struct WindowDesc {
     bool fullscreen = false;
     bool resizable = true;
     bool vsync = true;
+    // Open maximized (interactive sessions; scripted runs keep the exact
+    // width/height above for determinism).
+    bool maximized = false;
 };
 
 struct WindowSize {

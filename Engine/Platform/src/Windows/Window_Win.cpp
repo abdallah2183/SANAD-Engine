@@ -166,7 +166,9 @@ bool Window::create(const WindowDesc& desc) {
     m_native_handle = static_cast<void*>(hwnd);
     m_instance = static_cast<void*>(hInstance);
 
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    // Maximized first (SW_SHOWMAXIMIZED posts WM_SIZE synchronously, so
+    // width()/height() already report the maximized client area below).
+    ShowWindow(hwnd, desc.maximized ? SW_SHOWMAXIMIZED : SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
 
     NF_LOG_INFO(LogCategory::Platform, "Window created: {}x{} '{}'",

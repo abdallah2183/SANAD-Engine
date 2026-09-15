@@ -325,6 +325,9 @@ int main(int argc, char** argv) {
         wdesc.height = 720;
         wdesc.title = "NOVAForge Editor";
         wdesc.vsync = true;
+        // A human session opens maximized; scripted runs (--frames) keep the
+        // exact 1280x720 so automation pixel math stays deterministic.
+        wdesc.maximized = (cfg.max_frames == 0);
         if (!window.create(wdesc)) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to create window");
             nf::JobSystem::instance().shutdown();
