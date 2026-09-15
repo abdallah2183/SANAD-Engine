@@ -4,6 +4,7 @@
 #include <NF/Rendering/StaticMesh.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 
@@ -216,7 +217,8 @@ void GpuPicker::shutdown() {
 }
 
 PickHit GpuPicker::pick(rhi::CommandBuffer& cmd, std::span<const RenderObject> objects,
-                        const Camera& camera, MeshLibrary& meshes, u32 x, u32 y) {
+                         const Camera& camera, MeshLibrary& meshes, u32 x, u32 y,
+                         std::span<const float> lod_max_distances) {
     PickHit result{};
     if (!m_ready || !m_device) return result;
     if (m_width == 0 || m_height == 0) return result;
@@ -244,15 +246,36 @@ PickHit GpuPicker::pick(rhi::CommandBuffer& cmd, std::span<const RenderObject> o
         if (!ro.visible || !ro.mesh_handle.valid()) continue;
         const StaticMesh* mesh = meshes.get(ro.mesh_handle);
         if (mesh == nullptr || !mesh->is_uploaded()) continue;
-        if (ro.lod >= mesh->lods().size()) continue;
-        const rhi::Buffer* vb = mesh->vertex_buffer(ro.lod);
-        const rhi::Buffer* ib = mesh->index_buffer(ro.lod);
+        if (mesh->lods().empty()) continue;
+        // Same effective LOD the renderer draws (empty bands = authored lod):
+        // picking a coarser-or-equal surface than the frame shows would
+        // select through objects the user cannot see.
+        u32 lod = ro.lod;
+        if (!lod_max_distances.empty()) {
+            const float dx = ro.sphere.cx - camera.position.x;
+            const float dy = ro.sphere.cy - camera.position.y;
+            const float dz = ro.sphere.cz - camera.position.z;
+            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const u32 distance_lod = select_lod(distance,
+                                                static_cast<u32>(mesh->lods().size()),
+                                                lod_max_distances);
+            if (distance_lod > lod) {
+                lod = distance_lod;
+            }
+            if (lod >= mesh->lods().size()) {
+                lod = static_cast<u32>(mesh->lods().size()) - 1;
+            }
+        } else if (ro.lod >= mesh->lods().size()) {
+            continue;
+        }
+        const rhi::Buffer* vb = mesh->vertex_buffer(lod);
+        const rhi::Buffer* ib = mesh->index_buffer(lod);
         if (vb == nullptr || ib == nullptr) continue;
 
         // A mesh is drawn submesh by submesh, matching Renderer3D exactly: if
         // the id pass drew a different range the two images would disagree.
-        const MeshLOD& lod = mesh->lods()[ro.lod];
-        if (lod.submeshes.empty()) continue;
+        const MeshLOD& lod_mesh = mesh->lods()[lod];
+        if (lod_mesh.submeshes.empty()) continue;
 
         std::memcpy(push.model, ro.world.m, sizeof(push.model));
         pack_pick_id(ro.id, push.pick_id);
@@ -265,7 +288,7 @@ PickHit GpuPicker::pick(rhi::CommandBuffer& cmd, std::span<const RenderObject> o
         const std::array<const rhi::Buffer*, 1> vbs{vb};
         cmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
         cmd.bind_index_buffer(*ib, 0);
-        for (const SubMesh& sm : lod.submeshes) {
+        for (const SubMesh& sm : lod_mesh.submeshes) {
             cmd.draw_indexed(sm.index_count, 1, sm.index_offset,
                              static_cast<i32>(sm.vertex_offset), 0);
         }

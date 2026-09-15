@@ -639,7 +639,18 @@ SceneMergeResult merge_scene_into_world(assets::VirtualFileSystem& vfs, const st
         out.error = loaded.error.empty() ? ("Cannot merge scene '" + logical_path + "'") : loaded.error;
         return out;
     }
-    const ecs::World& src = loaded.scene->world();
+    out.created = merge_loaded_scene_into_world(*loaded.scene, dst_world);
+    out.warnings = loaded.warnings;
+    for (const std::string& missing : loaded.missing_assets) {
+        out.warnings.push_back("Missing asset: " + missing);
+    }
+    out.success = true;
+    return out;
+}
+
+std::vector<ecs::Entity> merge_loaded_scene_into_world(scene::Scene& chunk, ecs::World& dst_world) {
+    std::vector<ecs::Entity> created;
+    const ecs::World& src = chunk.world();
 
     // Roots: entities with no live parent in the chunk (same rule as prefab
     // templates). Internal hierarchy is remapped below; chunk roots become
@@ -690,17 +701,12 @@ SceneMergeResult merge_scene_into_world(assets::VirtualFileSystem& vfs, const st
             }
         }
         if (new_root.valid()) {
-            out.created.push_back(new_root);
+            created.push_back(new_root);
         }
     }
 
     scene::propagate_transforms(dst_world);
-    out.warnings = loaded.warnings;
-    for (const std::string& missing : loaded.missing_assets) {
-        out.warnings.push_back("Missing asset: " + missing);
-    }
-    out.success = true;
-    return out;
+    return created;
 }
 
 } // namespace nf::runtime

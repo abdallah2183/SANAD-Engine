@@ -64,6 +64,7 @@ add_executable(RHITests
     RHITests/test_3d_renderer.cpp
     RHITests/test_gpu_picking.cpp
     RHITests/test_benchmarks_3d.cpp
+    RHITests/test_lod.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).

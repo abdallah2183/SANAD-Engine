@@ -19,6 +19,7 @@
 #include <NF/Rendering/StaticMesh.hpp> // AABB / BoundingSphere
 
 #include <mutex>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -56,8 +57,34 @@ struct RenderObject {
     MaterialHandle material_handle;
     AABB bounds;                   // world-space AABB
     BoundingSphere sphere;         // world-space bounding sphere
+    // Authored LOD floor (0 = full detail). The renderer may only go coarser
+    // from here via select_lod(), never sharper — and clamps into range, so
+    // a stale lod on a mesh with fewer LODs draws the coarsest instead of
+    // indexing out of bounds (which the old code did).
     u32 lod = 0;
 };
+
+/// Distance-based LOD selection: index into the mesh's lods().
+/// max_distances[i] is the farthest camera distance still drawn at lod i;
+/// beyond the last band the coarsest available lod wins. Empty bands (or a
+/// single LOD) always select 0, so content without LODs renders bit-identical
+/// with or without this — selection can never sharpen, only coarsen.
+inline u32 select_lod(float distance, u32 lod_count, std::span<const float> max_distances) {
+    if (lod_count == 0) {
+        return 0;
+    }
+    u32 lod = 0;
+    for (float band : max_distances) {
+        if (distance <= band) {
+            break;
+        }
+        ++lod;
+    }
+    if (lod >= lod_count) {
+        lod = lod_count - 1;
+    }
+    return lod;
+}
 
 struct RenderWorld {
     std::vector<RenderObject> objects;

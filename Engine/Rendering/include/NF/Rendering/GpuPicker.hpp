@@ -65,12 +65,18 @@ public:
     /// Renders ids for `objects` into the id image and reads back the pixel at
     /// (x, y), in the same pixel space as the rendered image (origin top-left).
     ///
+    /// `lod_max_distances` applies the same distance LOD the renderer uses
+    /// (see select_lod): what is pickable is exactly what was drawn. Empty
+    /// (the default) keeps the authored ro.lod, which is what every existing
+    /// caller — and every LOD-less scene — wants.
+    ///
     /// Records and submits internally; `cmd` must be in the initial state (not
     /// already begun). Returns {false, 0} when the picker is not ready, the
     /// coordinate is out of range, nothing was drawn, or no object covered that
     /// pixel.
     PickHit pick(rhi::CommandBuffer& cmd, std::span<const RenderObject> objects,
-                 const Camera& camera, MeshLibrary& meshes, u32 x, u32 y);
+                 const Camera& camera, MeshLibrary& meshes, u32 x, u32 y,
+                 std::span<const float> lod_max_distances = {});
 
 private:
     bool create_targets(u32 width, u32 height);

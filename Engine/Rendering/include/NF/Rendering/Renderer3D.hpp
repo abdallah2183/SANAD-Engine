@@ -122,6 +122,14 @@ public:
     void set_exposure(float exposure) { m_exposure = exposure; }
     float exposure() const { return m_exposure; }
 
+    // --- LOD policy ---
+    // max_distances[i] is the farthest camera distance still drawn at lod i
+    // (see select_lod). Defaults sit beyond any test scene, so content
+    // without LODs — or an author who never touches this — renders exactly
+    // as before. Empty bands disable selection entirely (always lod 0).
+    void set_lod_max_distances(std::vector<float> bands) { m_lod_max_distances = std::move(bands); }
+    const std::vector<float>& lod_max_distances() const { return m_lod_max_distances; }
+
     /// Records one full frame into `cmd` (which must be in recording state):
     ///   Frustum Culling → DepthPrepass → GBuffer → Lighting → Tonemap.
     /// The tonemapped result lands in `out_target`. When the target is a
@@ -267,6 +275,7 @@ private:
     float m_ambient = 0.03f;
     float m_exposure = 1.0f;
     Stats m_stats;
+    std::vector<float> m_lod_max_distances{40.0f, 100.0f, 250.0f};
 
     // White 1x1 fallback texture so scalar-only materials still have a valid
     // albedo binding (the shader multiplies by it, i.e. ignores it).

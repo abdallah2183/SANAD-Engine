@@ -1,9 +1,11 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Jobs/JobSystem.hpp>
 #include <NF/Rendering/ImageDecode.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
 #include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Scene/NameComponent.hpp>
+#include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Rendering/Camera.hpp>
@@ -906,6 +908,22 @@ void Runtime::enable_streaming(const std::string& chunk_dir_logical,
     if (m_streaming_enabled) {
         disable_streaming();
     }
+    // ECS component type ids are process-global mutable state on first touch
+    // (a function-local static fed by a registering singleton). The chunk
+    // parser below builds Worlds on workers now, so every component type it
+    // can add is touched here, on the main thread, first. Without this, a
+    // first-touch registration on a worker races the main thread's own adds.
+    (void)ecs::component_type_id<scene::Transform>();
+    (void)ecs::component_type_id<scene::NameComponent>();
+    (void)ecs::component_type_id<scene::PrefabLinkComponent>();
+    (void)ecs::component_type_id<MeshComponent>();
+    (void)ecs::component_type_id<DirectionalLight>();
+    (void)ecs::component_type_id<CameraComponent>();
+    (void)ecs::component_type_id<physics::RigidBodyComponent>();
+    (void)ecs::component_type_id<physics::ColliderComponent>();
+    (void)ecs::component_type_id<animation::AnimationComponent>();
+    (void)ecs::component_type_id<audio::AudioComponent>();
+    (void)ecs::component_type_id<gameplay::GameplayModuleComponent>();
     m_streaming_chunk_dir = chunk_dir_logical;
     m_streaming_enabled = true;
     m_streamer.set_handlers(
@@ -925,6 +943,10 @@ void Runtime::disable_streaming() {
     m_streamer.clear();
     m_streaming_enabled = false;
     m_streaming_chunk_dir.clear();
+    // Abandoned workers touch only their staged block (never the world or
+    // `this`), so dropping the map entries is safe; a late completion finds
+    // no entry and its scene is simply destroyed with the block.
+    m_stream_jobs.clear();
     resync_after_streaming();
 }
 
@@ -943,45 +965,120 @@ u32 Runtime::step_streaming() {
     return loaded;
 }
 
+size_t Runtime::stream_in_flight_count() const {
+    return m_stream_jobs.size();
+}
+
+bool Runtime::stream_coord_still_wanted(const scene::ChunkCoord& coord) const {
+    for (const scene::ChunkCoord& c : m_streamer.wanted_chunks()) {
+        if (c == coord) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Runtime::streaming_load_chunk(const scene::ChunkCoord& coord,
                                    std::vector<ecs::Entity>& out_created, std::string& out_error) {
     if (!has_scene()) {
         out_error = "No scene loaded";
         return false;
     }
-    const std::string path = m_streaming_chunk_dir + "/chunk_" + std::to_string(coord.x) + "_" +
-                             std::to_string(coord.y) + "_" + std::to_string(coord.z) + ".nfscene";
-    SceneMergeResult merged =
-        merge_scene_into_world(m_vfs, path, m_scene_data_ptr->scene->world());
-    if (!merged.success) {
-        out_error = merged.error;
-        return false;
-    }
-    // The streamer contract wants EVERY added entity (it counts them and
-    // hands them back at unload), while the merge reports roots. Expand here:
-    // parent-first collection, so unloading in reverse destroys children
-    // before the parents whose links they hold.
-    auto& world = m_scene_data_ptr->scene->world();
-    for (ecs::Entity root : merged.created) {
-        if (!world.is_alive(root)) {
-            continue;
+    // Stage one: a finished worker waits for its main-thread commit. False
+    // here does NOT mean failure — the streamer retries the coord on a later
+    // update, which is exactly the non-blocking contract.
+    auto it = m_stream_jobs.find(coord);
+    if (it != m_stream_jobs.end()) {
+        std::shared_ptr<StreamLoadJob> job = it->second;
+        bool finished = false;
+        {
+            std::lock_guard<std::mutex> lock(job->mutex);
+            finished = job->finished;
         }
-        // Per-root member list (parent first): the outer list accumulates
-        // across roots, so walking it directly would re-add earlier roots'
-        // subtrees as duplicates.
-        std::vector<ecs::Entity> members{root};
-        for (size_t i = 0; i < members.size(); ++i) {
-            for (ecs::Entity kid : scene::get_children(world, members[i])) {
-                if (world.is_alive(kid)) {
-                    members.push_back(kid);
+        if (!finished) {
+            return false;
+        }
+        m_stream_jobs.erase(it);
+        if (!job->ok || !job->scene) {
+            out_error = job->error.empty() ? ("Cannot load streamed chunk") : job->error;
+            return false;
+        }
+        if (!stream_coord_still_wanted(coord)) {
+            // The volume moved on while the worker parsed: the temp scene is
+            // destroyed with the job block, nothing reaches the live world.
+            return false;
+        }
+        const std::vector<ecs::Entity> roots =
+            merge_loaded_scene_into_world(*job->scene, m_scene_data_ptr->scene->world());
+        auto& world = m_scene_data_ptr->scene->world();
+        for (ecs::Entity root : roots) {
+            if (!world.is_alive(root)) {
+                continue;
+            }
+            std::vector<ecs::Entity> members{root};
+            for (size_t i = 0; i < members.size(); ++i) {
+                for (ecs::Entity kid : scene::get_children(world, members[i])) {
+                    if (world.is_alive(kid)) {
+                        members.push_back(kid);
+                    }
                 }
             }
+            out_created.insert(out_created.end(), members.begin(), members.end());
         }
-        out_created.insert(out_created.end(), members.begin(), members.end());
+        NF_LOG_INFO(LogCategory::Core, "Runtime: streamed in chunk ({},{},{}) ({} entities)", coord.x,
+                    coord.y, coord.z, out_created.size());
+        return true;
     }
-    NF_LOG_INFO(LogCategory::Core, "Runtime: streamed in '{}' ({} new roots, {} entities)", path,
-                merged.created.size(), out_created.size());
-    return true;
+    // Stage zero: dispatch, bounded by the in-flight cap. Path resolution
+    // stays on the main thread (VFS); the worker gets a physical path and
+    // parses with plain file IO, touching neither the VFS nor the live
+    // world — the ImportQueue split, applied to chunks.
+    if (m_stream_jobs.size() >= m_max_stream_in_flight) {
+        return false;
+    }
+    const std::string path = m_streaming_chunk_dir + "/chunk_" + std::to_string(coord.x) + "_" +
+                             std::to_string(coord.y) + "_" + std::to_string(coord.z) + ".nfscene";
+    auto resolved = m_vfs.resolve(path);
+    if (!resolved.ok) {
+        out_error = resolved.error;
+        return false;
+    }
+    // Existence is checked HERE, on the main thread, with a cheap stat —
+    // not by spending a worker proving the file absent on every update.
+    // Resolve only maps the path; it does not promise the file is there, and
+    // without this every missing chunk in range would burn a worker slot per
+    // update (the common case: a sparse region). A TOCTOU gap remains (the
+    // file may vanish before the worker opens it); the worker fails that
+    // gracefully, and an appearing file is picked up on a later update.
+    std::error_code ec;
+    if (!std::filesystem::exists(resolved.value, ec)) {
+        out_error = "Chunk file not found: " + path;
+        return false;
+    }
+    auto job = std::make_shared<StreamLoadJob>();
+    auto run_parse = [job, physical = resolved.value] {
+        SceneLoadResult result;
+        try {
+            result = load_scene_from_physical(physical);
+        } catch (...) {
+            result.error = "Exception while parsing streamed chunk";
+        }
+        std::lock_guard<std::mutex> lock(job->mutex);
+        job->ok = result.success && result.scene != nullptr;
+        job->scene = std::move(result.scene);
+        job->error = result.error;
+        job->finished = true;
+    };
+    if (JobSystem::instance().is_initialized()) {
+        JobSystem::instance().enqueue(std::move(run_parse));
+    } else {
+        // No workers (tests, tools): deterministic inline parse. Same
+        // contract — this call still returns false; the commit lands on the
+        // next update, so both paths are exercised identically.
+        run_parse();
+    }
+    m_stream_jobs.emplace(coord, std::move(job));
+    return false;
 }
 
 void Runtime::streaming_unload_chunk(const scene::ChunkCoord& coord,
@@ -1406,8 +1503,12 @@ bool Runtime::pick_entity_gpu(uint32_t x, uint32_t y, uint32_t& out_entity_id) {
     if (!cmd) {
         return false;
     }
-    const rendering::PickHit hit =
-        m_picker->pick(*cmd, world.objects, cam, *m_mesh_library, x, y);
+    // Same LOD bands the frame was drawn with, so a distant object simplified
+    // out of the image is not pickable through the empty pixels either.
+    static const std::vector<float> kNoLodBands;
+    const std::vector<float>& lod_bands = m_renderer ? m_renderer->lod_max_distances() : kNoLodBands;
+    const rendering::PickHit hit = m_picker->pick(*cmd, world.objects, cam, *m_mesh_library, x, y,
+                                                   std::span<const float>(lod_bands));
     if (!hit.hit) {
         return false;
     }

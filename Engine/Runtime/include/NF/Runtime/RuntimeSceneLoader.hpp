@@ -60,6 +60,12 @@ struct SceneMergeResult {
 SceneMergeResult merge_scene_into_world(assets::VirtualFileSystem& vfs, const std::string& logical_path,
                                         ecs::World& dst_world);
 
+/// Clones every root subtree of an already-loaded chunk scene into `dst`.
+/// The file wrapper above is load-then-this; the split exists so an async
+/// loader can parse on a worker (which must never touch the live world) and
+/// commit on the main thread. Returns the new roots, in chunk order.
+std::vector<ecs::Entity> merge_loaded_scene_into_world(scene::Scene& chunk, ecs::World& dst_world);
+
 /// The scene's on-disk text, without touching the filesystem.
 ///
 /// Split out so the save system can take a snapshot on the main thread and hand

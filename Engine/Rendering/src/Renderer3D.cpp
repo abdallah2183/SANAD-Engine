@@ -581,6 +581,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const RenderObject* object;
         const StaticMesh* mesh;
         const rhi::DescriptorSet* material_set; // non-owning: cached on the entry
+        u32 lod = 0;                            // effective LOD for this frame
     };
     std::vector<PreparedDraw> prepared;
     prepared.reserve(m_visible.size());
@@ -589,8 +590,27 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         if (!ro.mesh_handle.valid() || !m_mesh_library) continue;
         const StaticMesh* mesh = m_mesh_library->get(ro.mesh_handle);
         if (!mesh || !mesh->is_uploaded()) continue;
+        if (mesh->lods().empty()) continue;
 
-        PreparedDraw pd{&ro, mesh, nullptr};
+        PreparedDraw pd{&ro, mesh, nullptr, 0};
+        // Distance LOD, resolved once per frame (not per pass): the authored
+        // lod is a floor, distance only coarsens, and the result is clamped
+        // into range — a stale lod on a poorer mesh draws the coarsest LOD
+        // instead of indexing out of bounds.
+        {
+            const float dx = ro.sphere.cx - camera.position.x;
+            const float dy = ro.sphere.cy - camera.position.y;
+            const float dz = ro.sphere.cz - camera.position.z;
+            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const u32 distance_lod = select_lod(distance,
+                                                static_cast<u32>(mesh->lods().size()),
+                                                std::span<const float>(m_lod_max_distances));
+            u32 effective = ro.lod > distance_lod ? ro.lod : distance_lod;
+            if (effective >= mesh->lods().size()) {
+                effective = static_cast<u32>(mesh->lods().size()) - 1;
+            }
+            pd.lod = effective;
+        }
         MaterialEntry* entry = m_material_library->get(ro.material_handle);
         if (entry && entry->material && entry->material->valid()) {
             // One set per material instance, reused every frame. Objects share
@@ -644,13 +664,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         for (auto& pd : prepared) {
             std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
-            const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.object->lod);
-            const rhi::Buffer* ib = pd.mesh->index_buffer(pd.object->lod);
+            const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
+            const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
             if (!vb || !ib) continue;
             const std::array<const rhi::Buffer*, 1> vbs{vb};
             gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
             gcmd.bind_index_buffer(*ib, 0);
-            const MeshLOD& lod = pd.mesh->lods()[pd.object->lod];
+            const MeshLOD& lod = pd.mesh->lods()[pd.lod];
             for (const SubMesh& sm : lod.submeshes) {
                 gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
                 ++m_stats.draw_calls;
@@ -684,13 +704,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
             const std::array<const rhi::DescriptorSet*, 1> sets{pd.material_set};
             gcmd.bind_descriptor_sets(*m_material_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
-            const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.object->lod);
-            const rhi::Buffer* ib = pd.mesh->index_buffer(pd.object->lod);
+            const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
+            const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
             if (!vb || !ib) continue;
             const std::array<const rhi::Buffer*, 1> vbs{vb};
             gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
             gcmd.bind_index_buffer(*ib, 0);
-            const MeshLOD& lod = pd.mesh->lods()[pd.object->lod];
+            const MeshLOD& lod = pd.mesh->lods()[pd.lod];
             for (const SubMesh& sm : lod.submeshes) {
                 gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
                 ++m_stats.draw_calls;

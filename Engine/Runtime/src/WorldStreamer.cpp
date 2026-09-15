@@ -29,6 +29,19 @@ std::vector<scene::ChunkCoord> WorldStreamer::wanted_chunks() const {
     return wanted;
 }
 
+std::vector<scene::ChunkCoord> WorldStreamer::next_wanted_loads(
+    const std::unordered_set<scene::ChunkCoord>& in_flight, size_t cap) const {
+    std::vector<scene::ChunkCoord> out;
+    if (!m_has_volume || cap == 0) return out;
+    for (const scene::ChunkCoord& coord : wanted_chunks()) {
+        if (out.size() >= cap) break;
+        if (m_loaded.find(coord) != m_loaded.end()) continue;
+        if (in_flight.find(coord) != in_flight.end()) continue;
+        out.push_back(coord);
+    }
+    return out;
+}
+
 size_t WorldStreamer::streamed_entity_count() const {
     size_t total = 0;
     for (const auto& [coord, chunk] : m_loaded) {
@@ -61,9 +74,43 @@ u32 WorldStreamer::update() {
         }
     }
 
-    if (m_max_loads_per_update == 0) return 0;
+    // --- Then enforce the memory budget -------------------------------------
+    //
+    // Farthest-first, and only outside the load radius: chunks inside it are
+    // must-keep (evicting one reloads it on the very next update). Chunks in
+    // the hysteresis band are fair game — that is what the budget is for.
+    // When everything resident is must-keep, the budget holds its nose and
+    // stays over rather than thrashing.
+    //
+    // This runs even when loading is disabled (max_loads_per_update == 0):
+    // eviction is unloading, and unloading never waits for loading.
+    if (m_max_loaded_chunks > 0) {
+        while (m_loaded.size() > m_max_loaded_chunks) {
+            auto victim = m_loaded.end();
+            f32 victim_distance = 0.0f;
+            for (auto it = m_loaded.begin(); it != m_loaded.end(); ++it) {
+                const f32 distance =
+                    scene::distance_to_chunk(m_volume.center, it->first, m_volume.chunk_size);
+                if (distance <= m_volume.load_radius) continue;
+                if (victim == m_loaded.end() || distance > victim_distance) {
+                    victim = it;
+                    victim_distance = distance;
+                }
+            }
+            if (victim == m_loaded.end()) break;
+            if (m_unload) {
+                m_unload(victim->first, victim->second.entities);
+            }
+            ++m_unload_requests;
+            m_loaded.erase(victim);
+        }
+    }
 
     // --- Then load ----------------------------------------------------------
+    // Disabled entirely when the cap is zero (unloading above still ran:
+    // releasing memory must never wait for loading).
+    if (m_max_loads_per_update == 0) return 0;
+
     m_scratch.clear();
     scene::chunks_in_radius(m_volume.center, m_volume.load_radius, m_volume.chunk_size, m_scratch);
 

@@ -23,6 +23,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace nf::runtime {
@@ -94,6 +95,28 @@ public:
     /// tell "the volume is wrong" from "the streamer is wrong".
     [[nodiscard]] std::vector<scene::ChunkCoord> wanted_chunks() const;
 
+    /// The next chunks to start loading, in dispatch order: wanted
+    /// (nearest-first), skipping already-loaded chunks and `in_flight` ones
+    /// (work already dispatched but not committed), up to `cap` entries.
+    ///
+    /// Pure with respect to threads — it only reads the wanted set, the
+    /// loaded set and the given exclusion set — so an async loader can decide
+    /// what to dispatch without racing its workers, and a test can pin the
+    /// order without any.
+    [[nodiscard]] std::vector<scene::ChunkCoord> next_wanted_loads(
+        const std::unordered_set<scene::ChunkCoord>& in_flight, size_t cap) const;
+
+    /// Upper bound on resident loaded chunks. 0 (default) = unlimited.
+    ///
+    /// Enforcement is farthest-first and hysteresis-aware: only chunks OUTSIDE
+    /// the load radius are evictable, never must-keep ones inside it — evicting
+    /// those would reload them on the next update and turn the budget into a
+    /// thrash generator. Eviction flows through the unload handler and counts
+    /// like any unload. When everything resident is must-keep, the budget is
+    /// best-effort (over, but stable) rather than violated by force.
+    void set_max_loaded_chunks(size_t max_chunks) { m_max_loaded_chunks = max_chunks; }
+    [[nodiscard]] size_t max_loaded_chunks() const { return m_max_loaded_chunks; }
+
 private:
     struct LoadedChunk {
         std::vector<ecs::Entity> entities;
@@ -111,6 +134,7 @@ private:
     u32 m_max_loads_per_update = 4;
     u32 m_load_requests = 0;
     u32 m_unload_requests = 0;
+    size_t m_max_loaded_chunks = 0;
     std::string m_last_error;
 };
 

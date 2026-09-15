@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <span>
 
 using namespace nf;
 using namespace nf::test;
@@ -176,8 +177,7 @@ NF_TEST(gpu_pick_prefers_the_nearer_surface) {
 
 // Invisible objects must not be pickable: the id pass draws what the frame
 // draws, and a culled object is not on screen to click.
-NF_TEST(gpu_pick_ignores_invisible_objects) {
-    const GpuFixture& f = require_gpu();
+NF_TEST(gpu_pick_ignores_invisible_objects) {    const GpuFixture& f = require_gpu();
     auto& device = *f.device;
     rhi::reset_validation_error_count();
 
@@ -201,6 +201,53 @@ NF_TEST(gpu_pick_ignores_invisible_objects) {
     const Camera cam = make_pick_camera(5.0f);
     auto cmd = device.create_command_buffer();
     NF_CHECK(!picker.pick(*cmd, world.objects, cam, meshes, kW / 2, kH / 2).hit);
+
+    device.wait_idle();
+    picker.shutdown();
+    device.wait_idle();
+    NF_CHECK(rhi::validation_error_count() == 0);
+    rhi::reset_validation_error_count();
+}
+
+// Picking follows the same LOD the frame draws: a distant object simplified
+// out of the image must not be pickable through its empty pixels — and with
+// no bands the authored lod applies exactly as before.
+NF_TEST(gpu_pick_matches_render_lod) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    GpuPicker picker;
+    NF_CHECK(picker.init(device, pick_shader_dir(), kW, kH));
+
+    MeshLibrary meshes;
+    auto cube = StaticMesh::create_cube(2.0f);
+    cube->lods().push_back(MeshLOD{}); // LOD 1: empty — draws nothing
+    StaticMeshHandle h = meshes.add(std::move(cube));
+    meshes.upload_all(device);
+
+    RenderWorld world{};
+    RenderObject ro{};
+    ro.id = 66;
+    ro.visible = true;
+    ro.mesh_handle = h;
+    ro.lod = 0;
+    set_translation(ro, 0.0f, 0.0f, 0.0f);
+    world.objects.push_back(ro);
+
+    // Far camera (distance 60, well inside the far plane): the cube covers
+    // the centre pixel at full detail.
+    const Camera cam = make_pick_camera(60.0f);
+    const float bands_arr[] = {40.0f};
+    const std::span<const float> bands(bands_arr, 1);
+
+    auto cmd = device.create_command_buffer();
+    NF_CHECK(picker.pick(*cmd, world.objects, cam, meshes, kW / 2, kH / 2).hit);
+
+    // Same pixel, same frame content, renderer bands applied: LOD 1 is empty,
+    // so there is nothing under the cursor — exactly what the frame shows.
+    auto cmd2 = device.create_command_buffer();
+    NF_CHECK(!picker.pick(*cmd2, world.objects, cam, meshes, kW / 2, kH / 2, bands).hit);
 
     device.wait_idle();
     picker.shutdown();

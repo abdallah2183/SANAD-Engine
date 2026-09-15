@@ -72,6 +72,18 @@ Plan: `Docs/Phase11_Plan.md`. No new feature area — three things removed that 
 - Commits on `workbuddy/main-9da20c25`: `5b63eb5` (W2–W5), `7fbe65f` (W1), `0b2e769` (W6), `b6b5546` (repair-script fix).
 - **Fixed a pre-existing defect found by W6 verification:** the editor's headless acceptance was **failing** (`Physics: body moved under gravity FAILED — world_y = 0`, editor exit 1, which would make the CI acceptance step red). Bodies are built from the scene only on load, so a `RigidBody`/`Collider` added through the inspector never became a body and Play simulated the on-disk scene. `EditorApp::play()` now calls `Runtime::rebuild_physics_from_scene()` before simulating. Not a Phase 11 regression — the physics rebuild/step are byte-identical to Phase 10.
 
+## Uncommitted math + merge work (between Phase 11 and 12)
+- **Math unification (one type, one owner):** deleted `rendering::Vec3`/`Mat4`; everything on `nf::` Core types. Fixed en route, all previously masked (Core builders had no production users): Core `look_at` rotation untransposed for tilted views + an `m[2][2]`/`m[1][2]` typo, `perspective` collapsing depth to ~[1,2], `orthographic` mapping far to −1, GL-style `[-1,1]` renderer projection replaced by Vulkan `[0,1]`, frustum re-derived for row-vector clip (columns, near = col 2). `compose_trs_mat4` with a byte-equivalence test vs the legacy column-major bytes; GPU uploads unchanged (plain memcpy).
+- **Scene merge:** `merge_scene_into_world` + canonical `copy_scene_entity` shared with prefab cloning (which now delegates — its copy was missing physics/animation/audio/gameplay); live body handles reset on copy. Runtime wiring (`enable_streaming`/`step_streaming`: merge, mesh kick, physics rebuild, subtree unload). Suite 543/0/1 at that point.
+
+## Phase 12 — Complete world streaming COMPLETE
+Plan: `Docs/Phase12_Plan.md`. Finishes what W5 deferred, without changing policy.
+- **W1 Async chunk pipeline:** `LoadFn` stages parses on the JobSystem and commits on the main thread (worker touches only its staged block + physical path; resolve stays main-thread). Unwanted-on-completion jobs discarded. Component type ids pre-warmed on enable (first-touch registration would race). Inline fallback when JobSystem is down. Existence is a main-thread stat before dispatch — VFS resolve does not promise the file, and without this every missing chunk burned a worker per update.
+- **W2 Priority:** dispatch follows `wanted_chunks()` order via `WorldStreamer::next_wanted_loads(exclude, cap)` (pure, unit-tested without threads).
+- **W3 Budget:** `set_max_loaded_chunks`, farthest-first eviction outside the load radius only (never must-keep); runs even with loading disabled.
+- **W4 LOD by distance:** pure `select_lod` + renderer bands (defaults beyond test scenes: no behavior change) stamped in render prep; picker takes the same bands so picked == rendered. Integration: 2-LOD mesh renders lit near, dark far; picker parity test.
+- **Final Phase-12 suite: 552 passed / 0 failed / 1 skipped across 14 suites** (Streaming 26, Runtime 35, RHI 73). ctest 14/14, layering guard holds, editor headless 45 OK / 0 FAILED / validation 0 / alive 0, samples exit 0, `nf` end-to-end (package + 60-frame player: physics, animation, audio live).
+
 ## Lessons that cost real time
 - **A green suite says nothing about integration.** `Runtime::update()` is the ground truth for what runs in a shipped frame; anything unreachable from it is dead in a game no matter how many unit tests pass. See the `novaforge-verify` skill, Step 3c.
 - **A content assertion only covers the subsystem it names.** CI asserted `physics world created`, which stayed true while animation/audio were never stepped — the falling box is physics-driven.

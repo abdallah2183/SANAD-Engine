@@ -507,3 +507,120 @@ NF_TEST(streamer_treats_an_inverted_hysteresis_band_as_a_valid_one) {
     NF_CHECK_EQ(handlers.unload_calls, 0u);
 }
 
+// ---------------------------------------------------------------------------
+// Dispatch order + memory budget (Phase 12)
+// ---------------------------------------------------------------------------
+
+NF_TEST(stream_next_wanted_loads_follows_wanted_order_skipping_loaded_and_in_flight) {
+    RecordingHandlers handlers;
+    WorldStreamer streamer;
+    handlers.attach(streamer);
+
+    scene::StreamingVolume volume;
+    volume.center = Vec3{0.0f, 0.0f, 0.0f};
+    volume.chunk_size = 32.0f;
+    volume.load_radius = 40.0f;
+    volume.unload_radius = 200.0f;
+    streamer.set_volume(volume);
+
+    // Nothing loaded, two already in flight: the answer is wanted[2..3].
+    const std::vector<ChunkCoord> wanted = streamer.wanted_chunks();
+    NF_CHECK(wanted.size() >= 4);
+    std::unordered_set<ChunkCoord> in_flight{wanted[0], wanted[1]};
+    const std::vector<ChunkCoord> next = streamer.next_wanted_loads(in_flight, 2);
+    NF_CHECK_EQ(next.size(), 2u);
+    NF_CHECK(next[0] == wanted[2]);
+    NF_CHECK(next[1] == wanted[3]);
+
+    // Loaded chunks are skipped the same way: load the first two for real,
+    // then the answer must again start past them.
+    streamer.set_max_loads_per_update(2);
+    NF_CHECK_EQ(streamer.update(), 2u);
+    const std::unordered_set<ChunkCoord> empty;
+    const std::vector<ChunkCoord> next2 = streamer.next_wanted_loads(empty, 2);
+    NF_CHECK_EQ(next2.size(), 2u);
+    for (const ChunkCoord& c : next2) {
+        NF_CHECK(!streamer.is_loaded(c));
+    }
+    NF_CHECK(next2[0] == wanted[2]);
+    NF_CHECK(next2[1] == wanted[3]);
+}
+
+NF_TEST(stream_next_wanted_loads_empty_without_volume_or_cap) {
+    WorldStreamer streamer;
+    const std::unordered_set<ChunkCoord> empty;
+    NF_CHECK(streamer.next_wanted_loads(empty, 4).empty());
+
+    scene::StreamingVolume volume;
+    volume.center = Vec3{0.0f, 0.0f, 0.0f};
+    volume.chunk_size = 32.0f;
+    volume.load_radius = 40.0f;
+    streamer.set_volume(volume);
+    NF_CHECK(streamer.next_wanted_loads(empty, 0).empty());
+    NF_CHECK(!streamer.next_wanted_loads(empty, 4).empty());
+}
+
+NF_TEST(stream_budget_evicts_farthest_beyond_load_radius_first) {
+    RecordingHandlers handlers;
+    WorldStreamer streamer;
+    handlers.attach(streamer);
+    streamer.set_max_loads_per_update(1000);
+
+    scene::StreamingVolume volume;
+    volume.center = Vec3{0.0f, 0.0f, 0.0f};
+    volume.chunk_size = 32.0f;
+    volume.load_radius = 40.0f;
+    volume.unload_radius = 500.0f;
+    streamer.set_volume(volume);
+    NF_CHECK((streamer.update()) > (2u));
+    const size_t loaded = streamer.loaded_chunk_count();
+
+    // Move far away (nothing unloads by range: unload radius is huge), then
+    // cap the budget below what is resident: the two nearest survivors stay.
+    // Loading is disabled for this step so the count measures eviction only,
+    // not eviction-plus-refill.
+    volume.center = Vec3{200.0f, 0.0f, 0.0f};
+    streamer.set_volume(volume);
+    streamer.set_max_loaded_chunks(loaded - 2);
+    streamer.set_max_loads_per_update(0);
+    streamer.update();
+    NF_CHECK_EQ(streamer.loaded_chunk_count(), loaded - 2);
+    NF_CHECK_EQ(handlers.unloaded_log.size(), 2u);
+
+    // Every survivor is at least as near as every evicted chunk.
+    for (const ChunkCoord& kept : handlers.loaded_log) {
+        if (!streamer.is_loaded(kept)) continue;
+        const float kept_d =
+            scene::distance_to_chunk(volume.center, kept, volume.chunk_size);
+        for (const ChunkCoord& gone : handlers.unloaded_log) {
+            const float gone_d =
+                scene::distance_to_chunk(volume.center, gone, volume.chunk_size);
+            NF_CHECK(kept_d <= gone_d + 1e-3f);
+        }
+    }
+}
+
+NF_TEST(stream_budget_never_evicts_must_keep_chunks) {
+    RecordingHandlers handlers;
+    WorldStreamer streamer;
+    handlers.attach(streamer);
+    streamer.set_max_loads_per_update(1000);
+
+    scene::StreamingVolume volume;
+    volume.center = Vec3{0.0f, 0.0f, 0.0f};
+    volume.chunk_size = 32.0f;
+    volume.load_radius = 40.0f;
+    volume.unload_radius = 500.0f;
+    streamer.set_volume(volume);
+    NF_CHECK((streamer.update()) > (1u));
+    const size_t loaded = streamer.loaded_chunk_count();
+
+    // Everything resident is inside the load radius (must-keep). A budget of
+    // 1 cannot be honoured without reloading next update, so it holds its
+    // nose: over budget, but stable and evicting nothing.
+    streamer.set_max_loaded_chunks(1);
+    streamer.update();
+    NF_CHECK_EQ(streamer.loaded_chunk_count(), loaded);
+    NF_CHECK_EQ(handlers.unload_calls, 0u);
+}
+

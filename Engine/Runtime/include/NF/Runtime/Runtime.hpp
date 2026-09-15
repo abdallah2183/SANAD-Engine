@@ -30,6 +30,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -145,6 +146,11 @@ public:
     u32 step_streaming();
     [[nodiscard]] size_t streamed_chunk_count() const { return m_streamer.loaded_chunk_count(); }
     [[nodiscard]] size_t streamed_entity_count() const { return m_streamer.streamed_entity_count(); }
+    /// Chunk loads currently staged on workers (parsed, not yet committed).
+    /// Bounded by the in-flight cap; the observable that proves the cap.
+    [[nodiscard]] size_t stream_in_flight_count() const;
+    /// Upper bound on concurrent chunk-parse workers. Default 2.
+    void set_max_stream_loads_in_flight(size_t cap) { m_max_stream_in_flight = cap; }
 
     // --- Animation (Phase 9) ------------------------------------------------
     //
@@ -385,6 +391,23 @@ private:
                               std::string& out_error);
     void streaming_unload_chunk(const scene::ChunkCoord& coord,
                                 const std::vector<ecs::Entity>& created);
+    // One chunk staged on a worker: read + parsed, waiting for a main-thread
+    // commit. Owned jointly by the map entry and the worker lambda, so an
+    // in-flight job can never dangle even if streaming is disabled or the
+    // Runtime is destroyed first (the worker touches only this block and the
+    // physical path it was given — never the VFS, the live world, or `this`).
+    struct StreamLoadJob {
+        std::mutex mutex;
+        bool finished = false;
+        bool ok = false;
+        std::string error;
+        std::shared_ptr<scene::Scene> scene;
+    };
+    std::unordered_map<scene::ChunkCoord, std::shared_ptr<StreamLoadJob>> m_stream_jobs;
+    size_t m_max_stream_in_flight = 2;
+    // True when the coordinator still wants the chunk (a job that finished
+    // after its chunk left the wanted set is discarded, never committed).
+    bool stream_coord_still_wanted(const scene::ChunkCoord& coord) const;
 
     // Gameplay modules (Phase 10). Sorted by (priority, name) at init so the
     // per-frame loop is a straight walk.
