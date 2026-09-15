@@ -497,16 +497,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::TextUnformatted("|");
             ImGui::SameLine();
             if (ImGui::Button("About")) {
-                ImGui::OpenPopup("AboutNOVAForge");
+                ImGui::OpenPopup("AboutSANAD");
             }
-            if (ImGui::BeginPopupModal("AboutNOVAForge", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextColored(ImVec4(1.0f, 0.62f, 0.15f, 1.0f), "NOVAForge Engine");
-                ImGui::Text("Modern C++23 & Vulkan Game Engine");
-                ImGui::Text("An extensible open-source engine led by Arab developers.");
+            if (ImGui::BeginPopupModal("AboutSANAD", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextColored(ImVec4(1.0f, 0.62f, 0.15f, 1.0f), "SANAD Engine (محرك سند)");
+                ImGui::Text("Founder & Project Lead: Abdallah (عبدالله)");
+                ImGui::Text("The Modern Extensible Arabic C++23 & Vulkan Game Engine");
                 ImGui::Separator();
                 ImGui::Text("Phase: 11 / 13 (Foundation + PBR + ECS + Physics + Audio + Animation)");
                 ImGui::Text("Validation: 0 errors | 534 automated tests passing");
-                ImGui::Text("Open Source Community: We welcome all contributors to build together!");
+                ImGui::Text("Open Source Community: We welcome all contributors to build SANAD together!");
                 ImGui::Separator();
                 if (ImGui::Button("Close", ImVec2(120, 0))) {
                     ImGui::CloseCurrentPopup();

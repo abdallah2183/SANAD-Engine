@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NOVAForge Engine | أول محرك ألعاب عربي متطور وحديث بتقنيات C++23 و Vulkan</title>
-    <meta name="description" content="NOVAForge Engine — محرك ألعاب عربي حديث ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan ومعمارية ECS الموجهة للبيانات. مشروع قابل للتطوير يرحب بكل المطورين العرب.">
+    <title>محرك سند (SANAD Engine) | أول محرك ألعاب عربي متطور وحديث بتقنيات C++23 و Vulkan</title>
+    <meta name="description" content="محرك سند (SANAD Engine) — محرك ألعاب عربي حديث ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan ومعمارية ECS الموجهة للبيانات. المؤسس والقائم على العمل: عبدالله.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -91,7 +91,7 @@
         }
 
         .brand-title {
-            font-size: 1.25rem;
+            font-size: 1.3rem;
             font-weight: 800;
             letter-spacing: 0.5px;
             background: linear-gradient(135deg, #fff 40%, var(--primary-orange) 100%);
@@ -206,11 +206,23 @@
             border-radius: 20px;
             font-size: 0.88rem;
             font-weight: 700;
+            margin-bottom: 1.2rem;
+        }
+
+        .author-badge {
+            display: inline-block;
+            background: rgba(0, 229, 255, 0.08);
+            border: 1px solid rgba(0, 229, 255, 0.25);
+            color: #b0f4ff;
+            padding: 4px 14px;
+            border-radius: 16px;
+            font-size: 0.9rem;
+            font-weight: 600;
             margin-bottom: 1.5rem;
         }
 
         .hero h1 {
-            font-size: 3.2rem;
+            font-size: 3.4rem;
             font-weight: 900;
             line-height: 1.25;
             margin-bottom: 1.2rem;
@@ -579,6 +591,7 @@
         footer a {
             color: var(--primary-orange);
             text-decoration: none;
+            font-weight: 700;
         }
 
         @media (max-width: 768px) {
@@ -593,8 +606,8 @@
     <!-- Navigation -->
     <nav>
         <a href="#" class="nav-brand">
-            <img src="assets/logo.jpg" alt="NOVAForge Logo">
-            <span class="brand-title">NOVAForge Engine</span>
+            <img src="assets/logo.jpg" alt="SANAD Engine Logo">
+            <span class="brand-title">محرك سند | SANAD</span>
         </a>
 
         <ul class="nav-links">
@@ -607,7 +620,7 @@
 
         <div class="nav-actions">
             <button class="lang-btn" id="langToggle">English</button>
-            <a href="https://github.com/abdallah2183" target="_blank" class="github-btn" id="githubLink">
+            <a href="https://github.com/abdallah2183/NOVAForge-Engine" target="_blank" class="github-btn" id="githubLink">
                 <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24">
                     <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
                 </svg>
@@ -619,13 +632,16 @@
     <!-- Hero Section -->
     <header class="hero container">
         <div class="logo-wrapper">
-            <img src="assets/logo.jpg" alt="NOVAForge Logo">
+            <img src="assets/logo.jpg" alt="SANAD Engine Logo">
         </div>
         <div>
-            <span class="hero-badge" data-i18n="hero_badge">⚡ محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
+            <span class="hero-badge" data-i18n="hero_badge">⚡ محرك سند — أول محرك ألعاب عربي متطور وقابل للتطوير</span>
+        </div>
+        <div>
+            <span class="author-badge" data-i18n="author_badge">👑 المؤسس والقائم على العمل: عبدالله (Abdallah)</span>
         </div>
         <h1>
-            <span class="hero-gradient-text" data-i18n="hero_title">NOVAForge Engine</span>
+            <span class="hero-gradient-text" data-i18n="hero_title">محرك سَنَد | SANAD Engine</span>
         </h1>
         <p class="hero-desc" data-i18n="hero_subtitle">
             محرك ألعاب ثلاثي الأبعاد فائق الأداء، مبني من الصفر بأحدث تقنيات C++23 ومكتبة الرسوميات الحديثة Vulkan RHI بمعمارية موجهة للبيانات (ECS) وخوارزميات محاكاة فيزيائية وصوتية متقدمة.
@@ -652,7 +668,7 @@
                     <span class="dot yellow"></span>
                     <span class="dot green"></span>
                 </div>
-                <div style="font-family: var(--font-code);">NOVAForge Native Viewport (Vulkan 1.2+ Simulation)</div>
+                <div style="font-family: var(--font-code);">SANAD Native Viewport (Vulkan 1.2+ Simulation)</div>
                 <div style="color: var(--primary-orange); font-weight: 700;">60.0 FPS | 16.6 ms</div>
             </div>
             <canvas id="interactiveCanvas"></canvas>
@@ -733,9 +749,9 @@
     <!-- Inspiring Callout Section -->
     <section class="container" id="community">
         <div class="callout-box">
-            <h2 data-i18n="callout_title">نداء لكل مطور ومبدع عربي — لنبني المستقبل معاً!</h2>
+            <h2 data-i18n="callout_title">نداء لكل مطور ومبدع عربي — لنبني "سند" معاً!</h2>
             <p data-i18n="callout_desc">
-                NOVAForge Engine ليس مجرد كود برمجي؛ إنه بذرة محرك ألعاب عربي منافس مصمم بأحدث المعايير البرمجية. المحرك مصمم منذ يومه الأول ليكون قابلاً للتطوير والتوسع، ونحن نرحب بكل من يرغب في وضع بصمته: مبرمجي رسوميات، خبراء صوت، مبرمجي فيزياء، مطوري واجهات، ومصممي ألعاب. يداً بيد نصنع محركنا العربي الخاص!
+                محرك سند هو مشروع عربي طموح أسسه ويقوده <strong>عبدالله</strong> ليكون سنداً حقيقياً لكل صانع ألعاب في عالمنا العربي. المحرك مصمم منذ يومه الأول ليكون قابلاً للتطوير والتوسع، ونحن نرحب بكل من يرغب في وضع بصمته: مبرمجي رسوميات، خبراء صوت، مبرمجي فيزياء، مطوري واجهات، ومصممي ألعاب. يداً بيد نصنع محركنا العربي الخاص!
             </p>
 
             <div class="wanted-tags">
@@ -748,7 +764,7 @@
             </div>
 
             <div class="hero-cta-group">
-                <a href="https://github.com/abdallah2183" target="_blank" class="github-btn" style="padding: 12px 28px; font-size: 1.1rem;" data-i18n="callout_btn_pr">
+                <a href="https://github.com/abdallah2183/NOVAForge-Engine" target="_blank" class="github-btn" style="padding: 12px 28px; font-size: 1.1rem;" data-i18n="callout_btn_pr">
                     🌟 انضم إلى المستودع وأرسل مساهمتك (Pull Request)
                 </a>
                 <a href="#quickstart" class="btn-secondary" data-i18n="callout_btn_guide">
@@ -828,7 +844,7 @@
             <div class="code-comment"># 2. بناء المحرك والأدوات (Build with batch script or CMake)</div>
             <div><span class="code-cmd">build_nf.bat</span></div>
             <br>
-            <div class="code-comment"># 3. تشغيل محرر نوفا فورج التفاعلي (Run NOVAForge Editor)</div>
+            <div class="code-comment"># 3. تشغيل محرر سند التفاعلي (Run SANAD Editor)</div>
             <div><span class="code-cmd">.\build\DebugNinja\bin\NOVAForgeEditor.exe</span></div>
             <br>
             <div class="code-comment"># 4. تشغيل المشغل المستقل للألعاب (Run standalone player)</div>
@@ -839,11 +855,14 @@
     <!-- Footer -->
     <footer>
         <div class="container">
-            <p style="margin-bottom: 0.8rem; font-weight: 700; color: #fff;">
-                NOVAForge Engine — محرك نوفا فورج مفتوح المصدر
+            <p style="margin-bottom: 0.6rem; font-weight: 800; font-size: 1.15rem; color: #fff;">
+                محرك سَنَد | SANAD Engine
             </p>
-            <p>
-                مشروع مرخص ومفتوح المصدر بقيادة المطور <a href="https://github.com/abdallah2183" target="_blank">abdallah2183</a> وكافة المطورين العرب المساهمين.
+            <p style="margin-bottom: 0.8rem; font-size: 1rem; color: var(--primary-orange);">
+                المؤسس والقائم على العمل: <a href="https://github.com/abdallah2183" target="_blank" style="text-decoration: underline;">عبدالله (Abdallah)</a>
+            </p>
+            <p style="color: var(--text-muted);">
+                مشروع مرخص ومفتوح المصدر لخدمة صناع ومطوري الألعاب في الوطن العربي والعالم.
             </p>
             <p style="margin-top: 1rem; font-size: 0.82rem; color: #6b7280;">
                 Designed with ❤️ for the Arab Game Development Community.
@@ -853,7 +872,6 @@
 
     <!-- Interactive 3D Canvas Script & Localization -->
     <script>
-        // 3D Canvas Mesh Simulation (Interactive Wireframe PBR Orb / Engine Entity)
         const canvas = document.getElementById('interactiveCanvas');
         const ctx = canvas.getContext('2d');
 
@@ -907,12 +925,11 @@
             lastMouseY = e.touches[0].clientY;
         });
 
-        // Generate a 3D Geosphere / Icosahedron-like mesh
+        // 3D Geometry
         const vertices = [];
         const edges = [];
         const size = 110;
 
-        // Cube + diamond faceted shape representing the NOVAForge engine core
         const rawPoints = [
             [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
             [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
@@ -930,7 +947,6 @@
             [12,0],[12,1],[12,2],[12,3],[13,4],[13,5],[13,6],[13,7]
         ];
 
-        // Background Star Particles
         const stars = Array.from({ length: 70 }, () => ({
             x: (Math.random() - 0.5) * 800,
             y: (Math.random() - 0.5) * 400,
@@ -959,7 +975,6 @@
                 rotX += 0.002;
             }
 
-            // Draw Background Stars
             ctx.fillStyle = "rgba(0, 229, 255, 0.4)";
             for (const s of stars) {
                 const sp = project(s.x, s.y, s.z, cx, cy);
@@ -968,17 +983,14 @@
                 ctx.fill();
             }
 
-            // Rotate Vertices
             const sinY = Math.sin(rotY);
             const cosY = Math.cos(rotY);
             const sinX = Math.sin(rotX);
             const cosX = Math.cos(rotX);
 
             const transformed = vertices.map(v => {
-                // Rotate around Y
                 let x1 = v.x * cosY - v.z * sinY;
                 let z1 = v.z * cosY + v.x * sinY;
-                // Rotate around X
                 let y2 = v.y * cosX - z1 * sinX;
                 let z2 = z1 * cosX + v.y * sinX;
 
@@ -988,22 +1000,18 @@
                 };
             });
 
-            // Draw Wireframe Edges
             ctx.lineWidth = 1.4;
             for (const [i1, i2] of rawEdges) {
                 const v1 = transformed[i1];
                 const v2 = transformed[i2];
-
                 const depthAlpha = Math.max(0.15, Math.min(1.0, (v1.origZ + v2.origZ + 200) / 400));
                 ctx.strokeStyle = `rgba(255, 145, 0, ${depthAlpha * 0.85})`;
-
                 ctx.beginPath();
                 ctx.moveTo(v1.p.x, v1.p.y);
                 ctx.lineTo(v2.p.x, v2.p.y);
                 ctx.stroke();
             }
 
-            // Draw Vertex Nodes
             for (const v of transformed) {
                 const r = 3.5 * v.p.scale;
                 ctx.fillStyle = "#ff9100";
@@ -1028,8 +1036,9 @@
                 nav_community: "المساهمة",
                 nav_quickstart: "البدء السريع",
                 btn_github: "مستودع جيت هب",
-                hero_badge: "⚡ محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
-                hero_title: "NOVAForge Engine",
+                hero_badge: "⚡ محرك سند — أول محرك ألعاب عربي متطور وقابل للتطوير",
+                author_badge: "👑 المؤسس والقائم على العمل: عبدالله (Abdallah)",
+                hero_title: "محرك سَنَد | SANAD Engine",
                 hero_subtitle: "محرك ألعاب ثلاثي الأبعاد فائق الأداء، مبني من الصفر بأحدث تقنيات C++23 ومكتبة الرسوميات الحديثة Vulkan RHI بمعمارية موجهة للبيانات (ECS) وخوارزميات محاكاة فيزيائية وصوتية متقدمة.",
                 hero_cta_join: "🚀 شارك في التطوير معنا",
                 hero_cta_build: "🛠️ كيفية البناء والتشغيل",
@@ -1053,8 +1062,8 @@
                 feat_audio_desc: "توزيع ومزج صوتي ثلاثي الأبعاد مع توهين للمسافات (Attenuation) ومحرك WASAPI مع عزل كامل في نمط Headless للاختبارات المؤتمتة.",
                 feat_editor_title: "محرر متكامل Native ImGui Editor",
                 feat_editor_desc: "محرر أصلي متكامل بنظام النوافذ القابلة للدمج (Docking)، متصفح أصول (Asset Browser)، تراجع وإعادة (Undo/Redo)، ونافذة معاينة تفاعلية وتحكم بالكاميرا.",
-                callout_title: "نداء لكل مطور ومبدع عربي — لنبني المستقبل معاً!",
-                callout_desc: "NOVAForge Engine ليس مجرد كود برمجي؛ إنه بذرة محرك ألعاب عربي منافس مصمم بأحدث المعايير البرمجية. المحرك مصمم منذ يومه الأول ليكون قابلاً للتطوير والتوسع، ونحن نرحب بكل من يرغب في وضع بصمته: مبرمجي رسوميات، خبراء صوت، مبرمجي فيزياء، مطوري واجهات، ومصممي ألعاب. يداً بيد نصنع محركنا العربي الخاص!",
+                callout_title: "نداء لكل مطور ومبدع عربي — لنبني \"سند\" معاً!",
+                callout_desc: "محرك سند هو مشروع عربي طموح أسسه ويقوده عبدالله ليكون سنداً حقيقياً لكل صانع ألعاب في عالمنا العربي. المحرك مصمم منذ يومه الأول ليكون قابلاً للتطوير والتوسع، ونحن نرحب بكل من يرغب في وضع بصمته: مبرمجي رسوميات، خبراء صوت، مبرمجي فيزياء، مطوري واجهات، ومصممي ألعاب. يداً بيد نصنع محركنا العربي الخاص!",
                 callout_btn_pr: "🌟 انضم إلى المستودع وأرسل مساهمتك (Pull Request)",
                 callout_btn_guide: "📖 اقرأ دليل المساهمة (CONTRIBUTING.md)",
                 roadmap_title: "خارطة طريق التطوير (Roadmap)",
@@ -1069,8 +1078,9 @@
                 nav_community: "Contribute",
                 nav_quickstart: "Quickstart",
                 btn_github: "GitHub Repo",
-                hero_badge: "⚡ Extensible Open-Source Arabic Game Engine",
-                hero_title: "NOVAForge Engine",
+                hero_badge: "⚡ SANAD — Extensible Arabic 3D Game Engine",
+                author_badge: "👑 Founder & Project Lead: Abdallah",
+                hero_title: "SANAD Engine | محرك سند",
                 hero_subtitle: "High-performance 3D game engine engineered from scratch with modern C++23, low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, skeletal animation, and 3D spatial audio.",
                 hero_cta_join: "🚀 Join & Contribute With Us",
                 hero_cta_build: "🛠️ Build & Run Guide",
@@ -1094,14 +1104,14 @@
                 feat_audio_desc: "Positional 3D audio, distance attenuation models, bus mixer, WASAPI shared-mode backend, and deterministic tone synthesizers.",
                 feat_editor_title: "Native ImGui Docking Editor",
                 feat_editor_desc: "Integrated editor shell with full docking layout, outliner, reflected inspector, asset browser, undo/redo, and interactive viewport gizmos.",
-                callout_title: "Calling Developers & Creators — Build With Us!",
-                callout_desc: "NOVAForge Engine is built from the ground up to be fully extensible and community-driven. Whether you are a Vulkan graphics programmer, audio engineer, physics enthusiast, tools developer, or technical writer, we invite you to build the first world-class Arab game engine together.",
+                callout_title: "Calling Developers & Creators — Build SANAD With Us!",
+                callout_desc: "SANAD Engine was founded and is led by Abdallah to be the bedrock for game development across the Arab world and internationally. Whether you are a Vulkan graphics programmer, audio engineer, physics enthusiast, tools developer, or technical writer, we invite you to build together.",
                 callout_btn_pr: "🌟 Join the Repo & Submit a PR",
                 callout_btn_guide: "📖 Read the Contributing Guide (CONTRIBUTING.md)",
                 roadmap_title: "Development Roadmap",
                 roadmap_desc: "Clear milestones where you can easily pick up a subsystem and make an immediate impact.",
                 quick_title: "Quick Start: Build & Run",
-                quick_desc: "Build NOVAForge immediately on Windows using CMake and Visual Studio 2022 / Ninja"
+                quick_desc: "Build SANAD immediately on Windows using CMake and Visual Studio 2022 / Ninja"
             }
         };
 

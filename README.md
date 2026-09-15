@@ -1,12 +1,16 @@
 <p align="center">
-  <img src="Docs/images/novaforge_logo.jpg" alt="NOVAForge Engine Logo" width="220" style="border-radius: 24px; box-shadow: 0 12px 40px rgba(255, 145, 0, 0.35);" />
+  <img src="Docs/images/novaforge_logo.jpg" alt="شعار محرك سند | Sanad Engine" width="220" style="border-radius: 24px; box-shadow: 0 12px 40px rgba(255, 145, 0, 0.35);" />
 </p>
 
-<h1 align="center">NOVAForge Engine | محرك نوفا فورج</h1>
+<h1 align="center">محرك سند | SANAD Engine</h1>
 
 <p align="center">
   <strong>أول محرك ألعاب عربي ثلاثي الأبعاد متطور وحديث مفتوح المصدر وقابل للتطوير</strong><br>
-  <em>The Modern, Extensible Open-Source C++23 & Vulkan 3D Game Engine</em>
+  <em>The Modern, Extensible Arabic C++23 & Vulkan 3D Game Engine</em>
+</p>
+
+<p align="center">
+  <strong>المؤسس والقائم على العمل:</strong> <a href="https://github.com/abdallah2183"><strong>عبدالله (Abdallah)</strong></a>
 </p>
 
 <p align="center">
@@ -22,21 +26,21 @@
 ---
 
 ## 🌐 الواجهة التفاعلية والموقع التعريفي (Web Showcase)
-يمكنك استعراض واجهة المحرك التفاعلية ثلاثية الأبعاد عبر فتح ملف [`index.html`](index.html) أو عبر [موقع المحرك](https://abdallah2183.github.io/NOVAForge-Engine/)، حيث يحتوي على مجسم تفاعلي وإحصائيات حية وخيارات تبديل اللغة (العربية / English).
+يمكنك استعراض واجهة المحرك التفاعلية ثلاثية الأبعاد عبر فتح ملف [`index.html`](index.html) أو عبر [موقع المحرك على GitHub Pages](https://abdallah2183.github.io/NOVAForge-Engine/)، حيث يحتوي على مجسم تفاعلي وإحصائيات حية وخيارات تبديل اللغة (العربية / English).
 
 ---
 
 <div dir="rtl">
 
-## 🌟 نبذة عن المشروع ورؤيتنا (Arabic Overview)
+## 🌟 نبذة عن محرك سند ورؤيتنا (Arabic Overview)
 
-**NOVAForge Engine** هو مشروع محرك ألعاب ثلاثي الأبعاد متطور تم بناؤه من الصفر بأحدث معايير البرمجة العالمية (**C++23**) ومكتبة الرسوميات الحديثة (**Vulkan 1.2+**) وبمعمارية موجهة للبيانات بالكامل (**Data-Oriented ECS**).
+**محرك سند (SANAD Engine)** هو مشروع محرك ألعاب ثلاثي الأبعاد متطور وشامل، تم تأسيسه وتطويره بقيادة **عبدالله** ليكون الركيزة الأساسية لصناعة الألعاب في الوطن العربي. بُني المحرك من الصفر بأحدث معايير البرمجة العالمية (**C++23**) ومكتبة الرسوميات الحديثة (**Vulkan 1.2+**) وبمعمارية موجهة للبيانات بالكامل (**Data-Oriented ECS**).
 
-### 🚀 نداء لكل المطورين والمبدعين العرب: لنبني معاً أول محرك ألعاب عربي عالمي!
+### 🚀 نداء لكل المطورين والمبدعين العرب: لنبني معاً "سند" — محركنا العربي المستقل!
 > **"يدٌ واحدة لا تصفق، ولكن عقولنا مجتمعة تصنع المعجزات."**  
 > لطالما حلمنا بوجود محرك ألعاب عربي أصيل ومفتوح المصدر، يمتلك بنية تحتية هندسية احترافية تضاهي المحركات العالمية وتفتح الباب أمام مطورينا لصناعة ألعابهم وتقنياتهم بحرية واستقلالية كاملة.  
-> **NOVAForge صُمم منذ اللحظة الأولى ليكون قابلاً للتطوير والتوسع (Extensible & Modular)، وهو مفتوح بالكامل أمام المجتمع.**  
-> سواء كنت مبرمج C++، خبير رسوميات Vulkan / Direct3D، مهندس صوت، فيزيائي محاكاة، مطور واجهات، أو كاتب توثيق وأدلة، **مكانك محجوز في هذا المشروع!**
+> **محرك سند صُمم ليكون سنداً لكل مطور ألعاب عربي، وقابلاً للتطوير والتوسع (Extensible & Modular)، وهو مفتوح بالكامل أمام المجتمع.**  
+> سواء كنت مبرمج C++، خبير رسوميات Vulkan / Direct3D، مهندس صوت، فيزيائي محاكاة، مطور واجهات، أو كاتب توثيق وأدلة، **مكانك محجوز معنا في هذا المشروع!**
 
 ### 🎯 المجالات المطلوبة للمساهمة:
 - [ ] **الرسوميات والظلال (Vulkan & Shaders):** خرائط الظلال Cascaded Shadow Maps والسماء الإجرائية وSSA/Bloom.
@@ -55,12 +59,12 @@
 
 ## ⚡ High-Performance Architecture Overview
 
-NOVAForge is designed with strict layering, multi-threaded work-stealing job scheduling, and zero runtime bloat.
+SANAD Engine is designed with strict layering, multi-threaded work-stealing job scheduling, and zero runtime bloat.
 
 ```
-NOVAForge Engine Architecture
+SANAD Engine Architecture
 ┌─────────────────────────────────────────────────────────────────┐
-│              NOVAForge Editor (ImGui + Win32)                   │
+│               SANAD Editor (ImGui + Win32 Docking)              │
 ├───────────────────────────────┬─────────────────────────────────┤
 │    Gameplay Module Registry   │      NFPlayer Standalone        │
 ├───────────────────────────────┴─────────────────────────────────┤
@@ -82,7 +86,7 @@ NOVAForge Engine Architecture
 
 ## 🏆 Current Status (Phase 11 — Verified Foundation)
 
-NOVAForge has achieved **Phase 11 verification**:
+SANAD Engine has achieved **Phase 11 verification**:
 - **534 Automated Unit, Integration, & Rendering Tests Passed** (0 failed, 1 skipped).
 - **0 Vulkan Validation Layer Errors** and **0 leaked RHI resources**.
 - Clean build under `/W4 /WX` on MSVC.
@@ -190,5 +194,6 @@ This project is licensed under the Apache License, Version 2.0. See the [LICENSE
 
 <p align="center">
   صُنع بشغف لرفعة وتطوير مجتمع صناعة الألعاب العربي 🚀<br>
-  <strong>Lead Developer:</strong> <a href="https://github.com/abdallah2183">Abdallah (abdallah2183)</a> & Community Contributors
+  <strong>مؤسس المحرك والقائم على العمل:</strong> <a href="https://github.com/abdallah2183"><strong>عبدالله (Abdallah)</strong></a><br>
+  <em>Founder & Lead Developer: Abdallah (<a href="https://github.com/abdallah2183">@abdallah2183</a>) & Community Contributors</em>
 </p>

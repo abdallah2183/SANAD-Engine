@@ -1,4 +1,4 @@
-# المساهمة في محرك نوفا فورج | Contributing to NOVAForge Engine
+# المساهمة في محرك سَنَد | Contributing to SANAD Engine
 
 [العربية](#-دليل-المساهمة-باللغة-العربية) | [English](#-english-contributing-guide)
 
@@ -6,10 +6,10 @@
 
 ## 🇸🇦 دليل المساهمة باللغة العربية
 
-أهلاً بك في مجتمع **NOVAForge Engine**! يسعدنا جداً اهتمامك بالمساهمة في بناء وتطوير أول محرك ألعاب عربي حديث ومفتوح المصدر.
+أهلاً بك في مجتمع **محرك سَنَد (SANAD Engine)** بقيادة وتأسيس المطور **عبدالله**! يسعدنا جداً اهتمامك بالمساهمة في بناء وتطوير هذا الصرح التقني ليكون سنداً حقيقياً لمطوري الألعاب في الوطن العربي.
 
-### 🌟 فلسفة المشروع
-- **مشروع للجميع:** هذا المشروع ليس ملكاً لشخص واحد؛ إنه مشروع عربي مشترك نهدف من خلاله إلى إرساء قواعد قوية لصناعة محركات الألعاب في وطننا العربي.
+### 🌟 فلسفة محرك سند
+- **سند لكل مطور عربي:** المحرك مبني ليكون مشروعاً تعاونياً جامعاً لكل الكفاءات البرمجية العربية، لنمكّن المطورين من بناء ألعابهم بحرية واستقلالية كاملة.
 - **الجودة والصرامة البرمجية:** كل سطر كود يضاف يمر عبر فحوصات واختبارات مؤتمتة وتدقيق لطبقات المعمارية (Layering Architecture).
 - **صفر أخطاء وفاليديشن:** نحرص على ألا يحتوي الكود على أي أخطاء من طبقات فحص Vulkan Validation Layers أو أي تسريب للذاكرة.
 
@@ -86,7 +86,7 @@
 
 ## 🌐 English Contributing Guide
 
-Welcome to the **NOVAForge Engine** community! We are thrilled to welcome developers, graphics engineers, audio designers, tools programmers, and documentation writers from around the globe to build this next-generation engine together.
+Welcome to the **SANAD Engine** community, founded and led by **Abdallah**! We are thrilled to welcome developers, graphics engineers, audio designers, tools programmers, and documentation writers from around the globe to build this next-generation engine together.
 
 ### 📐 Architectural Principles
 - **Strict Layer Invariants:** Subsystems are decoupled behind abstract interfaces. `Assets` never links `Rendering`; `Rendering` never links `ECS`/`Scene`.
@@ -99,4 +99,6 @@ Welcome to the **NOVAForge Engine** community! We are thrilled to welcome develo
 3. Verify your build passes all tests using `build_nf.bat` or the CMake toolchain.
 4. Submit a **Pull Request** detailing your changes.
 
-Thank you for contributing to the future of NOVAForge! 🌟
+Thank you for contributing to the future of SANAD Engine! 🌟
+<br>
+*Founder & Project Lead: Abdallah (@abdallah2183)*
