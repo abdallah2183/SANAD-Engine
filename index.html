@@ -1,36 +1,42 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>محرك سند (SANAD Engine) | أول محرك ألعاب عربي متطور وحديث بتقنيات C++23 و Vulkan</title>
-    <meta name="description" content="محرك سند (SANAD Engine) — محرك ألعاب عربي حديث ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan ومعمارية ECS الموجهة للبيانات. المؤسس والقائم على العمل: عبدالله.">
+    <title>محرك سَنَد | SANAD Engine</title>
+    <meta name="description" content="محرك سَنَد (SANAD Engine) — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-dark: #0c0e12;
-            --bg-card: #14171f;
-            --bg-card-hover: #1b202c;
-            --border-color: #242a38;
+            --bg-main: #0b0d13;
+            --bg-card: #131722;
+            --bg-card-hover: #1a2030;
+            --border-subtle: #202738;
             --primary-orange: #ff9100;
-            --primary-orange-glow: rgba(255, 145, 0, 0.35);
+            --primary-orange-soft: rgba(255, 145, 0, 0.12);
+            --primary-orange-glow: rgba(255, 145, 0, 0.28);
             --accent-cyan: #00e5ff;
-            --text-main: #f0f3f8;
-            --text-muted: #9ba3b4;
-            --font-ar: 'Cairo', system-ui, sans-serif;
-            --font-en: 'Plus Jakarta Sans', system-ui, sans-serif;
+            --text-primary: #f3f6fc;
+            --text-secondary: #9aa5be;
+            --font-ar: 'Cairo', system-ui, -apple-system, sans-serif;
+            --font-en: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
             --font-code: 'JetBrains Mono', monospace;
-            --transition: all 0.25s ease-in-out;
+            --radius-md: 10px;
+            --radius-lg: 16px;
+            --transition: all 0.2s ease-in-out;
         }
 
         [dir="ltr"] {
             font-family: var(--font-en);
+            letter-spacing: -0.01em;
         }
 
         [dir="rtl"] {
             font-family: var(--font-ar);
+            letter-spacing: 0;
+            line-height: 1.75;
         }
 
         * {
@@ -40,22 +46,21 @@
         }
 
         body {
-            background-color: var(--bg-dark);
-            color: var(--text-main);
+            background-color: var(--bg-main);
+            color: var(--text-primary);
             overflow-x: hidden;
-            line-height: 1.6;
         }
 
-        /* Ambient Glow Background */
+        /* Ambient subtle backdrop */
         .ambient-glow {
             position: fixed;
-            top: -200px;
+            top: -180px;
             left: 50%;
             transform: translateX(-50%);
-            width: 800px;
-            height: 500px;
-            background: radial-gradient(circle, var(--primary-orange-glow) 0%, transparent 70%);
-            filter: blur(90px);
+            width: 760px;
+            height: 480px;
+            background: radial-gradient(circle, var(--primary-orange-glow) 0%, transparent 65%);
+            filter: blur(80px);
             z-index: 0;
             pointer-events: none;
         }
@@ -66,9 +71,9 @@
             top: 0;
             z-index: 100;
             backdrop-filter: blur(16px);
-            background: rgba(12, 14, 18, 0.85);
-            border-bottom: 1px solid var(--border-color);
-            padding: 0.85rem 2rem;
+            background: rgba(11, 13, 19, 0.88);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 0.85rem 2.2rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -79,35 +84,32 @@
             align-items: center;
             gap: 12px;
             text-decoration: none;
-            color: var(--text-main);
+            color: var(--text-primary);
         }
 
         .nav-brand img {
-            width: 44px;
-            height: 44px;
+            width: 42px;
+            height: 42px;
             border-radius: 8px;
-            box-shadow: 0 0 15px var(--primary-orange-glow);
+            border: 1px solid rgba(255, 145, 0, 0.35);
             object-fit: cover;
         }
 
         .brand-title {
-            font-size: 1.3rem;
+            font-size: 1.25rem;
             font-weight: 800;
-            letter-spacing: 0.5px;
-            background: linear-gradient(135deg, #fff 40%, var(--primary-orange) 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: #ffffff;
         }
 
         .nav-links {
             display: flex;
             align-items: center;
-            gap: 1.8rem;
+            gap: 2rem;
             list-style: none;
         }
 
         .nav-links a {
-            color: var(--text-muted);
+            color: var(--text-secondary);
             text-decoration: none;
             font-weight: 600;
             font-size: 0.95rem;
@@ -125,12 +127,13 @@
         }
 
         .lang-btn {
-            background: #1c212d;
-            border: 1px solid var(--border-color);
-            color: var(--text-main);
-            padding: 6px 14px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            padding: 7px 16px;
             border-radius: 6px;
-            font-weight: 700;
+            font-weight: 600;
+            font-size: 0.9rem;
             cursor: pointer;
             transition: var(--transition);
             font-family: inherit;
@@ -145,24 +148,24 @@
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            background: linear-gradient(135deg, #ff9100, #ff6d00);
-            color: #000;
+            background: var(--primary-orange);
+            color: #0b0d13;
             font-weight: 700;
+            font-size: 0.92rem;
             padding: 8px 18px;
             border-radius: 6px;
             text-decoration: none;
             transition: var(--transition);
-            box-shadow: 0 4px 15px var(--primary-orange-glow);
         }
 
         .github-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(255, 145, 0, 0.5);
+            background: #ffa726;
+            transform: translateY(-1px);
         }
 
         /* Container */
         .container {
-            max-width: 1200px;
+            max-width: 1180px;
             margin: 0 auto;
             padding: 0 1.5rem;
             position: relative;
@@ -171,75 +174,67 @@
 
         /* Hero Section */
         .hero {
-            padding: 5rem 0 3.5rem;
+            padding: 4.5rem 0 3.2rem;
             text-align: center;
         }
 
         .logo-wrapper {
             position: relative;
             display: inline-block;
-            margin-bottom: 2rem;
+            margin-bottom: 1.8rem;
         }
 
         .logo-wrapper img {
-            width: 170px;
-            height: 170px;
-            border-radius: 24px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), 0 0 50px var(--primary-orange-glow);
-            border: 2px solid rgba(255, 145, 0, 0.4);
-            animation: float 4s ease-in-out infinite;
+            width: 155px;
+            height: 155px;
+            border-radius: 20px;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+            border: 1.5px solid rgba(255, 145, 0, 0.45);
         }
 
-        @keyframes float {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-8px); }
+        .hero-badge-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 1.4rem;
+            flex-wrap: wrap;
         }
 
         .hero-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(255, 145, 0, 0.1);
+            background: var(--primary-orange-soft);
             border: 1px solid rgba(255, 145, 0, 0.3);
             color: var(--primary-orange);
-            padding: 5px 16px;
+            padding: 4px 14px;
             border-radius: 20px;
-            font-size: 0.88rem;
+            font-size: 0.85rem;
             font-weight: 700;
-            margin-bottom: 1.2rem;
         }
 
         .author-badge {
-            display: inline-block;
             background: rgba(0, 229, 255, 0.08);
             border: 1px solid rgba(0, 229, 255, 0.25);
             color: #b0f4ff;
             padding: 4px 14px;
-            border-radius: 16px;
-            font-size: 0.9rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
             font-weight: 600;
-            margin-bottom: 1.5rem;
         }
 
         .hero h1 {
-            font-size: 3.4rem;
+            font-size: 3.1rem;
             font-weight: 900;
             line-height: 1.25;
             margin-bottom: 1.2rem;
-            letter-spacing: -0.5px;
-        }
-
-        .hero-gradient-text {
-            background: linear-gradient(135deg, #ffffff 20%, var(--primary-orange) 80%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: #ffffff;
         }
 
         .hero-desc {
-            font-size: 1.25rem;
-            color: var(--text-muted);
-            max-width: 820px;
-            margin: 0 auto 2.5rem;
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            max-width: 800px;
+            margin: 0 auto 2.4rem;
+            line-height: 1.8;
         }
 
         .hero-cta-group {
@@ -255,11 +250,11 @@
             align-items: center;
             gap: 8px;
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            color: var(--text-main);
-            font-weight: 700;
-            padding: 11px 24px;
-            border-radius: 8px;
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            font-weight: 600;
+            padding: 10px 22px;
+            border-radius: 6px;
             text-decoration: none;
             transition: var(--transition);
         }
@@ -270,26 +265,26 @@
             background: var(--bg-card-hover);
         }
 
-        /* 3D Interactive Viewport Banner */
+        /* 3D Viewport Simulation */
         .viewport-section {
             margin: 2rem 0 4rem;
-            background: radial-gradient(circle at center, #1b202e 0%, #10121a 100%);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
+            background: #10141d;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
             overflow: hidden;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            box-shadow: 0 16px 40px rgba(0,0,0,0.4);
             position: relative;
         }
 
         .viewport-header {
-            background: #141721;
-            padding: 10px 18px;
-            border-bottom: 1px solid var(--border-color);
+            background: #151a26;
+            padding: 11px 18px;
+            border-bottom: 1px solid var(--border-subtle);
             display: flex;
             align-items: center;
             justify-content: space-between;
             font-size: 0.85rem;
-            color: var(--text-muted);
+            color: var(--text-secondary);
         }
 
         .window-dots {
@@ -322,10 +317,10 @@
             position: absolute;
             bottom: 15px;
             left: 20px;
-            background: rgba(10, 12, 16, 0.75);
+            background: rgba(11, 13, 19, 0.8);
             backdrop-filter: blur(8px);
-            padding: 8px 14px;
-            border-radius: 8px;
+            padding: 7px 14px;
+            border-radius: 6px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             font-family: var(--font-code);
             font-size: 0.78rem;
@@ -333,147 +328,129 @@
             pointer-events: none;
         }
 
-        /* Stats Bar */
+        /* Stats Grid */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 1.2rem;
-            margin-bottom: 4rem;
+            margin-bottom: 4.5rem;
         }
 
         .stat-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            padding: 1.5rem;
-            border-radius: 12px;
+            border: 1px solid var(--border-subtle);
+            padding: 1.6rem;
+            border-radius: var(--radius-md);
             text-align: center;
             transition: var(--transition);
         }
 
         .stat-card:hover {
-            border-color: var(--primary-orange);
-            transform: translateY(-4px);
+            border-color: rgba(255, 145, 0, 0.4);
+            transform: translateY(-2px);
         }
 
         .stat-num {
-            font-size: 2.2rem;
-            font-weight: 900;
+            font-size: 2.1rem;
+            font-weight: 800;
             color: var(--primary-orange);
             font-family: var(--font-code);
+            margin-bottom: 4px;
         }
 
         .stat-label {
-            color: var(--text-muted);
+            color: var(--text-secondary);
             font-size: 0.92rem;
-            margin-top: 4px;
         }
 
         /* Features Section */
-        .section-title {
+        .section-header {
             text-align: center;
             margin-bottom: 3rem;
         }
 
-        .section-title h2 {
-            font-size: 2.3rem;
+        .section-header h2 {
+            font-size: 2.2rem;
             font-weight: 800;
             margin-bottom: 0.8rem;
+            color: #ffffff;
         }
 
-        .section-title p {
-            color: var(--text-muted);
-            max-width: 650px;
+        .section-header p {
+            color: var(--text-secondary);
+            max-width: 680px;
             margin: 0 auto;
+            font-size: 1.05rem;
         }
 
         .features-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 1.8rem;
+            gap: 1.6rem;
             margin-bottom: 5rem;
         }
 
         .feature-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--border-subtle);
             padding: 2rem;
-            border-radius: 14px;
-            transition: var(--transition);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .feature-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 3px;
-            background: linear-gradient(90deg, transparent, var(--primary-orange), transparent);
-            opacity: 0;
+            border-radius: var(--radius-lg);
             transition: var(--transition);
         }
 
         .feature-card:hover {
-            border-color: rgba(255, 145, 0, 0.4);
-            transform: translateY(-5px);
+            border-color: rgba(255, 145, 0, 0.35);
             background: var(--bg-card-hover);
+            transform: translateY(-3px);
         }
 
-        .feature-card:hover::before {
-            opacity: 1;
-        }
-
-        .feature-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 10px;
-            background: rgba(255, 145, 0, 0.12);
+        .feature-tag {
+            display: inline-block;
             color: var(--primary-orange);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.4rem;
-            margin-bottom: 1.2rem;
+            font-family: var(--font-code);
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.8rem;
         }
 
         .feature-card h3 {
             font-size: 1.25rem;
             font-weight: 700;
-            margin-bottom: 0.7rem;
+            margin-bottom: 0.8rem;
+            color: #ffffff;
         }
 
         .feature-card p {
-            color: var(--text-muted);
+            color: var(--text-secondary);
             font-size: 0.95rem;
-            line-height: 1.6;
+            line-height: 1.7;
         }
 
-        /* Community Call to Action Section */
+        /* Community Callout Box */
         .callout-box {
-            background: linear-gradient(135deg, rgba(255, 145, 0, 0.08) 0%, rgba(20, 23, 31, 0.95) 100%);
-            border: 2px solid rgba(255, 145, 0, 0.35);
-            border-radius: 20px;
+            background: #121622;
+            border: 1px solid rgba(255, 145, 0, 0.3);
+            border-radius: var(--radius-lg);
             padding: 3.5rem 2.5rem;
             text-align: center;
             margin-bottom: 5rem;
-            box-shadow: 0 20px 45px rgba(0,0,0,0.4);
-            position: relative;
         }
 
         .callout-box h2 {
-            font-size: 2.4rem;
-            font-weight: 900;
-            margin-bottom: 1rem;
-            color: #fff;
+            font-size: 2.2rem;
+            font-weight: 800;
+            margin-bottom: 1.2rem;
+            color: #ffffff;
         }
 
         .callout-box p {
             font-size: 1.15rem;
-            color: #c7d0e0;
-            max-width: 800px;
+            color: #cad2e2;
+            max-width: 820px;
             margin: 0 auto 2.2rem;
+            line-height: 1.8;
         }
 
         .wanted-tags {
@@ -485,21 +462,16 @@
         }
 
         .wanted-tag {
-            background: #181d28;
-            border: 1px solid var(--border-color);
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-size: 0.85rem;
+            background: #171c2a;
+            border: 1px solid var(--border-subtle);
+            padding: 6px 16px;
+            border-radius: 6px;
+            font-size: 0.88rem;
             font-weight: 600;
-            color: var(--text-main);
+            color: var(--text-primary);
         }
 
-        .wanted-tag span {
-            color: var(--primary-orange);
-            margin-left: 5px;
-        }
-
-        /* Roadmap Section */
+        /* Roadmap Grid */
         .roadmap-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -509,69 +481,61 @@
 
         .roadmap-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
-            position: relative;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 1.6rem;
         }
 
         .roadmap-card.active {
             border-color: var(--primary-orange);
-            box-shadow: 0 0 15px rgba(255, 145, 0, 0.15);
-        }
-
-        .roadmap-card.done {
-            border-color: #27c93f;
         }
 
         .roadmap-status {
             display: inline-block;
-            font-size: 0.75rem;
+            font-size: 0.76rem;
             font-weight: 700;
             text-transform: uppercase;
             padding: 3px 8px;
             border-radius: 4px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
         .roadmap-status.done { background: rgba(39, 201, 63, 0.15); color: #27c93f; }
-        .roadmap-status.active { background: rgba(255, 145, 0, 0.15); color: var(--primary-orange); }
-        .roadmap-status.planned { background: rgba(155, 163, 180, 0.15); color: var(--text-muted); }
+        .roadmap-status.active { background: var(--primary-orange-soft); color: var(--primary-orange); }
+        .roadmap-status.planned { background: rgba(154, 165, 190, 0.12); color: var(--text-secondary); }
 
         .roadmap-card h4 {
-            font-size: 1.1rem;
-            margin-bottom: 8px;
+            font-size: 1.15rem;
+            margin-bottom: 10px;
+            color: #ffffff;
         }
 
         .roadmap-card ul {
             list-style: none;
-            color: var(--text-muted);
-            font-size: 0.88rem;
-            line-height: 1.6;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.7;
         }
 
         .roadmap-card ul li::before {
-            content: "•";
+            content: "— ";
             color: var(--primary-orange);
-            display: inline-block;
-            width: 1em;
         }
 
-        /* Code Terminal */
+        /* Terminal Box */
         .code-box {
-            background: #090b0e;
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
+            background: #090b10;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 1.6rem;
             margin: 2rem auto;
-            max-width: 800px;
+            max-width: 820px;
             text-align: left;
             direction: ltr;
             font-family: var(--font-code);
             font-size: 0.9rem;
             color: #d8dee9;
             overflow-x: auto;
-            position: relative;
         }
 
         .code-comment { color: #6272a4; }
@@ -580,18 +544,18 @@
 
         /* Footer */
         footer {
-            border-top: 1px solid var(--border-color);
-            background: #0a0c10;
+            border-top: 1px solid var(--border-subtle);
+            background: #090b10;
             padding: 3rem 1.5rem;
             text-align: center;
-            color: var(--text-muted);
+            color: var(--text-secondary);
             font-size: 0.92rem;
         }
 
         footer a {
             color: var(--primary-orange);
             text-decoration: none;
-            font-weight: 700;
+            font-weight: 600;
         }
 
         @media (max-width: 768px) {
@@ -607,24 +571,20 @@
     <nav>
         <a href="#" class="nav-brand">
             <img src="assets/logo.jpg" alt="SANAD Engine Logo">
-            <span class="brand-title">محرك سند | SANAD</span>
+            <span class="brand-title">محرك سَنَد | SANAD</span>
         </a>
 
         <ul class="nav-links">
             <li><a href="#features" data-i18n="nav_features">المزايا</a></li>
-            <li><a href="#architecture" data-i18n="nav_arch">المعمارية</a></li>
-            <li><a href="#roadmap" data-i18n="nav_roadmap">خارطة الطريق</a></li>
             <li><a href="#community" data-i18n="nav_community">المساهمة</a></li>
+            <li><a href="#roadmap" data-i18n="nav_roadmap">خارطة الطريق</a></li>
             <li><a href="#quickstart" data-i18n="nav_quickstart">البدء السريع</a></li>
         </ul>
 
         <div class="nav-actions">
             <button class="lang-btn" id="langToggle">English</button>
             <a href="https://github.com/abdallah2183/SANAD-Engine" target="_blank" class="github-btn" id="githubLink">
-                <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24">
-                    <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
-                </svg>
-                <span data-i18n="btn_github">مستودع جيت هب</span>
+                <span data-i18n="btn_github">مستودع GitHub</span>
             </a>
         </div>
     </nav>
@@ -634,32 +594,30 @@
         <div class="logo-wrapper">
             <img src="assets/logo.jpg" alt="SANAD Engine Logo">
         </div>
-        <div>
-            <span class="hero-badge" data-i18n="hero_badge">⚡ محرك سند — أول محرك ألعاب عربي متطور وقابل للتطوير</span>
-        </div>
-        <div>
-            <span class="author-badge" data-i18n="author_badge">👑 المؤسس والقائم على العمل: عبدالله (Abdallah)</span>
+        <div class="hero-badge-container">
+            <span class="hero-badge" data-i18n="hero_badge">محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
+            <span class="author-badge" data-i18n="author_badge">المؤسس والقائم على العمل: عبدالله (Abdallah)</span>
         </div>
         <h1>
-            <span class="hero-gradient-text" data-i18n="hero_title">محرك سَنَد | SANAD Engine</span>
+            <span data-i18n="hero_title">محرك سَنَد | SANAD Engine</span>
         </h1>
         <p class="hero-desc" data-i18n="hero_subtitle">
-            محرك ألعاب ثلاثي الأبعاد فائق الأداء، مبني من الصفر بأحدث تقنيات C++23 ومكتبة الرسوميات الحديثة Vulkan RHI بمعمارية موجهة للبيانات (ECS) وخوارزميات محاكاة فيزيائية وصوتية متقدمة.
+            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية.
         </p>
         <div class="hero-cta-group">
-            <a href="#community" class="github-btn" style="padding: 12px 28px; font-size: 1.05rem;" data-i18n="hero_cta_join">
-                🚀 شارك في التطوير معنا
+            <a href="#community" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_join">
+                المساهمة في التطوير
             </a>
             <a href="#quickstart" class="btn-secondary" data-i18n="hero_cta_build">
-                🛠️ كيفية البناء والتشغيل
+                البناء والتشغيل
             </a>
             <a href="#features" class="btn-secondary" data-i18n="hero_cta_explore">
-                🔍 استكشف المميزات
+                استعراض المميزات
             </a>
         </div>
     </header>
 
-    <!-- Interactive 3D Viewport Simulation -->
+    <!-- 3D Interactive Viewport Simulation -->
     <section class="container">
         <div class="viewport-section">
             <div class="viewport-header">
@@ -668,12 +626,12 @@
                     <span class="dot yellow"></span>
                     <span class="dot green"></span>
                 </div>
-                <div style="font-family: var(--font-code);">SANAD Native Viewport (Vulkan 1.2+ Simulation)</div>
+                <div style="font-family: var(--font-code);">SANAD Viewport (Vulkan 1.2+ Simulation)</div>
                 <div style="color: var(--primary-orange); font-weight: 700;">60.0 FPS | 16.6 ms</div>
             </div>
             <canvas id="interactiveCanvas"></canvas>
             <div class="canvas-overlay" data-i18n="canvas_hint">
-                🖱️ اسحب بالمؤشر لتدوير المجسم ثلاثي الأبعاد في مساحة العالم
+                اسحب بالمؤشر لتدوير المجسم في مساحة العالم
             </div>
         </div>
     </section>
@@ -682,93 +640,93 @@
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">534/534</div>
+                <div class="stat-num">534 / 534</div>
                 <div class="stat-label" data-i18n="stat_tests">اختبار مؤتمت ناجح عبر 14 حزمة</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">0</div>
-                <div class="stat-label" data-i18n="stat_val">أخطاء Vulkan Validation (خالٍ تماماً من التسريبات)</div>
+                <div class="stat-label" data-i18n="stat_val">أخطاء Vulkan Validation (خالٍ من التسريب)</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">C++23</div>
-                <div class="stat-label" data-i18n="stat_cpp">أحدث معايير C++ المتقدمة</div>
+                <div class="stat-label" data-i18n="stat_cpp">معيار C++ الحديث للأداء الأقصى</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">100%</div>
-                <div class="stat-label" data-i18n="stat_det">محاكاة حتمية وتوافق كامل مع الخوادم</div>
+                <div class="stat-label" data-i18n="stat_det">محاكاة حتمية متوافقة مع الخوادم</div>
             </div>
         </div>
     </section>
 
     <!-- Core Features -->
     <section class="container" id="features">
-        <div class="section-title">
-            <h2 data-i18n="features_title">مكونات ومزايا المحرك الأساسية</h2>
-            <p data-i18n="features_desc">تم بناء كل نظام في المحرك ليعمل باستقلالية وأقصى درجات الكفاءة وتوافق خيوط المعالجة المتعددة</p>
+        <div class="section-header">
+            <h2 data-i18n="features_title">الأنظمة والمزايا الأساسية</h2>
+            <p data-i18n="features_desc">صُمم كل نظام ليعمل باستقلالية تامة وكفاءة عالية مع جدولة متعددة الخيوط</p>
         </div>
 
         <div class="features-grid">
             <div class="feature-card">
-                <div class="feature-icon">⚡</div>
-                <h3 data-i18n="feat_rhi_title">محرك تصيير Vulkan متطور (PBR)</h3>
-                <p data-i18n="feat_rhi_desc">مسار تصيير مؤجل (Deferred Renderer) متعدد الممرات (Depth Prepass, GBuffer, Cook-Torrance GGX Lighting, Tonemapping) مع RenderGraph ديناميكي خفيف العبء.</p>
+                <span class="feature-tag">Rendering & RHI</span>
+                <h3 data-i18n="feat_rhi_title">تصيير مؤجل حديث PBR</h3>
+                <p data-i18n="feat_rhi_desc">مسار تصيير مؤجل متعدد الممرات بمكتبة Vulkan، يشمل ممر العمق، وتوليد GBuffer، وإضاءة واقعية Cook-Torrance GGX، وإدارة ممرات بـ RenderGraph ديناميكي.</p>
             </div>
 
             <div class="feature-card">
-                <div class="feature-icon">🧩</div>
+                <span class="feature-tag">Architecture</span>
                 <h3 data-i18n="feat_ecs_title">معمارية الكيانات والمكونات (ECS)</h3>
-                <p data-i18n="feat_ecs_desc">نظام Sparse-Set عالي السرعة مع استهلاك ذاكرة مثالي وتوافق تام لذاكرة الكاش (Cache-friendly)، يدعم الهرمية وتحويلات المشاهد وقوالب Prefabs.</p>
+                <p data-i18n="feat_ecs_desc">نظام Sparse-Set متقدم يوفر أعلى سرعة وصول للذاكرة وتوافقاً كاملاً مع ذاكرة الكاش، مع دعم الهرميات وتحويلات المشاهد وقوالب Prefabs.</p>
             </div>
 
             <div class="feature-card">
-                <div class="feature-icon">🪐</div>
-                <h3 data-i18n="feat_phys_title">محرك فيزياء حتمي (Physics Solver)</h3>
-                <p data-i18n="feat_phys_desc">محلل تصادمات واصطدامات الأجسام الصلبة (Impulse-based with Warm Starting, SAT Narrowphase, Coulomb Friction) مع استقرار تام للخطوات الزمنية الثابتة.</p>
+                <span class="feature-tag">Simulation</span>
+                <h3 data-i18n="feat_phys_title">محرك فيزياء حتمي</h3>
+                <p data-i18n="feat_phys_desc">محلل تصادمات مستقل للأجسام الصلبة مبني على عزم الدفع المتسلسل (Sequential Impulses) مع خوارزميات SAT وتقليم Sutherland-Hodgman.</p>
             </div>
 
             <div class="feature-card">
-                <div class="feature-icon">🦴</div>
-                <h3 data-i18n="feat_anim_title">نظام تحريك هيكلي (Skeletal Animation)</h3>
-                <p data-i18n="feat_anim_desc">دعم هياكل العظام، آلة حالات التحريك (State Machine) مع الانتقالات والتلاشي والدمج (Blending)، ومولد مقاطع حركة حتمية بدون انتظار استيراد النماذج.</p>
+                <span class="feature-tag">Animation</span>
+                <h3 data-i18n="feat_anim_title">نظام تحريك هيكلي</h3>
+                <p data-i18n="feat_anim_desc">حسابات حركة العظام، آلة حالات التحريك (State Machine) مع الانتقالات والتلاشي والدمج المتعدد، وتوليد مقاطع حركية إجرائية حتمية.</p>
             </div>
 
             <div class="feature-card">
-                <div class="feature-icon">🔊</div>
-                <h3 data-i18n="feat_audio_title">صوتيات ثلاثية الأبعاد واقعية</h3>
-                <p data-i18n="feat_audio_desc">توزيع ومزج صوتي ثلاثي الأبعاد مع توهين للمسافات (Attenuation) ومحرك WASAPI مع عزل كامل في نمط Headless للاختبارات المؤتمتة.</p>
+                <span class="feature-tag">Audio</span>
+                <h3 data-i18n="feat_audio_title">صوتيات ثلاثية الأبعاد</h3>
+                <p data-i18n="feat_audio_desc">توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج توهين المسافات (Attenuation) وموجه WASAPI مع دعم نمط الاختبار الصامت (Headless).</p>
             </div>
 
             <div class="feature-card">
-                <div class="feature-icon">🖥️</div>
-                <h3 data-i18n="feat_editor_title">محرر متكامل Native ImGui Editor</h3>
-                <p data-i18n="feat_editor_desc">محرر أصلي متكامل بنظام النوافذ القابلة للدمج (Docking)، متصفح أصول (Asset Browser)، تراجع وإعادة (Undo/Redo)، ونافذة معاينة تفاعلية وتحكم بالكاميرا.</p>
+                <span class="feature-tag">Tools & Editor</span>
+                <h3 data-i18n="feat_editor_title">محرر متكامل Native Editor</h3>
+                <p data-i18n="feat_editor_desc">محرر أصلي بواجهة Dear ImGui يدعم تقسيم النوافذ (Docking)، واستعراض الكائنات (Outliner)، ومفتش الخصائص بالانعكاس البرمجي، وتاريخ التراجع والإعادة.</p>
             </div>
         </div>
     </section>
 
-    <!-- Inspiring Callout Section -->
+    <!-- Community Section -->
     <section class="container" id="community">
         <div class="callout-box">
-            <h2 data-i18n="callout_title">نداء لكل مطور ومبدع عربي — لنبني "سند" معاً!</h2>
+            <h2 data-i18n="callout_title">نداء للمطورين والمبدعين العرب</h2>
             <p data-i18n="callout_desc">
-                محرك سند هو مشروع عربي طموح أسسه ويقوده <strong>عبدالله</strong> ليكون سنداً حقيقياً لكل صانع ألعاب في عالمنا العربي. المحرك مصمم منذ يومه الأول ليكون قابلاً للتطوير والتوسع، ونحن نرحب بكل من يرغب في وضع بصمته: مبرمجي رسوميات، خبراء صوت، مبرمجي فيزياء، مطوري واجهات، ومصممي ألعاب. يداً بيد نصنع محركنا العربي الخاص!
+                محرك سَنَد مشروع عربي طموح أسسه ويقوده <strong>عبدالله</strong> ليكون سنداً حقيقياً لمطوري وصناع الألعاب. صُمم المحرك بمعمارية برمجية صارمة ومفتوحة المصدر بالكامل للتوسع والتطوير المستمر. نرحب بكافة المطورين في مجالات الرسوميات، وهندسة الصوت، والمحاكاة الفيزيائية، والواجهات، والتوثيق للمشاركة في بناء هذا المشروع.
             </p>
 
             <div class="wanted-tags">
-                <div class="wanted-tag">🖥️ مبرمجو C++23 <span>(مطلوب)</span></div>
-                <div class="wanted-tag">🌌 مبرمجو Vulkan & Shaders <span>(مطلوب)</span></div>
-                <div class="wanted-tag">📜 سكربتات C# / Lua <span>(مفتوح)</span></div>
-                <div class="wanted-tag">🎨 واجهات المستخدم والخطوط العربية <span>(مطلوب)</span></div>
-                <div class="wanted-tag">🔊 محرك الصوت MiniAudio <span>(مفتوح)</span></div>
-                <div class="wanted-tag">📚 توثيق وأمثلة وشروحات <span>(مرحب بالجميع)</span></div>
+                <div class="wanted-tag">C++23 Systems</div>
+                <div class="wanted-tag">Vulkan & Shaders</div>
+                <div class="wanted-tag">C# / Lua Scripting</div>
+                <div class="wanted-tag">MiniAudio DSP</div>
+                <div class="wanted-tag">Editor & RTL Support</div>
+                <div class="wanted-tag">Documentation & Demos</div>
             </div>
 
             <div class="hero-cta-group">
-                <a href="https://github.com/abdallah2183/SANAD-Engine" target="_blank" class="github-btn" style="padding: 12px 28px; font-size: 1.1rem;" data-i18n="callout_btn_pr">
-                    🌟 انضم إلى المستودع وأرسل مساهمتك (Pull Request)
+                <a href="https://github.com/abdallah2183/SANAD-Engine" target="_blank" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="callout_btn_pr">
+                    فتح مساهمة عبر Pull Request
                 </a>
                 <a href="#quickstart" class="btn-secondary" data-i18n="callout_btn_guide">
-                    📖 اقرأ دليل المساهمة (CONTRIBUTING.md)
+                    دليل المساهمة (CONTRIBUTING.md)
                 </a>
             </div>
         </div>
@@ -776,54 +734,52 @@
 
     <!-- Roadmap -->
     <section class="container" id="roadmap">
-        <div class="section-title">
-            <h2 data-i18n="roadmap_title">خارطة طريق التطوير (Roadmap)</h2>
-            <p data-i18n="roadmap_desc">مراحل واضحة ومحددة تتيح لأي مطور اختيار الجزئية التي يحب البدء في بنائها</p>
+        <div class="section-header">
+            <h2 data-i18n="roadmap_title">خارطة طريق التطوير</h2>
+            <p data-i18n="roadmap_desc">مراحل محددة تتيح للمطورين اختيار الجزئيات التي يرغبون في بنائها</p>
         </div>
 
         <div class="roadmap-grid">
             <div class="roadmap-card done">
-                <span class="roadmap-status done">مكتمل ومُثبت ✅</span>
+                <span class="roadmap-status done">مكتمل ومثبت</span>
                 <h4>Phase 1–11: الأساس المعماري</h4>
                 <ul>
-                    <li>Vulkan RHI وتصيير مؤجل PBR</li>
+                    <li>تصيير مؤجل PBR ومكتبة Vulkan</li>
                     <li>معمارية ECS موجهة للبيانات</li>
                     <li>فيزياء وتحريك وهيكل عظام أصلي</li>
-                    <li>محرر ImGui مع ترصيف وتفتيش</li>
-                    <li>534 اختبار ناجح وخالٍ من الأخطاء</li>
+                    <li>محرر ImGui مع تفقد الخصائص</li>
+                    <li>534 اختباراً مؤتمتاً ناجحاً</li>
                 </ul>
             </div>
 
             <div class="roadmap-card active">
-                <span class="roadmap-status active">قيد التطوير الفوري 🚀</span>
-                <h4>Phase 12–13: الظلال وسماء واقعية</h4>
+                <span class="roadmap-status active">قيد التنفيذ</span>
+                <h4>Phase 12–13: الظلال والسماء</h4>
                 <ul>
-                    <li>خرائط الظلال الاتجاهية Directional Shadow Maps</li>
-                    <li>سماء إجرائية تدرجية مع قرص الشمس Procedural Sky</li>
-                    <li>توزيع إشعاعي وظلال ناعمة PCF</li>
-                    <li>تحديث المحرر بأدوات تحكم بالظلال</li>
+                    <li>خرائط الظلال الاتجاهية Directional Shadows</li>
+                    <li>سماء إجرائية تدرجية مع قرص الشمس</li>
+                    <li>مرشح تنعيم الظلال 3x3 PCF وموازنة العمق</li>
+                    <li>أدوات تحكم بالظلال داخل المحرر</li>
                 </ul>
             </div>
 
             <div class="roadmap-card">
-                <span class="roadmap-status planned">المرحلة القادمة ⏳</span>
-                <h4>Phase 14: الصوتيات والسكربت</h4>
+                <span class="roadmap-status planned">المرحلة القادمة</span>
+                <h4>Phase 14: الصوتيات واستيراد النماذج</h4>
                 <ul>
-                    <li>دمج MiniAudio خلف واجهة AudioDevice</li>
-                    <li>ربط لغات البرمجة (C# / Lua)</li>
-                    <li>دعم خطوط عربية كامل في المحرر</li>
-                    <li>استيراد ملفات النماذج glTF و WAV</li>
+                    <li>دمج مكتبة MiniAudio خلف AudioDevice</li>
+                    <li>دعم ملفات الصوت WAV و OGG</li>
+                    <li>استيراد نماذج glTF 2.0 و FBX</li>
                 </ul>
             </div>
 
             <div class="roadmap-card">
-                <span class="roadmap-status planned">المرحلة المستقبلية 🌐</span>
-                <h4>Phase 15+: الشبكات ومحرك Jolt</h4>
+                <span class="roadmap-status planned">مخطط مستقبلي</span>
+                <h4>Phase 15+: السكربت والفيزياء</h4>
                 <ul>
-                    <li>فيزياء Jolt Physics المتقدمة</li>
-                    <li>شبكات ألعاب وتزامن Client/Server</li>
-                    <li>دعم المنصات المتعددة (Linux / WebGPU)</li>
-                    <li>نظام ذكاء اصطناعي ونظام مسارات NavMesh</li>
+                    <li>دمج لغات البرمجة (C# / Lua)</li>
+                    <li>تعريب المحرر ودعم التخطيط العربي</li>
+                    <li>محرك الفيزياء العالمي Jolt Physics</li>
                 </ul>
             </div>
         </div>
@@ -831,9 +787,9 @@
 
     <!-- Quickstart -->
     <section class="container" id="quickstart" style="margin-bottom: 5rem;">
-        <div class="section-title">
-            <h2 data-i18n="quick_title">البدء السريع: بناء وتشغيل المحرك</h2>
-            <p data-i18n="quick_desc">يمكنك بناء المشروع فوراً على نظام Windows باستخدام CMake و Visual Studio / Ninja</p>
+        <div class="section-header">
+            <h2 data-i18n="quick_title">البدء السريع: البناء والتشغيل</h2>
+            <p data-i18n="quick_desc">بناء المحرك على نظام Windows باستخدام CMake و Visual Studio / Ninja</p>
         </div>
 
         <div class="code-box">
@@ -841,7 +797,7 @@
             <div><span class="code-cmd">git clone</span> <span class="code-arg">https://github.com/abdallah2183/SANAD-Engine.git</span></div>
             <div><span class="code-cmd">cd</span> <span class="code-arg">SANAD-Engine</span></div>
             <br>
-            <div class="code-comment"># 2. بناء المحرك والأدوات (Build with batch script or CMake)</div>
+            <div class="code-comment"># 2. بناء المحرك (Build with batch script or CMake)</div>
             <div><span class="code-cmd">build_nf.bat</span></div>
             <br>
             <div class="code-comment"># 3. تشغيل محرر سند التفاعلي (Run SANAD Editor)</div>
@@ -855,17 +811,14 @@
     <!-- Footer -->
     <footer>
         <div class="container">
-            <p style="margin-bottom: 0.6rem; font-weight: 800; font-size: 1.15rem; color: #fff;">
+            <p style="margin-bottom: 0.5rem; font-weight: 700; font-size: 1.1rem; color: #ffffff;">
                 محرك سَنَد | SANAD Engine
             </p>
-            <p style="margin-bottom: 0.8rem; font-size: 1rem; color: var(--primary-orange);">
-                المؤسس والقائم على العمل: <a href="https://github.com/abdallah2183" target="_blank" style="text-decoration: underline;">عبدالله (Abdallah)</a>
+            <p style="margin-bottom: 0.6rem; color: var(--primary-orange);">
+                المؤسس والقائم على العمل: <a href="https://github.com/abdallah2183" target="_blank">عبدالله (Abdallah)</a>
             </p>
-            <p style="color: var(--text-muted);">
+            <p style="color: var(--text-secondary); font-size: 0.88rem;">
                 مشروع مرخص ومفتوح المصدر لخدمة صناع ومطوري الألعاب في الوطن العربي والعالم.
-            </p>
-            <p style="margin-top: 1rem; font-size: 0.82rem; color: #6b7280;">
-                Designed with ❤️ for the Arab Game Development Community.
             </p>
         </div>
     </footer>
@@ -906,7 +859,6 @@
             lastMouseY = e.clientY;
         });
 
-        // Touch support
         canvas.addEventListener('touchstart', (e) => {
             if (e.touches.length === 1) {
                 isDragging = true;
@@ -925,7 +877,6 @@
             lastMouseY = e.touches[0].clientY;
         });
 
-        // 3D Geometry
         const vertices = [];
         const edges = [];
         const size = 110;
@@ -1031,83 +982,81 @@
         const translations = {
             ar: {
                 nav_features: "المزايا",
-                nav_arch: "المعمارية",
-                nav_roadmap: "خارطة الطريق",
                 nav_community: "المساهمة",
+                nav_roadmap: "خارطة الطريق",
                 nav_quickstart: "البدء السريع",
-                btn_github: "مستودع جيت هب",
-                hero_badge: "⚡ محرك سند — أول محرك ألعاب عربي متطور وقابل للتطوير",
-                author_badge: "👑 المؤسس والقائم على العمل: عبدالله (Abdallah)",
+                btn_github: "مستودع GitHub",
+                hero_badge: "محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
+                author_badge: "المؤسس والقائم على العمل: عبدالله (Abdallah)",
                 hero_title: "محرك سَنَد | SANAD Engine",
-                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد فائق الأداء، مبني من الصفر بأحدث تقنيات C++23 ومكتبة الرسوميات الحديثة Vulkan RHI بمعمارية موجهة للبيانات (ECS) وخوارزميات محاكاة فيزيائية وصوتية متقدمة.",
-                hero_cta_join: "🚀 شارك في التطوير معنا",
-                hero_cta_build: "🛠️ كيفية البناء والتشغيل",
-                hero_cta_explore: "🔍 استكشف المميزات",
-                canvas_hint: "🖱️ اسحب بالمؤشر لتدوير المجسم ثلاثي الأبعاد في مساحة العالم",
+                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية.",
+                hero_cta_join: "المساهمة في التطوير",
+                hero_cta_build: "البناء والتشغيل",
+                hero_cta_explore: "استعراض المميزات",
+                canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
                 stat_tests: "اختبار مؤتمت ناجح عبر 14 حزمة",
-                stat_val: "أخطاء Vulkan Validation (خالٍ تماماً من التسريبات)",
-                stat_cpp: "أحدث معايير C++ المتقدمة",
-                stat_det: "محاكاة حتمية وتوافق كامل مع الخوادم",
-                features_title: "مكونات ومزايا المحرك الأساسية",
-                features_desc: "تم بناء كل نظام في المحرك ليعمل باستقلالية وأقصى درجات الكفاءة وتوافق خيوط المعالجة المتعددة",
-                feat_rhi_title: "محرك تصيير Vulkan متطور (PBR)",
-                feat_rhi_desc: "مسار تصيير مؤجل (Deferred Renderer) متعدد الممرات (Depth Prepass, GBuffer, Cook-Torrance GGX Lighting, Tonemapping) مع RenderGraph ديناميكي خفيف العبء.",
+                stat_val: "أخطاء Vulkan Validation (خالٍ من التسريب)",
+                stat_cpp: "معيار C++ الحديث للأداء الأقصى",
+                stat_det: "محاكاة حتمية متوافقة مع الخوادم",
+                features_title: "الأنظمة والمزايا الأساسية",
+                features_desc: "صُمم كل نظام ليعمل باستقلالية تامة وكفاءة عالية مع جدولة متعددة الخيوط",
+                feat_rhi_title: "تصيير مؤجل حديث PBR",
+                feat_rhi_desc: "مسار تصيير مؤجل متعدد الممرات بمكتبة Vulkan، يشمل ممر العمق، وتوليد GBuffer، وإضاءة واقعية Cook-Torrance GGX، وإدارة ممرات بـ RenderGraph ديناميكي.",
                 feat_ecs_title: "معمارية الكيانات والمكونات (ECS)",
-                feat_ecs_desc: "نظام Sparse-Set عالي السرعة مع استهلاك ذاكرة مثالي وتوافق تام لذاكرة الكاش (Cache-friendly)، يدعم الهرمية وتحويلات المشاهد وقوالب Prefabs.",
-                feat_phys_title: "محرك فيزياء حتمي (Physics Solver)",
-                feat_phys_desc: "محلل تصادمات واصطدامات الأجسام الصلبة (Impulse-based with Warm Starting, SAT Narrowphase, Coulomb Friction) مع استقرار تام للخطوات الزمنية الثابتة.",
-                feat_anim_title: "نظام تحريك هيكلي (Skeletal Animation)",
-                feat_anim_desc: "دعم هياكل العظام، آلة حالات التحريك (State Machine) مع الانتقالات والتلاشي والدمج (Blending)، ومولد مقاطع حركة حتمية بدون انتظار استيراد النماذج.",
-                feat_audio_title: "صوتيات ثلاثية الأبعاد واقعية",
-                feat_audio_desc: "توزيع ومزج صوتي ثلاثي الأبعاد مع توهين للمسافات (Attenuation) ومحرك WASAPI مع عزل كامل في نمط Headless للاختبارات المؤتمتة.",
-                feat_editor_title: "محرر متكامل Native ImGui Editor",
-                feat_editor_desc: "محرر أصلي متكامل بنظام النوافذ القابلة للدمج (Docking)، متصفح أصول (Asset Browser)، تراجع وإعادة (Undo/Redo)، ونافذة معاينة تفاعلية وتحكم بالكاميرا.",
-                callout_title: "نداء لكل مطور ومبدع عربي — لنبني \"سند\" معاً!",
-                callout_desc: "محرك سند هو مشروع عربي طموح أسسه ويقوده عبدالله ليكون سنداً حقيقياً لكل صانع ألعاب في عالمنا العربي. المحرك مصمم منذ يومه الأول ليكون قابلاً للتطوير والتوسع، ونحن نرحب بكل من يرغب في وضع بصمته: مبرمجي رسوميات، خبراء صوت، مبرمجي فيزياء، مطوري واجهات، ومصممي ألعاب. يداً بيد نصنع محركنا العربي الخاص!",
-                callout_btn_pr: "🌟 انضم إلى المستودع وأرسل مساهمتك (Pull Request)",
-                callout_btn_guide: "📖 اقرأ دليل المساهمة (CONTRIBUTING.md)",
-                roadmap_title: "خارطة طريق التطوير (Roadmap)",
-                roadmap_desc: "مراحل واضحة ومحددة تتيح لأي مطور اختيار الجزئية التي يحب البدء في بنائها",
-                quick_title: "البدء السريع: بناء وتشغيل المحرك",
-                quick_desc: "يمكنك بناء المشروع فوراً على نظام Windows باستخدام CMake و Visual Studio / Ninja"
+                feat_ecs_desc: "نظام Sparse-Set متقدم يوفر أعلى سرعة وصول للذاكرة وتوافقاً كاملاً مع ذاكرة الكاش، مع دعم الهرميات وتحويلات المشاهد وقوالب Prefabs.",
+                feat_phys_title: "محرك فيزياء حتمي",
+                feat_phys_desc: "محلل تصادمات مستقل للأجسام الصلبة مبني على عزم الدفع المتسلسل (Sequential Impulses) مع خوارزميات SAT وتقليم Sutherland-Hodgman.",
+                feat_anim_title: "نظام تحريك هيكلي",
+                feat_anim_desc: "حسابات حركة العظام، آلة حالات التحريك (State Machine) مع الانتقالات والتلاشي والدمج المتعدد، وتوليد مقاطع حركية إجرائية حتمية.",
+                feat_audio_title: "صوتيات ثلاثية الأبعاد",
+                feat_audio_desc: "توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج توهين المسافات (Attenuation) وموجه WASAPI مع دعم نمط الاختبار الصامت (Headless).",
+                feat_editor_title: "محرر متكامل Native Editor",
+                feat_editor_desc: "محرر أصلي بواجهة Dear ImGui يدعم تقسيم النوافذ (Docking)، واستعراض الكائنات (Outliner)، ومفتش الخصائص بالانعكاس البرمجي، وتاريخ التراجع والإعادة.",
+                callout_title: "نداء للمطورين والمبدعين العرب",
+                callout_desc: "محرك سَنَد مشروع عربي طموح أسسه ويقوده عبدالله ليكون سنداً حقيقياً لمطوري وصناع الألعاب. صُمم المحرك بمعمارية برمجية صارمة ومفتوحة المصدر بالكامل للتوسع والتطوير المستمر. نرحب بكافة المطورين في مجالات الرسوميات، وهندسة الصوت، والمحاكاة الفيزيائية، والواجهات، والتوثيق للمشاركة في بناء هذا المشروع.",
+                callout_btn_pr: "فتح مساهمة عبر Pull Request",
+                callout_btn_guide: "دليل المساهمة (CONTRIBUTING.md)",
+                roadmap_title: "خارطة طريق التطوير",
+                roadmap_desc: "مراحل محددة تتيح للمطورين اختيار الجزئيات التي يرغبون في بنائها",
+                quick_title: "البدء السريع: البناء والتشغيل",
+                quick_desc: "بناء المحرك على نظام Windows باستخدام CMake و Visual Studio / Ninja"
             },
             en: {
                 nav_features: "Features",
-                nav_arch: "Architecture",
-                nav_roadmap: "Roadmap",
                 nav_community: "Contribute",
+                nav_roadmap: "Roadmap",
                 nav_quickstart: "Quickstart",
-                btn_github: "GitHub Repo",
-                hero_badge: "⚡ SANAD — Extensible Arabic 3D Game Engine",
-                author_badge: "👑 Founder & Project Lead: Abdallah",
+                btn_github: "GitHub Repository",
+                hero_badge: "SANAD — Extensible Arabic 3D Game Engine",
+                author_badge: "Founder & Project Lead: Abdallah",
                 hero_title: "SANAD Engine | محرك سند",
-                hero_subtitle: "High-performance 3D game engine engineered from scratch with modern C++23, low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, skeletal animation, and 3D spatial audio.",
-                hero_cta_join: "🚀 Join & Contribute With Us",
-                hero_cta_build: "🛠️ Build & Run Guide",
-                hero_cta_explore: "🔍 Explore Features",
-                canvas_hint: "🖱️ Click and drag to orbit the 3D viewport entity in world space",
+                hero_subtitle: "High-performance 3D game engine engineered from scratch with modern C++23, low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio.",
+                hero_cta_join: "Join the Development",
+                hero_cta_build: "Build and Run",
+                hero_cta_explore: "Explore Features",
+                canvas_hint: "Click and drag to orbit the 3D entity in world space",
                 stat_tests: "Automated Tests Passed Across 14 Suites",
                 stat_val: "Vulkan Validation Errors (Zero Leaks)",
                 stat_cpp: "Modern C++23 ISO Standard",
-                stat_det: "Deterministic & Dedicated Server Ready",
-                features_title: "Core Engine Architecture & Subsystems",
-                features_desc: "Every subsystem is isolated behind strict abstraction layers with zero-overhead interfaces and multi-threaded job scheduling.",
+                stat_det: "Deterministic & Server-Authoritative Ready",
+                features_title: "Core Architecture and Subsystems",
+                features_desc: "Every subsystem is isolated behind strict abstraction layers with multi-threaded scheduling.",
                 feat_rhi_title: "Modern Vulkan 1.2+ PBR Renderer",
-                feat_rhi_desc: "Multi-pass deferred rendering pipeline (Depth prepass, GBuffer, Cook-Torrance GGX lighting, Tonemapping) with dynamic DAG RenderGraph.",
+                feat_rhi_desc: "Multi-pass deferred rendering pipeline with depth prepass, GBuffer generation, Cook-Torrance GGX lighting, and dynamic DAG RenderGraph.",
                 feat_ecs_title: "Data-Oriented ECS & Scene Graph",
-                feat_ecs_desc: "Cache-optimized sparse-set Entity Component System with hierarchical transform propagation, prefabs, and high memory throughput.",
+                feat_ecs_desc: "Cache-optimized sparse-set Entity Component System with hierarchical transform propagation and high memory locality.",
                 feat_phys_title: "Deterministic 3D Physics Solver",
-                feat_phys_desc: "Rigid-body solver featuring sequential impulses, warm starting, SAT narrowphase, Coulomb friction, and fixed-timestep synchronization.",
+                feat_phys_desc: "Rigid-body solver featuring sequential impulses, warm starting, SAT narrowphase, Coulomb friction, and fixed-timestep clock.",
                 feat_anim_title: "Skeletal Animation & State Machines",
                 feat_anim_desc: "Hierarchical bone evaluation, clip blending, state machines with cross-fading, and procedural motion clip generators.",
                 feat_audio_title: "3D Spatial Audio & Mixer",
-                feat_audio_desc: "Positional 3D audio, distance attenuation models, bus mixer, WASAPI shared-mode backend, and deterministic tone synthesizers.",
+                feat_audio_desc: "Positional 3D audio, distance attenuation models, bus mixer, WASAPI shared-mode backend, and headless test driver.",
                 feat_editor_title: "Native ImGui Docking Editor",
                 feat_editor_desc: "Integrated editor shell with full docking layout, outliner, reflected inspector, asset browser, undo/redo, and interactive viewport gizmos.",
-                callout_title: "Calling Developers & Creators — Build SANAD With Us!",
-                callout_desc: "SANAD Engine was founded and is led by Abdallah to be the bedrock for game development across the Arab world and internationally. Whether you are a Vulkan graphics programmer, audio engineer, physics enthusiast, tools developer, or technical writer, we invite you to build together.",
-                callout_btn_pr: "🌟 Join the Repo & Submit a PR",
-                callout_btn_guide: "📖 Read the Contributing Guide (CONTRIBUTING.md)",
+                callout_title: "Calling Developers & Creators — Build SANAD With Us",
+                callout_desc: "SANAD Engine was founded and is led by Abdallah to be the bedrock for game development across the Arab world and internationally. Whether you specialize in graphics, audio, physics, tooling, or documentation, we welcome your contributions.",
+                callout_btn_pr: "Submit a Pull Request",
+                callout_btn_guide: "Read Contributing Guide",
                 roadmap_title: "Development Roadmap",
                 roadmap_desc: "Clear milestones where you can easily pick up a subsystem and make an immediate impact.",
                 quick_title: "Quick Start: Build & Run",
@@ -1134,4 +1083,3 @@
     </script>
 </body>
 </html>
-
