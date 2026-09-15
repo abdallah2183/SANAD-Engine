@@ -612,8 +612,9 @@ u32 Runtime::step_audio(float dt) {
         return 0;
     }
     if (!m_audio_device) {
-        m_audio_device = std::make_unique<audio::NullAudioDevice>();
-        m_audio_device->initialize(audio::kDefaultSampleRate, audio::kDefaultBufferFrames);
+        // Best available output: real hardware where a backend opens one,
+        // silence otherwise (headless/CI). Never null.
+        m_audio_device = audio::create_output_device();
     }
     if (dt <= 0.0f) {
         return 0;
@@ -710,6 +711,11 @@ u32 Runtime::step_audio(float dt) {
     for (usize i = 0; i < frames; ++i) {
         m_audio_output_peak = std::max(m_audio_output_peak, std::abs(m_audio_left[i]));
         m_audio_output_peak = std::max(m_audio_output_peak, std::abs(m_audio_right[i]));
+    }
+    // Real-output backends consume the final mix on their own clock; the null
+    // backend ignores this (its contract ends at request_buffer).
+    if (m_audio_device->accepts_push()) {
+        m_audio_device->submit_mix(m_audio_left.data(), m_audio_right.data(), frames);
     }
 
     return blocks;

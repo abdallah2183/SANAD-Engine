@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -125,7 +126,8 @@ struct AudioListener {
 };
 
 /// Abstract audio device. The headless/null backend returns silence and never
-/// touches hardware. A future MiniAudio backend implements the same interface.
+/// touches hardware. The WASAPI backend (Windows) pushes the final mix to the
+/// OS mixer on its own thread.
 class AudioDevice {
 public:
     virtual ~AudioDevice() = default;
@@ -137,7 +139,24 @@ public:
     /// fills `left` and `right` (each `num_frames` long). The null backend
     /// fills with silence.
     virtual void request_buffer(f32* left, f32* right, usize num_frames) = 0;
+    /// Human-readable backend id for logs and tests ("null", "wasapi-shared").
+    virtual const char* backend_name() const { return "null"; }
+    /// True when the device wants the final mix pushed (real output).
+    /// Default false keeps every existing backend compiling unchanged.
+    virtual bool accepts_push() const { return false; }
+    /// Hands the fully-mixed block to the device. Only called when
+    /// accepts_push() is true.
+    virtual void submit_mix(const f32* left, const f32* right, usize num_frames) {
+        (void)left;
+        (void)right;
+        (void)num_frames;
+    }
 };
+
+/// Best output device for this machine: real hardware when a backend can
+/// open it, NullAudioDevice otherwise (headless/CI, or no endpoint). Never
+/// null, never throws — silence is always preferable to no runtime.
+std::unique_ptr<AudioDevice> create_output_device();
 
 /// Null/headless audio device — produces silence, no hardware. This is what
 /// CI and headless tests use. It never fails and never touches the audio API.

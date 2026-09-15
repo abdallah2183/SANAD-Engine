@@ -1,6 +1,11 @@
 #include <NF/Audio/AudioEngine.hpp>
+#include <NF/Core/Logger.hpp>
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#ifdef _WIN32
+#include <NF/Audio/WasapiAudioDevice.hpp>
+#endif
 
 namespace nf::audio {
 
@@ -193,6 +198,27 @@ u32 NullAudioDevice::sample_rate() const {
 void NullAudioDevice::request_buffer(f32* left, f32* right, usize num_frames) {
     if (left) std::memset(left, 0, num_frames * sizeof(f32));
     if (right) std::memset(right, 0, num_frames * sizeof(f32));
+}
+
+// ---------------------------------------------------------------------------
+// Output device factory
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<AudioDevice> create_output_device() {
+#ifdef _WIN32
+    // Real hardware first: shared-mode float stereo at the endpoint's own
+    // mix rate (resampled from the engine rate when they differ — some
+    // drivers reject anything but the mix rate at open time).
+    auto wasapi = std::make_unique<WasapiAudioDevice>();
+    if (wasapi->initialize(kDefaultSampleRate, kDefaultBufferFrames)) {
+        NF_LOG_INFO(LogCategory::Audio, "Audio output: {}", wasapi->backend_name());
+        return wasapi;
+    }
+    NF_LOG_INFO(LogCategory::Audio, "Audio output: no usable endpoint, silent null device");
+#endif
+    auto null_dev = std::make_unique<NullAudioDevice>();
+    null_dev->initialize(kDefaultSampleRate, kDefaultBufferFrames);
+    return null_dev;
 }
 
 } // namespace nf::audio

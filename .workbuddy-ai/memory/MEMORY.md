@@ -115,7 +115,14 @@ Plan: `Docs/Phase12_Plan.md`. Finishes what W5 deferred, without changing policy
   scene loader, and Runtime wiring (`enable_streaming`/`step_streaming`:
   merge → mesh kick → physics rebuild, destroy-subtree unload). New tests:
   3 merge + 1 end-to-end wiring.
-- Audio backend swap (MiniAudio behind `AudioDevice` seam) — planned, not yet implemented.
+- Audio backend swap (MiniAudio behind `AudioDevice` seam) — RESOLVED
+  differently: `WasapiAudioDevice` (shared-mode float stereo at the endpoint
+  mix rate, linear resample from the engine rate, SPSC ring, event thread —
+  no third-party code, the OS mixer does the rest) behind the same seam, with
+  `create_output_device()` falling back to Null on failure. MiniAudio would
+  have added a vendored dependency for what the OS already does. New tests:
+  ring, resampler (DC/count/sine/chain/degen), init-without-hardware,
+  factory. Suite 566/0/1.
 - Animation lacks a skinning GPU pipeline (CPU-only sampling); no animation asset cooker yet.
 
 ## Working tree convention
