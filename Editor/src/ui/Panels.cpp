@@ -615,8 +615,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // Live viewport image: the offscreen Runtime target, sampled through
         // UiRenderer::kViewportTextureId (bound by the shell every frame).
         // Pixels are proven by render_offscreen plus periodic readback.
+        // Flipped V: standard Vulkan puts NDC +Y in memory-BOTTOM rows while
+        // ImGui samples UV (0,0) at the widget top — default UVs would show
+        // the scene upside down (and mirror every NDC gesture vertically
+        // while the centre still hits, which is exactly how this survived).
         ImVec2 img_size(avail_w > 0.0f ? avail_w : 10.0f, avail_h - 24.0f > 0.0f ? avail_h - 24.0f : 10.0f);
-        ImGui::Image(static_cast<ImTextureID>(UiRenderer::kViewportTextureId), img_size);
+        ImGui::Image(static_cast<ImTextureID>(UiRenderer::kViewportTextureId), img_size,
+                     ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
         // Pointer gesture state machine (one viewport, so statics are fine):
         // press on the image arms a gizmo drag in the app, movement feeds it,
         // release folds one undoable command. NDC is recomputed from the live

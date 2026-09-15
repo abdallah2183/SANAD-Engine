@@ -21,6 +21,7 @@
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/Scene.hpp>
 
+#include <cmath>
 #include <filesystem>
 
 using namespace nf;
@@ -103,6 +104,26 @@ ecs::Entity setup_drag_scene(VirtualFileSystem& vfs, AssetRegistry& reg, AssetMa
 
 } // namespace
 
+NF_TEST(viewport_ndc_to_pixel_matches_flipped_display) {
+    // Pins the mapping the GPU picker depends on: NDC top (+1) addresses
+    // memory-bottom rows (where standard Vulkan puts NDC +Y), NDC bottom
+    // addresses row 0. The negated form mirrors picking vertically while the
+    // centre still hits — invisible until an off-centre click misses.
+    float x = -1.0f, y = -1.0f;
+    editor::viewport_ndc_to_pixel(0.0f, 0.0f, 64.0f, 64.0f, x, y);
+    NF_CHECK_NEAR(x, 32.0f, 1e-5f);
+    NF_CHECK_NEAR(y, 32.0f, 1e-5f);
+    editor::viewport_ndc_to_pixel(-1.0f, -1.0f, 64.0f, 64.0f, x, y);
+    NF_CHECK_NEAR(x, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(y, 0.0f, 1e-5f);
+    editor::viewport_ndc_to_pixel(1.0f, 1.0f, 64.0f, 64.0f, x, y);
+    NF_CHECK_NEAR(x, 64.0f, 1e-5f);
+    NF_CHECK_NEAR(y, 64.0f, 1e-5f);
+    editor::viewport_ndc_to_pixel(0.0f, 0.5f, 64.0f, 64.0f, x, y);
+    NF_CHECK_NEAR(x, 32.0f, 1e-5f);
+    NF_CHECK_NEAR(y, 48.0f, 1e-5f); // upper NDC -> lower-half rows
+}
+
 NF_TEST(viewport_drag_moves_selection_as_one_undo) {
     const GpuFixture& f = require_gpu();
     auto& device = *f.device;
@@ -135,6 +156,9 @@ NF_TEST(viewport_drag_moves_selection_as_one_undo) {
     NF_CHECK(app.viewport_drag(0.2f, 0.0f, vc, err));
     const float moved_x = app.world()->get<scene::Transform>(cube)->local_x;
     NF_CHECK(moved_x > 0.3f && moved_x < 1.0f);
+    // Pure horizontal gesture: no vertical drift (the reported symptom was a
+    // slow upward creep while moving sideways).
+    NF_CHECK(std::abs(app.world()->get<scene::Transform>(cube)->local_y) < 0.05f);
 
     NF_CHECK(app.viewport_release(err));
     NF_CHECK(!app.viewport_dragging());

@@ -663,3 +663,119 @@ NF_TEST(material_descriptor_set_is_cached) {
     std::filesystem::remove_all(tmp);
     rhi::reset_validation_error_count();
 }
+
+NF_TEST(render_memory_rows_follow_vulkan_top_left_origin) {
+    // Orientation contract the whole viewport UI relies on: with a standard
+    // (positive-height) Vulkan viewport, NDC +Y lands in memory-BOTTOM rows
+    // (framebuffer y=0 is the top row, NDC -1 maps there). The ImGui viewport
+    // Image() therefore samples with flipped V — and every NDC<->pixel
+    // conversion assumes standard NDC (+Y up). A red cube above the view
+    // centre must concentrate in rows 32..63, not 0..31.
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_orient");
+    std::filesystem::create_directories(tmp / "Content" / "Scenes");
+    std::filesystem::create_directories(tmp / "Content" / "Materials");
+    std::filesystem::create_directories(tmp / "Cache" / "Meshes");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+
+    auto cube = rendering::StaticMesh::create_cube(2.0f);
+    const AssetId mesh_id = AssetId::generate();
+    auto asset = rendering::make_mesh_asset(*cube, mesh_id, "content://Meshes/cube.nfmesh");
+    std::vector<uint8_t> bytes;
+    asset->save_to_bytes(bytes);
+    NF_CHECK(vfs.write_bytes("cache://Meshes/cube.nfmesh", std::span<const uint8_t>(bytes)).ok);
+    AssetRegistry reg;
+    AssetMetadata meta;
+    meta.id = mesh_id;
+    meta.type = AssetType::Mesh;
+    meta.logical_path = "content://Meshes/cube.nfmesh";
+    meta.cooked_path = "cache://Meshes/cube.nfmesh";
+    std::string err;
+    NF_CHECK(reg.add(meta, err));
+    NF_CHECK(vfs.write_text("content://Materials/Red.nfmat",
+                            "# NOVAForge Material v1\nname: Red\nbase_color: 0.9 0.1 0.1 1\n"
+                            "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
+                            "emission_strength: 0\n")
+                 .ok);
+
+    scene::Scene scene("Orient");
+    auto& w = scene.world();
+    ecs::Entity cam_e = w.create_entity();
+    w.add<scene::Transform>(cam_e, scene::Transform{});
+    w.get<scene::Transform>(cam_e)->local_z = 5.0f;
+    runtime::CameraComponent cam;
+    cam.is_active = true;
+    w.add<runtime::CameraComponent>(cam_e, cam);
+    ecs::Entity light_e = w.create_entity();
+    w.add<runtime::DirectionalLight>(light_e, runtime::DirectionalLight{});
+    ecs::Entity mesh_e = w.create_entity();
+    w.add<scene::Transform>(mesh_e, scene::Transform{});
+    // Above the view centre (world +Y).
+    w.get<scene::Transform>(mesh_e)->local_y = 2.5f;
+    runtime::MeshComponent mc;
+    mc.mesh_id = mesh_id;
+    mc.material = "content://Materials/Red";
+    w.add<runtime::MeshComponent>(mesh_e, mc);
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Orient.nfscene", scene, err));
+
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    NF_CHECK(runtime.load_scene("content://Scenes/Orient.nfscene", err));
+    auto handle = manager.load_mesh_sync(mesh_id);
+    NF_CHECK(handle && handle->state == AssetState::Ready);
+    manager.update();
+    runtime.update(0.016f);
+
+    rhi::TextureDesc td{};
+    td.width = 64;
+    td.height = 64;
+    td.format = rhi::Format::R8G8B8A8_UNorm;
+    td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
+    auto target = device.create_texture(td);
+    rhi::BufferDesc bd{};
+    bd.size = static_cast<usize>(64) * 64 * 4;
+    bd.usage = rhi::BufferUsage::TransferDst;
+    bd.memory = rhi::MemoryUsage::GPUToCPU;
+    auto rb = device.create_buffer(bd);
+    auto cmd = device.create_command_buffer();
+    auto fence = device.create_fence(false);
+    NF_CHECK(target && rb && cmd && fence);
+    cmd->begin();
+    runtime.render_offscreen(*target, *cmd);
+    cmd->copy_texture_to_buffer(*target, *rb, 0, 0, 64, 64, 0);
+    cmd->end();
+    device.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+    NF_CHECK(fence->wait(kGpuTimeoutNs));
+    const auto* px = static_cast<const uint8_t*>(rb->map());
+    NF_CHECK(px != nullptr);
+    uint64_t red_top = 0, red_bottom = 0;
+    for (uint32_t y = 0; y < 64u; ++y) {
+        for (uint32_t x = 0; x < 64u; ++x) {
+            const size_t i = static_cast<size_t>(y) * 64u + x;
+            const bool red = px[i * 4] > px[i * 4 + 1] + 40 && px[i * 4] > px[i * 4 + 2] + 40;
+            if (red) {
+                if (y < 32u) {
+                    ++red_top;
+                } else {
+                    ++red_bottom;
+                }
+            }
+        }
+    }
+    rb->unmap();
+    NF_CHECK(red_bottom > 100);        // the cube rendered, above centre...
+    NF_CHECK(red_top * 4 < red_bottom); // ...into memory-bottom rows (NDC +Y)
+
+    NF_CHECK(rhi::validation_error_count() == 0);
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}

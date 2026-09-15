@@ -1095,8 +1095,8 @@ ecs::Entity EditorApp::pick(const ViewCamera& cam, float ndc_x, float ndc_y) {
         const auto fw = static_cast<float>(m_viewport.width);
         const auto fh = static_cast<float>(m_viewport.height);
         // NDC (-1..1, +y up) -> pixels (0..size-1, +y down).
-        const float px = (ndc_x * 0.5f + 0.5f) * fw;
-        const float py = (0.5f - ndc_y * 0.5f) * fh;
+        float px = 0.0f, py = 0.0f;
+        viewport_ndc_to_pixel(ndc_x, ndc_y, fw, fh, px, py);
         if (px >= 0.0f && py >= 0.0f && px < fw && py < fh) {
             uint32_t picked_id = 0;
             if (m_runtime->pick_entity_gpu(static_cast<uint32_t>(px), static_cast<uint32_t>(py),

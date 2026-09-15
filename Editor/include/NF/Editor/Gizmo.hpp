@@ -45,6 +45,19 @@ struct AABB {
 Ray pick_ray(const ViewCamera& cam, float ndc_x, float ndc_y);
 bool ray_hit_aabb(const Ray& ray, const AABB& box, float& out_t);
 
+// Viewport NDC (-1..1, +Y up) to image pixels (origin top-left). Standard
+// Vulkan puts NDC +Y in memory-BOTTOM rows (pinned by
+// render_memory_rows_follow_vulkan_top_left_origin), and the viewport Image
+// samples flipped-V so the widget matches — so NDC top (+1) is pixel row
+// `height`, NDC bottom (-1) is row 0. Negating the Y here mirrors picking
+// vertically while the centre still hits: the failure mode that looks like
+// "picking works" until an off-centre click misses.
+inline void viewport_ndc_to_pixel(float ndc_x, float ndc_y, float width, float height, float& out_x,
+                                  float& out_y) {
+    out_x = (ndc_x * 0.5f + 0.5f) * width;
+    out_y = (0.5f + ndc_y * 0.5f) * height;
+}
+
 // Nearest mesh-candidate entity hit by the NDC pointer position.
 // bounds_of maps an entity to its world-space bounds (absent = skipped).
 template <typename BoundsFn>
