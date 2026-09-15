@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 title NOVAForge Engine - Push to GitHub
 echo ====================================================================
@@ -13,9 +13,9 @@ echo Checking Git Remote Origin...
 git remote -v
 echo.
 
-set /p REPO_URL="Enter your GitHub Repository URL (or press Enter for https://github.com/abdallah2183/NOVAForge-Engine.git): "
+set /p REPO_URL="Enter your GitHub Repository URL (or press Enter for https://github.com/abdallah2183/SANAD-Engine.git): "
 if "%REPO_URL%"=="" (
-    set "REPO_URL=https://github.com/abdallah2183/NOVAForge-Engine.git"
+    set "REPO_URL=https://github.com/abdallah2183/SANAD-Engine.git"
 )
 
 echo.
@@ -47,3 +47,4 @@ if %ERRORLEVEL% equ 0 (
 )
 echo.
 pause
+

@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="Docs/images/novaforge_logo.jpg" alt="شعار محرك سند" width="220" style="border-radius: 24px; box-shadow: 0 12px 40px rgba(255, 145, 0, 0.35);" />
 </p>
 
@@ -25,7 +25,7 @@
 ---
 
 ## 🌐 الواجهة التفاعلية والموقع التعريفي
-يمكنك استعراض واجهة المحرك التفاعلية عبر فتح ملف [`index.html`](index.html) في متصفحك أو زيارة موقع المشروع على [GitHub Pages](https://abdallah2183.github.io/NOVAForge-Engine/)، حيث يتضمن مجسماً ثلاثي الأبعاد تفاعلياً ومواصفات كاملة للمحرك باللغتين العربية والإنجليزية.
+يمكنك استعراض واجهة المحرك التفاعلية عبر فتح ملف [`index.html`](index.html) في متصفحك أو زيارة موقع المشروع على [GitHub Pages](https://abdallah2183.github.io/SANAD-Engine/)، حيث يتضمن مجسماً ثلاثي الأبعاد تفاعلياً ومواصفات كاملة للمحرك باللغتين العربية والإنجليزية.
 
 ---
 
@@ -116,3 +116,4 @@ build_nf.bat
   <strong>المؤسس والقائم على العمل:</strong> <a href="https://github.com/abdallah2183"><strong>عبدالله (Abdallah)</strong></a><br>
   ومجتمع المطورين والمساهمين العرب.
 </p>
+

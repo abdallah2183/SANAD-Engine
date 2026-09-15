@@ -1,4 +1,4 @@
-# المساهمة في محرك سَنَد | Contributing to SANAD Engine
+﻿# المساهمة في محرك سَنَد | Contributing to SANAD Engine
 
 [العربية](#-دليل-المساهمة-باللغة-العربية) | [English](#-english-contributing-guide)
 
@@ -56,8 +56,8 @@
 
 2. **استنسخ نسختك محلياً:**
    ```bash
-   git clone https://github.com/<YOUR_USERNAME>/NOVAForge-Engine.git
-   cd NOVAForge-Engine
+   git clone https://github.com/<YOUR_USERNAME>/SANAD-Engine.git
+   cd SANAD-Engine
    ```
 
 3. **أنشئ فرعاً جديداً لميزتك:**
@@ -102,3 +102,4 @@ Welcome to the **SANAD Engine** community, founded and led by **Abdallah**! We a
 Thank you for contributing to the future of SANAD Engine! 🌟
 <br>
 *Founder & Project Lead: Abdallah (@abdallah2183)*
+

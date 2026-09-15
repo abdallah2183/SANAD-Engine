@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="Docs/images/novaforge_logo.jpg" alt="شعار محرك سند | Sanad Engine" width="220" style="border-radius: 24px; box-shadow: 0 12px 40px rgba(255, 145, 0, 0.35);" />
 </p>
 
@@ -26,7 +26,7 @@
 ---
 
 ## 🌐 الواجهة التفاعلية والموقع التعريفي (Web Showcase)
-يمكنك استعراض واجهة المحرك التفاعلية ثلاثية الأبعاد عبر فتح ملف [`index.html`](index.html) أو عبر [موقع المحرك على GitHub Pages](https://abdallah2183.github.io/NOVAForge-Engine/)، حيث يحتوي على مجسم تفاعلي وإحصائيات حية وخيارات تبديل اللغة (العربية / English).
+يمكنك استعراض واجهة المحرك التفاعلية ثلاثية الأبعاد عبر فتح ملف [`index.html`](index.html) أو عبر [موقع المحرك على GitHub Pages](https://abdallah2183.github.io/SANAD-Engine/)، حيث يحتوي على مجسم تفاعلي وإحصائيات حية وخيارات تبديل اللغة (العربية / English).
 
 ---
 
@@ -121,8 +121,8 @@ SANAD Engine has achieved **Phase 11 verification**:
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/abdallah2183/NOVAForge-Engine.git
-cd NOVAForge-Engine
+git clone https://github.com/abdallah2183/SANAD-Engine.git
+cd SANAD-Engine
 ```
 
 ### 2. Build the Engine (One-Click)
@@ -197,3 +197,4 @@ This project is licensed under the Apache License, Version 2.0. See the [LICENSE
   <strong>مؤسس المحرك والقائم على العمل:</strong> <a href="https://github.com/abdallah2183"><strong>عبدالله (Abdallah)</strong></a><br>
   <em>Founder & Lead Developer: Abdallah (<a href="https://github.com/abdallah2183">@abdallah2183</a>) & Community Contributors</em>
 </p>
+
