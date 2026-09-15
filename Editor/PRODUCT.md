@@ -1,4 +1,4 @@
-# NOVAForge Editor — Product (Phase 4 + Phase 5)
+# NOVAForge Editor — Product (Phase 4 + Phase 5 + Phase 6)
 
 ## Who
 A solo/team game developer iterating on `.nfscene` levels for hours on a
@@ -20,7 +20,8 @@ Windows desktop with a GPU.
 ## Decisions
 - Explicit inspector per component over generic reflection (ships now, correct now).
 - One undoable command per user gesture; gizmo drags commit once on release.
-- CPU ray/AABB picking first; GPU picking explicitly deferred.
+- GPU picking first (on-demand id pass); CPU ray/AABB stays the fallback
+  when the picker is unavailable or the pixel is empty.
 - Play = snapshot + lock (no gameplay systems in v0.1, so nothing can drift).
 - Keyboard: W/E/R gizmo, Ctrl+Z/Y undo/redo, Ctrl+S save, Delete request.
 
