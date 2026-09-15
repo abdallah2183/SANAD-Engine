@@ -208,6 +208,7 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_save_load.cpp
         EditorTests/test_playmode.cpp
         EditorTests/test_viewport.cpp
+        EditorTests/test_viewport_drag.cpp
         EditorTests/test_console.cpp
         EditorTests/test_ui_render.cpp
         EditorTests/test_materials.cpp

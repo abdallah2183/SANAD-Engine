@@ -8,6 +8,8 @@
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 
+#include <cmath>
+
 namespace nf::editor {
 
 EditorApp::EditorApp(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry,
@@ -69,6 +71,12 @@ bool EditorApp::new_scene(std::string& out_err) {
         out_err = "Stop play mode before creating a scene";
         return false;
     }
+    // A drag armed on the old world must not survive the switch: entity ids
+    // recycle, so the stale handle could alias a different entity.
+    {
+        std::string dummy;
+        viewport_abort_drag(dummy);
+    }
     // Build an empty scene through the loader path: save an empty scene to a
     // temp logical path, then load it so Runtime owns it like any other scene.
     scene::Scene empty("Untitled");
@@ -99,6 +107,10 @@ bool EditorApp::open_scene(const std::string& logical_path, std::string& out_err
     if (m_play.playing()) {
         out_err = "Stop play mode before opening a scene";
         return false;
+    }
+    {
+        std::string dummy;
+        viewport_abort_drag(dummy);
     }
     if (!m_runtime->load_scene(logical_path, out_err)) {
         return false;
@@ -1032,6 +1044,11 @@ bool EditorApp::play(std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    // A drag cannot cross into play mode (edits lock there): fold it away.
+    {
+        std::string dummy;
+        viewport_abort_drag(dummy);
+    }
     // Physics bodies are built from the scene when it is *loaded*. A RigidBody
     // and Collider added through the inspector while the scene is already open
     // therefore has no body yet, and Play would simulate the scene as it was on
@@ -1119,6 +1136,129 @@ ecs::Entity EditorApp::pick(const ViewCamera& cam, float ndc_x, float ndc_y) {
         return box;
     };
     return pick_entity(*w, bounds_of, cam, ndc_x, ndc_y);
+}
+
+namespace {
+
+constexpr float kDragDeadzoneNdc = 0.004f; // clicks must not become micro-drags
+
+float drag_distance_to(const ViewCamera& vc, const scene::Transform& t) {
+    const float dx = t.world_x - vc.px;
+    const float dy = t.world_y - vc.py;
+    const float dz = t.world_z - vc.pz;
+    const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    return len > 1e-4f ? len : 1e-4f;
+}
+
+} // namespace
+
+bool EditorApp::viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    const ecs::Entity hit = pick(vc, ndc_x, ndc_y);
+    if (!hit.valid()) {
+        // Miss: deselect (standard), and make sure no stale drag survives.
+        m_selection.clear();
+        m_drag.cancel();
+        return true;
+    }
+    m_selection.set_single(hit);
+    const auto* t = w->get<scene::Transform>(hit);
+    if (t == nullptr) {
+        m_drag.cancel();
+        out_err = "Selected entity has no Transform";
+        return false;
+    }
+    if (!m_drag.begin(*w, hit, m_gizmo_mode, m_gizmo_space, out_err)) {
+        return false;
+    }
+    m_drag_vc = vc;
+    m_drag_ndc0x = ndc_x;
+    m_drag_ndc0y = ndc_y;
+    m_drag_lastx = ndc_x;
+    m_drag_lasty = ndc_y;
+    m_drag_distance = drag_distance_to(vc, *t);
+    m_drag_moved = false;
+    return true;
+}
+
+bool EditorApp::viewport_drag(float ndc_x, float ndc_y, const ViewCamera& vc, std::string& out_err) {
+    (void)vc; // mapping uses the press-time camera: the view must not shift under the gesture
+    if (!m_drag.active()) {
+        return true;
+    }
+    ecs::World* w = world();
+    if (!require_editable(out_err) || w == nullptr) {
+        m_drag.cancel();
+        if (w == nullptr) {
+            out_err = "No scene open";
+        }
+        return false;
+    }
+    if (!m_drag_moved) {
+        const float dx = ndc_x - m_drag_ndc0x;
+        const float dy = ndc_y - m_drag_ndc0y;
+        if (dx * dx + dy * dy < kDragDeadzoneNdc * kDragDeadzoneNdc) {
+            return true;
+        }
+        m_drag_moved = true;
+    }
+    const GizmoDelta d =
+        gizmo_delta_for_drag(m_gizmo_mode, m_drag_vc, m_drag_distance, m_drag_lastx, m_drag_lasty,
+                             ndc_x, ndc_y);
+    m_drag.accumulate(d);
+    m_drag_lastx = ndc_x;
+    m_drag_lasty = ndc_y;
+    if (!m_drag.live_apply(*w)) {
+        m_drag.cancel();
+        out_err = "Drag target lost";
+        return false;
+    }
+    after_mutation(m_drag.entity());
+    return true;
+}
+
+bool EditorApp::viewport_release(std::string& out_err) {
+    if (!m_drag.active()) {
+        return true;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        m_drag.cancel();
+        out_err = "No scene open";
+        return false;
+    }
+    // A click without movement folds into nothing (commit returns nullptr),
+    // so selection clicks never pollute the undo stack.
+    if (std::unique_ptr<ICommand> cmd = m_drag.commit(*w)) {
+        const ecs::Entity target = cmd->target();
+        m_stack.push(std::move(cmd), *w);
+        after_mutation(target);
+    }
+    (void)out_err;
+    return true;
+}
+
+bool EditorApp::viewport_abort_drag(std::string& out_err) {
+    if (!m_drag.active()) {
+        return true;
+    }
+    ecs::World* w = world();
+    const ecs::Entity e = m_drag.entity();
+    if (w != nullptr && e.valid() && w->is_alive(e)) {
+        m_drag.abort(*w);
+        after_mutation(e);
+    } else {
+        m_drag.cancel();
+    }
+    (void)out_err;
+    return true;
 }
 
 void EditorApp::tick(float dt) {

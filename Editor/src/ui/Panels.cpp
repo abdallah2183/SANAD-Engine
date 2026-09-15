@@ -617,16 +617,52 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // Pixels are proven by render_offscreen plus periodic readback.
         ImVec2 img_size(avail_w > 0.0f ? avail_w : 10.0f, avail_h - 24.0f > 0.0f ? avail_h - 24.0f : 10.0f);
         ImGui::Image(static_cast<ImTextureID>(UiRenderer::kViewportTextureId), img_size);
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        // Pointer gesture state machine (one viewport, so statics are fine):
+        // press on the image arms a gizmo drag in the app, movement feeds it,
+        // release folds one undoable command. NDC is recomputed from the live
+        // mouse position every frame (the panel can resize mid-gesture).
+        {
             const ImVec2 mn = ImGui::GetItemRectMin();
             const ImVec2 mx = ImGui::GetItemRectMax();
-            const ImVec2 mp = ImGui::GetIO().MousePos;
             const float w = mx.x - mn.x;
             const float h = mx.y - mn.y;
-            if (w > 1.0f && h > 1.0f) {
-                intents.viewport_pick = true;
-                intents.pick_ndc_x = ((mp.x - mn.x) / w) * 2.0f - 1.0f;
-                intents.pick_ndc_y = 1.0f - ((mp.y - mn.y) / h) * 2.0f;
+            auto to_ndc = [&](float& out_x, float& out_y) {
+                const ImVec2 mp = ImGui::GetIO().MousePos;
+                float fx = (w > 1.0f) ? (mp.x - mn.x) / w : 0.0f;
+                float fy = (h > 1.0f) ? (mp.y - mn.y) / h : 0.0f;
+                if (fx < 0.0f) fx = 0.0f;
+                if (fx > 1.0f) fx = 1.0f;
+                if (fy < 0.0f) fy = 0.0f;
+                if (fy > 1.0f) fy = 1.0f;
+                out_x = fx * 2.0f - 1.0f;
+                out_y = 1.0f - fy * 2.0f;
+            };
+            static bool press_armed = false;
+            static float last_ndc_x = 0.0f;
+            static float last_ndc_y = 0.0f;
+            if (!press_armed && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                if (w > 1.0f && h > 1.0f) {
+                    press_armed = true;
+                    intents.viewport_press = true;
+                    to_ndc(intents.press_ndc_x, intents.press_ndc_y);
+                    last_ndc_x = intents.press_ndc_x;
+                    last_ndc_y = intents.press_ndc_y;
+                }
+            } else if (press_armed) {
+                if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    float nx = 0.0f, ny = 0.0f;
+                    to_ndc(nx, ny);
+                    if (nx != last_ndc_x || ny != last_ndc_y) {
+                        intents.viewport_drag = true;
+                        intents.drag_ndc_x = nx;
+                        intents.drag_ndc_y = ny;
+                        last_ndc_x = nx;
+                        last_ndc_y = ny;
+                    }
+                } else {
+                    intents.viewport_release = true;
+                    press_armed = false;
+                }
             }
         }
         if (ImGui::BeginDragDropTarget()) {
@@ -638,6 +674,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         }
         if (!app.selection().has_selection()) {
             ImGui::TextDisabled("No selection — gizmo disabled. Click the scene or an outliner row.");
+        } else if (!app.viewport_dragging()) {
+            ImGui::TextDisabled("Drag the selection to move it (W/E/R switch mode, Esc cancels).");
+        } else {
+            ImGui::TextDisabled("Dragging… release to commit (one undo step), Esc cancels.");
         }
     }
     ImGui::End();

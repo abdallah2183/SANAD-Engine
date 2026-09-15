@@ -45,10 +45,18 @@ struct UiIntents {
     // Mesh asset dropped onto the viewport panel (logical path).
     bool viewport_drop = false;
     std::string dropped_mesh_path;
-    // Viewport pick request in panel NDC.
-    bool viewport_pick = false;
-    float pick_ndc_x = 0.0f;
-    float pick_ndc_y = 0.0f;
+    // Viewport pointer gesture (left button): press hit-tests, selects and
+    // arms a gizmo drag; drag moves the selection live; release folds the
+    // whole gesture into one undoable command (a click without movement
+    // folds into nothing, so plain selection never touches undo).
+    // Panel NDC in all three.
+    bool viewport_press = false;
+    float press_ndc_x = 0.0f;
+    float press_ndc_y = 0.0f;
+    bool viewport_drag = false;
+    float drag_ndc_x = 0.0f;
+    float drag_ndc_y = 0.0f;
+    bool viewport_release = false;
 
     // --- Project actions -----------------------------------------------------
     // Scaffolding and building happen in main.cpp, not here: this layer only

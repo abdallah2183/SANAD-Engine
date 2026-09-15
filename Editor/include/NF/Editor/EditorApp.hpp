@@ -182,6 +182,18 @@ public:
     // --- Picking (viewport NDC -> selection) ---
     ecs::Entity pick(const ViewCamera& cam, float ndc_x, float ndc_y);
 
+    // --- Viewport mouse drag (move/rotate/scale with the pointer) ---
+    // press() hit-tests, selects, and arms a drag (no scene change yet);
+    // drag() live-applies pointer movement (no undo entry yet); release()
+    // folds the whole gesture into ONE undoable command (a click without
+    // movement folds into nothing). abort() restores the start transform
+    // with no undo entry (Escape / scene switch). All respect the play lock.
+    bool viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, std::string& out_err);
+    bool viewport_drag(float ndc_x, float ndc_y, const ViewCamera& vc, std::string& out_err);
+    bool viewport_release(std::string& out_err);
+    bool viewport_abort_drag(std::string& out_err);
+    bool viewport_dragging() const { return m_drag.active(); }
+
     // --- Frame ---
     void tick(float dt);
 
@@ -236,6 +248,16 @@ private:
     ViewportState m_viewport;
     GizmoMode m_gizmo_mode = GizmoMode::Translate;
     GizmoSpace m_gizmo_space = GizmoSpace::World;
+    // Active pointer drag state (viewport mouse move). Not part of the undo
+    // stack until release() folds it; aborted (not committed) on scene switch.
+    GizmoDrag m_drag;
+    ViewCamera m_drag_vc{};
+    float m_drag_ndc0x = 0.0f;
+    float m_drag_ndc0y = 0.0f;
+    float m_drag_lastx = 0.0f;
+    float m_drag_lasty = 0.0f;
+    float m_drag_distance = 1.0f;
+    bool m_drag_moved = false;
 
     double m_fps = 0.0;
     double m_frame_ms = 0.0;

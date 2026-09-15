@@ -98,9 +98,17 @@ public:
     void accumulate(const GizmoDelta& d);
     bool active() const { return m_active; }
     ecs::Entity entity() const { return m_entity; }
+    GizmoMode mode() const { return m_mode; }
+    // Writes the current total onto the entity for live feedback during the
+    // drag (no undo entry — commit() folds it all into one command later).
+    // Returns false when there is nothing to show (idle/dead/transformless).
+    bool live_apply(ecs::World& world);
     // Folds the accumulated delta into one command (nullptr when idle/dead).
     std::unique_ptr<ICommand> commit(ecs::World& world);
     void cancel();
+    // Restores the start transform and ends the drag (Escape / scene switch):
+    // unlike cancel(), leaves no moved-without-undo state behind.
+    bool abort(ecs::World& world);
 
 private:
     bool m_active = false;

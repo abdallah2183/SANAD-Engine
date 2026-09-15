@@ -217,4 +217,31 @@ void GizmoDrag::cancel() {
     m_total = GizmoDelta{};
 }
 
+bool GizmoDrag::live_apply(ecs::World& world) {
+    if (!m_active || !m_entity.valid() || !world.is_alive(m_entity)) {
+        return false;
+    }
+    auto* t = world.get<scene::Transform>(m_entity);
+    if (t == nullptr) {
+        return false;
+    }
+    *t = apply_gizmo_delta(m_start, m_total, m_mode, m_space);
+    t->dirty = true;
+    return true;
+}
+
+bool GizmoDrag::abort(ecs::World& world) {
+    if (!m_active) {
+        return false;
+    }
+    const bool restored = m_entity.valid() && world.is_alive(m_entity) &&
+                          world.get<scene::Transform>(m_entity) != nullptr;
+    if (restored) {
+        *world.get<scene::Transform>(m_entity) = m_start;
+        world.get<scene::Transform>(m_entity)->dirty = true;
+    }
+    cancel();
+    return restored;
+}
+
 } // namespace nf::editor

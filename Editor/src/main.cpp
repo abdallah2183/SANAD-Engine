@@ -19,7 +19,10 @@
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Core/Logger.hpp>
+#include <NF/Core/Math.hpp>
 #include <NF/Core/Time.hpp>
+
+#include <cmath>
 #include <NF/Platform/Platform.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/RHI/RHI.hpp>
@@ -648,6 +651,10 @@ int main(int argc, char** argv) {
                 if (key_edge(VK_DELETE) && app.selection().has_selection()) {
                     app.request_delete(app.selection().primary());
                 }
+                if (key_edge(VK_ESCAPE) && app.viewport_dragging()) {
+                    std::string e;
+                    app.viewport_abort_drag(e);
+                }
             }
 
             runtime.update(dt);
@@ -959,16 +966,30 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                if (ui_in.viewport_pick) {
+                if (ui_in.viewport_press || ui_in.viewport_drag) {
                     const float aspect = (vp_state.height != 0)
-                                             ? (static_cast<float>(vp_state.width) /
-                                                static_cast<float>(vp_state.height))
-                                             : 16.0f / 9.0f;
+                                              ? (static_cast<float>(vp_state.width) /
+                                                 static_cast<float>(vp_state.height))
+                                              : 16.0f / 9.0f;
                     const nf::editor::ViewCamera vc =
                         view_camera_from_scene(runtime.scene(), aspect);
-                    const nf::ecs::Entity hit = app.pick(vc, ui_in.pick_ndc_x, ui_in.pick_ndc_y);
-                    if (hit.valid()) {
-                        app.selection().set_single(hit);
+                    if (ui_in.viewport_press) {
+                        std::string e;
+                        if (!app.viewport_press(ui_in.press_ndc_x, ui_in.press_ndc_y, vc, e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Viewport press: {}", e);
+                        }
+                    }
+                    if (ui_in.viewport_drag) {
+                        std::string e;
+                        if (!app.viewport_drag(ui_in.drag_ndc_x, ui_in.drag_ndc_y, vc, e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Viewport drag: {}", e);
+                        }
+                    }
+                }
+                if (ui_in.viewport_release) {
+                    std::string e;
+                    if (!app.viewport_release(e)) {
+                        NF_LOG_WARN(nf::LogCategory::Editor, "Viewport release: {}", e);
                     }
                 }
             }
@@ -985,6 +1006,7 @@ int main(int argc, char** argv) {
             // --- Deterministic automation proof (only with --frames) --------
             if (automation) {
                 const uint32_t f = frame_count;
+                static float automation_drag_start_x = 0.0f;
                 if (f == 2) {
                     auto hit = find_first_mesh(app.world());
                     auto_check(hit.has_value(), "Inspector target (mesh entity)");
@@ -1023,6 +1045,55 @@ int main(int argc, char** argv) {
                     std::string e;
                     const bool ok = app.redo(e);
                     auto_check(ok, "Redo");
+                }
+                if (f == 10) {
+                    // Pointer drag through the app entry point (what the
+                    // viewport panel feeds): press on the cube, move right.
+                    std::string e;
+                    bool ok = false;
+                    if (auto hit = find_first_mesh(app.world())) {
+                        const auto* t = app.world()->get<nf::scene::Transform>(*hit);
+                        const float aspect = (vp_state.height != 0)
+                                                  ? (static_cast<float>(vp_state.width) /
+                                                     static_cast<float>(vp_state.height))
+                                                  : 16.0f / 9.0f;
+                        const nf::editor::ViewCamera vc =
+                            view_camera_from_scene(runtime.scene(), aspect);
+                        const nf::Mat4 view = nf::Mat4::look_at(
+                            nf::Vec3{vc.px, vc.py, vc.pz}, nf::Vec3{vc.tx, vc.ty, vc.tz},
+                            nf::Vec3{0.0f, 1.0f, 0.0f});
+                        const nf::Mat4 proj = nf::Mat4::perspective(
+                            vc.fov_y_deg * 3.14159265359f / 180.0f, aspect, vc.near_plane,
+                            vc.far_plane);
+                        const nf::Vec3 ndc =
+                            (view * proj).transform_point(nf::Vec3{t->world_x, t->world_y, t->world_z});
+                        automation_drag_start_x = t->local_x;
+                        ok = app.viewport_press(ndc.x, ndc.y, vc, e) &&
+                             app.viewport_drag(ndc.x + 0.15f, ndc.y, vc, e) &&
+                             app.viewport_dragging();
+                    } else {
+                        e = "no mesh entity";
+                    }
+                    auto_check(ok, "Viewport drag moves selection live");
+                }
+                if (f == 11) {
+                    std::string e;
+                    const size_t before = app.stack().undo_size();
+                    bool ok = app.viewport_release(e);
+                    const auto sel = app.selection().primary();
+                    const auto* t = (app.world() && sel.valid())
+                                        ? app.world()->get<nf::scene::Transform>(sel)
+                                        : nullptr;
+                    ok = ok && t != nullptr && t->local_x > 0.2f &&
+                         app.stack().undo_size() == before + 1;
+                    auto_check(ok, "Viewport release folds one undo step");
+                    if (ok) {
+                        ok = app.undo(e);
+                        const auto* rt = app.world()->get<nf::scene::Transform>(sel);
+                        ok = ok && rt != nullptr &&
+                             std::abs(rt->local_x - automation_drag_start_x) < 1e-4f;
+                        auto_check(ok, "Viewport drag undoes cleanly");
+                    }
                 }
                 if (f == 15) {
                     std::string e;
