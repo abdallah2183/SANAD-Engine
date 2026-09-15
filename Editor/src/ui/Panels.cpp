@@ -19,6 +19,7 @@
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h> // DockBuilder: default layout only (first frame)
 #include <backends/imgui_impl_win32.h>
 
 #include <algorithm>
@@ -269,7 +270,36 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+    // Full-window dockspace with a Unity-style default layout, built once:
+    // Outliner left, Viewport center, Inspector right, Assets + Console
+    // tabbed at the bottom. The layout is rebuilt every launch (IniFilename
+    // is null, so there is nothing to load it from) but never again within
+    // a session, so the user can still drag panels around freely.
+    {
+        const ImGuiID dockspace_id = ImGui::GetID("NOVAForgeDockSpace");
+        ImGui::DockSpaceOverViewport(dockspace_id, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+        static bool dock_layout_built = false;
+        if (!dock_layout_built) {
+            dock_layout_built = true;
+            ImGui::DockBuilderRemoveNode(dockspace_id);
+            ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
+
+            ImGuiID dock_left = 0, dock_right = 0, dock_bottom = 0, dock_center = 0;
+            ImGuiID dock_rest = dockspace_id;
+            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Left, 0.18f, &dock_left, &dock_rest);
+            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Right, 0.24f, &dock_right, &dock_rest);
+            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
+
+            ImGui::DockBuilderDockWindow("Outliner", dock_left);
+            ImGui::DockBuilderDockWindow("Viewport", dock_center);
+            ImGui::DockBuilderDockWindow("Inspector", dock_right);
+            ImGui::DockBuilderDockWindow("Assets", dock_bottom);
+            ImGui::DockBuilderDockWindow("Console", dock_bottom);
+            ImGui::DockBuilderFinish(dockspace_id);
+        }
+    }
 
     const EditorStatus st = app.status();
 
