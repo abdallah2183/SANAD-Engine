@@ -1,6 +1,7 @@
 // NF/Editor/Prefabs.cpp — subtree clone helpers (see header).
 
 #include <NF/Editor/Prefabs.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
@@ -35,25 +36,15 @@ std::vector<ecs::Entity> collect_subtree(const ecs::World& world, ecs::Entity ro
 namespace {
 
 void copy_components(const ecs::World& src, ecs::Entity se, ecs::World& dst, ecs::Entity de) {
-    if (const auto* t = src.get<scene::Transform>(se)) {
-        dst.add<scene::Transform>(de, *t);
+    // The component list itself lives in the runtime scene loader, next to
+    // the parser: prefab cloning and scene merging share it, so a newly
+    // parsed component type cannot reach one consumer but not the other.
+    // Only the clone-specific fixup stays here: a clone starts parentless
+    // (the remap pass below re-parents it) with a dirty transform.
+    runtime::copy_scene_entity(src, se, dst, de);
+    if (dst.get<scene::Transform>(de) != nullptr) {
         dst.get<scene::Transform>(de)->parent = ecs::kInvalidEntity;
         dst.get<scene::Transform>(de)->dirty = true;
-    }
-    if (const auto* n = src.get<scene::NameComponent>(se)) {
-        dst.add<scene::NameComponent>(de, *n);
-    }
-    if (const auto* m = src.get<runtime::MeshComponent>(se)) {
-        dst.add<runtime::MeshComponent>(de, *m);
-    }
-    if (const auto* c = src.get<runtime::CameraComponent>(se)) {
-        dst.add<runtime::CameraComponent>(de, *c);
-    }
-    if (const auto* l = src.get<runtime::DirectionalLight>(se)) {
-        dst.add<runtime::DirectionalLight>(de, *l);
-    }
-    if (const auto* p = src.get<scene::PrefabLinkComponent>(se)) {
-        dst.add<scene::PrefabLinkComponent>(de, *p);
     }
 }
 

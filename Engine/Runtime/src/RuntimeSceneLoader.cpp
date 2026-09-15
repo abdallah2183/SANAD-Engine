@@ -15,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <cstring>
+#include <unordered_map>
 
 namespace nf::runtime {
 
@@ -561,6 +562,145 @@ bool save_scene_to_vfs(assets::VirtualFileSystem& vfs, const std::string& logica
     auto r = vfs.resolve(logical_path);
     if (!r.ok) { out_error = r.error; return false; }
     return save_scene_to_physical(r.value, scene_obj, out_error);
+}
+
+void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, ecs::Entity de) {
+    if (const auto* t = src.get<scene::Transform>(se)) {
+        dst.add<scene::Transform>(de, *t);
+    }
+    if (const auto* n = src.get<scene::NameComponent>(se)) {
+        dst.add<scene::NameComponent>(de, *n);
+    }
+    if (const auto* p = src.get<scene::PrefabLinkComponent>(se)) {
+        dst.add<scene::PrefabLinkComponent>(de, *p);
+    }
+    if (const auto* m = src.get<MeshComponent>(se)) {
+        dst.add<MeshComponent>(de, *m);
+    }
+    if (const auto* l = src.get<DirectionalLight>(se)) {
+        dst.add<DirectionalLight>(de, *l);
+    }
+    if (const auto* c = src.get<CameraComponent>(se)) {
+        dst.add<CameraComponent>(de, *c);
+    }
+    if (const auto* rb = src.get<physics::RigidBodyComponent>(se)) {
+        physics::RigidBodyComponent fresh = *rb;
+        // A live body handle is per-session, never scene data: copying it
+        // would alias two entities onto one body (or a dead one). The
+        // runtime rebuilds bodies from the components after a merge/load.
+        fresh.body = physics::BodyHandle{};
+        dst.add<physics::RigidBodyComponent>(de, fresh);
+    }
+    if (const auto* col = src.get<physics::ColliderComponent>(se)) {
+        dst.add<physics::ColliderComponent>(de, *col);
+    }
+    if (const auto* a = src.get<animation::AnimationComponent>(se)) {
+        dst.add<animation::AnimationComponent>(de, *a);
+    }
+    if (const auto* au = src.get<audio::AudioComponent>(se)) {
+        dst.add<audio::AudioComponent>(de, *au);
+    }
+    if (const auto* g = src.get<gameplay::GameplayModuleComponent>(se)) {
+        dst.add<gameplay::GameplayModuleComponent>(de, *g);
+    }
+}
+
+namespace {
+
+std::vector<ecs::Entity> collect_members(const ecs::World& world, ecs::Entity root) {
+    std::vector<ecs::Entity> out;
+    if (!root.valid() || !world.is_alive(root)) {
+        return out;
+    }
+    // Iterative pre-order DFS (parent before children).
+    std::vector<ecs::Entity> stack{root};
+    while (!stack.empty()) {
+        ecs::Entity cur = stack.back();
+        stack.pop_back();
+        if (!world.is_alive(cur)) {
+            continue;
+        }
+        out.push_back(cur);
+        auto kids = scene::get_children(world, cur);
+        for (auto it = kids.rbegin(); it != kids.rend(); ++it) {
+            stack.push_back(*it);
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+SceneMergeResult merge_scene_into_world(assets::VirtualFileSystem& vfs, const std::string& logical_path,
+                                        ecs::World& dst_world) {
+    SceneMergeResult out;
+    SceneLoadResult loaded = load_scene_from_vfs(vfs, logical_path);
+    if (!loaded.success || !loaded.scene) {
+        out.error = loaded.error.empty() ? ("Cannot merge scene '" + logical_path + "'") : loaded.error;
+        return out;
+    }
+    const ecs::World& src = loaded.scene->world();
+
+    // Roots: entities with no live parent in the chunk (same rule as prefab
+    // templates). Internal hierarchy is remapped below; chunk roots become
+    // parentless members of the live world.
+    std::vector<ecs::Entity> roots;
+    for (ecs::Entity e : src.all_entities()) {
+        const auto* t = src.get<scene::Transform>(e);
+        if (t == nullptr || !t->parent.valid() || !src.is_alive(t->parent)) {
+            roots.push_back(e);
+        }
+    }
+
+    std::unordered_map<u32, ecs::Entity> remap;
+    for (ecs::Entity root : roots) {
+        const std::vector<ecs::Entity> members = collect_members(src, root);
+        if (members.empty()) {
+            continue;
+        }
+        ecs::Entity new_root;
+        bool first = true;
+        for (ecs::Entity se : members) {
+            ecs::Entity de = dst_world.create_entity();
+            remap[se.id] = de;
+            copy_scene_entity(src, se, dst_world, de);
+            // Chunk roots start parentless (their file parent, if any, did
+            // not survive the liveness check above); the remap pass below
+            // only rewires members below their own root.
+            if (auto* dt = dst_world.get<scene::Transform>(de)) {
+                dt->parent = ecs::kInvalidEntity;
+                dt->dirty = true;
+            }
+            if (first) {
+                new_root = de;
+                first = false;
+            }
+        }
+        for (ecs::Entity se : members) {
+            if (se == root) {
+                continue;
+            }
+            const auto* st = src.get<scene::Transform>(se);
+            if (st == nullptr || !st->parent.valid()) {
+                continue;
+            }
+            const auto it = remap.find(st->parent.id);
+            if (it != remap.end()) {
+                scene::set_parent(dst_world, remap[se.id], it->second);
+            }
+        }
+        if (new_root.valid()) {
+            out.created.push_back(new_root);
+        }
+    }
+
+    scene::propagate_transforms(dst_world);
+    out.warnings = loaded.warnings;
+    for (const std::string& missing : loaded.missing_assets) {
+        out.warnings.push_back("Missing asset: " + missing);
+    }
+    out.success = true;
+    return out;
 }
 
 } // namespace nf::runtime

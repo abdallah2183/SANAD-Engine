@@ -31,13 +31,6 @@ f32 safe_scale_ratio(f32 posed, f32 rest) {
     return posed / rest;
 }
 
-// The rendering module carries its own minimal Vec3 (Rendering/Camera.hpp)
-// rather than the core one, so a camera position has to be converted, not
-// assigned.
-Vec3 from_rendering(const rendering::Vec3& v) {
-    return Vec3(v.x, v.y, v.z);
-}
-
 } // namespace
 
 Runtime::Runtime(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry, assets::AssetManager& manager,
@@ -191,8 +184,8 @@ bool Runtime::ensure_renderer_initialized_for(uint32_t width, uint32_t height) {
     m_renderer->set_mesh_library(m_mesh_library.get());
     // Sensible defaults; per-frame extraction overrides the directional light.
     m_renderer->set_directional_light(rendering::DirectionalLight{
-        rendering::Vec3{-0.5f, -1.0f, -0.3f},
-        rendering::Vec3{1.0f, 1.0f, 1.0f},
+        Vec3{-0.5f, -1.0f, -0.3f},
+        Vec3{1.0f, 1.0f, 1.0f},
         1.0f,
         true,
     });
@@ -428,6 +421,10 @@ void Runtime::mark_scene_edited() {
 }
 
 void Runtime::update(float dt) {
+    // Streaming first: it moves world membership (merge/unload chunks), and
+    // everything below — asset sync, physics, animation — must see the
+    // post-stream world. No-op unless enable_streaming ran.
+    step_streaming();
     // AssetManager.update(): finalize async loads finished on workers
     // (Loading -> Ready). The GPU upload is sync_meshes_from_assets' business
     // via rendering::MeshLibrary, since Phase 11 W1.
@@ -627,14 +624,14 @@ u32 Runtime::step_audio(float dt) {
     {
         rendering::Camera cam{};
         if (extract_camera(0, 0, cam)) {
-            const Vec3 cam_pos = from_rendering(cam.position);
+            const Vec3 cam_pos = cam.position;
             m_audio_listener.position = cam_pos;
-            const Vec3 forward = from_rendering(cam.target) - cam_pos;
+            const Vec3 forward = cam.target - cam_pos;
             const f32 len = forward.length();
             if (len > 1e-6f) {
                 m_audio_listener.forward = forward * (1.0f / len);
             }
-            m_audio_listener.up = from_rendering(cam.up);
+            m_audio_listener.up = cam.up;
         }
     }
 
@@ -904,6 +901,142 @@ void Runtime::apply_gameplay_state() {
     }
 }
 
+void Runtime::enable_streaming(const std::string& chunk_dir_logical,
+                               const scene::StreamingVolume& volume) {
+    if (m_streaming_enabled) {
+        disable_streaming();
+    }
+    m_streaming_chunk_dir = chunk_dir_logical;
+    m_streaming_enabled = true;
+    m_streamer.set_handlers(
+        [this](const scene::ChunkCoord& coord, std::vector<ecs::Entity>& out_created,
+               std::string& out_error) { return streaming_load_chunk(coord, out_created, out_error); },
+        [this](const scene::ChunkCoord& coord, const std::vector<ecs::Entity>& created) {
+            streaming_unload_chunk(coord, created);
+        });
+    m_streamer.set_volume(volume);
+    m_streaming_known_loaded = m_streamer.loaded_chunk_count();
+}
+
+void Runtime::disable_streaming() {
+    if (!m_streaming_enabled) {
+        return;
+    }
+    m_streamer.clear();
+    m_streaming_enabled = false;
+    m_streaming_chunk_dir.clear();
+    resync_after_streaming();
+}
+
+void Runtime::set_streaming_volume(const scene::StreamingVolume& volume) {
+    m_streamer.set_volume(volume);
+}
+
+u32 Runtime::step_streaming() {
+    if (!m_streaming_enabled || !has_scene()) {
+        return 0;
+    }
+    const u32 loaded = m_streamer.update();
+    if (m_streamer.loaded_chunk_count() != m_streaming_known_loaded) {
+        resync_after_streaming();
+    }
+    return loaded;
+}
+
+bool Runtime::streaming_load_chunk(const scene::ChunkCoord& coord,
+                                   std::vector<ecs::Entity>& out_created, std::string& out_error) {
+    if (!has_scene()) {
+        out_error = "No scene loaded";
+        return false;
+    }
+    const std::string path = m_streaming_chunk_dir + "/chunk_" + std::to_string(coord.x) + "_" +
+                             std::to_string(coord.y) + "_" + std::to_string(coord.z) + ".nfscene";
+    SceneMergeResult merged =
+        merge_scene_into_world(m_vfs, path, m_scene_data_ptr->scene->world());
+    if (!merged.success) {
+        out_error = merged.error;
+        return false;
+    }
+    // The streamer contract wants EVERY added entity (it counts them and
+    // hands them back at unload), while the merge reports roots. Expand here:
+    // parent-first collection, so unloading in reverse destroys children
+    // before the parents whose links they hold.
+    auto& world = m_scene_data_ptr->scene->world();
+    for (ecs::Entity root : merged.created) {
+        if (!world.is_alive(root)) {
+            continue;
+        }
+        // Per-root member list (parent first): the outer list accumulates
+        // across roots, so walking it directly would re-add earlier roots'
+        // subtrees as duplicates.
+        std::vector<ecs::Entity> members{root};
+        for (size_t i = 0; i < members.size(); ++i) {
+            for (ecs::Entity kid : scene::get_children(world, members[i])) {
+                if (world.is_alive(kid)) {
+                    members.push_back(kid);
+                }
+            }
+        }
+        out_created.insert(out_created.end(), members.begin(), members.end());
+    }
+    NF_LOG_INFO(LogCategory::Core, "Runtime: streamed in '{}' ({} new roots, {} entities)", path,
+                merged.created.size(), out_created.size());
+    return true;
+}
+
+void Runtime::streaming_unload_chunk(const scene::ChunkCoord& coord,
+                                     const std::vector<ecs::Entity>& created) {
+    if (!has_scene()) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    size_t destroyed = 0;
+    for (ecs::Entity root : created) {
+        if (!world.is_alive(root)) {
+            continue;
+        }
+        // Destroy the whole subtree, children first: destroy_entity removes
+        // components but does not cascade, and a member destroyed before its
+        // children would strand their parent links.
+        std::vector<ecs::Entity> members{root};
+        for (size_t i = 0; i < members.size(); ++i) {
+            for (ecs::Entity kid : scene::get_children(world, members[i])) {
+                if (world.is_alive(kid)) {
+                    members.push_back(kid);
+                }
+            }
+        }
+        for (auto it = members.rbegin(); it != members.rend(); ++it) {
+            world.destroy_entity(*it);
+            ++destroyed;
+        }
+    }
+    NF_LOG_INFO(LogCategory::Core, "Runtime: streamed out chunk ({},{},{}) ({} entities)", coord.x,
+                coord.y, coord.z, destroyed);
+}
+
+void Runtime::resync_after_streaming() {
+    m_streaming_known_loaded = m_streamer.loaded_chunk_count();
+    if (!has_scene()) {
+        return;
+    }
+    // Merged entities reference meshes by stable AssetId exactly like a fresh
+    // load, so the same kick starts their async loads; the frame's asset sync
+    // uploads whatever is ready.
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<MeshComponent>()) {
+        auto* comp = world.get<MeshComponent>(e);
+        if (comp != nullptr && comp->mesh_id.valid()) {
+            m_manager.load_mesh(comp->mesh_id);
+        }
+    }
+    // Full physics rebuild: merged bodies get created, unloaded bodies are
+    // gone with the fresh world. Loads are rare capped events, so the simple
+    // correct pass beats an incremental one that must mirror its invariants.
+    rebuild_physics_from_scene();
+    mark_scene_edited();
+}
+
 void Runtime::rebuild_physics_from_scene() {
     m_physics = std::make_unique<physics::PhysicsWorld>();
     m_physics_clock.reset();
@@ -1093,13 +1226,10 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
         ro.transform.y = tr->world_y;
         ro.transform.z = tr->world_z;
         // Full TRS matrix: translation from the propagated world position,
-        // rotation/scale from the local transform. Matches compose_trs().
-        float m[16]{};
-        scene::compose_trs(tr->world_x, tr->world_y, tr->world_z, tr->rot_x, tr->rot_y, tr->rot_z,
-                           tr->scale_x, tr->scale_y, tr->scale_z, m);
-        for (int i = 0; i < 16; ++i) {
-            ro.world.m[i] = m[i];
-        }
+        // rotation/scale from the local transform.
+        ro.world = scene::compose_trs_mat4(tr->world_x, tr->world_y, tr->world_z, tr->rot_x,
+                                           tr->rot_y, tr->rot_z, tr->scale_x, tr->scale_y,
+                                           tr->scale_z);
         ro.mesh_handle = it->second;
         // Shared material assignment: same path shares one renderer instance.
         ro.material_handle = material_for_path(mc->material);

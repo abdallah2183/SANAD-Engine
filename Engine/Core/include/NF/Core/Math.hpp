@@ -172,7 +172,21 @@ struct Vec4 {
 };
 
 // =========================================================================
-// Mat4 — Row-major 4x4 matrix
+// Mat4 — 4x4 matrix, the engine's ONE matrix type (owned by NFCore).
+//
+// Storage is row-major: m[row][col]. Vectors apply on the LEFT (row
+// vectors): v' = v * M, so translation lives in row 3 (m[3][0..2]) and a
+// composed transform reads left-to-right in application order
+// (M = scale * rotation * translate applies scale first).
+//
+// GPU uploads are a plain memcpy of m — and that is correct, not a shortcut:
+// row-major-flat of the row-vector matrix is elementwise identical to
+// column-major-flat of the same transform in column-vector form (the form
+// GLSL mat4 and the shaders' `view_proj * model * pos` expect), because the
+// two forms are transposes of each other. A second, "column-major" Mat4 type
+// existed in the renderer and was deleted in favour of this one; do NOT
+// reintroduce it, and do NOT "transpose for the GPU" — either silently
+// transposes every transform in the scene.
 // =========================================================================
 struct Mat4 {
     // Row-major: m[row][col]
@@ -204,6 +218,8 @@ struct Mat4 {
     Mat4 transposed() const;
     Mat4 inverse() const;
 };
+static_assert(sizeof(Mat4) == 16 * sizeof(f32),
+              "Mat4 must stay a tight 4x4: GPU uploads memcpy it");
 
 // =========================================================================
 // Quat — Quaternion for rotation

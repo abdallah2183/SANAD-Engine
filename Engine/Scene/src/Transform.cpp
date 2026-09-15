@@ -128,16 +128,11 @@ void transform_system(ecs::World& world) {
 }
 
 Quat quat_from_euler_xyz_degrees(float rx_deg, float ry_deg, float rz_deg) {
-    // Built through compose_trs rather than by composing axis rotations here:
-    // that keeps the convention in exactly one function, so the forward and
-    // inverse directions cannot drift apart.
-    float m16[16];
-    compose_trs(0.0f, 0.0f, 0.0f, rx_deg, ry_deg, rz_deg, 1.0f, 1.0f, 1.0f, m16);
-    Mat4 m = Mat4::identity();
-    for (int i = 0; i < 16; ++i) {
-        m.m[i / 4][i % 4] = m16[i]; // m16 is column-major: [col * 4 + row]
-    }
-    return Quat::from_matrix(m);
+    // Built through compose_trs_mat4: one convention, one code path from
+    // euler degrees to matrix, so the forward and inverse directions cannot
+    // drift apart (and no raw-array index juggling to get subtly wrong).
+    return Quat::from_matrix(compose_trs_mat4(0.0f, 0.0f, 0.0f, rx_deg, ry_deg, rz_deg, 1.0f,
+                                              1.0f, 1.0f));
 }
 
 void euler_xyz_degrees_from_quat(const Quat& q, float& out_rx, float& out_ry, float& out_rz) {
@@ -183,6 +178,23 @@ void compose_trs(float px, float py, float pz,
                  float rx_deg, float ry_deg, float rz_deg,
                  float sx, float sy, float sz,
                  float out_m16[16]) {
+    const Mat4 m = compose_trs_mat4(px, py, pz, rx_deg, ry_deg, rz_deg, sx, sy, sz);
+    // Mat4 is row-major (m[row][col]); the legacy array is column-major
+    // (out[col*4+row]). Reinterpreting the same 16 floats across the two
+    // layouts is exactly a transpose, which is what converts between the
+    // row-vector CPU convention and the column-vector GPU convention while
+    // preserving the transform. Writing it as an explicit loop (rather than
+    // duplicating the trig below) keeps the rotation in one place.
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            out_m16[r * 4 + c] = m.m[r][c];
+        }
+    }
+}
+
+Mat4 compose_trs_mat4(float px, float py, float pz,
+                      float rx_deg, float ry_deg, float rz_deg,
+                      float sx, float sy, float sz) {
     constexpr float kPi = 3.14159265358979323846f;
     const float rx = rx_deg * kPi / 180.0f;
     const float ry = ry_deg * kPi / 180.0f;
@@ -190,23 +202,29 @@ void compose_trs(float px, float py, float pz,
     const float cx = std::cos(rx), sxr = std::sin(rx);
     const float cy = std::cos(ry), syr = std::sin(ry);
     const float cz = std::cos(rz), szr = std::sin(rz);
-    // R = Ry * Rx * Rz (column-major rotations about Y, X, Z)
-    // Ry = [cy,0,-syr; 0,1,0; syr,0,cy], Rx = [1,0,0; 0,cx,sxr; 0,-sxr,cx],
-    // Rz = [cz,szr,0; -szr,cz,0; 0,0,1]  (column-major storage below)
-    float r00 = cy * cz + syr * sxr * szr;
-    float r10 = cx * szr;
-    float r20 = -syr * cz + cy * sxr * szr;
-    float r01 = -cy * szr + syr * sxr * cz;
-    float r11 = cx * cz;
-    float r21 = syr * szr + cy * sxr * cz;
-    float r02 = syr * cx;
-    float r12 = -sxr;
-    float r22 = cy * cx;
-    // M = T * R * S: scale the rotation columns, then set translation.
-    out_m16[0] = r00 * sx; out_m16[1] = r10 * sx; out_m16[2] = r20 * sx; out_m16[3] = 0.0f;
-    out_m16[4] = r01 * sy; out_m16[5] = r11 * sy; out_m16[6] = r21 * sy; out_m16[7] = 0.0f;
-    out_m16[8] = r02 * sz; out_m16[9] = r12 * sz; out_m16[10] = r22 * sz; out_m16[11] = 0.0f;
-    out_m16[12] = px; out_m16[13] = py; out_m16[14] = pz; out_m16[15] = 1.0f;
+    // R = Ry * Rx * Rz, same rotation the legacy column-major compose_trs
+    // builds (r{row}{col} name the rotation entries before scaling).
+    const float r00 = cy * cz + syr * sxr * szr;
+    const float r10 = cx * szr;
+    const float r20 = -syr * cz + cy * sxr * szr;
+    const float r01 = -cy * szr + syr * sxr * cz;
+    const float r11 = cx * cz;
+    const float r21 = syr * szr + cy * sxr * cz;
+    const float r02 = syr * cx;
+    const float r12 = -sxr;
+    const float r22 = cy * cx;
+    // Row-vector storage: m[r][c] holds the legacy column-major byte
+    // out[r*4+c], i.e. the same 16 floats reinterpreted across the two
+    // layouts (row-major-flat of the row-vector form == column-major-flat
+    // of the column-vector form). Translation lands in row 3, so
+    // transform_point applies it; the w column stays (0,0,0,1).
+    Mat4 m = Mat4::identity();
+    m.m[0][0] = r00 * sx; m.m[0][1] = r10 * sx; m.m[0][2] = r20 * sx;
+    m.m[1][0] = r01 * sy; m.m[1][1] = r11 * sy; m.m[1][2] = r21 * sy;
+    m.m[2][0] = r02 * sz; m.m[2][1] = r12 * sz; m.m[2][2] = r22 * sz;
+    m.m[0][3] = 0.0f; m.m[1][3] = 0.0f; m.m[2][3] = 0.0f;
+    m.m[3][0] = px; m.m[3][1] = py; m.m[3][2] = pz; m.m[3][3] = 1.0f;
+    return m;
 }
 
 } // namespace nf::scene

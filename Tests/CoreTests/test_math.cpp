@@ -61,6 +61,81 @@ NF_TEST(test_mat4_perspective) {
     NF_CHECK(projected.x == projected.x); // not NaN
 }
 
+NF_TEST(test_mat4_look_at_points_down_minus_z) {
+    // Absolute anchor: eye at the origin looking down -Z with up +Y must be
+    // the identity rotation. (A typo once wrote the up vector's z into
+    // m[2][2] instead of m[1][2]; with the usual up=(0,1,0) that reads back
+    // as row 1 == (0,1,0) either way, so only absolute, tilted cases below
+    // can catch a wrong rotation block.)
+    Mat4 v = Mat4::look_at({0, 0, 0}, {0, 0, -1}, {0, 1, 0});
+    NF_CHECK_NEAR(v.m[0][0], 1.0f, 1e-6f);
+    NF_CHECK_NEAR(v.m[1][1], 1.0f, 1e-6f);
+    NF_CHECK_NEAR(v.m[2][2], 1.0f, 1e-6f);
+    NF_CHECK_NEAR(v.m[0][1], 0.0f, 1e-6f);
+    NF_CHECK_NEAR(v.m[1][0], 0.0f, 1e-6f);
+    NF_CHECK_NEAR(v.m[1][2], 0.0f, 1e-6f);
+    NF_CHECK_NEAR(v.m[2][1], 0.0f, 1e-6f);
+
+    // Eye at (0,0,5) looking at the origin: the world origin must land at
+    // view-space (0,0,-5).
+    Mat4 v2 = Mat4::look_at({0, 0, 5}, {0, 0, 0}, {0, 1, 0});
+    Vec3 moved = v2.transform_point({0, 0, 0});
+    NF_CHECK_NEAR(moved.x, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(moved.y, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(moved.z, -5.0f, 1e-5f);
+
+    // Tilted up gets orthonormalized, not passed through: row 1 is the
+    // orthonormalized up's transpose slot (s.y, u.y, -f.y), here (0,1,0).
+    Mat4 v3 = Mat4::look_at({0, 0, 5}, {0, 0, 0}, {0, 1, 1});
+    NF_CHECK_NEAR(v3.m[1][0], 0.0f, 1e-5f);
+    NF_CHECK_NEAR(v3.m[1][1], 1.0f, 1e-5f);
+    NF_CHECK_NEAR(v3.m[1][2], 0.0f, 1e-5f);
+
+    // Genuinely tilted view: the eye must map to the origin and the target
+    // onto the -Z axis. An untransposed rotation block (rows holding the
+    // basis instead of its transpose) passes every axis-aligned case and
+    // fails exactly here.
+    Mat4 v4 = Mat4::look_at({1, 2, 3}, {0, 0, 0}, {0, 1, 0});
+    Vec3 eye_at_origin = v4.transform_point({1, 2, 3});
+    NF_CHECK_NEAR(eye_at_origin.x, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(eye_at_origin.y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(eye_at_origin.z, 0.0f, 1e-4f);
+    Vec3 target_on_axis = v4.transform_point({0, 0, 0});
+    const float dist = std::sqrt(1.0f + 4.0f + 9.0f);
+    NF_CHECK_NEAR(target_on_axis.x, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(target_on_axis.y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(target_on_axis.z, -dist, 1e-4f);
+}
+
+NF_TEST(test_mat4_perspective_maps_near_to_zero_far_to_one) {
+    // Pins the Vulkan [0,1] depth convention: a second, GL-style [-1,1]
+    // projection once lived beside this one and the two are only visibly
+    // different at the near plane.
+    Mat4 p = Mat4::perspective(to_radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+    Vec3 near = p.transform_point({0, 0, -0.1f});
+    Vec3 far = p.transform_point({0, 0, -100.0f});
+    NF_CHECK_NEAR(near.z, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(far.z, 1.0f, 1e-4f);
+}
+
+NF_TEST(test_mat4_transpose_swaps_off_diagonal) {
+    Mat4 r = Mat4::rotate_z(0.7f);
+    Mat4 t = r.transposed();
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            NF_CHECK_NEAR(t.m[row][col], r.m[col][row], 1e-6f);
+        }
+    }
+    // Double transpose is identity — the property the CPU/GPU upload
+    // contract rests on (row-major-flat of M == column-major-flat of M^T).
+    Mat4 back = t.transposed();
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            NF_CHECK_NEAR(back.m[row][col], r.m[row][col], 1e-6f);
+        }
+    }
+}
+
 NF_TEST(test_quat_identity) {
     Quat q;
     Mat4 m = q.to_matrix();

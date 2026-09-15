@@ -111,13 +111,17 @@ NF_TEST(transform_prevents_cycle) {
 
 namespace {
 
-/// compose_trs with unit scale, as a Mat4, for comparison.
+/// compose_trs with unit scale, as a Mat4, for comparison. The legacy array
+/// is column-major (out[col*4+row]); reading byte [r*4+c] into m[r][c]
+/// reinterprets the same 16 floats as row-major, which is exactly the
+/// transpose that converts the column-vector GPU form to the row-vector CPU
+/// form while preserving the transform.
 nf::Mat4 trs_matrix(float rx, float ry, float rz) {
     float m16[16];
     nf::scene::compose_trs(0.0f, 0.0f, 0.0f, rx, ry, rz, 1.0f, 1.0f, 1.0f, m16);
     nf::Mat4 m = nf::Mat4::identity();
     for (int i = 0; i < 16; ++i) {
-        m.m[i / 4][i % 4] = m16[i]; // m16 is column-major [col*4 + row]; Mat4 is m[col][row]
+        m.m[i / 4][i % 4] = m16[i];
     }
     return m;
 }
@@ -192,4 +196,49 @@ NF_TEST(euler_forward_and_inverse_are_consistent) {
         // which is what a physics body written back into a Transform relies on.
         NF_CHECK(matrices_match(trs_matrix(a[0], a[1], a[2]), trs_matrix(rx, ry, rz), 1e-3f));
     }
+}
+
+NF_TEST(compose_trs_mat4_matches_the_legacy_bytes) {
+    // The Mat4 form must memcpy to the exact bytes the column-major form has
+    // always produced: the renderer uploads those bytes unchanged, so any
+    // drift here silently re-poses every rotated/scaled object in the scene.
+    const float cases[][9] = {
+        {0, 0, 0, 0, 0, 0, 1, 1, 1},
+        {1, 2, 3, 0, 0, 0, 1, 1, 1},
+        {0, 0, 0, 0, 0, 90, 1, 1, 1},
+        {5, -2, 7, 20, -35, 50, 1, 1, 1},
+        {0, 0, 0, 30, 45, 60, 2, 3, 4},
+        {-4, 8, -1, -80, 15, -120, 0.5f, 2, 1.5f},
+    };
+    for (const auto& t : cases) {
+        float legacy[16];
+        scene::compose_trs(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], legacy);
+        const Mat4 m =
+            scene::compose_trs_mat4(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]);
+        for (int i = 0; i < 16; ++i) {
+            NF_CHECK_NEAR(m.m[i / 4][i % 4], legacy[i], 1e-5f);
+        }
+    }
+}
+
+NF_TEST(compose_trs_mat4_applies_scale_then_rotation_then_translation) {
+    // Absolute anchors (not round-trips): +X rotated +90 about Z is +Y, and
+    // the translation applies in world space afterwards.
+    Mat4 r = scene::compose_trs_mat4(0, 0, 0, 0, 0, 90, 1, 1, 1);
+    Vec3 turned = r.transform_point({1, 0, 0});
+    NF_CHECK_NEAR(turned.x, 0.0f, 1e-5f);
+    NF_CHECK_NEAR(turned.y, 1.0f, 1e-5f);
+    NF_CHECK_NEAR(turned.z, 0.0f, 1e-5f);
+
+    Mat4 rt = scene::compose_trs_mat4(5, 0, 0, 0, 0, 90, 1, 1, 1);
+    Vec3 moved = rt.transform_point({1, 0, 0});
+    NF_CHECK_NEAR(moved.x, 5.0f, 1e-5f);
+    NF_CHECK_NEAR(moved.y, 1.0f, 1e-5f);
+    NF_CHECK_NEAR(moved.z, 0.0f, 1e-5f);
+
+    Mat4 s = scene::compose_trs_mat4(0, 0, 0, 0, 0, 0, 2, 3, 4);
+    Vec3 scaled = s.transform_point({1, 1, 1});
+    NF_CHECK_NEAR(scaled.x, 2.0f, 1e-5f);
+    NF_CHECK_NEAR(scaled.y, 3.0f, 1e-5f);
+    NF_CHECK_NEAR(scaled.z, 4.0f, 1e-5f);
 }

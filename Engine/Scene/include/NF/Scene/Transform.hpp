@@ -33,10 +33,27 @@ void propagate_transforms(ecs::World& world);
 // System that can be registered in the scheduler
 void transform_system(ecs::World& world);
 
-// Composes a column-major 4x4 matrix (same layout as rendering::Mat4:
-// out[12..14] hold translation) from translation + XYZ euler rotation
-// (degrees, applied as R = Ry * Rx * Rz) + scale: M = T * R * S.
-// Shared by the Runtime (render matrix) and the Editor gizmo so both agree.
+// Composes a column-major 4x4 matrix (out[col*4+row], translation at
+// out[12..14]) from translation + XYZ euler rotation (degrees,
+// R = Ry * Rx * Rz) + scale: M = T * R * S. Column-vector application.
+// Prefer compose_trs_mat4 below (same transform as nf::Mat4) for all new
+// code; this raw-array form stays as the byte-level reference the
+// equivalence test pins (GPU uploads have consumed these exact bytes since
+// v0.1, so any drift re-poses every rotated object in the scene).
+void compose_trs(float px, float py, float pz,
+                 float rx_deg, float ry_deg, float rz_deg,
+                 float sx, float sy, float sz,
+                 float out_m16[16]);
+
+/// Same transform as compose_trs, as the engine's row-vector nf::Mat4:
+/// memcpy of result.m is byte-identical to the legacy column-major array
+/// (row-major-flat of the row-vector form == column-major-flat of the
+/// column-vector form), so GPU uploads do not change. Translation in row 3.
+/// Prefer this for all CPU-side work (extraction, bounds, tests).
+Mat4 compose_trs_mat4(float px, float py, float pz,
+                      float rx_deg, float ry_deg, float rz_deg,
+                      float sx, float sy, float sz);
+
 /// The inverse of compose_trs's rotation: the XYZ euler angles in degrees
 /// (R = Ry * Rx * Rz) that reproduce a quaternion's rotation.
 ///
@@ -50,10 +67,5 @@ void euler_xyz_degrees_from_quat(const Quat& q, float& out_rx, float& out_ry, fl
 /// for the given XYZ euler degrees. Exists so a physics body can be created from
 /// a Transform without either side guessing the convention.
 Quat quat_from_euler_xyz_degrees(float rx_deg, float ry_deg, float rz_deg);
-
-void compose_trs(float px, float py, float pz,
-                 float rx_deg, float ry_deg, float rz_deg,
-                 float sx, float sy, float sz,
-                 float out_m16[16]);
 
 } // namespace nf::scene

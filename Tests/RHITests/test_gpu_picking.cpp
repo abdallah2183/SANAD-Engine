@@ -45,11 +45,7 @@ Camera make_pick_camera(float z) {
 }
 
 void set_translation(RenderObject& ro, float x, float y, float z) {
-    float m[16]{};
-    scene::compose_trs(x, y, z, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, m);
-    for (int i = 0; i < 16; ++i) {
-        ro.world.m[i] = m[i];
-    }
+    ro.world = scene::compose_trs_mat4(x, y, z, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f);
 }
 
 } // namespace

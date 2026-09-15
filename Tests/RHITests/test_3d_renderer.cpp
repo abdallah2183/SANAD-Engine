@@ -310,16 +310,11 @@ NF_TEST(mesh_asset_cook_import_gpu_upload) {
 
 NF_TEST(camera_view_projection) {
     Camera cam = make_camera(5.0f, 16.0f / 9.0f);
-    // A point straight ahead of the camera must project near NDC center
+    // A point straight ahead of the camera must project near NDC center.
+    // Row-vector application (v' = v * M) with perspective divide.
     auto project = [&](float x, float y, float z) {
         const Mat4& vp = cam.view_projection;
-        float clip[4] = {
-            vp.m[0]*x + vp.m[4]*y + vp.m[8]*z + vp.m[12],
-            vp.m[1]*x + vp.m[5]*y + vp.m[9]*z + vp.m[13],
-            vp.m[2]*x + vp.m[6]*y + vp.m[10]*z + vp.m[14],
-            vp.m[3]*x + vp.m[7]*y + vp.m[11]*z + vp.m[15],
-        };
-        return Vec3{clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]};
+        return vp.transform_point(Vec3{x, y, z});
     };
     const Vec3 ndc = project(0, 0, 0); // origin: dead ahead of (0,0,5)
     NF_CHECK_NEAR(ndc.x, 0.0f, 1e-4f);
@@ -354,9 +349,11 @@ NF_TEST(camera_frustum) {
     // Mat4 inverse round-trips (foundation for depth reconstruction)
     const Mat4 inv = persp.view_projection.inverse();
     const Mat4 round = persp.view_projection * inv;
-    for (int i = 0; i < 16; ++i) {
-        const float expect = (i % 5 == 0) ? 1.0f : 0.0f;
-        NF_CHECK_NEAR(round.m[i], expect, 1e-3f);
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            const float expect = (r == c) ? 1.0f : 0.0f;
+            NF_CHECK_NEAR(round.m[r][c], expect, 1e-3f);
+        }
     }
 }
 
@@ -431,7 +428,7 @@ NF_TEST(static_mesh_extraction) {
     NF_CHECK(rw.objects[0].mesh_handle == h_cube);
     NF_CHECK(rw.objects[1].mesh_handle == h_sphere);
     NF_CHECK_NEAR(rw.objects[0].transform.x, 1.0f, 1e-6f);
-    NF_CHECK_NEAR(rw.objects[0].world.m[12], 1.0f, 1e-6f);
+    NF_CHECK_NEAR(rw.objects[0].world.m[3][0], 1.0f, 1e-6f);
     // Bounds are world-space: cube at x=1 spans [0.5, 1.5]
     NF_CHECK_NEAR(rw.objects[0].bounds.min_x, 0.5f, 1e-5f);
     NF_CHECK_NEAR(rw.objects[0].bounds.max_x, 1.5f, 1e-5f);

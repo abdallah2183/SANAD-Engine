@@ -5,25 +5,14 @@
 
 namespace nf::rendering {
 
-// Minimal math for Camera if Core Math not sufficient — we use simple structs
-struct Vec3 {
-    float x=0,y=0,z=0;
-    Vec3() = default;
-    Vec3(float _x,float _y,float _z):x(_x),y(_y),z(_z){}
-};
-
-struct Mat4 {
-    float m[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-    static Mat4 identity();
-    static Mat4 perspective(float fov_y_rad, float aspect, float near_plane, float far_plane);
-    static Mat4 orthographic(float left, float right, float bottom, float top, float near_plane, float far_plane);
-    static Mat4 look_at(const Vec3& eye, const Vec3& center, const Vec3& up);
-    static Mat4 translation(float x, float y, float z);
-    Mat4 operator*(const Mat4& other) const;
-    /// Full general 4x4 inverse (cofactor/determinant). Used for invViewProj —
-    /// the deferred lighting pass reconstructs world position from depth.
-    Mat4 inverse() const;
-};
+// The renderer owns NO math types: Vec3/Mat4 are NFCore's (row-major
+// storage, row-vector application — see NF/Core/Math.hpp). These aliases
+// exist so existing rendering code keeps reading unchanged; new code should
+// name nf::Vec3 / nf::Mat4 directly. A second, column-major pair of structs
+// with these exact names lived here and was deleted: same-looking,
+// silently-transposing types are how the historical matrix bugs started.
+using nf::Vec3;
+using nf::Mat4;
 
 struct Plane {
     float a=0,b=0,c=0,d=0; // ax+by+cz+d=0, normalized

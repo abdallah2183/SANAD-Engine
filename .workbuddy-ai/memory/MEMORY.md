@@ -87,12 +87,28 @@ Plan: `Docs/Phase11_Plan.md`. No new feature area — three things removed that 
 - **A generated file checked into git must be deterministic.** `Content/AssetRegistry.nfreg` is rewritten by the cooker; it is stable across repeated runs, so a cook no longer dirties the tree. Verify with two consecutive cooks before assuming a diff is noise.
 
 ## Open architectural debt
-- **Two `Mat4`s with the same name and different layouts**: `nf::Mat4` (Core, `f32 m[4][4]`, row-major) vs `nf::rendering::Mat4` (`Camera.hpp`, `float m[16]`, column-major). A `memcpy`/`reinterpret_cast` between them silently transposes every transform in the scene. Needs the same "one type, one owner" treatment W1 gave the mesh formats. `Rendering` also has its own `Vec3` (hence `Runtime.cpp`'s `from_rendering()`).
-- **`Runtime::load_scene` replaces the world**, so a scene cannot be merged into a live one — W5's seam is complete but its real chunk loader (a scene merge) is still outstanding. The merge belongs next to the scene loader.
+- ~~Two `Mat4`s with the same name and different layouts~~ — RESOLVED (working
+  tree): one type, one owner (`nf::Vec3`/`nf::Mat4`, NFCore). The renderer's
+  column-major pair is deleted; `Camera`/`RenderObject` and all uploads use the
+  Core types (uploads stay plain memcpy by the flat-array identity). Fixed en
+  route, all previously masked: Core `look_at` rotation untransposed for tilted
+  views (+ an `m[2][2]`/`m[1][2]` typo), `perspective` collapsing depth to
+  ~[1,2], `orthographic` mapping far to -1, GL-style `[-1,1]` renderer
+  projection replaced by Vulkan `[0,1]` (pinned near→0/far→1), frustum
+  re-derived for row-vector clip (columns, near = col 2). `compose_trs_mat4`
+  with a byte-equivalence test vs the legacy bytes.
+- ~~`Runtime::load_scene` replaces the world~~ — MERGE LANDED (working tree):
+  `merge_scene_into_world` + canonical `copy_scene_entity` (shared with prefab
+  cloning, which now delegates; live body handles reset on copy) next to the
+  scene loader, and Runtime wiring (`enable_streaming`/`step_streaming`:
+  merge → mesh kick → physics rebuild, destroy-subtree unload). New tests:
+  3 merge + 1 end-to-end wiring.
 - Audio backend swap (MiniAudio behind `AudioDevice` seam) — planned, not yet implemented.
 - Animation lacks a skinning GPU pipeline (CPU-only sampling); no animation asset cooker yet.
 
 ## Working tree convention
-- Phases 7–11 are all committed on `workbuddy/main-9da20c25` (`13e79da`, `4312645`, `5b63eb5`, `7fbe65f`, `0b2e769`, `b6b5546`). **The `main` branch is still at `421511f` (Phase 6)** — session branches have never been merged into it, so a worktree branched from `main` starts at Phase 6 and looks like the work is missing. Merge the session branch into `main` (or branch from it) before starting the next phase.
+- Phases 7–11 are merged into `main` (fast-forward to `b2a0853`, then a
+  `PRODUCT.md` doc fix on top). The old `workbuddy/*` session branches are
+  superseded; branch new work from `main`.
 - **After any commit here, run `bash Scripts/git_repair_ref.sh`.** OneDrive deletes new ref files under the main `.git/refs/`; the commit object survives but the branch can end up unborn. The script is worktree- and branch-agnostic and detects the stale-packed-ref case.
 - Never delete `.workbuddy-ai`.

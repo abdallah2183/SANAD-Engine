@@ -25,6 +25,7 @@
 #include <NF/Gameplay/GameplayModule.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 #include <NF/Gameplay/GameplayState.hpp>
+#include <NF/Runtime/WorldStreamer.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 
 #include <filesystem>
@@ -112,6 +113,38 @@ public:
     /// Creates bodies for every entity that has a rigid body, a collider and a
     /// transform. Called on scene load; safe to call again to resynchronise.
     void rebuild_physics_from_scene();
+
+    // --- World streaming ----------------------------------------------------
+    //
+    // The IO half of the WorldStreamer seam (the policy half is stream-tested
+    // without a filesystem or GPU). Chunk files are ordinary .nfscene files
+    // under a content directory, named chunk_<x>_<y>_<z>.nfscene; a load
+    // merges the chunk into the live world (see merge_scene_into_world), an
+    // unload destroys exactly the entities the load created. Off by default:
+    // a runtime that never enables streaming never pays for it and behaves
+    // exactly as before.
+    //
+    // After a load lands, meshes are kicked for async loading (like a fresh
+    // scene load) and physics is rebuilt so merged bodies simulate. Both are
+    // deliberately full passes, not incremental: loads are rare, capped
+    // events, and an incremental path would have to mirror the rebuild's
+    // invariants to stay correct.
+
+    /// Turns streaming on with chunk files resolved under `chunk_dir_logical`
+    /// (e.g. "content://Chunks") and the given initial volume. Missing chunk
+    /// files fail their load and are retried on later updates — a hole in the
+    /// region is not a reason to give up on it.
+    void enable_streaming(const std::string& chunk_dir_logical, const scene::StreamingVolume& volume);
+    /// Unloads every streamed chunk and turns streaming off.
+    void disable_streaming();
+    [[nodiscard]] bool streaming_enabled() const { return m_streaming_enabled; }
+    /// Replaces the active volume (call every frame with a moving volume).
+    void set_streaming_volume(const scene::StreamingVolume& volume);
+    /// Advances the streamer; callers normally get this via update().
+    /// No-op without a loaded scene. Returns chunks loaded this call.
+    u32 step_streaming();
+    [[nodiscard]] size_t streamed_chunk_count() const { return m_streamer.loaded_chunk_count(); }
+    [[nodiscard]] size_t streamed_entity_count() const { return m_streamer.streamed_entity_count(); }
 
     // --- Animation (Phase 9) ------------------------------------------------
     //
@@ -339,6 +372,19 @@ private:
     /// 1/60 s is the conventional choice: fine enough that a fast-moving body
     /// does not tunnel through a thin one, coarse enough to stay cheap.
     physics::FixedTimestep m_physics_clock{1.0f / 60.0f, 8};
+
+    // World streaming (off unless enable_streaming ran). m_streaming_known is
+    // the loaded-chunk count as of the last resync: any change means the
+    // world membership moved, so meshes get kicked and physics rebuilt.
+    WorldStreamer m_streamer;
+    bool m_streaming_enabled = false;
+    std::string m_streaming_chunk_dir;
+    size_t m_streaming_known_loaded = 0;
+    void resync_after_streaming();
+    bool streaming_load_chunk(const scene::ChunkCoord& coord, std::vector<ecs::Entity>& out_created,
+                              std::string& out_error);
+    void streaming_unload_chunk(const scene::ChunkCoord& coord,
+                                const std::vector<ecs::Entity>& created);
 
     // Gameplay modules (Phase 10). Sorted by (priority, name) at init so the
     // per-frame loop is a straight walk.

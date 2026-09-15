@@ -106,6 +106,7 @@ add_executable(RuntimeTests
     RuntimeTests/test_runtime.cpp
     RuntimeTests/test_runtime_3b.cpp
     RuntimeTests/test_run_config.cpp
+    RuntimeTests/test_runtime_streaming.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
@@ -168,9 +169,10 @@ nf_target_set_warnings(SaveTests)
 add_executable(StreamingTests
     TestFramework.cpp
     StreamingTests/test_streaming.cpp
+    StreamingTests/test_stream_merge.cpp
 )
 target_include_directories(StreamingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(StreamingTests PRIVATE NFCore NFScene NFEcs NFRuntime)
+target_link_libraries(StreamingTests PRIVATE NFCore NFScene NFEcs NFRuntime NFAssets)
 nf_target_set_warnings(StreamingTests)
 
 # --- Tool tests (project scaffold, cooker, packager) ---

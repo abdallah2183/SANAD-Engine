@@ -48,7 +48,10 @@ struct RenderObject {
     std::string material;  // Material name
 
     // --- pipeline fields (ECS extraction path) ---
-    Mat4 world;                    // world transform (translation only for now)
+    Mat4 world; // nf::Mat4 (row-major, row-vector; translation in row 3).
+                // Full TRS when the producer composes it (Runtime render
+                // path), translation-only from the shared SceneExtraction
+                // bridge. Uploads memcpy it straight to push constants.
     StaticMeshHandle mesh_handle;
     MaterialHandle material_handle;
     AABB bounds;                   // world-space AABB

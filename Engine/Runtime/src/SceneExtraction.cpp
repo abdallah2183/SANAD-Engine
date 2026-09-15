@@ -30,14 +30,10 @@ void extract_render_objects(const ecs::World& world, const rendering::MeshLibrar
         ro.transform.y = tr->world_y;
         ro.transform.z = tr->world_z;
 
-        // `RenderObject::world` is rendering::Mat4 — the rendering module's own
-        // flat column-major matrix (Camera.hpp), NOT nf::Mat4 (Core's row-major
-        // [4][4]). Indices 12/13/14 are the translation column here. The two
-        // Mat4 types are not interchangeable; see the note in Phase11_Plan.md.
-        ro.world = rendering::Mat4{};
-        ro.world.m[12] = tr->world_x;
-        ro.world.m[13] = tr->world_y;
-        ro.world.m[14] = tr->world_z;
+        // Translation-only world matrix (rotation/scale do not accumulate
+        // through the hierarchy yet). nf::Mat4 is row-major with translation
+        // in row 3 — no raw index writes, no convention to get wrong.
+        ro.world = Mat4::translate({tr->world_x, tr->world_y, tr->world_z});
 
         ro.mesh_handle = mc->mesh;
         ro.material_handle = mc->material;

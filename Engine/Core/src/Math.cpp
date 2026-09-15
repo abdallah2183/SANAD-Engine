@@ -70,23 +70,28 @@ Mat4 Mat4::rotation(const Vec3& axis, f32 angle) {
 }
 
 Mat4 Mat4::perspective(f32 fovy, f32 aspect, f32 near_z, f32 far_z) {
-    // Right-handed, Y up, depth range [0, 1]
-    f32 f = 1.0f / std::tan(fovy * 0.5f);
+    // Right-handed, camera looking down -Z, Vulkan depth range [0, 1].
+    // Row-vector application (v' = v * M): clip.w comes from m[2][3] * z,
+    // which must be positive for visible (negative-z) geometry, hence the
+    // -1. Near maps to NDC 0, far to NDC 1. (An earlier revision used the
+    // D3D-LH signs here, which collapsed the whole depth range to ~[1, 2].)
+    const f32 f = 1.0f / std::tan(fovy * 0.5f);
     Mat4 r{};
 
     r.m[0][0] = f / aspect;
     r.m[1][1] = f;
-    r.m[2][2] = far_z / (far_z - near_z);
-    r.m[2][3] = 1.0f;
-    r.m[3][2] = -(near_z * far_z) / (far_z - near_z);
+    r.m[2][2] = far_z / (near_z - far_z);
+    r.m[2][3] = -1.0f;
+    r.m[3][2] = (near_z * far_z) / (near_z - far_z);
     return r;
 }
 
 Mat4 Mat4::orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 near_z, f32 far_z) {
+    // Same convention as perspective: -Z forward, NDC depth [0, 1].
     Mat4 r = identity();
     r.m[0][0] = 2.0f / (right - left);
     r.m[1][1] = 2.0f / (top - bottom);
-    r.m[2][2] = 1.0f / (far_z - near_z);
+    r.m[2][2] = -1.0f / (far_z - near_z);
     r.m[3][0] = -(left + right) / (right - left);
     r.m[3][1] = -(top + bottom) / (top - bottom);
     r.m[3][2] = -near_z / (far_z - near_z);
@@ -98,10 +103,15 @@ Mat4 Mat4::look_at(const Vec3& eye, const Vec3& center, const Vec3& up) {
     Vec3 s = f.cross(up).normalized();
     Vec3 u = s.cross(f);
 
+    // Row-vector application (v' = v * M): this is the TRANSPOSE of the
+    // textbook column-vector lookAt. Rows hold the camera basis transposed:
+    // row 0 is (s.x, u.x, -f.x), not (s.x, s.y, s.z). Writing the basis
+    // untransposed keeps axis-aligned views working (they coincide) and
+    // breaks every tilted one (the eye no longer maps to the origin).
     Mat4 r = identity();
-    r.m[0][0] = s.x;  r.m[0][1] = s.y;  r.m[0][2] = s.z;
-    r.m[1][0] = u.x;  r.m[1][1] = u.y;  r.m[2][2] = u.z;
-    r.m[2][0] = -f.x; r.m[2][1] = -f.y; r.m[2][2] = -f.z;
+    r.m[0][0] = s.x;  r.m[0][1] = u.x;  r.m[0][2] = -f.x;
+    r.m[1][0] = s.y;  r.m[1][1] = u.y;  r.m[1][2] = -f.y;
+    r.m[2][0] = s.z;  r.m[2][1] = u.z;  r.m[2][2] = -f.z;
     r.m[3][0] = -s.dot(eye);
     r.m[3][1] = -u.dot(eye);
     r.m[3][2] = f.dot(eye);
@@ -344,10 +354,14 @@ Vec3 Quat::rotate(const Vec3& v) const {
 }
 
 Quat Quat::from_matrix(const Mat4& m) {
-    // Mat4 is column-major: m[col][row]. Reading the rotation out of it needs
-    // the row/column indices flipped, which is the easiest thing to get wrong
-    // here — a transposed read produces the inverse rotation and looks almost
-    // right on a symmetric test case.
+    // Storage is row-major (m[row][col]) with row-vector application, while
+    // Shepperd's formulas below are written for column-vector application
+    // (v' = R v). For the same physical rotation the two conventions hold
+    // transposes of each other, so the read flips the indices: rij here is
+    // R[row=i][col=j] of the column-vector form. Reading m[i][j] straight
+    // would feed the transpose into Shepperd and return the INVERSE rotation
+    // — which looks almost right on any symmetric test case, so the flip is
+    // doing real work. Do not "simplify" it.
     const f32 r00 = m.m[0][0], r01 = m.m[1][0], r02 = m.m[2][0];
     const f32 r10 = m.m[0][1], r11 = m.m[1][1], r12 = m.m[2][1];
     const f32 r20 = m.m[0][2], r21 = m.m[1][2], r22 = m.m[2][2];
