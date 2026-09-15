@@ -45,6 +45,7 @@ struct InspectorCache {
     float light_dir[3]{};
     float light_color[3]{};
     float light_intensity = 1.0f;
+    bool light_shadows = true;
     char mesh_id[64]{};
     char mesh_mat[192]{};
     char mat_path[256]{};
@@ -56,6 +57,9 @@ struct InspectorCache {
     float mat_estr = 0.0f;
     int mat_choice = 0;
     int albedo_choice = 0;
+    int mip_choice = 2; // 0=None, 1=Nearest, 2=Linear (mirrors rhi::MipMapMode)
+    bool mat_live = false; // a slider drag is writing previews, uncommitted
+    rendering::PBRMaterialParams mat_before{}; // snapshot at drag start (undo target)
     // Physics: RigidBody
     int rb_type = 1;       // 0=Static, 1=Dynamic, 2=Kinematic
     float rb_mass = 1.0f;
@@ -100,6 +104,23 @@ void push_info(ConsoleBuffer& console, const std::string& what) {
 void push_error(ConsoleBuffer& console, const std::string& what, const std::string& err) {
     console.push(LogMessage{LogLevel::Error, LogCategory::Editor, what + ": " + err,
                             std::chrono::system_clock::now(), __FILE__, __LINE__});
+}
+
+// MaterialEdit assembled from the inspector cache (sliders + color widgets).
+// Single source for the live path and the explicit Apply button.
+MaterialEdit material_edit_from_cache(const InspectorCache& ic) {
+    MaterialEdit e;
+    for (int i = 0; i < 4; ++i) {
+        e.base_color[i] = (i < 3) ? ic.mat_base[i] : 1.0f;
+    }
+    e.metallic = ic.mat_metal;
+    e.roughness = ic.mat_rough;
+    e.ao = ic.mat_ao;
+    for (int i = 0; i < 3; ++i) {
+        e.emission[i] = ic.mat_em[i];
+    }
+    e.emission_strength = ic.mat_estr;
+    return e;
 }
 
 const char* level_name(LogLevel l) {
@@ -472,6 +493,26 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::Text("%.1f FPS / %.2f ms", st.fps, st.frame_ms);
             ImGui::SameLine();
             ImGui::TextUnformatted(st.scene_label.c_str());
+            ImGui::SameLine();
+            ImGui::TextUnformatted("|");
+            ImGui::SameLine();
+            if (ImGui::Button("About")) {
+                ImGui::OpenPopup("AboutNOVAForge");
+            }
+            if (ImGui::BeginPopupModal("AboutNOVAForge", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextColored(ImVec4(1.0f, 0.62f, 0.15f, 1.0f), "NOVAForge Engine");
+                ImGui::Text("Modern C++23 & Vulkan Game Engine");
+                ImGui::Text("An extensible open-source engine led by Arab developers.");
+                ImGui::Separator();
+                ImGui::Text("Phase: 11 / 13 (Foundation + PBR + ECS + Physics + Audio + Animation)");
+                ImGui::Text("Validation: 0 errors | 534 automated tests passing");
+                ImGui::Text("Open Source Community: We welcome all contributors to build together!");
+                ImGui::Separator();
+                if (ImGui::Button("Close", ImVec2(120, 0))) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
         ImGui::EndMainMenuBar();
     }
 
@@ -620,6 +661,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // the scene upside down (and mirror every NDC gesture vertically
         // while the centre still hits, which is exactly how this survived).
         ImVec2 img_size(avail_w > 0.0f ? avail_w : 10.0f, avail_h - 24.0f > 0.0f ? avail_h - 24.0f : 10.0f);
+        // Feed the displayed size back: the shell renders the offscreen
+        // target at the panel size, never the window size — otherwise the
+        // image stretches whenever the docked panel aspect differs from
+        // the window aspect. One frame of lag on resize is invisible.
+        if (img_size.x >= 1.0f && img_size.y >= 1.0f) {
+            app.viewport().width = static_cast<uint32_t>(img_size.x);
+            app.viewport().height = static_cast<uint32_t>(img_size.y);
+        }
         ImGui::Image(static_cast<ImTextureID>(UiRenderer::kViewportTextureId), img_size,
                      ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
         // Pointer gesture state machine (one viewport, so statics are fine):
@@ -696,6 +745,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         } else {
             InspectorCache& ic = inspector_cache();
             if (!ic.valid || !(ic.entity == sel)) {
+                // A drag in progress targets the old material: fold it into
+                // one undo step before the cache is overwritten below.
+                if (ic.mat_live) {
+                    std::string commit_err;
+                    app.commit_material_params(ic.mat_path, ic.mat_before, commit_err);
+                    ic.mat_live = false;
+                }
                 ic.entity = sel;
                 ic.valid = true;
                 ic.error.clear();
@@ -727,6 +783,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ic.light_color[1] = l.color_g;
                 ic.light_color[2] = l.color_b;
                 ic.light_intensity = l.intensity;
+                ic.light_shadows = l.cast_shadows;
                 if (const auto* m = w->get<runtime::MeshComponent>(sel)) {
                     const std::string id = m->mesh_id.to_string();
                     std::strncpy(ic.mesh_id, id.c_str(), sizeof(ic.mesh_id) - 1);
@@ -933,12 +990,46 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ImGui::SameLine();
                     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "*");
                 }
-                ImGui::ColorEdit3("Base color", ic.mat_base);
-                ImGui::SliderFloat("Metallic", &ic.mat_metal, 0.0f, 1.0f);
-                ImGui::SliderFloat("Roughness", &ic.mat_rough, 0.0f, 1.0f);
-                ImGui::SliderFloat("AO", &ic.mat_ao, 0.0f, 1.0f);
-                ImGui::ColorEdit3("Emission", ic.mat_em);
-                ImGui::SliderFloat("Emission strength", &ic.mat_estr, 0.0f, 8.0f);
+                // Live edit: every slider tick writes straight through to the
+                // viewport (no undo entry); releasing the pointer folds the
+                // whole drag into one undo step. The explicit Apply button
+                // below stays for keyboard/explicit workflows.
+                bool mat_tweaked = false;
+                mat_tweaked |= ImGui::ColorEdit3("Base color", ic.mat_base);
+                mat_tweaked |= ImGui::SliderFloat("Metallic", &ic.mat_metal, 0.0f, 1.0f);
+                mat_tweaked |= ImGui::SliderFloat("Roughness", &ic.mat_rough, 0.0f, 1.0f);
+                mat_tweaked |= ImGui::SliderFloat("AO", &ic.mat_ao, 0.0f, 1.0f);
+                mat_tweaked |= ImGui::ColorEdit3("Emission", ic.mat_em);
+                mat_tweaked |=
+                    ImGui::SliderFloat("Emission strength", &ic.mat_estr, 0.0f, 8.0f);
+                if (mat_tweaked) {
+                    if (app.runtime() == nullptr) {
+                        ic.error = "No runtime";
+                    } else {
+                        if (!ic.mat_live) {
+                            ic.mat_before = read_material_params(*app.runtime(), ic.mat_path);
+                            ic.mat_live = true;
+                        }
+                        std::string err;
+                        if (!app.preview_material_params(ic.mat_path,
+                                                         material_edit_from_cache(ic), err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Material edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+                if (ic.mat_live && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    std::string err;
+                    if (!app.commit_material_params(ic.mat_path, ic.mat_before, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Material edit failed", err);
+                    } else {
+                        ic.error.clear();
+                    }
+                    ic.mat_live = false;
+                }
                 // Albedo texture picker ("None (scalar)" + known images).
                 std::vector<std::string> tex_list;
                 tex_list.emplace_back();
@@ -977,20 +1068,29 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         ic.error.clear();
                     }
                 }
-                if (ImGui::Button("Apply##material_params")) {
-                    MaterialEdit e;
-                    for (int i = 0; i < 4; ++i) {
-                        e.base_color[i] = (i < 3) ? ic.mat_base[i] : 1.0f;
-                    }
-                    e.metallic = ic.mat_metal;
-                    e.roughness = ic.mat_rough;
-                    e.ao = ic.mat_ao;
-                    for (int i = 0; i < 3; ++i) {
-                        e.emission[i] = ic.mat_em[i];
-                    }
-                    e.emission_strength = ic.mat_estr;
+                // Mip filter picker — rebinds the cached sampler, no re-upload.
+                // The combo order mirrors rhi::MipMapMode (None=0, Nearest=1, Linear=2).
+                {
+                    const rhi::MipMapMode cur = (app.runtime() != nullptr)
+                                                    ? app.material_mip_mode(ic.mat_path)
+                                                    : rhi::MipMapMode::Linear;
+                    ic.mip_choice = static_cast<int>(cur);
+                }
+                ImGui::Combo("Mip filter", &ic.mip_choice, "None\0Nearest\0Linear\0");
+                ImGui::SameLine();
+                if (ImGui::Button("Apply##mip")) {
                     std::string err;
-                    if (!app.set_material_params(ic.mat_path, e, err)) {
+                    if (!app.set_material_mip_mode(
+                            ic.mat_path, static_cast<rhi::MipMapMode>(ic.mip_choice), err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Mip filter assign failed", err);
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                if (ImGui::Button("Apply##material_params")) {
+                    std::string err;
+                    if (!app.set_material_params(ic.mat_path, material_edit_from_cache(ic), err)) {
                         ic.error = err;
                         push_error(app.console(), "Material edit failed", err);
                     } else {
@@ -1059,6 +1159,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::DragFloat3("Direction", ic.light_dir, 0.02f);
                 ImGui::ColorEdit3("Color", ic.light_color);
                 ImGui::DragFloat("Intensity", &ic.light_intensity, 0.05f, 0.0f, 16.0f);
+                ImGui::Checkbox("Cast shadows", &ic.light_shadows);
                 if (ImGui::Button("Apply##light")) {
                     LightEdit e;
                     e.dir_x = ic.light_dir[0];
@@ -1068,6 +1169,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     e.color_g = ic.light_color[1];
                     e.color_b = ic.light_color[2];
                     e.intensity = ic.light_intensity;
+                    e.cast_shadows = ic.light_shadows;
                     std::string err;
                     if (!app.set_light(sel, e, err)) {
                         ic.error = err;

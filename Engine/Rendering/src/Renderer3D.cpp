@@ -107,12 +107,13 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         ld.bindings = std::span<const rhi::DescriptorBinding>(material_binds);
         m_material_layout = device.create_descriptor_set_layout(ld);
 
-        const std::array<rhi::DescriptorBinding, 5> lighting_binds{{
+        const std::array<rhi::DescriptorBinding, 6> lighting_binds{{
             {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // base
             {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
             {2, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // surface
             {3, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // depth
             {4, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},// frame uniforms
+            {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // shadow map
         }};
         rhi::DescriptorSetLayoutDesc lld{};
         lld.bindings = std::span<const rhi::DescriptorBinding>(lighting_binds);
@@ -322,6 +323,38 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         return false;
     }
 
+    // Directional shadow map (fixed size): depth-only target, sampled by the
+    // lighting pass. The depth-only render pass already exists above.
+    {
+        rhi::TextureDesc shadow_desc{};
+        shadow_desc.width = kShadowMapSize;
+        shadow_desc.height = kShadowMapSize;
+        shadow_desc.format = rhi::Format::D32_SFloat;
+        shadow_desc.usage = rhi::ImageUsage::DepthAtt | rhi::ImageUsage::Sampled;
+        m_shadow_map = device.create_texture(shadow_desc);
+        if (m_shadow_map) {
+            rhi::TextureViewDesc svd{};
+            svd.dimension = rhi::ViewDimension::View2D;
+            svd.aspect = rhi::ImageAspect::Depth;
+            svd.base_mip = 0;
+            svd.mip_count = 1;
+            svd.base_layer = 0;
+            svd.layer_count = 1;
+            svd.texture = m_shadow_map.get();
+            m_shadow_view = device.create_texture_view(svd);
+        }
+        if (m_shadow_map && m_shadow_view) {
+            const std::array<rhi::Texture*, 0> no_colors{};
+            m_shadow_fb =
+                device.create_framebuffer(*m_depth_rp, std::span<rhi::Texture* const>(no_colors),
+                                          m_shadow_map.get());
+        }
+        if (!m_shadow_map || !m_shadow_view || !m_shadow_fb) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shadow map target");
+            return false;
+        }
+    }
+
     // --- graph-owned targets ---
     m_graph = std::make_unique<RenderGraph>(device);
     rhi::TextureDesc color_desc{};
@@ -481,6 +514,9 @@ void Renderer3D::shutdown() {
     m_tonemap_present_ready = false;
     m_white_view.reset();
     m_white_texture.reset();
+    m_shadow_fb.reset();
+    m_shadow_view.reset();
+    m_shadow_map.reset();
     m_sampler.reset();
     m_device = nullptr;
 }
@@ -515,6 +551,28 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     fu.dir_color_int[1] = m_directional.color.y;
     fu.dir_color_int[2] = m_directional.color.z;
     fu.dir_color_int[3] = m_directional.intensity;
+    // Directional shadow transform: ortho box around the origin with the
+    // light placed along -direction. Row-vector order matches update_camera
+    // (view * projection), so the shader consumes it the same way.
+    {
+        Mat4 light_vp = Mat4::identity();
+        Vec3 dir = m_directional.direction;
+        const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        if (len >= 1e-6f) {
+            dir *= (1.0f / len);
+            const Vec3 eye = dir * -20.0f;
+            const Vec3 up = (std::abs(dir.y) > 0.98f) ? Vec3{1.0f, 0.0f, 0.0f}
+                                                      : Vec3{0.0f, 1.0f, 0.0f};
+            light_vp = Mat4::look_at(eye, Vec3{0.0f, 0.0f, 0.0f}, up) *
+                       Mat4::orthographic(-12.0f, 12.0f, -12.0f, 12.0f, 1.0f, 60.0f);
+        }
+        std::memcpy(fu.light_view_proj, light_vp.m, sizeof(fu.light_view_proj));
+    }
+    const bool shadows_on = m_directional.enabled && m_directional.shadows_enabled;
+    fu.shadow_params[0] = shadows_on ? 1.0f : 0.0f;
+    fu.shadow_params[1] = m_directional.shadow_strength;
+    fu.shadow_params[2] = m_directional.shadow_bias;
+    fu.shadow_params[3] = 1.0f / static_cast<float>(kShadowMapSize);
     fu.counts[0] = static_cast<i32>(m_point_lights.size());
     fu.counts[1] = static_cast<i32>(m_spot_lights.size());
     for (u32 i = 0; i < m_point_lights.size() && i < kMaxPointLights; ++i) {
@@ -559,12 +617,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         return false;
     }
     {
-        const std::array<rhi::DescriptorWrite, 5> lighting_writes{{
+        const std::array<rhi::DescriptorWrite, 6> lighting_writes{{
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer0_view.get(), m_sampler.get()},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer1_view.get(), m_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer2_view.get(), m_sampler.get()},
             {3, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer_depth_view.get(), m_sampler.get()},
             {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms.get(), 0, sizeof(FrameUniforms), nullptr, nullptr},
+            {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_shadow_view.get(), m_sampler.get()},
         }};
         m_device->update_descriptor_set(*lighting_set, std::span<const rhi::DescriptorWrite>(lighting_writes));
         const std::array<rhi::DescriptorWrite, 1> tonemap_writes{{
@@ -647,6 +706,43 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // --- Build the frame graph ---
     m_graph->reset(true);
     auto rg_out = m_graph->import_texture("Output", &out_target);
+    // The shadow map is a standalone fixed-size texture; importing it lets
+    // the graph transition it (depth write in the shadow pass, fragment read
+    // in lighting) with the same barriers as owned targets.
+    auto rg_shadow = m_graph->import_texture("ShadowMap", m_shadow_map.get());
+
+    // Shadow map (depth from the light). Runs first: nothing else reads it
+    // until lighting, and early writing keeps the barrier chain linear.
+    RGPassDesc shadow_pass{};
+    shadow_pass.name = "ShadowMap";
+    shadow_pass.depth_attachment = rg_shadow;
+    shadow_pass.execute = [&](rhi::CommandBuffer& gcmd) {
+        const std::array<rhi::ClearValue, 0> no_clears{};
+        gcmd.begin_render_pass(*m_depth_rp, *m_shadow_fb, std::span<const rhi::ClearValue>(no_clears), 1.0f, 0);
+        gcmd.bind_pipeline(*m_depth_pipeline);
+        struct Push { float view_proj[16]; float model[16]; };
+        Push push{};
+        static_assert(sizeof(fu.light_view_proj) == sizeof(push.view_proj));
+        std::memcpy(push.view_proj, fu.light_view_proj, sizeof(push.view_proj));
+        gcmd.set_viewport(0, 0, kShadowMapSize, kShadowMapSize);
+        gcmd.set_scissor(0, 0, kShadowMapSize, kShadowMapSize);
+        for (auto& pd : prepared) {
+            std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
+            gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
+            const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
+            const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
+            if (!vb || !ib) continue;
+            const std::array<const rhi::Buffer*, 1> vbs{vb};
+            gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+            gcmd.bind_index_buffer(*ib, 0);
+            const MeshLOD& lod = pd.mesh->lods()[pd.lod];
+            for (const SubMesh& sm : lod.submeshes) {
+                gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
+            }
+        }
+        gcmd.end_render_pass();
+    };
+    m_graph->add_pass(shadow_pass);
 
     // Depth prepass
     RGPassDesc depth_pass{};
@@ -720,10 +816,11 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     };
     m_graph->add_pass(gbuffer_pass);
 
-    // Lighting: GBuffer + Depth → HDR
+    // Lighting: GBuffer + Depth + ShadowMap → HDR
     RGPassDesc lighting_pass{};
     lighting_pass.name = "Lighting";
-    lighting_pass.reads = {m_gbuffer0_handle, m_gbuffer1_handle, m_gbuffer2_handle, m_depth_handle};
+    lighting_pass.reads = {m_gbuffer0_handle, m_gbuffer1_handle, m_gbuffer2_handle, m_depth_handle,
+                           rg_shadow};
     lighting_pass.color_attachments = {m_hdr_handle};
     lighting_pass.execute = [&](rhi::CommandBuffer& gcmd) {
         const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{0.0f, 0.0f, 0.0f, 1.0f}};

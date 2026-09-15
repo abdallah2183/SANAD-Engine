@@ -592,9 +592,11 @@ int main(int argc, char** argv) {
                             break;
                         }
                     }
-                    vp_state.width = window.width();
-                    vp_state.height = window.height();
-                    app.viewport() = vp_state;
+                    // Window resize recreates the swapchain only. The offscreen
+                    // target follows the docked panel size (reported by the
+                    // panel every frame), never the window size — copying the
+                    // window size here would stretch the image on the next
+                    // frame whenever the panel aspect differs from it.
                 }
             }
 
@@ -664,6 +666,16 @@ int main(int argc, char** argv) {
 
             // Viewport: offscreen Runtime render (never swapchain-direct).
             device->wait_idle();
+            // The panel reports its displayed size every frame (windowed), so
+            // the target follows it 1:1 and the image never stretches.
+            // Headless has no panels: the fixed startup size survives here
+            // untouched, keeping CI deterministic.
+            vp_state = app.viewport();
+            if (vp_state.width == 0 || vp_state.height == 0) {
+                vp_state.width = 1280;
+                vp_state.height = 720;
+                app.viewport() = vp_state;
+            }
             if (!nf::editor::ensure_viewport_target(*device, vp_state, vp_res)) {
                 NF_LOG_ERROR(nf::LogCategory::Editor, "Viewport target creation failed");
                 exit_code = 1;

@@ -546,6 +546,136 @@ NF_TEST(material_mip_mode_save_reload) {
     rhi::reset_validation_error_count();
 }
 
+// The editor's mip filter switch is an undoable command: apply writes
+// through to the runtime, undo restores the snapshotted mode, redo
+// re-applies — all without touching the scene world.
+NF_TEST(material_mip_mode_command_undo) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_matmipcmd");
+    std::filesystem::create_directories(tmp / "Content" / "Materials");
+    std::filesystem::create_directories(tmp / "Cache");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    NF_CHECK(vfs.write_text("content://Materials/M.nfmat",
+                            "# NOVAForge Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
+                            "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
+                            "emission_strength: 0\n")
+                 .ok);
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    scene::Scene scene("MipCmd");
+    editor::CommandStack stack;
+    std::string err;
+    NF_CHECK(runtime.material_for_path("content://Materials/M").valid());
+    NF_CHECK(runtime.material_mip_mode("content://Materials/M") == rhi::MipMapMode::Linear);
+
+    auto cmd = editor::make_material_mip_command(runtime, "content://Materials/M",
+                                                 rhi::MipMapMode::Nearest, err);
+    NF_CHECK(cmd != nullptr);
+    stack.push(std::move(cmd), scene.world());
+    NF_CHECK(runtime.material_mip_mode("content://Materials/M") == rhi::MipMapMode::Nearest);
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(runtime.material_mip_mode("content://Materials/M") == rhi::MipMapMode::Linear);
+    NF_CHECK(stack.redo(scene.world()));
+    NF_CHECK(runtime.material_mip_mode("content://Materials/M") == rhi::MipMapMode::Nearest);
+
+    // Out-of-range modes are rejected without touching the runtime.
+    auto bad = editor::make_material_mip_command(runtime, "content://Materials/M",
+                                                 static_cast<rhi::MipMapMode>(9), err);
+    NF_CHECK(bad == nullptr);
+    NF_CHECK(!err.empty());
+    NF_CHECK(runtime.material_mip_mode("content://Materials/M") == rhi::MipMapMode::Nearest);
+
+    NF_CHECK(rhi::validation_error_count() == 0);
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}
+
+// Live material preview (the inspector slider path): preview writes through
+// immediately with no undo entry, commit folds the drag into exactly one
+// undo step, and undo restores the pre-drag values.
+NF_TEST(material_live_preview_commit_undo) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_matlive");
+    std::filesystem::create_directories(tmp / "Content" / "Scenes");
+    std::filesystem::create_directories(tmp / "Content" / "Materials");
+    std::filesystem::create_directories(tmp / "Cache");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    NF_CHECK(vfs.write_text("content://Materials/M.nfmat",
+                            "# NOVAForge Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
+                            "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
+                            "emission_strength: 0\n")
+                 .ok);
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+    std::string err;
+    // The app resolves its world through the runtime's edit scene.
+    scene::Scene scene("Live");
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Scenes/Live.nfscene", scene, err));
+    NF_CHECK(runtime.load_scene("content://Scenes/Live.nfscene", err));
+    NF_CHECK(runtime.material_for_path("content://Materials/M").valid());
+
+    auto base_red = [](const rendering::PBRMaterialParams& p) { return p.base_color[0]; };
+    rendering::PBRMaterialParams p0{};
+    NF_CHECK(runtime.material_params("content://Materials/M", p0));
+
+    // Preview: visible immediately, no undo entry.
+    editor::MaterialEdit red;
+    red.base_color[0] = 0.9f;
+    red.base_color[1] = 0.1f;
+    red.base_color[2] = 0.1f;
+    red.base_color[3] = 1.0f;
+    NF_CHECK(app.preview_material_params("content://Materials/M", red, err));
+    rendering::PBRMaterialParams p1{};
+    NF_CHECK(runtime.material_params("content://Materials/M", p1));
+    NF_CHECK_NEAR(base_red(p1), 0.9f, 1e-5f);
+    NF_CHECK(!app.undo(err)); // nothing committed yet
+
+    // Invalid previews are rejected without touching the live values.
+    editor::MaterialEdit bad = red;
+    bad.roughness = 42.0f;
+    NF_CHECK(!app.preview_material_params("content://Materials/M", bad, err));
+    NF_CHECK(!err.empty());
+    rendering::PBRMaterialParams p2{};
+    NF_CHECK(runtime.material_params("content://Materials/M", p2));
+    NF_CHECK_NEAR(base_red(p2), 0.9f, 1e-5f);
+
+    // Commit: exactly one undo step back to the pre-drag gray.
+    NF_CHECK(app.commit_material_params("content://Materials/M", p0, err));
+    NF_CHECK(app.undo(err));
+    rendering::PBRMaterialParams p3{};
+    NF_CHECK(runtime.material_params("content://Materials/M", p3));
+    NF_CHECK_NEAR(base_red(p3), base_red(p0), 1e-5f);
+
+    NF_CHECK(rhi::validation_error_count() == 0);
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}
+
 // The material descriptor set is cached on the material instance and reused
 // across frames. Before the cache the renderer allocated one set per visible
 // object per frame, so a scene whose objects share a material paid N

@@ -1291,6 +1291,7 @@ void Runtime::extract_light() {
         rl.color = {l->color_r, l->color_g, l->color_b};
         rl.intensity = l->intensity;
         rl.enabled = true;
+        rl.shadows_enabled = l->cast_shadows;
         m_renderer->set_directional_light(rl);
         return;
     }

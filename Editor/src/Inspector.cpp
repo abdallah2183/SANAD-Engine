@@ -90,6 +90,7 @@ LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.color_g = l->color_g;
     out.color_b = l->color_b;
     out.intensity = l->intensity;
+    out.cast_shadows = l->cast_shadows;
     return out;
 }
 
@@ -197,6 +198,7 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
     after.color_g = edit.color_g;
     after.color_b = edit.color_b;
     after.intensity = edit.intensity;
+    after.cast_shadows = edit.cast_shadows;
     return std::make_unique<SetLightCommand>(e, had, before, after);
 }
 
@@ -335,6 +337,19 @@ std::unique_ptr<ICommand> make_material_albedo_command(runtime::Runtime& runtime
                                                        const std::string& before_tex,
                                                        const std::string& after_tex) {
     return std::make_unique<SetMaterialAlbedoCommand>(&runtime, material_path, before_tex, after_tex);
+}
+
+std::unique_ptr<ICommand> make_material_mip_command(runtime::Runtime& runtime,
+                                                    const std::string& material_path,
+                                                    rhi::MipMapMode after_mode,
+                                                    std::string& out_err) {
+    const int idx = static_cast<int>(after_mode);
+    if (idx < 0 || idx > 2) {
+        out_err = "Invalid mip filter mode";
+        return nullptr;
+    }
+    const rhi::MipMapMode before = runtime.material_mip_mode(material_path);
+    return std::make_unique<SetMaterialMipModeCommand>(&runtime, material_path, before, after_mode);
 }
 
 } // namespace nf::editor

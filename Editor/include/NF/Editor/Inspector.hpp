@@ -9,6 +9,7 @@
 // and leaves the scene untouched.
 
 #include <NF/ECS/ECS.hpp>
+#include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -41,6 +42,7 @@ struct LightEdit {
     float dir_x = -0.5f, dir_y = -1.0f, dir_z = -0.3f;
     float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
     float intensity = 1.0f;
+    bool cast_shadows = true;
 };
 
 struct MaterialEdit {
@@ -88,5 +90,11 @@ std::unique_ptr<ICommand> make_material_albedo_command(runtime::Runtime& runtime
                                                        const std::string& material_path,
                                                        const std::string& before_tex,
                                                        const std::string& after_tex);
+// Mip filter switch. Snapshots the live mode for undo; rejects out-of-range
+// modes without touching the runtime.
+std::unique_ptr<ICommand> make_material_mip_command(runtime::Runtime& runtime,
+                                                    const std::string& material_path,
+                                                    rhi::MipMapMode after_mode,
+                                                    std::string& out_err);
 
 } // namespace nf::editor

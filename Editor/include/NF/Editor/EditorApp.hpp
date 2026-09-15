@@ -139,6 +139,20 @@ public:
     bool set_material_albedo(const std::string& material_path, const std::string& texture_path,
                              std::string& out_err);
     std::string material_albedo(const std::string& material_path) const;
+    // Live material preview: validates exactly like set_material_params and
+    // writes through immediately, but pushes no undo entry. The panel calls
+    // this on every slider tick and commit_material_params() once when the
+    // drag ends, so feedback is instant and undo stays one step per gesture.
+    bool preview_material_params(const std::string& material_path, const MaterialEdit& edit,
+                                 std::string& out_err);
+    // Folds preceding preview writes into a single undo step: before is the
+    // snapshot taken when the gesture started, after is the live value now.
+    bool commit_material_params(const std::string& material_path,
+                                const rendering::PBRMaterialParams& before,
+                                std::string& out_err);
+    bool set_material_mip_mode(const std::string& material_path, rhi::MipMapMode mode,
+                               std::string& out_err);
+    rhi::MipMapMode material_mip_mode(const std::string& material_path) const;
     std::vector<std::string> known_textures();
     // Saves src material to dst (same path = in-place save, clears dirty).
     bool save_material(const std::string& src_path, const std::string& dst_path, std::string& out_err);

@@ -211,46 +211,6 @@ static uint64_t render_red_count(rhi::IGraphicsDevice& device, runtime::Runtime&
     return red;
 }
 
-static uint32_t render_lit_count(rhi::IGraphicsDevice& device, runtime::Runtime& runtime) {
-    rhi::TextureDesc td{};
-    td.width = 64;
-    td.height = 64;
-    td.format = rhi::Format::R8G8B8A8_UNorm;
-    td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
-    auto target = device.create_texture(td);
-    rhi::BufferDesc bd{};
-    bd.size = static_cast<usize>(64) * 64 * 4;
-    bd.usage = rhi::BufferUsage::TransferDst;
-    bd.memory = rhi::MemoryUsage::GPUToCPU;
-    auto rb = device.create_buffer(bd);
-    auto cmd = device.create_command_buffer();
-    auto fence = device.create_fence(false);
-    if (!target || !rb || !cmd || !fence) {
-        return 0;
-    }
-    cmd->begin();
-    runtime.render_offscreen(*target, *cmd);
-    cmd->copy_texture_to_buffer(*target, *rb, 0, 0, 64, 64, 0);
-    cmd->end();
-    device.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
-    if (!fence->wait(5000000000ULL)) {
-        return 0;
-    }
-    const auto* px = static_cast<const uint8_t*>(rb->map());
-    if (px == nullptr) {
-        return 0;
-    }
-    uint32_t lit = 0;
-    for (size_t i = 0; i < 64u * 64u; ++i) {
-        if (px[i * 4] > 10 || px[i * 4 + 1] > 10 || px[i * 4 + 2] > 10) {
-            ++lit;
-        }
-    }
-    rb->unmap();
-    device.wait_idle();
-    return lit;
-}
-
 NF_TEST(hotreload_texture_goes_live) {
     const GpuFixture& f = require_gpu();
     auto& device = *f.device;
@@ -365,8 +325,10 @@ NF_TEST(hotreload_mesh_rebuilds_live) {
     NF_CHECK(handle && handle->state == AssetState::Ready);
     manager.update();
     runtime.update(0.016f);
-    const uint32_t lit_before = render_lit_count(device, runtime);
-    NF_CHECK(lit_before > 100);
+    // Red albedo pixels track the cube's screen area (the sky is blue, so it
+    // never counts); shrinking 2.0 → 0.5 must collapse the red count.
+    const uint64_t red_before = render_red_count(device, runtime);
+    NF_CHECK(red_before > 100);
 
     editor::HotReload hot;
     hot.watch_mesh(hs.mesh_id, "content://Meshes/cube.nfmesh");
@@ -382,15 +344,15 @@ NF_TEST(hotreload_mesh_rebuilds_live) {
     auto results = hot.poll(hs.vfs, hs.reg, runtime);
     NF_CHECK(results.size() == 1u && results[0].ok);
     runtime.update(0.016f);
-    const uint32_t lit_after = render_lit_count(device, runtime);
-    NF_CHECK(lit_after > 0 && lit_after * 4 < lit_before); // visibly smaller cube
+    const uint64_t red_after = render_red_count(device, runtime);
+    NF_CHECK(red_after > 0 && red_after * 4 < red_before); // visibly smaller cube
 
     // Corrupt source: validation rejects, last good copy stays live.
     write_bytes(hs.tmp / "Content" / "Meshes" / "cube.nfmesh", std::vector<uint8_t>{9, 9, 9});
     auto results2 = hot.poll(hs.vfs, hs.reg, runtime);
     NF_CHECK(results2.size() == 1u && !results2[0].ok);
     runtime.update(0.016f);
-    NF_CHECK(render_lit_count(device, runtime) > 0);
+    NF_CHECK(render_red_count(device, runtime) > 0);
 
     NF_CHECK(rhi::validation_error_count() == 0);
     device.wait_idle();

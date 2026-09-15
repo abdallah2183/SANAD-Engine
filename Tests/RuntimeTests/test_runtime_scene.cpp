@@ -3,6 +3,7 @@
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/ECS/ECS.hpp>
@@ -159,6 +160,53 @@ NF_TEST(scene_save_load_round_trip) {
     NF_CHECK(result.scene && result.scene->world().alive_entity_count()==1);
     auto* t = result.scene->world().get<Transform>(result.scene->world().all_entities()[0]);
     NF_CHECK(t && t->local_x==5);
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_light_shadow_round_trip) {
+    VirtualFileSystem vfs;
+    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_light_shadow_test";
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    Scene scene("LightShadow");
+    auto& w = scene.world();
+    ecs::Entity e1 = w.create_entity();
+    w.add<Transform>(e1, Transform{});
+    DirectionalLight no_shadow;
+    no_shadow.cast_shadows = false;
+    w.add<DirectionalLight>(e1, no_shadow);
+    ecs::Entity e2 = w.create_entity();
+    w.add<Transform>(e2, Transform{});
+    w.add<DirectionalLight>(e2, DirectionalLight{}); // default: shadows on
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/light.nfscene", scene, err));
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/light.nfscene");
+    NF_CHECK(result.success);
+    bool saw_off = false, saw_on = false;
+    for (auto e : result.scene->world().query<DirectionalLight>()) {
+        const auto* l = result.scene->world().get<DirectionalLight>(e);
+        if (l->cast_shadows) saw_on = true;
+        else saw_off = true;
+    }
+    NF_CHECK(saw_off); // shadows=false survived the round trip
+    NF_CHECK(saw_on);  // default (no key written) loads as shadows on
+
+    // Old files without the key keep working: shadows default to on.
+    NF_CHECK(vfs.write_text("content://Scenes/legacy.nfscene",
+                            "# NOVAForge Scene v1\nversion: 1\nname: Legacy\n"
+                            "entity_count: 1\n"
+                            "---\n"
+                            "entity: 0:0\n"
+                            "  Light: type=Directional dir(0,-1,0) color(1,1,1) intensity=1\n")
+                 .ok);
+    auto legacy = load_scene_from_vfs(vfs, "content://Scenes/legacy.nfscene");
+    NF_CHECK(legacy.success);
+    const auto* ll = legacy.scene->world().get<DirectionalLight>(
+        legacy.scene->world().all_entities()[0]);
+    NF_CHECK(ll != nullptr && ll->cast_shadows);
 
     std::filesystem::remove_all(tmp);
 }

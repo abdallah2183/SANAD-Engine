@@ -106,9 +106,13 @@ u32 render_lod_cube(rhi::IGraphicsDevice& dev, Renderer3D& renderer, MeshLibrary
 
     const auto* px = static_cast<const Pixel*>(rb->map());
     if (px == nullptr) return 0;
+    // Red-dominant pixels: the test cube is red (0.9, 0.1, 0.1) while the
+    // procedural sky (Phase 13) is blue and its haze neutral — so only
+    // actual cube geometry counts, never background. The front face gets
+    // ambient only under the top-down default light, hence the modest floor.
     u32 lit = 0;
     for (size_t i = 0; i < 64u * 64u; ++i) {
-        if (px[i].r > 10 || px[i].g > 10 || px[i].b > 10) ++lit;
+        if (px[i].r > 30 && px[i].r > px[i].g + 10 && px[i].r > px[i].b + 10) ++lit;
     }
     rb->unmap();
     return lit;

@@ -163,6 +163,22 @@ u64 pixel_sum(const std::vector<Pixel>& px) {
     return s;
 }
 
+// Sum over a centered square region (half-side `side` around the frame
+// center): geometry response isolated from the procedural sky, which is
+// identical across the compared frames and would otherwise compress
+// on/off ratios toward 1.
+u64 pixel_sum_center(const std::vector<Pixel>& px, u32 w, u32 h, u32 side) {
+    u64 s = 0;
+    const u32 cx = w / 2, cy = h / 2;
+    for (u32 y = (cy > side) ? cy - side : 0; y < cy + side && y < h; ++y) {
+        for (u32 x = (cx > side) ? cx - side : 0; x < cx + side && x < w; ++x) {
+            const Pixel& p = px[usize(y) * w + x];
+            s += u64(p.r) + p.g + p.b;
+        }
+    }
+    return s;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -949,21 +965,34 @@ NF_TEST(lighting_pass) {
     std::vector<Pixel> lit;
     SceneSpec s = base_spec();
     NF_CHECK(render_spec(*f.device, 64, 64, s, lit));
-    NF_LOG_WARN(nf::LogCategory::Core, "lighting debug: center=({}, {}, {}) c1=({}, {}, {}) litcount={}",
+    NF_LOG_WARN(nf::LogCategory::Core, "lighting debug: center=({}, {}, {}) c1=({}, {}, {}) cTL=({}, {}, {}) cBR=({}, {}, {}) litcount={}",
                 lit[32 * 64 + 32].r, lit[32 * 64 + 32].g, lit[32 * 64 + 32].b,
                 lit[30 * 64 + 32].r, lit[30 * 64 + 32].g, lit[30 * 64 + 32].b,
+                lit[0].r, lit[0].g, lit[0].b,
+                lit[63 * 64 + 63].r, lit[63 * 64 + 63].g, lit[63 * 64 + 63].b,
                 count_pixels_above(lit, 30));
-    // Lit geometry against a black background — the lighting pass ran
+    // Lit geometry in the middle; procedural sky (Phase 13) around it —
+    // blue-dominant and clearly non-black, so sky and geometry stay
+    // distinguishable the way black background used to be.
+    // Orientation note: the readback buffer stores NDC row order, which is
+    // vertically mirrored versus the displayed image (the panel flips V on
+    // display). World-up lands on readback BOTTOM rows, ground haze on top.
     NF_CHECK(count_pixels_above(lit, 30) > 300);
-    u32 dark = 0;
+    u32 sky = 0;
+    u32 haze = 0;
     for (usize i = 0; i < lit.size(); ++i) {
         const u32 x = static_cast<u32>(i % 64);
         const u32 y = static_cast<u32>(i / 64);
-        if ((x < 6 || x > 57) && (y < 6 || y > 57)) {
-            if (lit[i].r < 8 && lit[i].g < 8 && lit[i].b < 8) ++dark;
+        if (x < 6 || x > 57) {
+            if (y > 57) {
+                if (lit[i].b > lit[i].r + 10 && lit[i].b > 30) ++sky;
+            } else if (y < 6) {
+                if (lit[i].r > 20 && lit[i].g > 20 && lit[i].b > 20) ++haze;
+            }
         }
     }
-    NF_CHECK(dark > 100); // corners stayed unlit
+    NF_CHECK(sky > 60);  // world-up (readback bottom) shows blue sky
+    NF_CHECK(haze > 60); // world-down (readback top) shows lit haze, not black
 }
 
 NF_TEST(directional_light) {
@@ -973,9 +1002,14 @@ NF_TEST(directional_light) {
     NF_CHECK(render_spec(*f.device, 64, 64, s, on));
     s.light_enabled = false;
     NF_CHECK(render_spec(*f.device, 64, 64, s, off));
-    // Toggling the directional light changes the image; off ≈ ambient only
+    // Toggling the directional light changes the image; off ≈ ambient only.
+    // Compared over the frame center (the cube): the sky is identical in
+    // both frames, so a whole-frame ratio would be compressed toward 1.
     NF_CHECK(count_different_pixels(on, off) > 300);
-    NF_CHECK(pixel_sum(on) > pixel_sum(off) * 2);
+    const u64 on_c = pixel_sum_center(on, 64, 64, 16);
+    const u64 off_c = pixel_sum_center(off, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "dirlight debug: on_c={} off_c={}", on_c, off_c);
+    NF_CHECK(on_c > off_c * 2);
 }
 
 NF_TEST(point_light) {
@@ -1012,11 +1046,18 @@ NF_TEST(spot_light) {
     NF_CHECK(render_spec(*f.device, 64, 64, aimed, hit));
     NF_CHECK(render_spec(*f.device, 64, 64, away, missed));
     NF_CHECK(render_spec(*f.device, 64, 64, s, none));
-    // Cone aimed at the cube lights it; cone aimed at the sky does not
+    // Cone aimed at the cube lights it; cone aimed at the sky does not.
+    // Center-region sums: the sky is identical across frames, so whole-frame
+    // ratios would be compressed toward 1.
     NF_CHECK(count_different_pixels(hit, none) > 100);
     NF_CHECK(count_different_pixels(hit, missed) > 100);
-    NF_CHECK(pixel_sum(hit) > pixel_sum(missed) * 2);
-    NF_CHECK(pixel_sum(missed) < pixel_sum(none) * 2); // away ≈ unlit
+    const u64 hit_c = pixel_sum_center(hit, 64, 64, 16);
+    const u64 missed_c = pixel_sum_center(missed, 64, 64, 16);
+    const u64 none_c = pixel_sum_center(none, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "spot debug: hit_c={} missed_c={} none_c={}", hit_c,
+                missed_c, none_c);
+    NF_CHECK(hit_c > missed_c * 2);
+    NF_CHECK(missed_c < none_c * 2); // away ≈ unlit
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,4 +1352,112 @@ NF_TEST(validation_clean_full_pipeline) {
     const u32 errors = rhi::validation_error_count();
     NF_CHECK_EQ(errors, 0u);
     dev->shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Directional shadows (Phase 13)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Cube floating above a wide flat floor, lit at an angle: the cube throws a
+// shadow onto the floor beside it. Shadows on/off differ only in the shadow
+// factor, so lit pixels must be identical and shadowed ones strictly darker.
+struct ShadowScene {
+    bool shadows_on = true;
+};
+
+bool render_shadow_scene(rhi::IGraphicsDevice& dev, const ShadowScene& spec, std::vector<Pixel>& out) {
+    const u32 W = 128, H = 128;
+    const Camera cam = make_camera(6.0f, float(W) / float(H));
+    return render_full_chain(dev, W, H,
+        [&](ecs::World& world, MeshLibrary& meshes, Renderer3D& renderer) {
+            auto cube = StaticMesh::create_cube(1.5f);
+            StaticMeshHandle h_cube = meshes.add(std::move(cube));
+            auto slab = StaticMesh::create_cube(1.0f);
+            StaticMeshHandle h_floor = meshes.add(std::move(slab));
+            meshes.upload_all(dev);
+
+            PBRMaterialParams gray{};
+            set_rgb(gray, 0.8f, 0.8f, 0.8f);
+            gray.roughness = 0.6f;
+            MaterialHandle m = renderer.materials().create_instance(*renderer.gbuffer_material(),
+                                                                    gray, "gray");
+
+            Entity floor_e = world.create_entity();
+            world.add<scene::Transform>(floor_e, scene::Transform{});
+            world.get<scene::Transform>(floor_e)->local_y = -1.6f;
+            world.get<scene::Transform>(floor_e)->scale_x = 14.0f;
+            world.get<scene::Transform>(floor_e)->scale_y = 0.2f;
+            world.get<scene::Transform>(floor_e)->scale_z = 14.0f;
+            world.add<MeshComponent>(floor_e, MeshComponent{h_floor, m, true});
+
+            Entity cube_e = world.create_entity();
+            world.add<scene::Transform>(cube_e, scene::Transform{});
+            world.get<scene::Transform>(cube_e)->local_y = 0.4f;
+            world.add<MeshComponent>(cube_e, MeshComponent{h_cube, m, true});
+
+            DirectionalLight d{Vec3{-0.55f, -1.0f, -0.35f}, Vec3{1, 1, 1}, 2.5f, true};
+            d.shadows_enabled = spec.shadows_on;
+            renderer.set_directional_light(d);
+        },
+        out, nullptr, &cam);
+}
+
+} // namespace
+
+NF_TEST(directional_shadow_darkens_floor) {
+    const GpuFixture& f = require_gpu();
+    std::vector<Pixel> on, off;
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{true}, on));
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{false}, off));
+    NF_CHECK_EQ(on.size(), off.size());
+
+    // Shadows only ever darken: no pixel may get brighter with them on.
+    u32 darkened = 0;
+    u32 brightened = 0;
+    for (usize i = 0; i < on.size(); ++i) {
+        const int dr = int(off[i].r) - int(on[i].r);
+        const int dg = int(off[i].g) - int(on[i].g);
+        const int db = int(off[i].b) - int(on[i].b);
+        if (dr > 10 || dg > 10 || db > 10) ++darkened;
+        if (dr < -10 || dg < -10 || db < -10) ++brightened;
+    }
+    NF_LOG_WARN(nf::LogCategory::Core, "shadow debug: darkened={} brightened={}", darkened,
+                brightened);
+    NF_CHECK(darkened > 30);   // the cube's shadow lands on the floor
+    NF_CHECK_EQ(brightened, 0u); // ...and nothing else moved
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Procedural sky (Phase 13)
+// ---------------------------------------------------------------------------
+
+NF_TEST(procedural_sky_covers_background) {
+    const GpuFixture& f = require_gpu();
+    const u32 W = 128, H = 128;
+    const Camera cam = make_camera(3.0f, float(W) / float(H));
+    std::vector<Pixel> px;
+    // Empty scene: every pixel takes the sky branch (no geometry at all).
+    NF_CHECK(render_full_chain(*f.device, W, H,
+        [&](ecs::World& world, MeshLibrary& meshes, Renderer3D& renderer) {
+            (void)world;
+            (void)meshes;
+            renderer.set_directional_light(
+                DirectionalLight{Vec3{-0.5f, -1.0f, -0.3f}, Vec3{1, 1, 1}, 2.0f, true});
+        },
+        px, nullptr, &cam));
+
+    // Nothing black anywhere: sky replaces the old near-black clear.
+    NF_CHECK_EQ(px.size(), usize(W) * H);
+    NF_CHECK_EQ(count_pixels_above(px, 15), u32(W) * H);
+    // Majority blue-dominant (zenith gradient + horizon), ground haze below.
+    u32 blue = 0;
+    for (const Pixel& p : px) {
+        if (p.b > p.r + 8) ++blue;
+    }
+    NF_LOG_WARN(nf::LogCategory::Core, "sky debug: blue={} total={}", blue, px.size());
+    NF_CHECK(blue > px.size() * 35 / 100);
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
 }

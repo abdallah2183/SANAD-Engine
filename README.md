@@ -1,281 +1,194 @@
-# NOVAForge Engine
+<p align="center">
+  <img src="Docs/images/novaforge_logo.jpg" alt="NOVAForge Engine Logo" width="220" style="border-radius: 24px; box-shadow: 0 12px 40px rgba(255, 145, 0, 0.35);" />
+</p>
 
-High-performance C++23 game engine designed with a modern data-oriented architecture and low-overhead Vulkan RHI.
+<h1 align="center">NOVAForge Engine | محرك نوفا فورج</h1>
 
-## Current Status (Phase 11 — foundation: layering, debt, world streaming)
+<p align="center">
+  <strong>أول محرك ألعاب عربي ثلاثي الأبعاد متطور وحديث مفتوح المصدر وقابل للتطوير</strong><br>
+  <em>The Modern, Extensible Open-Source C++23 & Vulkan 3D Game Engine</em>
+</p>
 
-NOVAForge is at **Phase 11**. The core runtime pipeline (`Windows + Vulkan + Jobs + ECS + Deferred 3D Renderer`) is verified, test-hardened, and passes 100% of automated unit and rendering tests with zero validation errors. A project can be created, built, packaged and run as a standalone program. A self-contained deterministic rigid-body solver (`PhysicsWorld`), a skeletal animation system (`Skeleton`, `AnimationClip`, `AnimationPlayer`, `AnimationStateMachine`), an audio engine (`AudioDevice`, `AudioBus`, `AudioSource`), a reflection layer (`PropertyInfo`, `ClassInfo`, `ReflectionRegistry`), a C++ gameplay module system (`GameplayModule`, `GameplayModuleRegistry`), and a versioned save system (`SaveSystem`) are integrated into the ECS, runtime, editor, and serialized scene format.
-
-Integration is end-to-end, not just API-level: `Runtime::update()` steps physics → animation → audio → gameplay → transform propagation, so an animated entity's transform is actually written every frame, audio is mixed where the frame will render it, and a gameplay module's writes reach the renderer in the frame it made them. Because the asset import pipelines (mesh/WAV) are still future work, the animation and audio subsystems ship deterministic generators — `make_procedural_clip()` and `make_tone_buffer()` — so a scene can name a clip and a buffer that produce real motion and real samples without a cooked asset. Every component has an editor inspector panel, and the gameplay module state is edited through reflection rather than a hand-written panel.
-
-**Verified 2026-09-14**: build clean under `/W4 /WX`; **534 passed / 0 failed / 1 skipped across 14 suites**; the packaged `NFPlayer` runs the template scene — a falling box on a static plane plus an entity driven by a procedural clip and a generated tone — with 0 validation errors and 0 leaked RHI objects.
-
-### Phase 11 — foundation, not features
-
-Phase 11 deliberately added **no feature area**. It removed three things that were actively wrong and
-landed one seam that the design document calls a "from day one" principle. The case was not aesthetic:
-each item was a trap that had already cost time or structurally blocked a stated goal.
-
-- **`Engine/Assets` no longer depends on `NFRendering`.** The asset library was pulling in the renderer
-  — and therefore the RHI and all of Vulkan — because `AssetManager` was doing two jobs: load, parse
-  and cache CPU assets, *and* upload meshes to the GPU. The upload now lives in `Engine/Rendering`
-  (`MeshUpload`), the runtime owns the device, and `Assets` links only `NFCore`/`NFJobs`. Anything that
-  only needs assets no longer links a graphics stack.
-- **`Engine/Rendering` no longer depends on `NFEcs`/`NFScene`.** The ECS → render-world bridge moved up
-  to `NF/Runtime/SceneExtraction.hpp`, the layer that legitimately knows about both sides. The renderer
-  consumes plain data and can now be built and used standalone — which is what the **dedicated-server
-  path** needs, since a server has no business compiling a renderer to walk a scene graph.
-- **One `.nfmesh` format, not two.** The second writer (`rendering::mesh_asset`, magic `NFM1`) is
-  deleted. `NFME` / `assets::MeshAsset` is the only format, so the cooker can no longer produce
-  something the runtime cannot read.
-- **The six dead RHI handle types are gone** — `BufferHandle`, `TextureHandle`, `PipelineHandle`,
-  `ShaderModuleHandle`, `RenderPassHandle`, `FramebufferHandle`. They had zero references; the device
-  returns owning `unique_ptr`s. Two resource models, one abandoned, is how SIGSEGV-class bugs start.
-- **The ECS benchmarks assert a ceiling** instead of printing numbers nobody reads. The bound is
-  deliberately loose (an order of magnitude) so it catches a real regression without flaking on a
-  throttled runner — a flaky test gets muted, after which it detects nothing.
-- **World-streaming seam** (`scene::StreamingVolume` + `runtime::WorldStreamer`): distance-based chunk
-  load/unload on a uniform grid, with a hysteresis band so a volume parked on a chunk boundary does not
-  thrash, and a per-update load cap with nearest-first ordering. The seam plus one working
-  implementation — LOD, priority queues and a memory budget are deliberately deferred and documented.
-
-Both inversions are enforced by `Scripts/check_layering.sh`, which runs in CI immediately after the
-build so a reintroduced `#include` fails in seconds with the offending line named, instead of
-surfacing later as a confusing link error.
-
-### Implemented & Stabilized Modules
-- **Core**: Custom math library (`Vec2`, `Vec3`, `Vec4`, `Mat4`, `Quat`), custom memory allocators (Linear, Pool, Stack), fast containers, high-resolution time, GUID/UUID, and thread-safe logging.
-- **Jobs**: Work-stealing multi-threaded job scheduler and dependency graph.
-- **ECS & Scene**: Cache-friendly sparse-set Entity-Component System, hierarchical scene graphs (`Transform`, parent-child hierarchy), and prefab instantiation.
-- **RHI (Vulkan)**: Low-overhead Vulkan 1.2+ backend supporting headless offscreen rendering, swapchain presentation, dynamic descriptor allocation, pipeline caching, and full validation layer integration.
-- **Rendering & 3D**:
-  - DAG-based **RenderGraph** with automatic dependency topological ordering and layout transitions.
-  - Multi-pass deferred rendering pipeline: **Depth Prepass**, **GBuffer Generation** (Albedo, Normal, Roughness/Metallic, Emissive), **PBR Deferred Lighting** (Cook-Torrance GGX with Directional, Point, and Spot lights), and **Tonemapping** (Reinhard with gamma correction).
-  - Frustum culling, render object extraction (`RenderWorld`), material library, mesh streaming, GPU picking, and per-material-instance descriptor caching.
-- **Physics**: Self-contained deterministic rigid-body solver behind a `PhysicsWorld` seam. Sequential impulses with warm starting, Coulomb friction, restitution, Baumgarte position correction (split impulse), and island-based sleeping. Shapes: sphere, oriented box, infinite plane. Broadphase: uniform spatial hash grid. Narrowphase: SAT + Sutherland-Hodgman clipping for box–box. Fixed-timestep accumulator with deterministic state hashing. Generation-checked `BodyHandle`. `RigidBodyComponent`/`ColliderComponent` in the ECS; runtime steps physics on the fixed clock and writes transforms back; scene serialization round-trip.
-- **Animation**: Skeletal animation system with `Skeleton` (hierarchy of bones, parent indices, rest poses), `AnimationClip` (tracks with keyframes, binary-search sampling, lerp translation/scale + slerp rotation), `AnimationPlayer` (play/pause/stop, speed, loop/ping-pong), `AnimationStateMachine` (states, transitions with parameter conditions, cross-fade), N-way blend and additive blend. `AnimationComponent` in the ECS; `Runtime::step_animation()` samples it each frame and writes the posed bone delta onto the entity's `Transform` relative to an authored base offset, so animating an entity never teleports it to the rig origin. `make_procedural_clip()` generates a spin/bob clip from a `ProceduralClipSpec`, which is what lets an `Animation:` scene line drive motion before the mesh import pipeline exists. Scene serialization round-trip; editor inspector panel.
-- **Audio**: Audio engine with `AudioDevice` (abstract, `NullAudioDevice` for headless/CI), `AudioSource` (buffer, volume, pitch, looping), `AudioBus` (mixer), `AudioListener` (position + orientation). 3D positional audio with linear/inverse/exponential distance attenuation and equal-power stereo panning. All math is pure and testable without hardware. `Runtime::step_audio()` mixes sources into the bus each frame and reports the output peak; `make_tone_buffer()` generates a deterministic PCM sine so an `Audio:` line is audible before the WAV/OGG import pipeline exists. `AudioComponent` in the ECS; scene serialization round-trip; editor inspector panel.
-- **Reflection**: `PropertyInfo` / `ClassInfo` / `EnumInfo` metadata with `NF_CLASS` / `NF_PROPERTY` / `NF_ENUM` macros — no codegen step, so a property declaration sits next to the member it describes and nothing else has to be kept in sync. `ReflectionRegistry` registers classes during static initialisation, so the editor can enumerate types it has never instantiated. `property_to_string` / `property_from_string` are the single text form shared by the inspector, the scene format, and the save format — nine significant digits, so an `f32` survives a round trip exactly.
-- **Gameplay (scripting S0–S1)**: `GameplayModule` with `on_init` / `on_update` / `on_shutdown` / `on_scene_load` / `on_scene_unload`, registered by `NF_GAMEPLAY_MODULE` and driven by `Runtime::step_gameplay()`. Ordering is by `update_priority()` with a name tie-break, so it does not depend on static-init order. A module reaches the engine only through `GameplayContext` (world, scene, physics, audio, input), and its settings are a plain reflected struct, which is what makes them editable in the inspector and serializable without hand-written code. `OrbitCameraModule` is a worked example.
-- **Save system**: `SaveSystem` with named slots under `saves://`, each a directory of `scene.nfscene` + `modules.txt` + `meta.txt`. `save_game` builds into a staging directory and swaps it in with rollback, so a failed save cannot destroy a good one. `save_game_async` snapshots on the calling thread and writes on a worker — the scene is never serialized off-thread. Autosave is interval-driven, and `meta.txt` carries a schema version with a chained migration registry.
-- **Assets**: VFS (`content://`, `cache://`, `engine://`, `project://`, `saves://`), UUID-keyed asset registry, and a CLI cooker. **CPU-pure since Phase 11**: the module reads bytes and parses them, and links only `NFCore`/`NFJobs` — no RHI, no renderer, no graphics device. `assets::MeshAsset` (`.nfmesh`, magic `NFME`) is the single mesh format; the conversion to the GPU mesh lives in `Engine/Rendering` (`MeshUpload`).
-- **Samples**:
-  - `NFSampleTriangle`: Bare-bones Vulkan RHI clear and pipeline verification.
-  - `NFSampleTexturedQuad`: Texture upload, descriptor set binding, and sampler verification.
-  - `NFSampleBasic3D`: Complete 3D deferred PBR pipeline rendering via `Renderer3D` with camera orbiting and lighting.
-  - `NFSampleRuntimeScene`: Loads a `.nfscene` through the VFS/registry/AssetManager, with a `--headless` mode.
-
-### Planned Modules (Future Phases)
-- Audio backend swap (MiniAudio behind the `AudioDevice` seam)
-- Networking & Replication
-- Asset VFS & Cooker GUI
-- Engine Editor & Scripting (C#/Lua)
-- Physics backend swap (Jolt behind the `PhysicsWorld` seam)
-
-> `Engine/{AI,Networking,Scripting,UI}` are empty placeholders for
-> this planned work. `Input` is implemented, but lives under `Engine/Platform/`.
+<p align="center">
+  <a href="#-arabic-overview"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-orange.svg" alt="Bilingual" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-blue.svg?logo=c%2B%2B" alt="C++23" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-534%20Passed%20%7C%200%20Failed-brightgreen.svg" alt="Tests" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Vulkan%20Validation-0%20Errors-success.svg" alt="Validation" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome%20%7C%20%D9%85%D8%B1%D8%AD%D8%A8%20%D8%A8%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D9%87%D9%85%D9%8A%D9%86-orange.svg" alt="Contributions Welcome" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
+</p>
 
 ---
 
-## Projects: create, build, run standalone
-
-A **project** is a directory with a `.nfproj` descriptor. The descriptor declares where content,
-cache and shaders live, which scene to start in, and the window defaults — so the runtime no longer
-has to guess, and a built game runs without the engine source tree.
-
-```bash
-# 1. Create a project (copies the default template: scene, mesh, material)
-./build/debug/bin/nf new MyGame --name MyGame
-
-# 2. Cook every asset and package into MyGame/dist/
-./build/debug/bin/nf build --project MyGame/MyGame.nfproj
-
-# 3. Run it — no engine tree, no editor
-cd MyGame/dist && ./NFPlayer --frames 60 --validation
-```
-
-`nf` also has `nf cook` (cook only), `nf verify` (every registry entry's cooked file exists and
-parses) and `nf run` (build, then launch).
-
-The package is a **plain directory**, deliberately not an archive — it is debuggable and diffable:
-
-```text
-MyGame/dist/
-  MyGame.nfproj        mounts are relative, so the package is relocatable
-  NFPlayer.exe
-  Content/             source assets, mirrored
-  Cache/               cooked assets the runtime reads
-  Shaders/Basic3D/     SPIR-V, so the hardcoded build-tree search is not load-bearing
-  manifest.txt         sorted "<fingerprint>  <relative path>", diffable between builds
-```
-
-The editor opens inside a project with `--project`, shows its name in the toolbar, and its **Build**
-button runs the same packaging step:
-
-```bash
-./build/debug/bin/NOVAForgeEditor.exe --project MyGame/MyGame.nfproj
-```
-
-### The `.nfproj` format
-
-Line-based tolerant text, matching `.nfreg` / `.nfmat` / `.nfscene`:
-
-```text
-# NOVAForge Project
-version: 1
-name: MyGame
-title: My Game
-startup_scene: content://Scenes/Main.nfscene
-window_width: 1280
-window_height: 720
-
-# Mounts. Relative paths resolve against this file's directory.
-mount: project:// -> .
-mount: content:// -> Content
-mount: cache://   -> Cache
-mount: shaders:// -> Shaders
-```
-
-Four mounts have defaults relative to the project root and an explicit line overrides them.
-`engine://` has **no** default — it only means anything inside the engine source tree. A relative
-mount may not escape the project directory; an unknown `version` is rejected rather than
-half-parsed.
+## 🌐 الواجهة التفاعلية والموقع التعريفي (Web Showcase)
+يمكنك استعراض واجهة المحرك التفاعلية ثلاثية الأبعاد عبر فتح ملف [`index.html`](index.html) أو عبر [موقع المحرك](https://abdallah2183.github.io/NOVAForge-Engine/)، حيث يحتوي على مجسم تفاعلي وإحصائيات حية وخيارات تبديل اللغة (العربية / English).
 
 ---
 
-## Build Instructions
+<div dir="rtl">
+
+## 🌟 نبذة عن المشروع ورؤيتنا (Arabic Overview)
+
+**NOVAForge Engine** هو مشروع محرك ألعاب ثلاثي الأبعاد متطور تم بناؤه من الصفر بأحدث معايير البرمجة العالمية (**C++23**) ومكتبة الرسوميات الحديثة (**Vulkan 1.2+**) وبمعمارية موجهة للبيانات بالكامل (**Data-Oriented ECS**).
+
+### 🚀 نداء لكل المطورين والمبدعين العرب: لنبني معاً أول محرك ألعاب عربي عالمي!
+> **"يدٌ واحدة لا تصفق، ولكن عقولنا مجتمعة تصنع المعجزات."**  
+> لطالما حلمنا بوجود محرك ألعاب عربي أصيل ومفتوح المصدر، يمتلك بنية تحتية هندسية احترافية تضاهي المحركات العالمية وتفتح الباب أمام مطورينا لصناعة ألعابهم وتقنياتهم بحرية واستقلالية كاملة.  
+> **NOVAForge صُمم منذ اللحظة الأولى ليكون قابلاً للتطوير والتوسع (Extensible & Modular)، وهو مفتوح بالكامل أمام المجتمع.**  
+> سواء كنت مبرمج C++، خبير رسوميات Vulkan / Direct3D، مهندس صوت، فيزيائي محاكاة، مطور واجهات، أو كاتب توثيق وأدلة، **مكانك محجوز في هذا المشروع!**
+
+### 🎯 المجالات المطلوبة للمساهمة:
+- [ ] **الرسوميات والظلال (Vulkan & Shaders):** خرائط الظلال Cascaded Shadow Maps والسماء الإجرائية وSSA/Bloom.
+- [ ] **محرك الصوت (MiniAudio):** ربط مكتبة MiniAudio لدعم ملفات WAV و OGG ومؤثرات DSP ثلاثية الأبعاد.
+- [ ] **لغات البرمجة والسكربت (Scripting):** دمج C# عبر .NET Core أو Lua لبرمجة منطق الألعاب بسهولة.
+- [ ] **الواجهة الرسومية ودعم اللغة العربية (ImGui & Arabic RTL):** تشكيل النصوص العربية وربط خطوط عربية جميلة بالمحرر.
+- [ ] **محرك الفيزياء (Jolt Physics):** دمج مكتبة Jolt لمزيد من المحاكاة الفيزيائية المعقدة والمركبات.
+- [ ] **استيراد النماذج (Asset Pipelines):** بناء مستورد ملفات glTF 2.0 و FBX.
+- [ ] **التوثيق والشروحات:** إعداد دروس وأمثلة برمجية للألعاب للمبتدئين والمحترفين.
+
+راجع دليل المساهمة المفصل: [CONTRIBUTING.md](CONTRIBUTING.md) و [ROADMAP.md](ROADMAP.md).
+
+</div>
+
+---
+
+## ⚡ High-Performance Architecture Overview
+
+NOVAForge is designed with strict layering, multi-threaded work-stealing job scheduling, and zero runtime bloat.
+
+```
+NOVAForge Engine Architecture
+┌─────────────────────────────────────────────────────────────────┐
+│              NOVAForge Editor (ImGui + Win32)                   │
+├───────────────────────────────┬─────────────────────────────────┤
+│    Gameplay Module Registry   │      NFPlayer Standalone        │
+├───────────────────────────────┴─────────────────────────────────┤
+│                   NFRuntime (World & Stepping)                  │
+├──────────────────────┬─────────────────────────┬────────────────┤
+│  NFRendering (PBR)   │   NFPhysics (SAT/Imp)   │ NFAudio (3D)   │
+├──────────────────────┴─────────────────────────┴────────────────┤
+│         NFEcs (Sparse-Set) & NFScene (Hierarchical Graph)       │
+├─────────────────────────────────────────────────────────────────┤
+│            NFJobs (Work-Stealing Multi-threaded Graph)          │
+├─────────────────────────────────────────────────────────────────┤
+│    NFRHI (Vulkan 1.2+ Low Overhead) & NFPlatform (Win32)        │
+├─────────────────────────────────────────────────────────────────┤
+│     NFCore (Custom Allocators, Pure Math, SIMD, Logging, UUID)  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🏆 Current Status (Phase 11 — Verified Foundation)
+
+NOVAForge has achieved **Phase 11 verification**:
+- **534 Automated Unit, Integration, & Rendering Tests Passed** (0 failed, 1 skipped).
+- **0 Vulkan Validation Layer Errors** and **0 leaked RHI resources**.
+- Clean build under `/W4 /WX` on MSVC.
+- End-to-end integration: `Runtime::update()` steps physics → skeletal animation → 3D spatial audio → gameplay module updates → hierarchical transform propagation in deterministic lockstep.
+- Native dockable **ImGui Editor** with Outliner, Reflected Inspector, Asset Browser, Undo/Redo stack, and 3D Viewport.
+- Asset virtualization via clean VFS (`content://`, `cache://`, `project://`, `saves://`) and standalone CLI project tooling (`nf new`, `nf build`, `nf run`).
+
+---
+
+## 🛠️ Implemented Subsystems
+
+| Subsystem | Description & Capabilities |
+| :--- | :--- |
+| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, Tonemapping, GPU Picking). |
+| **Data-Oriented ECS** | Cache-friendly sparse-set Entity-Component-System with fast iteration, entity archetypes, and hierarchical scene transforms. |
+| **Physics Solver** | Fully deterministic rigid-body solver (Sequential Impulses, Warm Starting, Baumgarte split-impulse stabilization, SAT narrowphase with Sutherland-Hodgman clipping, Coulomb friction). |
+| **Skeletal Animation** | Bone hierarchy evaluation, animation clips with slerp/lerp keyframe sampling, state machine with transitions & cross-fading, procedural clip generator. |
+| **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, and headless test driver. |
+| **Reflection & Serialization** | Zero-codegen reflection macros (`NF_CLASS`, `NF_PROPERTY`, `NF_ENUM`), bidirectional text serialization, and automated inspector panels. |
+| **Native Editor** | Dear ImGui docking shell, scene outliner, entity inspector, live viewport gizmos, undo/redo command history, and game save manager. |
+| **Build & Packaging CLI** | `nf` CLI tool supporting project templating, cooking, asset registry management, and single-directory relocatable standalone distribution. |
+
+---
+
+## 🚀 Quick Start & Build Instructions
 
 ### Prerequisites
-- **OS**: Windows 10/11 (x64)
-- **Compiler**: MSVC 19.40+ (Visual Studio 2022 / 2026 or VS Build Tools)
-- **Build System**: CMake 3.25+ and Ninja
-- **Vulkan SDK**: Vulkan SDK 1.3+ with `glslc` on `PATH`
+- **Operating System**: Windows 10 / 11 (x64)
+- **Compiler**: Visual Studio 2022 / 2026 (MSVC 19.40+) with C++23 support
+- **Build Tools**: CMake 3.25+ & Ninja
+- **Graphics SDK**: [Vulkan SDK 1.3+](https://vulkan.lunarg.com/) with `glslc` on your `PATH`
 
-### Building the Engine and Samples
-
-`Scripts/build.sh` locates the Visual Studio install, MSVC toolset and Windows SDK automatically
-and builds the tree it lives in, so it works from any git worktree:
-
+### 1. Clone the Repository
 ```bash
-bash Scripts/build.sh              # Debug
-bash Scripts/build.sh release      # Release
-bash Scripts/build.sh rebuild      # Clean + configure + build
+git clone https://github.com/abdallah2183/NOVAForge-Engine.git
+cd NOVAForge-Engine
 ```
 
-Or drive CMake directly:
-
+### 2. Build the Engine (One-Click)
+Run the provided automated build script:
+```cmd
+build_nf.bat
+```
+*Or build using CMake & Ninja directly:*
 ```bash
-cmake -S . -B build/debug -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE=CMake/Toolchain-MSVC.cmake \
-      -DCMAKE_BUILD_TYPE=Debug -DNF_BUILD_TESTS=ON -DNF_BUILD_SAMPLES=ON \
-      -DNF_BUILD_EDITOR=ON -DNF_BUILD_TOOLS=ON
-cmake --build build/debug --parallel
+cmake -S . -B build/DebugNinja -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNF_BUILD_TESTS=ON -DNF_BUILD_SAMPLES=ON -DNF_BUILD_EDITOR=ON
+cmake --build build/DebugNinja --parallel
 ```
 
-Warnings-as-errors is on by default (`-DNF_WARNINGS_AS_ERRORS=OFF` to disable).
-
-### Cook the assets first
-
-The asset registry maps meshes to `cache://` paths that **only exist after cooking**. Skip this and
-samples and the editor render an empty scene — they will now fail loudly rather than exit 0 with a
-blank frame.
-
-```bash
-./build/debug/bin/NFAssetCooker.exe --input content://Meshes/cube.nfmesh \
-                                    --output cache://Meshes/cube.nfmesh \
-                                    --registry content://AssetRegistry.nfreg
+### 3. Run the Editor
+```cmd
+.\build\DebugNinja\bin\NOVAForgeEditor.exe
 ```
 
-### Running Automated Tests
-
-**534 passed / 0 failed / 1 skipped** across fourteen suites (the skip is the opt-in 1M-entity
-benchmark). A skipped test is never counted as a pass. The runtime integration is covered by tests
-that assert a transform *actually moved*, audio *actually mixed*, and a gameplay module *actually
-stepped* after `Runtime::update()` —
-not merely that component fields survive a serialization round-trip.
-
-The module-layering invariants Phase 11 established are checked separately, and cheaply — CI runs this
-immediately after the build, so a reintroduced inversion fails in seconds with the offending line
-named instead of surfacing later as a confusing link error:
-
-```bash
-bash Scripts/check_layering.sh
+### 4. Run Automated Tests
+```cmd
+.\build\DebugNinja\bin\EditorTests.exe
+.\build\DebugNinja\bin\RHITests.exe
+.\build\DebugNinja\bin\RuntimeTests.exe
 ```
 
-```bash
-bash Scripts/run_tests.sh build/debug
+### 5. Create & Package a Game Project
+```cmd
+# Create a new project from template
+.\build\DebugNinja\bin\nf.exe new MyGame --name MyGame
 
-# Or a single suite, with an optional substring filter on the test name
-./build/debug/bin/RHITests.exe
-./build/debug/bin/RHITests.exe rhi_offscreen_triangle
-```
+# Cook and package into a standalone binary
+.\build\DebugNinja\bin\nf.exe build --project MyGame/MyGame.nfproj
 
-### Running the Samples
-
-```bash
-# Validation layers on, fixed frame budget, headless where supported
-NF_TRIANGLE_FRAMES=60   NF_TRIANGLE_VALIDATION=1   ./build/debug/bin/NFSampleTriangle.exe
-NF_BASIC3D_FRAMES=60    NF_BASIC3D_VALIDATION=1    ./build/debug/bin/NFSampleBasic3D.exe
-NF_RUNTIME_HEADLESS=1   NF_RUNTIME_FRAMES=30       ./build/debug/bin/NFSampleRuntimeScene.exe
-
-# Editor acceptance harness (headless works on a machine with no display)
-./build/debug/bin/NOVAForgeEditor.exe --headless --frames 30
+# Run standalone game player
+cd MyGame/dist && .\NFPlayer.exe
 ```
 
 ---
 
-## Codebase Structure
+## 🗺️ Project Roadmap
 
-```
-NOVAForge/
-├── Engine/
-│   ├── Core/        — Memory, Math, Containers, Logging, UUID
-│   ├── Platform/    — Windows Win32 Window, Input, Events
-│   ├── RHI/         — Graphics abstraction layer & Vulkan backend
-│   ├── Rendering/   — RenderGraph, Renderer3D, PBR Shaders, Materials, Meshes, GPU picking
-│   ├── Jobs/        — Fiber/Worker job system with work stealing
-│   ├── ECS/         — Sparse-set ECS storage and query engine
-│   ├── Scene/       — Scene hierarchy, Transform, entity management, streaming chunk grid
-│   ├── Assets/      — VFS, asset registry, cooked mesh/material loaders (CPU-pure: no RHI, no renderer)
-│   ├── Physics/     — Deterministic rigid-body solver (shapes, broadphase, narrowphase, solver, world)
-│   ├── Animation/   — Skeletal animation (skeleton, clips, player, state machine, blending)
-│   ├── Audio/       — Audio engine (attenuation, 3D pan/gain, mixer, null device for headless)
-│   ├── Gameplay/    — C++ gameplay modules: lifecycle, registry, reflected state bridge
-│   ├── Runtime/     — Runtime + Application: device ownership, frame loop, asset sync, subsystem
-│   │                  stepping, the ECS→render-world bridge, and the world streamer
-│   └── Shaders/     — GLSL shaders compiled to SPIR-V (Depth, GBuffer, Lighting, Tonemap, Pick)
-├── Editor/          — Dear ImGui + Win32 + Vulkan editor, with a headless acceptance harness
-├── Samples/
-│   ├── Triangle/     — Hello Triangle RHI sample
-│   ├── TexturedQuad/ — Texture sampling RHI sample
-│   ├── Basic3D/      — Full deferred 3D PBR sample
-│   └── RuntimeScene/ — .nfscene loaded through VFS + registry + AssetManager
-├── Templates/
-│   └── Default/      — what `nf new` copies into a new project
-├── Tools/
-│   ├── ProjectTool/  — project descriptor, cooker, scaffold, packager (library)
-│   ├── AssetCooker/  — cook one asset or a whole project
-│   ├── BuildTool/    — the `nf` CLI (new / cook / build / run / verify)
-│   └── Player/       — NFPlayer, the standalone game runtime
-└── Tests/
-    ├── CoreTests/      — Math, memory, containers, IO, reflection           (59)
-    ├── JobTests/       — Job scheduling & parallelism                        (5)
-    ├── ECSTests/       — ECS, transform hierarchy, prefabs, benchmarks    (25+1skip)
-    ├── AssetTests/     — VFS, registry, cooking, projects                   (45)
-    ├── RHITests/       — Vulkan RHI, RenderGraph, 3D pipeline               (69)
-    ├── PhysicsTests/   — Shapes, broadphase, narrowphase, solver, determinism (86)
-    ├── AnimationTests/ — Skeleton, clips, player, state machine             (38)
-    ├── AudioTests/     — Attenuation, pan/gain, mixer, null device          (27)
-    ├── GameplayTests/  — Module lifecycle, registry, state serialization    (24)
-    ├── SaveTests/      — Slots, rollback, async save, migrations            (16)
-    ├── StreamingTests/ — Chunk grid geometry + streaming policy             (19)
-    ├── RuntimeTests/   — Scene load, run config, subsystem stepping         (33)
-    ├── EditorTests/    — Outliner, inspector, undo, prefabs, panels         (74)
-    └── ToolTests/      — Project scaffold, cooker, packager                 (14)
-```
+- [x] **Phase 1–11**: Core Engine Foundation (RHI, ECS, Deferred PBR, Physics, Animation, Audio, Editor, SaveSystem, CLI)
+- [ ] **Phase 12**: Dynamic Mesh LOD & Streaming Optimizations
+- [ ] **Phase 13**: Directional Shadow Mapping (PCF 3x3) & Procedural Sky Atmosphere
+- [ ] **Phase 14**: MiniAudio Hardware Backend & glTF 2.0 Asset Importer
+- [ ] **Phase 15**: Scripting Language Integration (C# / Lua) & Full Arabic RTL Editor Localisation
+- [ ] **Phase 16**: Jolt Physics Solver Integration & Multiplayer Replication
 
-## License
+See the complete details in [ROADMAP.md](ROADMAP.md).
 
-Copyright (c) 2026 NOVAForge Engine Contributors. All rights reserved.
-Licensed under the Apache License, Version 2.0.
+---
 
+## 🤝 انضم إلى فريق التطوير (How to Contribute)
+
+نحن نرحب بمساهمتك أياً كانت خبرتك! للبدء:
+1. قم بعمل **Fork** للمستودع على حسابك في GitHub.
+2. أنشئ فرعاً جديداً لميزتك (`git checkout -b feature/amazing-feature`).
+3. اكتب الكود واحرص على تشغيل الاختبارات (`build_nf.bat`).
+4. احرص على عدم وجود أي أخطاء في الـ Vulkan Validation Layers.
+5. أرسل مساهمتك عبر **Pull Request** مع شرح للتغييرات.
+
+للمزيد من التفاصيل راجع [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## 📄 License
+
+This project is licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file for details.
+
+<p align="center">
+  صُنع بشغف لرفعة وتطوير مجتمع صناعة الألعاب العربي 🚀<br>
+  <strong>Lead Developer:</strong> <a href="https://github.com/abdallah2183">Abdallah (abdallah2183)</a> & Community Contributors
+</p>

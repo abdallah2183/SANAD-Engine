@@ -18,6 +18,7 @@ layout(set = 0, binding = 0) uniform sampler2D gbuffer_base;
 layout(set = 0, binding = 1) uniform sampler2D gbuffer_normal;
 layout(set = 0, binding = 2) uniform sampler2D gbuffer_surface;
 layout(set = 0, binding = 3) uniform sampler2D gbuffer_depth;
+layout(set = 0, binding = 5) uniform sampler2D shadow_map;
 
 struct PointLight {
     vec4 pos_radius;   // xyz = world position, w = radius
@@ -37,12 +38,36 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
     vec4 camPos_ambient;          // xyz = camera world position, w = ambient
     vec4 dirLight_dir_enable;     // xyz = light direction (travels this way), w = enabled
     vec4 dirLight_color_int;      // rgb = color, a = intensity
+    mat4 lightViewProj;           // world -> shadow-map clip
+    vec4 shadow_params;           // x = enabled, y = strength, z = bias, w = texel (1/size)
     ivec4 counts;                 // x = point count, y = spot count
     PointLight points[8];
     SpotLight spots[8];
 } frame;
 
 const float PI = 3.14159265358979;
+
+// Directional shadow factor via the fixed ortho shadow map (3x3 PCF).
+// Same NDC convention as the main passes (uv = ndc*0.5+0.5, depth [0,1]),
+// so the lookup is self-consistent with how the map was rendered.
+float shadow_factor(vec3 pos) {
+    vec4 lp = frame.lightViewProj * vec4(pos, 1.0);
+    vec3 ndc = lp.xyz / max(lp.w, 1e-6);
+    vec2 suv = ndc.xy * 0.5 + 0.5;
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0 || ndc.z > 1.0) {
+        return 0.0; // outside the ortho box: fully lit
+    }
+    float bias = frame.shadow_params.z;
+    float texel = frame.shadow_params.w;
+    float occ = 0.0;
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            float map_depth = texture(shadow_map, suv + vec2(float(ox), float(oy)) * texel).r;
+            occ += (ndc.z - bias > map_depth) ? 1.0 : 0.0;
+        }
+    }
+    return occ / 9.0;
+}
 
 float D_GGX(float NoH, float alpha) {
     float a2 = alpha * alpha;
@@ -83,10 +108,29 @@ vec3 eval_pbr(vec3 N, vec3 V, vec3 L, vec3 radiance,
 void main() {
     float depth = texture(gbuffer_depth, in_uv).r;
 
-    // Nothing rendered here — leave the HDR target at clear (near-black) so
-    // background pixels stay distinguishable from lit geometry in tests.
+    // Procedural sky for empty pixels (Phase 13): gradient by view-ray
+    // height plus a sun disk along the directional light. The ray comes
+    // from the same inverse transform that reconstructs positions, so the
+    // sky tracks the camera exactly. Output is linear HDR like everything
+    // else; tonemapping happens downstream.
     if (depth >= 0.999999) {
-        out_color = vec4(0.0, 0.0, 0.0, 1.0);
+        vec4 far = frame.invViewProj * vec4(in_uv * 2.0 - 1.0, 0.99999, 1.0);
+        vec3 ray = normalize((far.xyz / far.w) - frame.camPos_ambient.xyz);
+        float h = clamp(ray.y, -1.0, 1.0);
+        vec3 zenith = vec3(0.20, 0.42, 0.85);
+        vec3 horizon = vec3(0.62, 0.72, 0.82);
+        vec3 ground_haze = vec3(0.09, 0.09, 0.11);
+        vec3 sky = (h >= 0.0) ? mix(horizon, zenith, pow(h, 0.6))
+                              : mix(horizon, ground_haze, clamp(-h * 3.0, 0.0, 1.0));
+        if (frame.dirLight_dir_enable.w > 0.5) {
+            vec3 sun_dir = normalize(-frame.dirLight_dir_enable.xyz);
+            float cos_a = max(dot(ray, sun_dir), 0.0);
+            float disk = smoothstep(0.9996, 0.99985, cos_a);
+            float glow = pow(cos_a, 600.0) * 0.6 + pow(cos_a, 24.0) * 0.12;
+            vec3 sun_col = frame.dirLight_color_int.rgb * frame.dirLight_color_int.a;
+            sky += sun_col * (disk * 4.0 + glow);
+        }
+        out_color = vec4(sky, 1.0);
         return;
     }
 
@@ -105,11 +149,15 @@ void main() {
     vec3 V = normalize(frame.camPos_ambient.xyz - pos);
     vec3 Lo = vec3(0.0);
 
-    // Directional light
+    // Directional light (shadow-tested: only the direct term dims)
     if (frame.dirLight_dir_enable.w > 0.5) {
         vec3 L = normalize(-frame.dirLight_dir_enable.xyz);
         vec3 radiance = frame.dirLight_color_int.rgb * frame.dirLight_color_int.a;
-        Lo += eval_pbr(N, V, L, radiance, albedo, metallic, roughness);
+        vec3 dir_lo = eval_pbr(N, V, L, radiance, albedo, metallic, roughness);
+        if (frame.shadow_params.x > 0.5) {
+            dir_lo *= 1.0 - frame.shadow_params.y * shadow_factor(pos);
+        }
+        Lo += dir_lo;
     }
 
     // Point lights — windowed inverse-square falloff inside the radius

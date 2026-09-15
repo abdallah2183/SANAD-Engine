@@ -139,6 +139,7 @@ nf_target_set_warnings(AnimationTests)
 add_executable(AudioTests
     TestFramework.cpp
     AudioTests/test_audio.cpp
+    AudioTests/test_audio_backend.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)

@@ -192,6 +192,8 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                 if (col_pos != std::string::npos) sscanf(line.c_str()+col_pos, "color(%f,%f,%f)", &light.color_r, &light.color_g, &light.color_b);
                 size_t int_pos = line.find("intensity=");
                 if (int_pos != std::string::npos) sscanf(line.c_str()+int_pos, "intensity=%f", &light.intensity);
+                // Absent key keeps the default (true): old scene files load lit as before.
+                if (line.find("shadows=false") != std::string::npos) light.cast_shadows = false;
                 scene->world().add<DirectionalLight>(e, light);
             } else if (line.rfind("  Camera:",0)==0) {
                 CameraComponent cam;
@@ -443,7 +445,9 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
         }
         const auto* l = scene_obj.world().get<DirectionalLight>(e);
         if (l) {
-            out << "  Light: type=Directional dir(" << l->dir_x << "," << l->dir_y << "," << l->dir_z << ") color(" << l->color_r << "," << l->color_g << "," << l->color_b << ") intensity=" << l->intensity << "\n";
+            out << "  Light: type=Directional dir(" << l->dir_x << "," << l->dir_y << "," << l->dir_z << ") color(" << l->color_r << "," << l->color_g << "," << l->color_b << ") intensity=" << l->intensity;
+            if (!l->cast_shadows) out << " shadows=false";
+            out << "\n";
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {

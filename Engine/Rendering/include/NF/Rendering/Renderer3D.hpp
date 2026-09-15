@@ -45,6 +45,11 @@ struct DirectionalLight {
     Vec3 color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
     bool enabled = true;
+    // Shadow mapping (Phase 13): depth-tested PCF against a fixed 2048
+    // ortho shadow map. Strength scales the occlusion 0..1 (1 = full dark).
+    bool shadows_enabled = true;
+    float shadow_strength = 1.0f;
+    float shadow_bias = 0.0005f;
 };
 
 struct PointLight {
@@ -158,6 +163,8 @@ private:
         float cam_pos_ambient[4];   // xyz camera, w ambient
         float dir_dir_enable[4];    // xyz direction, w enabled
         float dir_color_int[4];     // rgb color, a intensity
+        float light_view_proj[16];  // shadow-map transform (Phase 13)
+        float shadow_params[4];     // x enabled, y strength, z bias, w texel (1/size)
         i32 counts[4];              // x points, y spots
         struct PointGPU {
             float pos_radius[4];
@@ -173,7 +180,7 @@ private:
         PointGPU points[kMaxPointLights];
         SpotGPU spots[kMaxSpotLights];
     };
-    static_assert(sizeof(FrameUniforms) == 64 + 16 + 16 + 16 + 16 +
+    static_assert(sizeof(FrameUniforms) == 64 + 16 + 16 + 16 + 64 + 16 + 16 +
                                         kMaxPointLights * 48 + kMaxSpotLights * 64,
                   "FrameUniforms must match the shader's std140 layout");
 
@@ -198,7 +205,7 @@ private:
 
     // --- descriptor layouts ---
     std::unique_ptr<rhi::DescriptorSetLayout> m_material_layout;   // set 0: UBO + albedo
-    std::unique_ptr<rhi::DescriptorSetLayout> m_lighting_layout;   // set 0: 4 textures + UBO
+    std::unique_ptr<rhi::DescriptorSetLayout> m_lighting_layout;   // set 0: 5 textures + UBO
     std::unique_ptr<rhi::DescriptorSetLayout> m_tonemap_layout;    // set 0: HDR texture
 
     // --- render passes (owned) ---
@@ -281,6 +288,13 @@ private:
     // albedo binding (the shader multiplies by it, i.e. ignores it).
     std::unique_ptr<rhi::Texture> m_white_texture;
     std::unique_ptr<rhi::TextureView> m_white_view;
+
+    // Directional shadow map: fixed size, resolution-independent (survives
+    // resize without recreation, like the white fallback).
+    static constexpr u32 kShadowMapSize = 2048;
+    std::unique_ptr<rhi::Texture> m_shadow_map;
+    std::unique_ptr<rhi::TextureView> m_shadow_view;
+    std::unique_ptr<rhi::Framebuffer> m_shadow_fb;
 };
 
 } // namespace nf::rendering

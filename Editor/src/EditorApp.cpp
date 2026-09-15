@@ -681,6 +681,49 @@ bool EditorApp::set_material_params(const std::string& material_path, const Mate
     return true;
 }
 
+bool EditorApp::preview_material_params(const std::string& material_path, const MaterialEdit& edit,
+                                        std::string& out_err) {
+    if (!require_materials(out_err)) {
+        return false;
+    }
+    // Same validation as the undoable path (the factory rejects), but the
+    // command is applied directly and dropped: no undo entry per tick.
+    auto cmd = make_material_params_command(*m_runtime, material_path, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    cmd->apply(*w);
+    return true;
+}
+
+bool EditorApp::commit_material_params(const std::string& material_path,
+                                       const rendering::PBRMaterialParams& before,
+                                       std::string& out_err) {
+    if (!require_materials(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    rendering::PBRMaterialParams after = read_material_params(*m_runtime, material_path);
+    m_stack.push(std::make_unique<SetMaterialParamsCommand>(m_runtime, material_path, before, after),
+                 *w);
+    if (m_runtime != nullptr) {
+        m_runtime->mark_scene_edited();
+    }
+    if (const ecs::World* cw = world()) {
+        m_selection.prune(*cw);
+    }
+    return true;
+}
+
 bool EditorApp::set_material_albedo(const std::string& material_path, const std::string& texture_path,
                                     std::string& out_err) {
     if (!require_materials(out_err)) {
@@ -709,6 +752,34 @@ std::string EditorApp::material_albedo(const std::string& material_path) const {
         return {};
     }
     return m_runtime->material_albedo(material_path);
+}
+
+bool EditorApp::set_material_mip_mode(const std::string& material_path, rhi::MipMapMode mode,
+                                      std::string& out_err) {
+    if (!require_materials(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_material_mip_command(*m_runtime, material_path, mode, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    if (const ecs::World* cw = world()) {
+        m_selection.prune(*cw);
+    }
+    return true;
+}
+
+rhi::MipMapMode EditorApp::material_mip_mode(const std::string& material_path) const {
+    if (m_runtime == nullptr) {
+        return rhi::MipMapMode::Linear;
+    }
+    return m_runtime->material_mip_mode(material_path);
 }
 
 std::vector<std::string> EditorApp::known_textures() {

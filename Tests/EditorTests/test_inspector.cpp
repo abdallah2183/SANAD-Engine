@@ -123,6 +123,17 @@ NF_TEST(editor_inspector_light_edit) {
     const auto* l = scene.world().get<runtime::DirectionalLight>(e);
     NF_CHECK(l != nullptr);
     NF_CHECK_NEAR(l->intensity, 2.5f, 1e-6f);
+    NF_CHECK(l->cast_shadows); // default on
+
+    // Shadow toggle flows through the same command and undoes cleanly.
+    editor::LightEdit no_shadow = edit;
+    no_shadow.cast_shadows = false;
+    auto shadow_cmd = editor::make_light_command(scene.world(), e, no_shadow, err);
+    NF_CHECK(shadow_cmd != nullptr);
+    stack.push(std::move(shadow_cmd), scene.world());
+    NF_CHECK(!scene.world().get<runtime::DirectionalLight>(e)->cast_shadows);
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::DirectionalLight>(e)->cast_shadows);
 
     editor::LightEdit zero_dir = edit;
     zero_dir.dir_x = 0.0f;

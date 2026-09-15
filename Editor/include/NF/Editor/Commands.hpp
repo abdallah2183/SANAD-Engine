@@ -13,6 +13,7 @@
 
 #include <NF/Assets/AssetId.hpp>
 #include <NF/ECS/ECS.hpp>
+#include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/NameComponent.hpp>
@@ -346,6 +347,25 @@ private:
     std::string m_material;
     std::string m_before;
     std::string m_after;
+};
+
+// Switches a shared material's sampler mip filter (None/Nearest/Linear).
+// Rebinds the cached sampler, never re-uploads. Like albedo, the state
+// lives in the Runtime; apply/undo write through. Not entity-bound.
+class SetMaterialMipModeCommand : public ICommand {
+public:
+    SetMaterialMipModeCommand(runtime::Runtime* runtime, std::string material_path,
+                              rhi::MipMapMode before_mode, rhi::MipMapMode after_mode);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+
+private:
+    bool write_through(rhi::MipMapMode mode);
+    runtime::Runtime* m_runtime = nullptr;
+    std::string m_material;
+    rhi::MipMapMode m_before = rhi::MipMapMode::Linear;
+    rhi::MipMapMode m_after = rhi::MipMapMode::Linear;
 };
 
 // Edits a shared material asset's parameters. The values live in the

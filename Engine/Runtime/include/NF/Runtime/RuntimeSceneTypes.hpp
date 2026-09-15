@@ -24,6 +24,7 @@ struct DirectionalLight {
     float dir_x = -0.5f, dir_y = -1.0f, dir_z = -0.3f;
     float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
     float intensity = 1.0f;
+    bool cast_shadows = true; // Phase 13: feeds the renderer's shadow map
 };
 
 struct CameraComponent {

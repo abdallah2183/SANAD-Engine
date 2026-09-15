@@ -519,6 +519,43 @@ std::string SetMaterialAlbedoCommand::label() const {
     return "Set material albedo '" + m_material + "'";
 }
 
+// --- SetMaterialMipModeCommand ------------------------------------------------
+
+SetMaterialMipModeCommand::SetMaterialMipModeCommand(runtime::Runtime* runtime,
+                                                     std::string material_path,
+                                                     rhi::MipMapMode before_mode,
+                                                     rhi::MipMapMode after_mode)
+    : m_runtime(runtime),
+      m_material(std::move(material_path)),
+      m_before(before_mode),
+      m_after(after_mode) {}
+
+bool SetMaterialMipModeCommand::write_through(rhi::MipMapMode mode) {
+    if (m_runtime == nullptr) {
+        return false;
+    }
+    std::string err;
+    if (!m_runtime->set_material_mip_mode(m_material, mode, err)) {
+        NF_LOG_WARN(LogCategory::Editor, "SetMaterialMipModeCommand: {}", err);
+        return false;
+    }
+    return true;
+}
+
+void SetMaterialMipModeCommand::apply(ecs::World& world) {
+    (void)world;
+    write_through(m_after);
+}
+
+void SetMaterialMipModeCommand::undo(ecs::World& world) {
+    (void)world;
+    write_through(m_before);
+}
+
+std::string SetMaterialMipModeCommand::label() const {
+    return "Set material mip filter '" + m_material + "'";
+}
+
 // --- SetPrefabLinkCommand -----------------------------------------------------
 
 SetPrefabLinkCommand::SetPrefabLinkCommand(ecs::Entity e, bool had_before,
