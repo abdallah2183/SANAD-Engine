@@ -14,6 +14,7 @@ set(NFCORE_SOURCES
     src/Memory.cpp
     src/Containers.cpp
     src/Reflection.cpp
+    src/Profiler.cpp
 )
 
 nf_engine_library(NFCore

@@ -10,6 +10,9 @@
 set(NFGAMEPLAY_SOURCES
     src/GameplayModuleRegistry.cpp
     src/GameplayState.cpp
+    src/Tags.cpp
+    src/Quest.cpp
+    src/Inventory.cpp
 )
 
 nf_engine_library(NFGameplay

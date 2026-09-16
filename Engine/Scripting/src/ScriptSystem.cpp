@@ -2,6 +2,7 @@
 
 #include <NF/Scripting/ScriptEngine.hpp>
 #include <NF/Core/Logger.hpp>
+#include <NF/Core/Profiler.hpp>
 #include <NF/ECS/ECS.hpp>
 
 extern "C" {
@@ -128,6 +129,7 @@ void ScriptSystem::clear_cache() {
 }
 
 void ScriptSystem::update(ecs::World& world, float dt) {
+    NF_PROFILE_SCOPE("ScriptSystem::update");
     Impl& impl = *m_impl;
     install_ecs_bindings(impl.vm, world);
     impl.vm.set_instruction_limit(impl.instruction_limit);

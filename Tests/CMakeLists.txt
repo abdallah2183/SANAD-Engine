@@ -20,6 +20,7 @@ add_executable(CoreTests
     CoreTests/test_time.cpp
     CoreTests/test_filesystem.cpp
     CoreTests/test_reflection.cpp
+    CoreTests/test_profiler.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)
@@ -158,6 +159,7 @@ add_executable(GameplayTests
     TestFramework.cpp
     GameplayTests/test_gameplay.cpp
     GameplayTests/test_gameplay_serialization.cpp
+    GameplayTests/test_tags_quest_inventory.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
