@@ -117,6 +117,7 @@ add_executable(RuntimeTests
     RuntimeTests/test_run_config.cpp
     RuntimeTests/test_runtime_streaming.cpp
     RuntimeTests/test_runtime_sky.cpp
+    RuntimeTests/test_runtime_audio_import.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
@@ -200,10 +201,11 @@ target_include_directories(PlatformTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(PlatformTests PRIVATE NFCore NFPlatform)
 nf_target_set_warnings(PlatformTests)
 
-# --- Network tests (UDP loopback transport) ---
+# --- Network tests (UDP loopback transport, reliable channel, snapshots) ---
 add_executable(NetworkTests
     TestFramework.cpp
     NetworkTests/test_udp.cpp
+    NetworkTests/test_reliable.cpp
 )
 target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)

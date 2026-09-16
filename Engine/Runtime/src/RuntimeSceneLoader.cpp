@@ -2,6 +2,7 @@
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Assets/AssetId.hpp>
+#include <NF/Audio/AudioDecoder.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -358,8 +359,9 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                 aud.buffer_name = field_value(line, "buffer=");
 
                 // Same reasoning as the animation clip above: `tone=` is the
-                // only way a scene can carry real samples today, because the
-                // audio import pipeline is also a Phase 9 non-goal (§7).
+                // quick procedural path. A `buffer=` logical path (e.g.
+                // content://Audio/shoot.wav) resolves through the VFS import
+                // pipeline after load (see resolve_scene_audio below).
                 f32 tone_hz = 0.0f;
                 if (field_float(line, "tone=", tone_hz) && tone_hz > 0.0f) {
                     f32 tone_seconds = 0.5f;
@@ -368,10 +370,6 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                         audio::make_tone_buffer(tone_hz, tone_seconds, audio::kDefaultSampleRate, 1);
                     aud.tone_hz = tone_hz;
                     aud.tone_duration = tone_seconds;
-                } else if (!aud.buffer_name.empty()) {
-                    result.warnings.push_back(
-                        "Audio buffer '" + aud.buffer_name +
-                        "' has no data (no tone= spec, and there is no audio import pipeline yet); the source will be silent");
                 }
 
                 (void)field_float(line, "volume=", aud.volume);
@@ -435,7 +433,39 @@ SceneLoadResult load_scene_from_vfs(assets::VirtualFileSystem& vfs, const std::s
         res.error = r.error;
         return res;
     }
-    return load_scene_from_physical(r.value);
+    SceneLoadResult res = load_scene_from_physical(r.value);
+    if (res.success && res.scene) {
+        resolve_scene_audio(vfs, *res.scene, res.warnings);
+    }
+    return res;
+}
+
+// Binds AudioComponent::buffer_name through the VFS import pipeline:
+// reads the file and decodes it (WAV/OGG/MP3/FLAC) into owned_buffer at the
+// mix rate, so the source is audible without any procedural tone. Unresolvable
+// names keep the old loud warning instead of silent failure.
+void resolve_scene_audio(assets::VirtualFileSystem& vfs, scene::Scene& scene_obj,
+                         std::vector<std::string>& warnings) {
+    for (ecs::Entity e : scene_obj.world().all_entities()) {
+        auto* aud = scene_obj.world().get<audio::AudioComponent>(e);
+        if (!aud || !aud->owned_buffer.samples.empty() || aud->buffer_name.empty()) continue;
+        auto bytes = vfs.read_bytes(aud->buffer_name);
+        if (!bytes.ok) {
+            warnings.push_back("Audio buffer '" + aud->buffer_name +
+                               "' not found in VFS; the source will be silent");
+            continue;
+        }
+        audio::DecodeOptions options;
+        options.target_sample_rate = audio::kDefaultSampleRate;
+        audio::DecodeResult decoded =
+            audio::decode_audio_memory(bytes.value.data(), bytes.value.size(), options);
+        if (!decoded.ok) {
+            warnings.push_back("Audio buffer '" + aud->buffer_name + "' could not be decoded (" +
+                               decoded.error + "); the source will be silent");
+            continue;
+        }
+        aud->owned_buffer = std::move(decoded.buffer);
+    }
 }
 
 std::string serialize_scene_to_text(const scene::Scene& scene_obj) {

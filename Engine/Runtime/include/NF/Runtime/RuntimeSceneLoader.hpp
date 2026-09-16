@@ -24,6 +24,13 @@ struct SceneLoadResult {
 SceneLoadResult load_scene_from_vfs(assets::VirtualFileSystem& vfs, const std::string& logical_path);
 SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_path);
 
+/// Binds every AudioComponent carrying a `buffer=` logical path through the
+/// VFS audio import pipeline (decode to owned_buffer at the mix rate).
+/// Called by load_scene_from_vfs; also usable after merge/physical loads
+/// when a VFS is at hand. Unresolvable names append loud warnings.
+void resolve_scene_audio(assets::VirtualFileSystem& vfs, scene::Scene& scene_obj,
+                         std::vector<std::string>& warnings);
+
 bool save_scene_to_vfs(assets::VirtualFileSystem& vfs, const std::string& logical_path, const scene::Scene& scene, std::string& out_error);
 bool save_scene_to_physical(const std::filesystem::path& physical_path, const scene::Scene& scene, std::string& out_error);
 

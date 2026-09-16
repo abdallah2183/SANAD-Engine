@@ -4,6 +4,8 @@
 # replication builds on UdpSocket one layer up.
 
 set(NFNETWORKING_SOURCES
+    src/ReliableChannel.cpp
+    src/Snapshot.cpp
 )
 
 if(WIN32)
