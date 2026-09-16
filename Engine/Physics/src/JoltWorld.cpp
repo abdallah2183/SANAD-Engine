@@ -26,8 +26,10 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
@@ -55,6 +57,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <map>
 #include <mutex>
@@ -182,12 +185,32 @@ struct JoltWorld::Impl {
     };
     std::map<JPH::uint32, RagdollEntry> ragdolls;
     JPH::uint32 next_ragdoll = 1;
+    // Characters (design §39): one JPH::CharacterVirtual each plus the two
+    // capsule shapes a crouch swaps between. These are NOT bodies — the system
+    // knows nothing about them, so they never show up in body_count() and no
+    // other subsystem can reach them.
+    struct CharacterEntry {
+        JPH::Ref<JPH::CharacterVirtual> character;
+        JPH::ShapeRefC standing_shape;
+        JPH::ShapeRefC crouch_shape;
+        // Local offset that puts each capsule's BOTTOM at the character
+        // position (see character_create), so the feet stay planted across a
+        // stance change.
+        JPH::Vec3 standing_offset = JPH::Vec3::sZero();
+        JPH::Vec3 crouch_offset = JPH::Vec3::sZero();
+        JoltCharacterConfig config;
+        bool crouched = false;
+        bool climbing = false;
+    };
+    std::map<JPH::uint32, CharacterEntry> characters;
+    JPH::uint32 next_character = 1;
     bool ok = false;
 
     ~Impl() {
         constraints.clear(); // released before the system dies
         vehicle_testers.clear();
         ragdolls.clear();
+        characters.clear();
         delete bp_filter;
         delete layer_filter;
         delete broadphase;
@@ -820,6 +843,229 @@ void JoltWorld::ragdoll_activate(RagdollHandle handle) {
     if (it == m_impl->ragdolls.end()) return;
     it->second.ragdoll->Activate();
 }
+
+// --- Character controller wiring (design §39: step offset, slopes, moving
+// --- platforms, crouch, climb hooks, network-prediction hooks).
+// ---
+// --- ALL CharacterVirtual state is born and driven here: the object is never
+// --- handed out of this TU (the header only exposes an opaque id), exactly
+// --- like vehicles and ragdolls.
+// ---
+// --- ANCHORING: Jolt places a character's shape with its centre of mass at
+// --- `position + mShapeOffset` (+ character padding), and a CapsuleShape is
+// --- centred on its own origin. The shape offset below therefore lifts each
+// --- capsule by its own half height, which makes the character position the
+// --- capsule's BOTTOM (the feet): the natural gameplay anchor, and the reason
+// --- a crouch can swap the capsule without the feet moving.
+// ---
+// --- VERTICAL SPEED: CharacterVirtual::GetLinearVelocity() returns what the
+// --- caller last set (the contact solver reports the solved *displacement*,
+// --- not a solved velocity). Adding gravity to the stored velocity every tick
+// --- while standing on the floor would therefore accumulate an unbounded
+// --- falling speed, so a supported character rebuilds its vertical speed from
+// --- the ground's velocity each tick instead — the recipe documented on
+// --- CharacterVirtual::ExtendedUpdate.
+
+JoltWorld::CharacterHandle JoltWorld::character_create(const JoltCharacterConfig& config,
+                                                       Vec3 spawn) {
+    CharacterHandle out;
+    if (!valid()) return out;
+    Impl& impl = *m_impl;
+
+    // Sanitize: Jolt asserts on a non-positive radius / half height, and a bad
+    // config must not take the process down (same defensive style as the rest
+    // of the wrapper).
+    JoltCharacterConfig cfg = config;
+    if (!(cfg.radius > 0.0f)) cfg.radius = 0.35f;
+    if (!(cfg.half_height > 0.0f)) cfg.half_height = 0.55f;
+    if (!(cfg.crouch_half_height > 0.0f)) cfg.crouch_half_height = cfg.half_height * 0.5f;
+    if (!(cfg.max_slope_deg > 0.0f)) cfg.max_slope_deg = 50.0f;
+
+    const float radius = cfg.radius;
+    const JPH::Vec3 standing_offset(0.0f, cfg.half_height + radius, 0.0f);
+    const JPH::Vec3 crouch_offset(0.0f, cfg.crouch_half_height + radius, 0.0f);
+    JPH::ShapeRefC standing_shape = new JPH::CapsuleShape(cfg.half_height, radius);
+    JPH::ShapeRefC crouch_shape = new JPH::CapsuleShape(cfg.crouch_half_height, radius);
+
+    JPH::CharacterVirtualSettings settings;
+    settings.mShape = standing_shape;
+    settings.mShapeOffset = standing_offset;
+    settings.mUp = JPH::Vec3(0, 1, 0);
+    // Contacts behind this plane support the character, contacts in front only
+    // collide with it: at -radius that is "the lower sphere of the capsule can
+    // carry the character; its sides and top cannot". The plane lives in the
+    // shape's own space, so it is independent of the shape offset above.
+    settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -radius);
+    settings.mMaxSlopeAngle = cfg.max_slope_deg * 0.017453292f; // radians
+    settings.mMass = cfg.mass;
+    // SDK default, pinned explicitly: 0 makes characters stick to geometry
+    // (no sliding direction can be calculated), too large causes ghost
+    // collisions.
+    settings.mPredictiveContactDistance = 0.1f;
+    // Both faces of a thin wall collide: a character must not walk through the
+    // back face of a one-sided surface (SDK default, stated for the record).
+    settings.mBackFaceMode = JPH::EBackFaceMode::CollideWithBackFaces;
+
+    Impl::CharacterEntry entry;
+    entry.character = new JPH::CharacterVirtual(
+        &settings, JPH::RVec3(spawn.x, spawn.y, spawn.z), JPH::Quat::sIdentity(), &impl.physics);
+    entry.standing_shape = standing_shape;
+    entry.crouch_shape = crouch_shape;
+    entry.standing_offset = standing_offset;
+    entry.crouch_offset = crouch_offset;
+    entry.config = cfg;
+    const JPH::uint32 id = impl.next_character++;
+    impl.characters[id] = std::move(entry);
+    out.id = id;
+    return out;
+}
+
+void JoltWorld::character_destroy(CharacterHandle handle) {
+    if (!valid() || !handle.valid()) return;
+    // A CharacterVirtual is not registered with the PhysicsSystem (no inner
+    // rigid body is configured here), so dropping the Ref — along with the two
+    // shape Refs the entry owns — is the entire teardown. Nothing is left in
+    // the broadphase to remove.
+    m_impl->characters.erase(handle.id);
+}
+
+void JoltWorld::character_move(CharacterHandle handle, Vec3 wish_dir, bool jump, float dt) {
+    if (!valid() || !handle.valid() || !(dt > 0.0f)) return;
+    Impl& impl = *m_impl;
+    auto it = impl.characters.find(handle.id);
+    if (it == impl.characters.end()) return;
+    Impl::CharacterEntry& entry = it->second;
+    JPH::CharacterVirtual* character = entry.character.GetPtr();
+    if (character == nullptr) return;
+    const JoltCharacterConfig& cfg = entry.config;
+
+    const JPH::Vec3 gravity =
+        JPH::Vec3(m_settings.gravity.x, m_settings.gravity.y, m_settings.gravity.z) *
+        cfg.gravity_scale;
+    // OnSteepGround is deliberately NOT "grounded": a character standing on a
+    // slope too steep to walk up must not jump or inherit the slope's slide.
+    const bool grounded =
+        character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+    const JPH::Vec3 current = character->GetLinearVelocity();
+    const JPH::Vec3 ground_velocity =
+        grounded ? character->GetGroundVelocity() : JPH::Vec3::sZero();
+
+    // Horizontal: accelerate toward wish_dir * max_speed (a wish of (0,0,1)
+    // asks for the full cruise speed, (0,0,0.5) for half of it). The
+    // acceleration acts on the velocity RELATIVE to the ground: adding the
+    // ground velocity on top of a velocity that already contains it would
+    // compound it every tick and rocket a character off its moving platform.
+    JPH::Vec3 relative(current.GetX() - ground_velocity.GetX(), 0.0f,
+                       current.GetZ() - ground_velocity.GetZ());
+    const float accel = cfg.acceleration * (grounded ? 1.0f : cfg.air_control);
+    const float max_delta = (accel > 0.0f ? accel : 0.0f) * dt;
+    const JPH::Vec3 target(wish_dir.x * cfg.max_speed, 0.0f, wish_dir.z * cfg.max_speed);
+    JPH::Vec3 delta = target - relative;
+    if (delta.Length() > max_delta) delta = delta.Normalized() * max_delta;
+    relative += delta;
+    const JPH::Vec3 horizontal(relative.GetX() + ground_velocity.GetX(), 0.0f,
+                               relative.GetZ() + ground_velocity.GetZ());
+
+    // Vertical: the climb hook replaces gravity with the wish's own vertical
+    // component; otherwise a supported character starts from its ground's
+    // vertical velocity (0 on a static floor) and an airborne one from its
+    // current velocity, which is what makes the jump a real ballistic arc.
+    float vertical;
+    if (entry.climbing) {
+        vertical = wish_dir.y * cfg.max_speed;
+    } else {
+        vertical = (grounded ? ground_velocity.GetY() : current.GetY()) + gravity.GetY() * dt;
+        if (jump && grounded) vertical = cfg.jump_speed;
+    }
+    character->SetLinearVelocity(JPH::Vec3(horizontal.GetX(), vertical, horizontal.GetZ()));
+
+    // One call runs the whole movement: collide-and-slide, then the stairs and
+    // floor-stick passes that give the character its step offset. Their
+    // distances are derived from step_offset (Jolt's defaults are 0.4 up /
+    // 0.02 minimum forward / 0.15 forward test, i.e. exactly 100% / 5% / 50%
+    // of a 0.4m step). Climbing disables both: on a ladder the character must
+    // not be snapped back onto the floor it just left.
+    JPH::CharacterVirtual::ExtendedUpdateSettings update;
+    if (entry.climbing) {
+        update.mWalkStairsStepUp = JPH::Vec3::sZero();
+        update.mStickToFloorStepDown = JPH::Vec3::sZero();
+    } else {
+        const float step = cfg.step_offset > 0.0f ? cfg.step_offset : 0.0f;
+        update.mWalkStairsStepUp = JPH::Vec3(0.0f, step, 0.0f);
+        update.mStickToFloorStepDown = JPH::Vec3(0.0f, -step, 0.0f);
+        update.mWalkStairsMinStepForward = 0.05f * step;
+        update.mWalkStairsStepForwardTest = 0.5f * step;
+    }
+    character->ExtendedUpdate(dt, gravity, update, JPH::BroadPhaseLayerFilter(),
+                              JPH::ObjectLayerFilter(), JPH::BodyFilter(), JPH::ShapeFilter(),
+                              *impl.temp);
+}
+
+void JoltWorld::character_set_climbing(CharacterHandle handle, bool enabled) {
+    if (!valid() || !handle.valid()) return;
+    auto it = m_impl->characters.find(handle.id);
+    if (it == m_impl->characters.end()) return;
+    it->second.climbing = enabled;
+}
+
+void JoltWorld::character_set_crouch(CharacterHandle handle, bool crouched) {
+    if (!valid() || !handle.valid()) return;
+    auto it = m_impl->characters.find(handle.id);
+    if (it == m_impl->characters.end()) return;
+    Impl::CharacterEntry& entry = it->second;
+    if (entry.crouched == crouched) return;
+    JPH::CharacterVirtual* character = entry.character.GetPtr();
+    if (character == nullptr) return;
+
+    // Swap the capsule for the other stance, then its offset, so both shapes
+    // keep their bottom at the character position (feet planted). FLT_MAX
+    // accepts the switch unconditionally: whether a stand-up fits under a
+    // ceiling is the game's decision (it owns the crouch state), not a silent
+    // veto from the solver that would desynchronise the two.
+    const JPH::Shape* shape =
+        crouched ? entry.crouch_shape.GetPtr() : entry.standing_shape.GetPtr();
+    if (!character->SetShape(shape, FLT_MAX, JPH::BroadPhaseLayerFilter(),
+                             JPH::ObjectLayerFilter(), JPH::BodyFilter(), JPH::ShapeFilter(),
+                             *m_impl->temp)) {
+        return;
+    }
+    character->SetShapeOffset(crouched ? entry.crouch_offset : entry.standing_offset);
+    entry.crouched = crouched;
+}
+
+bool JoltWorld::character_is_crouched(CharacterHandle handle) const {
+    if (!valid() || !handle.valid()) return false;
+    auto it = m_impl->characters.find(handle.id);
+    return it != m_impl->characters.end() && it->second.crouched;
+}
+
+bool JoltWorld::character_is_grounded(CharacterHandle handle) const {
+    if (!valid() || !handle.valid()) return false;
+    auto it = m_impl->characters.find(handle.id);
+    if (it == m_impl->characters.end()) return false;
+    const JPH::CharacterVirtual* character = it->second.character.GetPtr();
+    return character != nullptr &&
+           character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+}
+
+Vec3 JoltWorld::character_position(CharacterHandle handle) const {
+    if (!valid() || !handle.valid()) return Vec3{0, 0, 0};
+    auto it = m_impl->characters.find(handle.id);
+    if (it == m_impl->characters.end()) return Vec3{0, 0, 0};
+    const JPH::CharacterVirtual* character = it->second.character.GetPtr();
+    if (character == nullptr) return Vec3{0, 0, 0};
+    return to_nf_real(character->GetPosition());
+}
+
+Vec3 JoltWorld::character_velocity(CharacterHandle handle) const {
+    if (!valid() || !handle.valid()) return Vec3{0, 0, 0};
+    auto it = m_impl->characters.find(handle.id);
+    if (it == m_impl->characters.end()) return Vec3{0, 0, 0};
+    const JPH::CharacterVirtual* character = it->second.character.GetPtr();
+    if (character == nullptr) return Vec3{0, 0, 0};
+    return to_nf(character->GetLinearVelocity());
+}
+
 JoltConstraint JoltWorld::add_slider(JoltBody a, JoltBody b, Vec3 world_point, Vec3 world_axis) {
     JoltConstraint out;
     if (!valid() || !is_alive(a) || !is_alive(b)) return out;

@@ -66,6 +66,23 @@ struct JoltVehicleConfig {
     float engine_max_torque = 500.0f;
 };
 
+/// Jolt character setup (capsule + gameplay movement). Lives here (not in
+/// JoltCharacter.hpp) so JoltWorld::character_create can take it without a
+/// circular include.
+struct JoltCharacterConfig {
+    float radius = 0.35f;              // capsule radius
+    float half_height = 0.55f;         // capsule cylinder half-height (total height = 2*(half+radius))
+    float crouch_half_height = 0.30f;  // cylinder half-height while crouched
+    float max_slope_deg = 50.0f;       // steeper contacts are walls, not ground
+    float max_speed = 6.0f;            // horizontal cruise speed
+    float acceleration = 40.0f;        // horizontal velocity gain per second
+    float air_control = 0.35f;         // acceleration multiplier while airborne
+    float jump_speed = 7.0f;           // upward speed applied when jumping while grounded
+    float step_offset = 0.4f;          // max obstacle height climbed while walking (WalkStairs)
+    float mass = 80.0f;                // for pushing dynamic bodies (character vs body)
+    float gravity_scale = 1.0f;        // multiplier on the world gravity
+};
+
 /// Opaque two-body constraint handle. 0 = invalid.
 struct JoltConstraint {
     u32 id = 0;
@@ -200,6 +217,65 @@ public:
     void ragdoll_apply_impulse(RagdollHandle handle, usize joint_index, const Vec3& impulse);
     void ragdoll_activate(RagdollHandle handle);
     JoltBody ragdoll_body_at(RagdollHandle handle, usize joint_index) const;
+
+    // --- Character controller wiring (design §39; same single-TU rule as
+    // --- vehicles and ragdolls: the JPH::CharacterVirtual object is born and
+    // --- driven in JoltWorld.cpp).
+    //
+    // The character is a KINEMATIC-STYLE volume (Jolt's CharacterVirtual with
+    // no inner rigid body), not a rigid body: it does NOT appear in
+    // body_count(), the world step never integrates it (character_move()
+    // moves it, once per fixed tick), and only its own contacts can push it
+    // around. Consequences worth knowing before wiring it into a game or a
+    // netcode layer:
+    //   * The tick is SELF-CONTAINED, unlike the first-party
+    //     CharacterController's move/step/post_step protocol: CharacterVirtual
+    //     integrates itself inside that single call, so there is no separate
+    //     step() to pair it with. The game still calls world.step() for the
+    //     rest of the world (and for the bodies the character pushes).
+    //   * It is DETERMINISTIC given identical inputs and dt — the same
+    //     sequence of character_move() calls from the same state produces the
+    //     same trajectory, which is what a network-prediction hook needs
+    //     (client and server replay the same inputs; the server's authority
+    //     is the same function of the same bytes).
+    //   * Gravity comes from world.settings().gravity, scaled by the config's
+    //     gravity_scale. A character standing on ground is rebuilt from the
+    //     ground's velocity each tick instead of accumulating gravity (an
+    //     accumulated falling speed would never be cancelled: CharacterVirtual
+    //     stores the velocity it is given, not the one the contacts solved).
+
+    /// Opaque character handle. 0 = invalid.
+    struct CharacterHandle {
+        u32 id = 0; // index into m_impl->characters (0 = none)
+        bool valid() const { return id != 0; }
+    };
+    CharacterHandle character_create(const JoltCharacterConfig& config, Vec3 spawn);
+    void character_destroy(CharacterHandle handle);
+    /// One gameplay tick: accelerates the horizontal velocity toward
+    /// wish_dir * max_speed (wish_dir length scales the target speed; pass a zero
+    /// vector to stop), applies gravity (scaled) on the vertical axis, jumps when
+    /// `jump` is set and the character is grounded, walks stairs up to
+    /// `step_offset`, sticks to the floor, then moves the character by itself for
+    /// `dt`. Call once per fixed step (dt <= 0 is a no-op).
+    ///
+    /// A supported character is CARRIED by its ground (the ground velocity is
+    /// added to the desired velocity, and the horizontal acceleration acts on
+    /// the velocity *relative* to the ground so it is never compounded) — that
+    /// is what makes moving platforms work. `character_position()` is the
+    /// character's FEET; `character_velocity()` is the velocity that was last
+    /// handed to it (CharacterVirtual stores the velocity it is given, not a
+    /// contact-solved one).
+    void character_move(CharacterHandle handle, Vec3 wish_dir, bool jump, float dt);
+    /// Enables/disables the climb hook: while enabled, a non-zero `wish_dir.y`
+    /// (interpreted through the character's up axis) drives vertical movement —
+    /// the game turns it on while the character is on a ladder and off otherwise.
+    void character_set_climbing(CharacterHandle handle, bool enabled);
+    /// Crouch state: changes the capsule height (crouch_half_height while crouched).
+    void character_set_crouch(CharacterHandle handle, bool crouched);
+    bool character_is_crouched(CharacterHandle handle) const;
+    bool character_is_grounded(CharacterHandle handle) const;
+    Vec3 character_position(CharacterHandle handle) const;
+    Vec3 character_velocity(CharacterHandle handle) const;
 
     // --- Two-body constraints (world-space setup) ---
     /// Welds two bodies rigidly in their current relative transform.
