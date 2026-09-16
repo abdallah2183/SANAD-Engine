@@ -12,6 +12,7 @@ set(NFPHYSICS_SOURCES
     src/Broadphase.cpp
     src/Narrowphase.cpp
     src/PhysicsWorld.cpp
+    src/CharacterController.cpp
 )
 
 nf_engine_library(NFPhysics

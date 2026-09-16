@@ -130,6 +130,7 @@ add_executable(PhysicsTests
     PhysicsTests/test_narrowphase.cpp
     PhysicsTests/test_solver.cpp
     PhysicsTests/test_determinism.cpp
+    PhysicsTests/test_character.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)
@@ -139,6 +140,7 @@ nf_target_set_warnings(PhysicsTests)
 add_executable(AnimationTests
     TestFramework.cpp
     AnimationTests/test_animation.cpp
+    AnimationTests/test_ik.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)

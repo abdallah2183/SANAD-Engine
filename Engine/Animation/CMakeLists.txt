@@ -11,6 +11,7 @@ set(NFANIMATION_SOURCES
     src/AnimationClip.cpp
     src/AnimationPlayer.cpp
     src/AnimationStateMachine.cpp
+    src/IK.cpp
 )
 
 nf_engine_library(NFAnimation
