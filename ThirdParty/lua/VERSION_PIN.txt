@@ -1,0 +1,13 @@
+Lua 5.4 — gameplay scripting VM.
+Upstream: https://www.lua.org (MIT, see lua/src/COPYRIGHT in the release tarball;
+license header is also present atop each source file).
+
+Files vendored: lua/src/*.c + *.h EXCEPT the standalone tools
+(lua.c interpreter/repl, luac.c compiler) which the engine does not ship.
+
+NOVAForge usage: NFScripting links this static library and exposes a small
+`nf.*` API (logging, math, entity transform access) to game scripts.
+
+To refresh: download a newer lua-5.4.x.tar.gz, replace lua/src (again
+dropping lua.c/luac.c), update this file, rebuild lua + NFScripting.
+Pinned: lua-5.4.8 (2026-09-16).

@@ -6,3 +6,13 @@ Files vendored: stb_image.h (public domain / MIT, see header)
 Usage: STB_IMAGE_IMPLEMENTATION is defined once in
 Engine/Rendering/src/StbImage.cpp, which compiles warning-lenient
 (the header is not /W4-/WX-clean by design).
+
+stb_vorbis — Ogg Vorbis decoder v1.22 (public domain, see header).
+Pinned: master as of 2026-09-16 (stb_vorbis.c, 192790 bytes).
+
+Usage: the implementation is compiled once in
+Engine/Audio/src/OggVorbisImpl.cpp (warning-lenient TU);
+Engine/Audio/src/AudioDecoder.cpp includes it with
+STB_VORBIS_HEADER_ONLY for the declarations. It backs OGG decoding
+because miniaudio 0.11.25's bundled vorbis fork rejects known-good
+Vorbis files (verified: stock stb_vorbis v1.22 opens them).

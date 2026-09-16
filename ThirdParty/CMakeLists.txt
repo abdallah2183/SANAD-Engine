@@ -31,3 +31,37 @@ if(MSVC)
     target_compile_definitions(imgui PUBLIC NOMINMAX)
 endif()
 target_compile_features(imgui PUBLIC cxx_std_17)
+
+# --- miniaudio (header-only audio decoding: WAV/OGG-Vorbis/MP3/FLAC) ---------
+# Used by NFAudio for the import pipeline only (decode file -> AudioBuffer);
+# output stays on the engine's AudioDevice seam (Null/WASAPI). Single header,
+# implementation compiled once inside NFAudio (see Engine/Audio).
+add_library(miniaudio INTERFACE)
+target_include_directories(miniaudio INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/miniaudio
+)
+
+# --- cgltf (header-only glTF 2.0 parser) -------------------------------------
+# Used by NFAssets for the glTF import pipeline (mesh/nodes/materials).
+# Single header, implementation compiled once inside NFAssets.
+add_library(cgltf INTERFACE)
+target_include_directories(cgltf INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/cgltf
+)
+
+# --- Lua 5.4 (gameplay scripting) --------------------------------------------
+# Used by NFScripting for the Lua VM. Vendored C sources, built as a static
+# library without the standalone interpreter/repl (lua.c/luac.c).
+file(GLOB LUA_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/lua/src/*.c
+)
+add_library(lua STATIC ${LUA_SOURCES})
+target_include_directories(lua PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lua/src
+)
+# Third-party code stays warning-lenient on purpose.
+if(MSVC)
+    target_compile_options(lua PRIVATE /W1)
+    set_property(TARGET lua PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(lua PUBLIC NOMINMAX)
+endif()

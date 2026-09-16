@@ -1,0 +1,11 @@
+cgltf — header-only glTF 2.0 parser.
+Upstream: https://github.com/jkuhlmann/cgltf
+File vendored: cgltf.h (single-header, MIT, see header).
+
+NOVAForge usage: parse-only. The implementation is compiled once in
+Engine/Assets/src/GltfImport.cpp with CGLTF_IMPLEMENTATION; mesh conversion
+(glTF primitives -> StaticMesh CPU data) lives in the same TU.
+
+To refresh: download cgltf.h at a newer commit, update this file,
+rebuild NFAssets + AssetTests. No other integration changes should be needed.
+Pinned: master as of 2026-09-16 (cgltf.h, 205754 bytes).
