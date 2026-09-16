@@ -135,6 +135,7 @@ add_executable(PhysicsTests
     PhysicsTests/test_jolt.cpp
     PhysicsTests/test_jolt_vehicle.cpp
     PhysicsTests/test_jolt_constraints.cpp
+    PhysicsTests/test_jolt_queries.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)

@@ -12,10 +12,18 @@
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/MotionQuality.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
@@ -76,6 +84,80 @@ const JPH::BroadPhaseLayer kBpNonMoving(0);
 const JPH::BroadPhaseLayer kBpMoving(1);
 constexpr JPH::uint kNumBroadPhaseLayers = 2;
 } // namespace Layers
+
+// --- Scene query plumbing (rays, sweeps, overlaps, sensors) ----------------
+//
+// Conversion helpers. JPH_DOUBLE_PRECISION is OFF in this build, so RVec3 and
+// Vec3 are the same type and RVec3Arg == Vec3Arg: the "real" variants below
+// cannot be overloads (they would be redefinitions) and are named instead.
+// They are kept separate so enabling double precision later only costs a
+// rebuild, not a rewrite of these queries.
+JPH::Vec3 to_jph(const Vec3& v) {
+    return JPH::Vec3(v.x, v.y, v.z);
+}
+JPH::RVec3 to_jph_real(const Vec3& v) {
+    return JPH::RVec3(v.x, v.y, v.z);
+}
+Vec3 to_nf(JPH::Vec3Arg v) {
+    return Vec3{v.GetX(), v.GetY(), v.GetZ()};
+}
+Vec3 to_nf_real(JPH::RVec3Arg v) {
+    return Vec3{static_cast<float>(v.GetX()), static_cast<float>(v.GetY()),
+                static_cast<float>(v.GetZ())};
+}
+
+/// Skips sensor (trigger) bodies and, optionally, one ignored body.
+///
+/// The two halves of the filter are called at different times by Jolt:
+/// ShouldCollide() per broadphase candidate, where only the id is known (so
+/// the ignored body is a plain id compare and a dead id simply matches
+/// nothing), and ShouldCollideLocked() once the body is locked — the only
+/// point where sensor-ness is visible.
+class SkipSensorsAndBody final : public JPH::BodyFilter {
+public:
+    explicit SkipSensorsAndBody(JPH::BodyID ignore = JPH::BodyID()) : mIgnore(ignore) {}
+
+    bool ShouldCollide(const JPH::BodyID& inBodyID) const override { return inBodyID != mIgnore; }
+    bool ShouldCollideLocked(const JPH::Body& inBody) const override { return !inBody.IsSensor(); }
+
+private:
+    JPH::BodyID mIgnore;
+};
+
+/// Engine handle -> filter id. An invalid handle means "ignore nothing", so
+/// callers can pass their ignore argument through unconditionally.
+JPH::BodyID ignore_id(JoltBody handle) {
+    return handle.valid() ? JPH::BodyID(handle.id) : JPH::BodyID();
+}
+
+/// Shared body of overlap_sphere / overlap_box / trigger_overlaps: collide
+/// `shape` (positioned by `transform`) against the world and return the
+/// overlapping body handles, deduped per body and without sensors.
+std::vector<JoltBody> collect_overlaps(const JPH::PhysicsSystem& physics, const JPH::Shape* shape,
+                                       JPH::RMat44Arg transform, JPH::BodyID ignore) {
+    std::vector<JoltBody> out;
+    // mMaxSeparationDistance stays 0: only true overlaps, no "nearly touching".
+    JPH::CollideShapeSettings settings;
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    const SkipSensorsAndBody filter(ignore);
+    // Base offset zero puts the results straight into world space. Jolt
+    // suggests a nearby offset for precision far from the origin; this wrapper
+    // hands out float Vec3 positions everywhere, so a double offset would buy
+    // accuracy that is thrown away one line later.
+    physics.GetNarrowPhaseQuery().CollideShape(shape, JPH::Vec3::sOne(), transform, settings,
+                                               JPH::RVec3::sZero(), collector, {}, {}, filter);
+    // A shape with several parts reports one hit per part: dedupe by body.
+    std::vector<JPH::uint32> seen;
+    for (const JPH::CollideShapeResult& hit : collector.mHits) {
+        const JPH::uint32 id = hit.mBodyID2.GetIndexAndSequenceNumber();
+        if (std::find(seen.begin(), seen.end(), id) != seen.end()) continue;
+        seen.push_back(id);
+        JoltBody body;
+        body.id = id;
+        out.push_back(body);
+    }
+    return out;
+}
 
 } // namespace
 
@@ -170,6 +252,17 @@ bool JoltWorld::valid() const {
 }
 
 JoltBody JoltWorld::add_body(const BodyDesc& desc) {
+    return add_body_internal(desc, /*sensor=*/false);
+}
+
+JoltBody JoltWorld::add_trigger(const BodyDesc& desc) {
+    // Same creation path as any body, plus Jolt's sensor flag: a sensor is
+    // still broadphase-tracked (so queries and trigger_overlaps find it) but
+    // contributes no contacts, so dynamics pass through untouched.
+    return add_body_internal(desc, /*sensor=*/true);
+}
+
+JoltBody JoltWorld::add_body_internal(const BodyDesc& desc, bool sensor) {
     JoltBody out;
     if (!valid()) return out;
     Impl& impl = *m_impl;
@@ -208,6 +301,7 @@ JoltBody JoltWorld::add_body(const BodyDesc& desc) {
     settings.mLinearDamping = desc.linear_damping;
     settings.mAngularDamping = desc.angular_damping;
     settings.mAllowSleeping = desc.allow_sleep;
+    settings.mIsSensor = sensor; // triggers: overlap detection, no response
     if (dynamic && desc.mass > 0.0f) {
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = desc.mass;
@@ -235,6 +329,128 @@ bool JoltWorld::is_alive(JoltBody handle) const {
     JPH::BodyID id(handle.id);
     // Added == live in the simulation (removal destroys immediately).
     return const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).IsAdded(id);
+}
+
+// --- Scene queries, sensors (triggers), continuous collision -------------
+//
+// Every entry point below keeps the same defensive shape as the rest of the
+// wrapper: reject an invalid world / invalid handle / unusable numeric input
+// up front and return a miss or an empty vector. Sensors are filtered out at
+// the body-filter level (see SkipSensorsAndBody), so a trigger can never be
+// the answer to "what is in front of me".
+
+JoltWorld::QueryHit JoltWorld::ray_cast(Vec3 origin, Vec3 direction, float max_distance,
+                                        JoltBody ignore) const {
+    QueryHit out;
+    if (!valid() || !(max_distance > 0.0f)) return out;
+    const float len = direction.length();
+    if (!(len > 1e-6f)) return out; // zero-length direction: miss, not NaN
+    direction = direction / len;
+    const Impl& impl = *m_impl;
+    // The cast length lives in the direction vector: Jolt reports a fraction
+    // of that length, which is why distance is fraction * max_distance.
+    const JPH::RRayCast ray(to_jph_real(origin), to_jph(direction * max_distance));
+    const SkipSensorsAndBody filter(ignore_id(ignore));
+    JPH::RayCastResult hit;
+    if (!impl.physics.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter)) return out;
+    // Lock only to read the surface normal; a body removed between cast and
+    // lock simply yields a miss instead of a dangling read.
+    JPH::BodyLockRead lock(impl.physics.GetBodyLockInterface(), hit.mBodyID);
+    if (!lock.Succeeded()) return out;
+    const JPH::RVec3 point = ray.GetPointOnRay(hit.mFraction);
+    out.hit = true;
+    out.body.id = hit.mBodyID.GetIndexAndSequenceNumber();
+    out.position = to_nf_real(point);
+    out.normal = to_nf(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point));
+    out.fraction = std::clamp(hit.mFraction, 0.0f, 1.0f);
+    out.distance = out.fraction * max_distance;
+    return out;
+}
+
+JoltWorld::QueryHit JoltWorld::sphere_cast(Vec3 origin, float radius, Vec3 direction,
+                                           float max_distance, JoltBody ignore) const {
+    QueryHit out;
+    if (!valid() || !(radius > 0.0f) || !(max_distance > 0.0f)) return out;
+    const float len = direction.length();
+    if (!(len > 1e-6f)) return out;
+    direction = direction / len;
+    const Impl& impl = *m_impl;
+    // The cast borrows the shape rather than owning it, so a stack shape keeps
+    // this query allocation-free (and off Jolt's allocator entirely).
+    const JPH::SphereShape shape(radius);
+    const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(
+        &shape, JPH::Vec3::sOne(), JPH::RMat44::sTranslation(to_jph_real(origin)),
+        to_jph(direction * max_distance));
+    JPH::ShapeCastSettings settings;
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    const SkipSensorsAndBody filter(ignore_id(ignore));
+    impl.physics.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), collector, {},
+                                                {}, filter);
+    if (!collector.HadHit()) return out;
+    const JPH::ShapeCastResult& hit = collector.mHit;
+    JPH::BodyLockRead lock(impl.physics.GetBodyLockInterface(), hit.mBodyID2);
+    if (!lock.Succeeded()) return out;
+    // Contact point 1 is on the swept sphere, point 2 on the hit body: report
+    // the point on the cast shape (what the caller collided with) and the
+    // normal out of the body actually hit.
+    out.hit = true;
+    out.body.id = hit.mBodyID2.GetIndexAndSequenceNumber();
+    out.position = to_nf(hit.mContactPointOn1);
+    out.normal =
+        to_nf(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, hit.mContactPointOn2));
+    out.fraction = std::clamp(hit.mFraction, 0.0f, 1.0f);
+    out.distance = out.fraction * max_distance;
+    return out;
+}
+
+std::vector<JoltBody> JoltWorld::overlap_sphere(Vec3 center, float radius) const {
+    if (!valid() || !(radius > 0.0f)) return {};
+    const JPH::SphereShape shape(radius);
+    return collect_overlaps(m_impl->physics, &shape, JPH::RMat44::sTranslation(to_jph_real(center)),
+                            JPH::BodyID());
+}
+
+std::vector<JoltBody> JoltWorld::overlap_box(Vec3 center, Vec3 half_extents) const {
+    // A degenerate box has no interior to overlap, so treat it as empty input
+    // rather than asking Jolt for a zero-extent shape.
+    if (!valid() || !(half_extents.x > 0.0f) || !(half_extents.y > 0.0f) ||
+        !(half_extents.z > 0.0f)) {
+        return {};
+    }
+    const JPH::BoxShape shape(to_jph(half_extents));
+    return collect_overlaps(m_impl->physics, &shape, JPH::RMat44::sTranslation(to_jph_real(center)),
+                            JPH::BodyID());
+}
+
+std::vector<JoltBody> JoltWorld::trigger_overlaps(JoltBody trigger) const {
+    std::vector<JoltBody> out;
+    if (!valid() || !trigger.valid() || !is_alive(trigger)) return out;
+    const Impl& impl = *m_impl;
+    const JPH::BodyID id(trigger.id);
+    // Copy shape + transform out under the lock and release it BEFORE the
+    // query: Jolt's query machinery locks bodies itself, and holding a second
+    // lock on this body while it walks the broadphase is asking for trouble.
+    // This is the same pattern Jolt uses internally.
+    JPH::ShapeRefC shape;
+    JPH::RMat44 transform;
+    {
+        JPH::BodyLockRead lock(impl.physics.GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return out;
+        const JPH::Body& body = lock.GetBody();
+        shape = body.GetShape();
+        transform = body.GetCenterOfMassTransform();
+    }
+    if (shape == nullptr) return out;
+    // Ignore the queried body itself as well as every sensor: without that, a
+    // trigger would always report itself.
+    return collect_overlaps(impl.physics, shape, transform, id);
+}
+
+void JoltWorld::set_continuous_collision(JoltBody handle, bool enabled) {
+    if (!valid() || !handle.valid() || !is_alive(handle)) return;
+    m_impl->physics.GetBodyInterface().SetMotionQuality(
+        JPH::BodyID(handle.id),
+        enabled ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
 }
 
 JoltBodyState JoltWorld::state(JoltBody handle) const {
