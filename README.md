@@ -17,7 +17,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-blue.svg" alt="اللغة" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-00599C.svg?logo=c%2B%2B" alt="C++23" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-769%20Passed-brightgreen.svg" alt="Tests" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-781%20Passed-brightgreen.svg" alt="Tests" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Validation-0%20Errors-success.svg" alt="Validation" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
@@ -118,7 +118,7 @@ SANAD Engine Architecture
 
 ## Current Status (Phase 12–16 Verification)
 
-- **769 Automated Tests Passed** across 20 test suites (0 failed, 1 benchmark skipped).
+- **781 Automated Tests Passed** across 20 test suites (0 failed, 1 benchmark skipped).
 - **0 Vulkan Validation Layer Errors** and zero memory leaks.
 - Clean compilation under `/W4 /WX` with MSVC.
 - End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, input replays, and scene transform hierarchies in lockstep.

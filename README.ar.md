@@ -16,7 +16,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/%D8%A7%D9%84%D9%85%D8%B9%D9%8A%D8%A7%D8%B1-C%2B%2B23-blue.svg?logo=c%2B%2B" alt="C++23" />
   <img src="https://img.shields.io/badge/%D8%A7%D9%84%D8%B1%D8%B3%D9%88%D9%85%D9%8A%D8%A7%D8%AA-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" />
-  <img src="https://img.shields.io/badge/%D8%A7%D9%84%D8%A7%D8%AE%D8%AA%D8%A8%D8%A7%D8%B1%D8%A7%D8%AA-769%20%D9%86%D8%A7%D8%AC%D8%AD-brightgreen.svg" alt="Tests" />
+  <img src="https://img.shields.io/badge/%D8%A7%D9%84%D8%A7%D8%AE%D8%AA%D8%A8%D8%A7%D8%B1%D8%A7%D8%AA-781%20%D9%86%D8%A7%D8%AC%D8%AD-brightgreen.svg" alt="Tests" />
   <img src="https://img.shields.io/badge/%D8%A3%D8%AE%D8%B7%D8%A7%D8%A1%20%D8%A7%D9%84%D8%AA%D8%B5%D9%8A%D9%8A%D8%B1-0%20%D8%A3%D8%AE%D8%B7%D8%A7%D8%A1-success.svg" alt="Validation" />
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D9%87%D9%85%D8%A9-%D9%85%D8%B1%D8%AD%D8%A8%20%D8%A8%D8%A7%D9%84%D8%AC%D9%85%D9%8A%D8%B9-orange.svg" alt="Contributions Welcome" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/%D8%A7%D9%84%D8%AA%D8%B1%D8%AE%D9%8A%D8%B5-Apache%202.0-lightgrey.svg" alt="License" /></a>
