@@ -576,6 +576,7 @@
 
         <ul class="nav-links">
             <li><a href="#features" data-i18n="nav_features">المزايا</a></li>
+            <li><a href="#showcase" data-i18n="nav_showcase">لقطات حقيقية</a></li>
             <li><a href="#community" data-i18n="nav_community">المساهمة</a></li>
             <li><a href="#roadmap" data-i18n="nav_roadmap">خارطة الطريق</a></li>
             <li><a href="#quickstart" data-i18n="nav_quickstart">البدء السريع</a></li>
@@ -636,11 +637,42 @@
         </div>
     </section>
 
+    <!-- Real Screenshots Showcase -->
+    <section class="container" id="showcase">
+        <div class="section-header">
+            <h2 data-i18n="show_title">لقطات حقيقية من المحرك</h2>
+            <p data-i18n="show_desc">صور ملتقطة مباشرة من المحرر واللعبة العاملة — بدون فوتوشوب</p>
+        </div>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <img src="assets/screenshots/shot_editor_en.png" alt="SANAD Editor" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
+                <span class="feature-tag">Editor</span>
+                <h3 data-i18n="show_editor_title">محرر سند الأصلي</h3>
+                <p data-i18n="show_editor_desc">منفذ عرض Vulkan حي، شجرة مشهد، مفتش انعكاسي، طرفية سجلات، وسماء إجرائية — يعمل بـ 100+ إطار/ثانية.</p>
+            </div>
+
+            <div class="feature-card">
+                <img src="assets/screenshots/shot_editor_ar.png" alt="SANAD Editor Arabic UI" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
+                <span class="feature-tag">Arabic RTL</span>
+                <h3 data-i18n="show_ar_title">واجهة عربية كاملة</h3>
+                <p data-i18n="show_ar_desc">تشكيل سياقي للحروف، ligatures، وترتيب RTL بخط أميري — أول محرك ألعاب بواجهة عربية حقيقية.</p>
+            </div>
+
+            <div class="feature-card">
+                <img src="assets/screenshots/shot_game.png" alt="Cube Collector game" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
+                <span class="feature-tag">Playable</span>
+                <h3 data-i18n="show_game_title">لعبة عاملة: جامع المكعبات</h3>
+                <p data-i18n="show_game_desc">عدو يتحرك بسكربت Lua، فيزياء إضاءة PBR، ظلال PCF، ونقاط ومستويات — مبنية بالمحرك نفسه.</p>
+            </div>
+        </div>
+    </section>
+
     <!-- Stats -->
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">534 / 534</div>
+                <div class="stat-num">722 / 722</div>
                 <div class="stat-label" data-i18n="stat_tests">اختبار مؤتمت ناجح عبر 14 حزمة</div>
             </div>
             <div class="stat-card">
@@ -693,13 +725,49 @@
             <div class="feature-card">
                 <span class="feature-tag">Audio</span>
                 <h3 data-i18n="feat_audio_title">صوتيات ثلاثية الأبعاد</h3>
-                <p data-i18n="feat_audio_desc">توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج توهين المسافات (Attenuation) وموجه WASAPI مع دعم نمط الاختبار الصامت (Headless).</p>
+                <p data-i18n="feat_audio_desc">توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج التوهين وموجه WASAPI، وخط استيراد حقيقي يفك WAV وOGG وMP3 وFLAC ويربطها بالمشاهد تلقائياً.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">Scripting</span>
+                <h3 data-i18n="feat_script_title">سكربت Lua معزول</h3>
+                <p data-i18n="feat_script_desc">آلة Lua 5.4 افتراضية ببيئات منفصلة لكل سكربت، مكتبة nf.*‎، ربط الكيانات، وحد تعليمات ضد الحلقات اللانهائية.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">AI</span>
+                <h3 data-i18n="feat_ai_title">ذكاء اصطناعي حتمي</h3>
+                <p data-i18n="feat_ai_desc">بحث A*‎ شبكي بلا قص زوايا مع تنعيم رؤية، وأشجار سلوك تفاعلية بلوحة Blackboard — كلها حتمية وقابلة لإعادة التشغيل.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">Gameplay</span>
+                <h3 data-i18n="feat_gameplay_title">إطار لعب متكامل</h3>
+                <p data-i18n="feat_gameplay_desc">وسوم هرمية واستعلامات منطقية، مهام مرحلية، مخزون، حوارات مربوطة بالوسوم، وتسجيل/إعادة تشغيل للمدخلات.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">Networking</span>
+                <h3 data-i18n="feat_net_title">شبكات اللعب الجماعي</h3>
+                <p data-i18n="feat_net_desc">نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، ولقطات حالة مُصدَرة — أساس اللعب الجماعي الموثوق.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">World</span>
+                <h3 data-i18n="feat_world_title">عالم حي: شمس وتضاريس</h3>
+                <p data-i18n="feat_world_desc">دورة ليل ونهار تقود الشمس والسماء، وتضاريس heightfield إجرائية بضجيج حتمي، ومولد LOD شبكي.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">Pipeline</span>
+                <h3 data-i18n="feat_asset_title">استيراد glTF حقيقي</h3>
+                <p data-i18n="feat_asset_desc">مستورد glTF 2.0 (gltf/glb) إلى صيغة المحرك nfmesh. مع أداة NFModelImporter، وفك صور stb، ومعالج أعطال minidump.</p>
             </div>
 
             <div class="feature-card">
                 <span class="feature-tag">Tools & Editor</span>
                 <h3 data-i18n="feat_editor_title">محرر متكامل Native Editor</h3>
-                <p data-i18n="feat_editor_desc">محرر أصلي بواجهة Dear ImGui يدعم تقسيم النوافذ (Docking)، واستعراض الكائنات (Outliner)، ومفتش الخصائص بالانعكاس البرمجي، وتاريخ التراجع والإعادة.</p>
+                <p data-i18n="feat_editor_desc">محرر أصلي بواجهة Dear ImGui: تقسيم نوافذ، مفتش انعكاسي، تراجع/إعادة، نافذة Profiler حية، وتعريب RTL كامل بخط أميري.</p>
             </div>
         </div>
     </section>
@@ -748,38 +816,37 @@
                     <li>معمارية ECS موجهة للبيانات</li>
                     <li>فيزياء وتحريك وهيكل عظام أصلي</li>
                     <li>محرر ImGui مع تفقد الخصائص</li>
-                    <li>534 اختباراً مؤتمتاً ناجحاً</li>
+                    <li>722 اختباراً مؤتمتاً ناجحاً عبر 20 حزمة</li>
+                </ul>
+            </div>
+
+            <div class="roadmap-card done">
+                <span class="roadmap-status done">مكتمل ومثبت</span>
+                <h4>Phase 12–13: الظلال والسماء وLOD</h4>
+                <ul>
+                    <li>خرائط ظلال 2048 بتقنية 3x3 PCF</li>
+                    <li>سماء إجرائية بمعاملات + تحكم محرر</li>
+                    <li>مولد LOD شبكي حتمي + مستورد موديلات</li>
+                </ul>
+            </div>
+
+            <div class="roadmap-card done">
+                <span class="roadmap-status done">مكتمل ومثبت</span>
+                <h4>Phase 14–15: الصوت وglTF والسكربت والتعريب</h4>
+                <ul>
+                    <li>فك WAV وOGG وMP3 وFLAC وربط المشاهد</li>
+                    <li>مستورد glTF إلى nfmesh + سكربت Lua معزول</li>
+                    <li>واجهة محرر عربية RTL بخط أميري</li>
                 </ul>
             </div>
 
             <div class="roadmap-card active">
-                <span class="roadmap-status active">قيد التنفيذ</span>
-                <h4>Phase 12–13: الظلال والسماء</h4>
+                <span class="roadmap-status active">بدأ التنفيذ</span>
+                <h4>Phase 16: الشبكات والذكاء والعالم</h4>
                 <ul>
-                    <li>خرائط الظلال الاتجاهية Directional Shadows</li>
-                    <li>سماء إجرائية تدرجية مع قرص الشمس</li>
-                    <li>مرشح تنعيم الظلال 3x3 PCF وموازنة العمق</li>
-                    <li>أدوات تحكم بالظلال داخل المحرر</li>
-                </ul>
-            </div>
-
-            <div class="roadmap-card">
-                <span class="roadmap-status planned">المرحلة القادمة</span>
-                <h4>Phase 14: الصوتيات واستيراد النماذج</h4>
-                <ul>
-                    <li>دمج مكتبة MiniAudio خلف AudioDevice</li>
-                    <li>دعم ملفات الصوت WAV و OGG</li>
-                    <li>استيراد نماذج glTF 2.0 و FBX</li>
-                </ul>
-            </div>
-
-            <div class="roadmap-card">
-                <span class="roadmap-status planned">مخطط مستقبلي</span>
-                <h4>Phase 15+: السكربت والفيزياء</h4>
-                <ul>
-                    <li>دمج لغات البرمجة (C# / Lua)</li>
-                    <li>تعريب المحرر ودعم التخطيط العربي</li>
-                    <li>محرك الفيزياء العالمي Jolt Physics</li>
+                    <li>UDP + قناة موثوقة ولقطات حالة</li>
+                    <li>A*‎ وسلوكيات وحوارات وجزيئات</li>
+                    <li>Jolt Physics والنسخ الاحتياطي للخوادم</li>
                 </ul>
             </div>
         </div>
@@ -803,8 +870,11 @@
             <div class="code-comment"># 3. تشغيل محرر سند التفاعلي (Run SANAD Editor)</div>
             <div><span class="code-cmd">.\build\DebugNinja\bin\NOVAForgeEditor.exe</span></div>
             <br>
-            <div class="code-comment"># 4. تشغيل المشغل المستقل للألعاب (Run standalone player)</div>
-            <div><span class="code-cmd">.\build\DebugNinja\bin\NFPlayer.exe</span> <span class="code-arg">--frames 120 --validation</span></div>
+            <div class="code-comment"># 4. تشغيل لعبة جامع المكعبات (Run the Cube Collector game)</div>
+            <div><span class="code-cmd">.\build\DebugNinja\bin\NFSampleSimpleGame.exe</span></div>
+            <br>
+            <div class="code-comment"># 5. المحرر بالواجهة العربية (Run the editor in Arabic)</div>
+            <div><span class="code-cmd">.\build\DebugNinja\bin\NOVAForgeEditor.exe</span> <span class="code-arg">--arabic</span></div>
         </div>
     </section>
 
@@ -982,6 +1052,27 @@
         const translations = {
             ar: {
                 nav_features: "المزايا",
+                nav_showcase: "لقطات حقيقية",
+                show_title: "لقطات حقيقية من المحرك",
+                show_desc: "صور ملتقطة مباشرة من المحرر واللعبة العاملة — بدون فوتوشوب",
+                show_editor_title: "محرر سند الأصلي",
+                show_editor_desc: "منفذ عرض Vulkan حي، شجرة مشهد، مفتش انعكاسي، طرفية سجلات، وسماء إجرائية — يعمل بـ 100+ إطار/ثانية.",
+                show_ar_title: "واجهة عربية كاملة",
+                show_ar_desc: "تشكيل سياقي للحروف، ligatures، وترتيب RTL بخط أميري — أول محرك ألعاب بواجهة عربية حقيقية.",
+                show_game_title: "لعبة عاملة: جامع المكعبات",
+                show_game_desc: "عدو يتحرك بسكربت Lua، فيزياء إضاءة PBR، ظلال PCF، ونقاط ومستويات — مبنية بالمحرك نفسه.",
+                feat_script_title: "سكربت Lua معزول",
+                feat_script_desc: "آلة Lua 5.4 افتراضية ببيئات منفصلة لكل سكربت، مكتبة nf.*‎، ربط الكيانات، وحد تعليمات ضد الحلقات اللانهائية.",
+                feat_ai_title: "ذكاء اصطناعي حتمي",
+                feat_ai_desc: "بحث A*‎ شبكي بلا قص زوايا مع تنعيم رؤية، وأشجار سلوك تفاعلية بلوحة Blackboard — كلها حتمية وقابلة لإعادة التشغيل.",
+                feat_gameplay_title: "إطار لعب متكامل",
+                feat_gameplay_desc: "وسوم هرمية واستعلامات منطقية، مهام مرحلية، مخزون، حوارات مربوطة بالوسوم، وتسجيل/إعادة تشغيل للمدخلات.",
+                feat_net_title: "شبكات اللعب الجماعي",
+                feat_net_desc: "نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، ولقطات حالة مُصدَرة — أساس اللعب الجماعي الموثوق.",
+                feat_world_title: "عالم حي: شمس وتضاريس",
+                feat_world_desc: "دورة ليل ونهار تقود الشمس والسماء، وتضاريس heightfield إجرائية بضجيج حتمي، ومولد LOD شبكي.",
+                feat_asset_title: "استيراد glTF حقيقي",
+                feat_asset_desc: "مستورد glTF 2.0 (gltf/glb) إلى صيغة المحرك nfmesh. مع أداة NFModelImporter، وفك صور stb، ومعالج أعطال minidump.",
                 nav_community: "المساهمة",
                 nav_roadmap: "خارطة الطريق",
                 nav_quickstart: "البدء السريع",
@@ -994,7 +1085,7 @@
                 hero_cta_build: "البناء والتشغيل",
                 hero_cta_explore: "استعراض المميزات",
                 canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
-                stat_tests: "اختبار مؤتمت ناجح عبر 14 حزمة",
+                stat_tests: "اختبار مؤتمت ناجح عبر 20 حزمة",
                 stat_val: "أخطاء Vulkan Validation (خالٍ من التسريب)",
                 stat_cpp: "معيار C++ الحديث للأداء الأقصى",
                 stat_det: "محاكاة حتمية متوافقة مع الخوادم",
@@ -1023,6 +1114,27 @@
             },
             en: {
                 nav_features: "Features",
+                nav_showcase: "Showcase",
+                show_title: "Real Engine Captures",
+                show_desc: "Screenshots taken straight from the running editor and game — no Photoshop.",
+                show_editor_title: "The Native SANAD Editor",
+                show_editor_desc: "Live Vulkan viewport, outliner, reflected inspector, log console, and procedural sky — running at 100+ FPS.",
+                show_ar_title: "Fully Arabic Interface",
+                show_ar_desc: "Contextual shaping, ligatures, and RTL ordering in the Amiri typeface — the first game engine with a real Arabic UI.",
+                show_game_title: "Playable: Cube Collector",
+                show_game_desc: "Lua-scripted enemy AI, PBR lighting, PCF shadows, score and levels — built with the engine itself.",
+                feat_script_title: "Sandboxed Lua Scripting",
+                feat_script_desc: "Lua 5.4 VM with per-script sandboxed environments, the nf.* host library, entity bindings, and instruction budgets against infinite loops.",
+                feat_ai_title: "Deterministic Game AI",
+                feat_ai_desc: "Grid A* with no corner cutting plus line-of-sight smoothing, and reactive behavior trees on a blackboard — fully deterministic and replayable.",
+                feat_gameplay_title: "Complete Gameplay Framework",
+                feat_gameplay_desc: "Hierarchical tags with boolean queries, staged quests, inventories, tag-driven dialogue, and input record/replay.",
+                feat_net_title: "Multiplayer Networking",
+                feat_net_desc: "Non-blocking UDP transport, reliable channel (sequence/ack/resend), and versioned state snapshots — the multiplayer foundation.",
+                feat_world_title: "Living World: Sun & Terrain",
+                feat_world_desc: "Day/night cycle driving sun and sky, procedural heightfield terrain on deterministic noise, and a grid LOD generator.",
+                feat_asset_title: "Real glTF Import",
+                feat_asset_desc: "glTF 2.0 (gltf/glb) importer into the .nfmesh engine format, NFModelImporter CLI, stb image decoding, and minidump crash handling.",
                 nav_community: "Contribute",
                 nav_roadmap: "Roadmap",
                 nav_quickstart: "Quickstart",
@@ -1035,7 +1147,7 @@
                 hero_cta_build: "Build and Run",
                 hero_cta_explore: "Explore Features",
                 canvas_hint: "Click and drag to orbit the 3D entity in world space",
-                stat_tests: "Automated Tests Passed Across 14 Suites",
+                stat_tests: "Automated Tests Passed Across 20 Suites",
                 stat_val: "Vulkan Validation Errors (Zero Leaks)",
                 stat_cpp: "Modern C++23 ISO Standard",
                 stat_det: "Deterministic & Server-Authoritative Ready",

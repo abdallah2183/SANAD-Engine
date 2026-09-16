@@ -34,6 +34,7 @@
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Physics/Components.hpp>
+#include <NF/UI/Localization.hpp>
 
 #include <imgui.h>
 
@@ -68,6 +69,7 @@ struct EditorConfig {
     uint32_t max_frames = 0;
     bool validation = false;
     bool headless = false;
+    bool arabic_ui = false; // start with the Arabic localised UI
     // Empty means "open the engine tree", which is how the editor has always
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
@@ -97,6 +99,8 @@ EditorConfig parse_args(int argc, char** argv) {
             c.project_path = value_of("--project=");
         } else if (arg == "--validation") {
             c.validation = true;
+        } else if (arg == "--arabic") {
+            c.arabic_ui = true;
         } else if (arg == "--headless") {
             c.headless = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -105,6 +109,7 @@ EditorConfig parse_args(int argc, char** argv) {
                         "  --scene <logical>   Scene to open (default content://Scenes/Example.nfscene)\n"
                         "  --frames N          Run N frames then exit (0 = interactive until close)\n"
                         "  --validation        Enable Vulkan validation\n"
+                        "  --arabic            Start with the Arabic localised UI\n"
                         "  --headless          No window (logic + offscreen viewport only)\n");
             std::exit(0);
         }
@@ -415,6 +420,9 @@ int main(int argc, char** argv) {
         nf::editor::UiInitResult ui;
         nf::editor::UiRenderer ui_renderer;
         if (!cfg.headless) {
+            if (cfg.arabic_ui) {
+                nf::ui::set_language(nf::ui::Language::Arabic);
+            }
             ui = nf::editor::ui_init(window.native_handle());
             NF_LOG_INFO(nf::LogCategory::Editor, "ImGui {} win32={} font={}", ui.context_ok ? "ready" : "FAILED",
                         ui.win32_ok ? "ok" : "off", ui.font_used);
