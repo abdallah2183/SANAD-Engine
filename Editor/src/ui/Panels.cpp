@@ -46,6 +46,16 @@ struct InspectorCache {
     float light_color[3]{};
     float light_intensity = 1.0f;
     bool light_shadows = true;
+    float light_shadow_strength = 1.0f;
+    float light_shadow_bias = 0.0005f;
+    // Sky / environment (Phase 13)
+    bool sky_has = false;
+    bool sky_enabled = true;
+    float sky_zenith[3]{0.20f, 0.42f, 0.85f};
+    float sky_horizon[3]{0.62f, 0.72f, 0.82f};
+    float sky_ground[3]{0.09f, 0.09f, 0.11f};
+    float sky_sun_disk = 1.0f;
+    float sky_sun_glow = 1.0f;
     char mesh_id[64]{};
     char mesh_mat[192]{};
     char mat_path[256]{};
@@ -784,6 +794,21 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ic.light_color[2] = l.color_b;
                 ic.light_intensity = l.intensity;
                 ic.light_shadows = l.cast_shadows;
+                ic.light_shadow_strength = l.shadow_strength;
+                ic.light_shadow_bias = l.shadow_bias;
+                const SkyEdit s = read_sky(*w, sel, ic.sky_has);
+                ic.sky_enabled = s.enabled;
+                ic.sky_zenith[0] = s.zenith[0];
+                ic.sky_zenith[1] = s.zenith[1];
+                ic.sky_zenith[2] = s.zenith[2];
+                ic.sky_horizon[0] = s.horizon[0];
+                ic.sky_horizon[1] = s.horizon[1];
+                ic.sky_horizon[2] = s.horizon[2];
+                ic.sky_ground[0] = s.ground[0];
+                ic.sky_ground[1] = s.ground[1];
+                ic.sky_ground[2] = s.ground[2];
+                ic.sky_sun_disk = s.sun_disk;
+                ic.sky_sun_glow = s.sun_glow;
                 if (const auto* m = w->get<runtime::MeshComponent>(sel)) {
                     const std::string id = m->mesh_id.to_string();
                     std::strncpy(ic.mesh_id, id.c_str(), sizeof(ic.mesh_id) - 1);
@@ -1160,6 +1185,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::ColorEdit3("Color", ic.light_color);
                 ImGui::DragFloat("Intensity", &ic.light_intensity, 0.05f, 0.0f, 16.0f);
                 ImGui::Checkbox("Cast shadows", &ic.light_shadows);
+                ImGui::SliderFloat("Shadow strength", &ic.light_shadow_strength, 0.0f, 1.0f);
+                ImGui::DragFloat("Shadow bias", &ic.light_shadow_bias, 0.00005f, 0.0f, 0.01f,
+                                 "%.5f");
                 if (ImGui::Button("Apply##light")) {
                     LightEdit e;
                     e.dir_x = ic.light_dir[0];
@@ -1170,12 +1198,59 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     e.color_b = ic.light_color[2];
                     e.intensity = ic.light_intensity;
                     e.cast_shadows = ic.light_shadows;
+                    e.shadow_strength = ic.light_shadow_strength;
+                    e.shadow_bias = ic.light_shadow_bias;
                     std::string err;
                     if (!app.set_light(sel, e, err)) {
                         ic.error = err;
                         push_error(app.console(), "Light edit failed", err);
                     } else {
                         ic.error.clear();
+                    }
+                }
+            }
+            // --- Sky / environment (Phase 13) ---
+            if (ImGui::CollapsingHeader("Sky", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.sky_has) {
+                    ImGui::TextDisabled("No sky settings on this entity.");
+                    if (ImGui::Button("Add Sky Settings")) {
+                        SkyEdit e; // defaults; command adds the component
+                        std::string err;
+                        if (!app.set_sky(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Add sky failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox("Enabled", &ic.sky_enabled);
+                    ImGui::ColorEdit3("Zenith", ic.sky_zenith);
+                    ImGui::ColorEdit3("Horizon", ic.sky_horizon);
+                    ImGui::ColorEdit3("Ground", ic.sky_ground);
+                    ImGui::SliderFloat("Sun disk", &ic.sky_sun_disk, 0.0f, 8.0f);
+                    ImGui::SliderFloat("Sun glow", &ic.sky_sun_glow, 0.0f, 8.0f);
+                    if (ImGui::Button("Apply##sky")) {
+                        SkyEdit e;
+                        e.zenith[0] = ic.sky_zenith[0];
+                        e.zenith[1] = ic.sky_zenith[1];
+                        e.zenith[2] = ic.sky_zenith[2];
+                        e.horizon[0] = ic.sky_horizon[0];
+                        e.horizon[1] = ic.sky_horizon[1];
+                        e.horizon[2] = ic.sky_horizon[2];
+                        e.ground[0] = ic.sky_ground[0];
+                        e.ground[1] = ic.sky_ground[1];
+                        e.ground[2] = ic.sky_ground[2];
+                        e.sun_disk = ic.sky_sun_disk;
+                        e.sun_glow = ic.sky_sun_glow;
+                        e.enabled = ic.sky_enabled;
+                        std::string err;
+                        if (!app.set_sky(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Sky edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
                     }
                 }
             }

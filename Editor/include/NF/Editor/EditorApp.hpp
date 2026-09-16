@@ -84,6 +84,7 @@ public:
     bool reparent(ecs::Entity e, ecs::Entity new_parent, std::string& out_err);
     bool set_camera(ecs::Entity e, const CameraEdit& edit, std::string& out_err);
     bool set_light(ecs::Entity e, const LightEdit& edit, std::string& out_err);
+    bool set_sky(ecs::Entity e, const SkyEdit& edit, std::string& out_err);
     bool set_mesh(ecs::Entity e, const std::string& asset_id_text, const std::string& material,
                   std::string& out_err);
     bool drop_mesh_asset(const AssetEntry& entry, std::string& out_err);

@@ -29,6 +29,7 @@
 #include <NF/Rendering/PipelineCache.hpp>
 #include <NF/Rendering/RenderGraph.hpp>
 #include <NF/Rendering/RenderWorld.hpp>
+#include <NF/Rendering/Sky.hpp>
 
 #include <filesystem>
 #include <functional>
@@ -115,6 +116,11 @@ public:
     const DirectionalLight& directional_light() const { return m_directional; }
     void set_ambient(float ambient) { m_ambient = ambient; }
 
+    // --- Sky (Phase 13): procedural gradient + sun disk, painted by the
+    // lighting pass where depth reads far. Pure state: no device needed.
+    void set_sky(const SkyParams& sky) { m_sky = sky; }
+    const SkyParams& sky() const { return m_sky; }
+
     u32 add_point_light(const PointLight& light);
     u32 add_spot_light(const SpotLight& light);
     void clear_point_lights() { m_point_lights.clear(); }
@@ -165,6 +171,11 @@ private:
         float dir_color_int[4];     // rgb color, a intensity
         float light_view_proj[16];  // shadow-map transform (Phase 13)
         float shadow_params[4];     // x enabled, y strength, z bias, w texel (1/size)
+        float sky_zenith[4];        // rgb zenith, w unused (Phase 13 sky)
+        float sky_horizon[4];       // rgb horizon, w unused
+        float sky_ground[4];        // rgb below-horizon, w unused
+        float sky_params[4];        // x enabled, y sun disk mul, z sun glow mul, w unused
+        float sky_clear[4];         // rgb fallback when the sky is disabled
         i32 counts[4];              // x points, y spots
         struct PointGPU {
             float pos_radius[4];
@@ -180,9 +191,9 @@ private:
         PointGPU points[kMaxPointLights];
         SpotGPU spots[kMaxSpotLights];
     };
-    static_assert(sizeof(FrameUniforms) == 64 + 16 + 16 + 16 + 64 + 16 + 16 +
-                                        kMaxPointLights * 48 + kMaxSpotLights * 64,
-                  "FrameUniforms must match the shader's std140 layout");
+    static_assert(sizeof(FrameUniforms) == 64 + 16 + 16 + 16 + 64 + 16 + 5 * 16 + 16 +
+                                         kMaxPointLights * 48 + kMaxSpotLights * 64,
+                   "FrameUniforms must match the shader's std140 layout");
 
     rhi::IGraphicsDevice* m_device = nullptr;
 
@@ -277,6 +288,7 @@ private:
     // State
     MeshLibrary* m_mesh_library = nullptr;
     DirectionalLight m_directional{};
+    SkyParams m_sky{};
     std::vector<PointLight> m_point_lights;
     std::vector<SpotLight> m_spot_lights;
     float m_ambient = 0.03f;

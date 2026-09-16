@@ -1292,10 +1292,39 @@ void Runtime::extract_light() {
         rl.intensity = l->intensity;
         rl.enabled = true;
         rl.shadows_enabled = l->cast_shadows;
+        rl.shadow_strength = l->shadow_strength;
+        rl.shadow_bias = l->shadow_bias;
         m_renderer->set_directional_light(rl);
         return;
     }
     // No light in the scene: keep the renderer's default directional light.
+}
+
+void Runtime::extract_sky() {
+    if (!m_renderer || !m_renderer_initialized) {
+        return;
+    }
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<SkyComponent>()) {
+        const auto* s = world.get<SkyComponent>(e);
+        if (s == nullptr) {
+            continue;
+        }
+        rendering::SkyParams sky;
+        sky.zenith = {s->zenith_r, s->zenith_g, s->zenith_b};
+        sky.horizon = {s->horizon_r, s->horizon_g, s->horizon_b};
+        sky.ground = {s->ground_r, s->ground_g, s->ground_b};
+        sky.clear = {s->clear_r, s->clear_g, s->clear_b};
+        sky.sun_disk = s->sun_disk;
+        sky.sun_glow = s->sun_glow;
+        sky.enabled = s->enabled;
+        m_renderer->set_sky(sky);
+        return;
+    }
+    // No sky in the scene: keep the renderer's default sky.
 }
 
 void Runtime::build_render_world(rendering::RenderWorld& out) {
@@ -1412,6 +1441,7 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
     rendering::Camera cam{};
     extract_camera(w, h, cam);
     extract_light();
+    extract_sky();
     rendering::RenderWorld render_world{};
     build_render_world(render_world);
     // Frustum culling happens inside Renderer3D::render (RenderWorld → Visible).
@@ -1454,6 +1484,7 @@ void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd) {
     rendering::Camera cam{};
     extract_camera(w, h, cam);
     extract_light();
+    extract_sky();
     rendering::RenderWorld render_world{};
     build_render_world(render_world);
     if (!m_renderer->render(cmd, render_world, cam, target, false)) {

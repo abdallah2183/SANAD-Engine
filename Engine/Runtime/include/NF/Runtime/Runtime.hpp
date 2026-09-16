@@ -525,6 +525,7 @@ private:
     void ensure_default_material();
     bool extract_camera(uint32_t target_width, uint32_t target_height, rendering::Camera& out);
     void extract_light();
+    void extract_sky();
     void build_render_world(rendering::RenderWorld& out);
     void fallback_clear(rhi::Texture& target, rhi::CommandBuffer& cmd, bool present_source);
 };

@@ -423,6 +423,35 @@ std::string SetLightCommand::label() const {
     return "Edit light";
 }
 
+// --- SetSkyCommand ----------------------------------------------------------
+
+SetSkyCommand::SetSkyCommand(ecs::Entity e, bool had_before,
+                             const runtime::SkyComponent& before,
+                             const runtime::SkyComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetSkyCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::SkyComponent>(m_entity, m_after);
+}
+
+void SetSkyCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::SkyComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::SkyComponent>(m_entity);
+    }
+}
+
+std::string SetSkyCommand::label() const {
+    return "Edit sky";
+}
+
 // --- SetMaterialAssignmentCommand -------------------------------------------
 
 SetMaterialAssignmentCommand::SetMaterialAssignmentCommand(ecs::Entity e, std::string before_path,

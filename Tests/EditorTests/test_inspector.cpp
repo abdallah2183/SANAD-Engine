@@ -164,3 +164,79 @@ NF_TEST(editor_inspector_mesh_edit) {
     NF_CHECK(editor::make_mesh_command(scene.world(), e, "not-a-uuid", "x", err) == nullptr);
     NF_CHECK(!err.empty());
 }
+
+NF_TEST(editor_inspector_light_shadow_tuning) {
+    scene::Scene scene("LightShadow");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    scene.world().add<runtime::DirectionalLight>(e, runtime::DirectionalLight{});
+
+    editor::LightEdit edit;
+    edit.shadow_strength = 0.35f;
+    edit.shadow_bias = 0.002f;
+    std::string err;
+    auto cmd = editor::make_light_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+    const auto* l = scene.world().get<runtime::DirectionalLight>(e);
+    NF_CHECK(l != nullptr);
+    NF_CHECK_NEAR(l->shadow_strength, 0.35f, 1e-6f);
+    NF_CHECK_NEAR(l->shadow_bias, 0.002f, 1e-7f);
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK_NEAR(scene.world().get<runtime::DirectionalLight>(e)->shadow_strength, 1.0f, 1e-6f);
+
+    editor::LightEdit bad_strength = edit;
+    bad_strength.shadow_strength = 1.5f;
+    NF_CHECK(editor::make_light_command(scene.world(), e, bad_strength, err) == nullptr);
+    editor::LightEdit bad_bias = edit;
+    bad_bias.shadow_bias = -1.0f;
+    NF_CHECK(editor::make_light_command(scene.world(), e, bad_bias, err) == nullptr);
+}
+
+NF_TEST(editor_inspector_sky_edit_add_and_undo) {
+    scene::Scene scene("SkyEdit");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+
+    // Read path: absent component reports has=false with defaults.
+    bool has = true;
+    editor::SkyEdit def = editor::read_sky(scene.world(), e, has);
+    NF_CHECK(!has);
+    NF_CHECK_NEAR(def.zenith[1], 0.42f, 1e-6f);
+
+    // Apply path: adds the component, undoes by removing it.
+    editor::SkyEdit edit;
+    edit.zenith[0] = 0.05f;
+    edit.sun_disk = 3.0f;
+    edit.enabled = false;
+    std::string err;
+    auto cmd = editor::make_sky_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+    const auto* s = scene.world().get<runtime::SkyComponent>(e);
+    NF_CHECK(s != nullptr);
+    NF_CHECK_NEAR(s->zenith_r, 0.05f, 1e-6f);
+    NF_CHECK_NEAR(s->sun_disk, 3.0f, 1e-6f);
+    NF_CHECK(!s->enabled);
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(!scene.world().has<runtime::SkyComponent>(e));
+
+    // Re-add, then read back through read_sky.
+    auto cmd2 = editor::make_sky_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd2 != nullptr);
+    stack.push(std::move(cmd2), scene.world());
+    bool has2 = false;
+    editor::SkyEdit back = editor::read_sky(scene.world(), e, has2);
+    NF_CHECK(has2);
+    NF_CHECK_NEAR(back.sun_disk, 3.0f, 1e-6f);
+
+    // Validation: out-of-range multiplier and NaN color rejected.
+    editor::SkyEdit bad = edit;
+    bad.sun_glow = 99.0f;
+    NF_CHECK(editor::make_sky_command(scene.world(), e, bad, err) == nullptr);
+    editor::SkyEdit bad2 = edit;
+    bad2.horizon[0] = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(editor::make_sky_command(scene.world(), e, bad2, err) == nullptr);
+}

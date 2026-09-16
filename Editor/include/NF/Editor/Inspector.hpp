@@ -43,6 +43,19 @@ struct LightEdit {
     float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
     float intensity = 1.0f;
     bool cast_shadows = true;
+    float shadow_strength = 1.0f;
+    float shadow_bias = 0.0005f;
+};
+
+// Procedural sky settings for the selected entity (Phase 13). Mirrors
+// runtime::SkyComponent; validated like every other edit (finite, clamped).
+struct SkyEdit {
+    float zenith[3] = {0.20f, 0.42f, 0.85f};
+    float horizon[3] = {0.62f, 0.72f, 0.82f};
+    float ground[3] = {0.09f, 0.09f, 0.11f};
+    float sun_disk = 1.0f;
+    float sun_glow = 1.0f;
+    bool enabled = true;
 };
 
 struct MaterialEdit {
@@ -57,6 +70,7 @@ struct MaterialEdit {
 TransformEdit read_transform(const ecs::World& world, ecs::Entity e);
 CameraEdit read_camera(const ecs::World& world, ecs::Entity e, bool& out_has);
 LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has);
+SkyEdit read_sky(const ecs::World& world, ecs::Entity e, bool& out_has);
 
 // All factories return nullptr + err on invalid entity or invalid values.
 std::unique_ptr<ICommand> make_transform_command(ecs::World& world, ecs::Entity e,
@@ -64,7 +78,9 @@ std::unique_ptr<ICommand> make_transform_command(ecs::World& world, ecs::Entity 
 std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
                                               const CameraEdit& edit, std::string& out_err);
 std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
-                                             const LightEdit& edit, std::string& out_err);
+                                              const LightEdit& edit, std::string& out_err);
+std::unique_ptr<ICommand> make_sky_command(ecs::World& world, ecs::Entity e,
+                                           const SkyEdit& edit, std::string& out_err);
 std::unique_ptr<ICommand> make_mesh_command(ecs::World& world, ecs::Entity e,
                                             const std::string& asset_id_text,
                                             const std::string& material, std::string& out_err);

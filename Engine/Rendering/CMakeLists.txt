@@ -20,6 +20,7 @@ set(NFRENDERING_SOURCES
     src/MeshUpload.cpp
     src/MeshLibrary.cpp
     src/Renderer3D.cpp
+    src/Sky.cpp
     src/GpuPicker.cpp
     src/Camera.cpp
     src/Culling.cpp

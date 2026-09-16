@@ -226,6 +226,23 @@ private:
     runtime::DirectionalLight m_after{};
 };
 
+// Sets (or adds) the procedural sky settings of an existing entity.
+class SetSkyCommand : public ICommand {
+public:
+    SetSkyCommand(ecs::Entity e, bool had_before, const runtime::SkyComponent& before,
+                  const runtime::SkyComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::SkyComponent m_before{};
+    runtime::SkyComponent m_after{};
+};
+
 // Reassigns an entity's mesh material path (shared asset, not a copy).
 // The entity must carry a MeshComponent; validated by the factory.
 class SetMaterialAssignmentCommand : public ICommand {

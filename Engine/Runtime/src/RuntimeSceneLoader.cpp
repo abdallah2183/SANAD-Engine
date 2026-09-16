@@ -194,7 +194,28 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                 if (int_pos != std::string::npos) sscanf(line.c_str()+int_pos, "intensity=%f", &light.intensity);
                 // Absent key keeps the default (true): old scene files load lit as before.
                 if (line.find("shadows=false") != std::string::npos) light.cast_shadows = false;
+                size_t ss_pos = line.find("shadow_strength=");
+                if (ss_pos != std::string::npos) sscanf(line.c_str()+ss_pos, "shadow_strength=%f", &light.shadow_strength);
+                size_t sb_pos = line.find("shadow_bias=");
+                if (sb_pos != std::string::npos) sscanf(line.c_str()+sb_pos, "shadow_bias=%f", &light.shadow_bias);
                 scene->world().add<DirectionalLight>(e, light);
+            } else if (line.rfind("  Sky:",0)==0) {
+                SkyComponent sky;
+                size_t zp = line.find("zenith(");
+                if (zp != std::string::npos) sscanf(line.c_str()+zp, "zenith(%f,%f,%f)", &sky.zenith_r, &sky.zenith_g, &sky.zenith_b);
+                size_t hp = line.find("horizon(");
+                if (hp != std::string::npos) sscanf(line.c_str()+hp, "horizon(%f,%f,%f)", &sky.horizon_r, &sky.horizon_g, &sky.horizon_b);
+                size_t gp = line.find("ground(");
+                if (gp != std::string::npos) sscanf(line.c_str()+gp, "ground(%f,%f,%f)", &sky.ground_r, &sky.ground_g, &sky.ground_b);
+                size_t cp = line.find("clear(");
+                if (cp != std::string::npos) sscanf(line.c_str()+cp, "clear(%f,%f,%f)", &sky.clear_r, &sky.clear_g, &sky.clear_b);
+                size_t dp = line.find("sun_disk=");
+                if (dp != std::string::npos) sscanf(line.c_str()+dp, "sun_disk=%f", &sky.sun_disk);
+                size_t glp = line.find("sun_glow=");
+                if (glp != std::string::npos) sscanf(line.c_str()+glp, "sun_glow=%f", &sky.sun_glow);
+                // Absent key keeps the default (true): old scene files keep the sky.
+                if (line.find("enabled=false") != std::string::npos) sky.enabled = false;
+                scene->world().add<SkyComponent>(e, sky);
             } else if (line.rfind("  Camera:",0)==0) {
                 CameraComponent cam;
                 size_t fov_pos = line.find("fov=");
@@ -447,7 +468,20 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
         if (l) {
             out << "  Light: type=Directional dir(" << l->dir_x << "," << l->dir_y << "," << l->dir_z << ") color(" << l->color_r << "," << l->color_g << "," << l->color_b << ") intensity=" << l->intensity;
             if (!l->cast_shadows) out << " shadows=false";
+            // Non-default shadow tuning is explicit so old files (which omit
+            // both keys) keep rendering exactly as before.
+            if (l->shadow_strength != 1.0f) out << " shadow_strength=" << l->shadow_strength;
+            if (l->shadow_bias != 0.0005f) out << " shadow_bias=" << l->shadow_bias;
             out << "\n";
+        }
+        const auto* sky = scene_obj.world().get<SkyComponent>(e);
+        if (sky) {
+            out << "  Sky: zenith(" << sky->zenith_r << "," << sky->zenith_g << "," << sky->zenith_b << ")"
+                << " horizon(" << sky->horizon_r << "," << sky->horizon_g << "," << sky->horizon_b << ")"
+                << " ground(" << sky->ground_r << "," << sky->ground_g << "," << sky->ground_b << ")"
+                << " clear(" << sky->clear_r << "," << sky->clear_g << "," << sky->clear_b << ")"
+                << " sun_disk=" << sky->sun_disk << " sun_glow=" << sky->sun_glow
+                << " enabled=" << (sky->enabled ? "true" : "false") << "\n";
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {
@@ -583,6 +617,9 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* l = src.get<DirectionalLight>(se)) {
         dst.add<DirectionalLight>(de, *l);
+    }
+    if (const auto* s = src.get<SkyComponent>(se)) {
+        dst.add<SkyComponent>(de, *s);
     }
     if (const auto* c = src.get<CameraComponent>(se)) {
         dst.add<CameraComponent>(de, *c);

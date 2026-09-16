@@ -91,6 +91,8 @@ LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.color_b = l->color_b;
     out.intensity = l->intensity;
     out.cast_shadows = l->cast_shadows;
+    out.shadow_strength = l->shadow_strength;
+    out.shadow_bias = l->shadow_bias;
     return out;
 }
 
@@ -169,7 +171,7 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
         return nullptr;
     }
     if (!all_finite({edit.dir_x, edit.dir_y, edit.dir_z, edit.color_r, edit.color_g, edit.color_b,
-                     edit.intensity})) {
+                      edit.intensity, edit.shadow_strength, edit.shadow_bias})) {
         out_err = "Light values must be finite numbers";
         return nullptr;
     }
@@ -187,6 +189,14 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
         out_err = "Light color channels must be within [0, 1]";
         return nullptr;
     }
+    if (edit.shadow_strength < 0.0f || edit.shadow_strength > 1.0f) {
+        out_err = "Shadow strength must be within [0, 1]";
+        return nullptr;
+    }
+    if (edit.shadow_bias < 0.0f || edit.shadow_bias > 0.01f) {
+        out_err = "Shadow bias must be within [0, 0.01]";
+        return nullptr;
+    }
     const auto* cur = world.get<runtime::DirectionalLight>(e);
     const bool had = (cur != nullptr);
     const runtime::DirectionalLight before = had ? *cur : runtime::DirectionalLight{};
@@ -199,7 +209,78 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
     after.color_b = edit.color_b;
     after.intensity = edit.intensity;
     after.cast_shadows = edit.cast_shadows;
+    after.shadow_strength = edit.shadow_strength;
+    after.shadow_bias = edit.shadow_bias;
     return std::make_unique<SetLightCommand>(e, had, before, after);
+}
+
+SkyEdit read_sky(const ecs::World& world, ecs::Entity e, bool& out_has) {
+    SkyEdit out;
+    const auto* s = world.get<runtime::SkyComponent>(e);
+    out_has = (s != nullptr);
+    if (s == nullptr) {
+        return out;
+    }
+    out.zenith[0] = s->zenith_r;
+    out.zenith[1] = s->zenith_g;
+    out.zenith[2] = s->zenith_b;
+    out.horizon[0] = s->horizon_r;
+    out.horizon[1] = s->horizon_g;
+    out.horizon[2] = s->horizon_b;
+    out.ground[0] = s->ground_r;
+    out.ground[1] = s->ground_g;
+    out.ground[2] = s->ground_b;
+    out.sun_disk = s->sun_disk;
+    out.sun_glow = s->sun_glow;
+    out.enabled = s->enabled;
+    return out;
+}
+
+std::unique_ptr<ICommand> make_sky_command(ecs::World& world, ecs::Entity e,
+                                           const SkyEdit& edit, std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.zenith[0], edit.zenith[1], edit.zenith[2], edit.horizon[0],
+                      edit.horizon[1], edit.horizon[2], edit.ground[0], edit.ground[1],
+                      edit.ground[2], edit.sun_disk, edit.sun_glow})) {
+        out_err = "Sky values must be finite numbers";
+        return nullptr;
+    }
+    for (float c : {edit.zenith[0], edit.zenith[1], edit.zenith[2], edit.horizon[0],
+                    edit.horizon[1], edit.horizon[2], edit.ground[0], edit.ground[1],
+                    edit.ground[2]}) {
+        if (c < 0.0f || c > 4.0f) {
+            out_err = "Sky colors must be within [0, 4] (HDR headroom allowed)";
+            return nullptr;
+        }
+    }
+    if (edit.sun_disk < 0.0f || edit.sun_disk > 8.0f) {
+        out_err = "Sun disk multiplier must be within [0, 8]";
+        return nullptr;
+    }
+    if (edit.sun_glow < 0.0f || edit.sun_glow > 8.0f) {
+        out_err = "Sun glow multiplier must be within [0, 8]";
+        return nullptr;
+    }
+    const auto* cur = world.get<runtime::SkyComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::SkyComponent before = had ? *cur : runtime::SkyComponent{};
+    runtime::SkyComponent after = before;
+    after.zenith_r = edit.zenith[0];
+    after.zenith_g = edit.zenith[1];
+    after.zenith_b = edit.zenith[2];
+    after.horizon_r = edit.horizon[0];
+    after.horizon_g = edit.horizon[1];
+    after.horizon_b = edit.horizon[2];
+    after.ground_r = edit.ground[0];
+    after.ground_g = edit.ground[1];
+    after.ground_b = edit.ground[2];
+    after.sun_disk = edit.sun_disk;
+    after.sun_glow = edit.sun_glow;
+    after.enabled = edit.enabled;
+    return std::make_unique<SetSkyCommand>(e, had, before, after);
 }
 
 std::unique_ptr<ICommand> make_mesh_command(ecs::World& world, ecs::Entity e,

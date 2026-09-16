@@ -573,6 +573,19 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     fu.shadow_params[1] = m_directional.shadow_strength;
     fu.shadow_params[2] = m_directional.shadow_bias;
     fu.shadow_params[3] = 1.0f / static_cast<float>(kShadowMapSize);
+    // Procedural sky (Phase 13): std140 vec4s straight from SkyParams.
+    fu.sky_zenith[0] = m_sky.zenith.x; fu.sky_zenith[1] = m_sky.zenith.y;
+    fu.sky_zenith[2] = m_sky.zenith.z; fu.sky_zenith[3] = 0.0f;
+    fu.sky_horizon[0] = m_sky.horizon.x; fu.sky_horizon[1] = m_sky.horizon.y;
+    fu.sky_horizon[2] = m_sky.horizon.z; fu.sky_horizon[3] = 0.0f;
+    fu.sky_ground[0] = m_sky.ground.x; fu.sky_ground[1] = m_sky.ground.y;
+    fu.sky_ground[2] = m_sky.ground.z; fu.sky_ground[3] = 0.0f;
+    fu.sky_params[0] = m_sky.enabled ? 1.0f : 0.0f;
+    fu.sky_params[1] = m_sky.sun_disk;
+    fu.sky_params[2] = m_sky.sun_glow;
+    fu.sky_params[3] = 0.0f;
+    fu.sky_clear[0] = m_sky.clear.x; fu.sky_clear[1] = m_sky.clear.y;
+    fu.sky_clear[2] = m_sky.clear.z; fu.sky_clear[3] = 1.0f;
     fu.counts[0] = static_cast<i32>(m_point_lights.size());
     fu.counts[1] = static_cast<i32>(m_spot_lights.size());
     for (u32 i = 0; i < m_point_lights.size() && i < kMaxPointLights; ++i) {

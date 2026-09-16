@@ -329,6 +329,24 @@ bool EditorApp::set_light(ecs::Entity e, const LightEdit& edit, std::string& out
     return true;
 }
 
+bool EditorApp::set_sky(ecs::Entity e, const SkyEdit& edit, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_sky_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::set_mesh(ecs::Entity e, const std::string& asset_id_text, const std::string& material,
                          std::string& out_err) {
     if (!require_editable(out_err)) {

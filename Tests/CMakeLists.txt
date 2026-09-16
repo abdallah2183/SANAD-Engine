@@ -65,6 +65,7 @@ add_executable(RHITests
     RHITests/test_gpu_picking.cpp
     RHITests/test_benchmarks_3d.cpp
     RHITests/test_lod.cpp
+    RHITests/test_sky.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -95,6 +96,7 @@ add_executable(AssetTests
     AssetTests/test_asset_manager.cpp
     AssetTests/test_project_descriptor.cpp
     AssetTests/test_project_cooker.cpp
+    AssetTests/test_gltf_import.cpp
 )
 target_include_directories(AssetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AssetTests PRIVATE NFCore NFAssets NFRHI NFRendering NFProjectTool)
@@ -108,6 +110,7 @@ add_executable(RuntimeTests
     RuntimeTests/test_runtime_3b.cpp
     RuntimeTests/test_run_config.cpp
     RuntimeTests/test_runtime_streaming.cpp
+    RuntimeTests/test_runtime_sky.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
@@ -140,6 +143,7 @@ add_executable(AudioTests
     TestFramework.cpp
     AudioTests/test_audio.cpp
     AudioTests/test_audio_backend.cpp
+    AudioTests/test_audio_decode.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)

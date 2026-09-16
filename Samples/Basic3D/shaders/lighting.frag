@@ -40,6 +40,11 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
     vec4 dirLight_color_int;      // rgb = color, a = intensity
     mat4 lightViewProj;           // world -> shadow-map clip
     vec4 shadow_params;           // x = enabled, y = strength, z = bias, w = texel (1/size)
+    vec4 sky_zenith;              // rgb zenith color
+    vec4 sky_horizon;             // rgb horizon color
+    vec4 sky_ground;              // rgb below-horizon color
+    vec4 sky_params;              // x = enabled, y = sun disk mul, z = sun glow mul
+    vec4 sky_clear;               // rgb fallback when the sky is disabled
     ivec4 counts;                 // x = point count, y = spot count
     PointLight points[8];
     SpotLight spots[8];
@@ -111,15 +116,20 @@ void main() {
     // Procedural sky for empty pixels (Phase 13): gradient by view-ray
     // height plus a sun disk along the directional light. The ray comes
     // from the same inverse transform that reconstructs positions, so the
-    // sky tracks the camera exactly. Output is linear HDR like everything
-    // else; tonemapping happens downstream.
+    // sky tracks the camera exactly. Colors/multipliers come from SkyParams
+    // (see NF/Rendering/Sky.hpp, whose CPU mirror must match this branch).
+    // Output is linear HDR like everything else; tonemapping happens downstream.
     if (depth >= 0.999999) {
+        if (frame.sky_params.x < 0.5) {
+            out_color = vec4(frame.sky_clear.rgb, 1.0);
+            return;
+        }
         vec4 far = frame.invViewProj * vec4(in_uv * 2.0 - 1.0, 0.99999, 1.0);
         vec3 ray = normalize((far.xyz / far.w) - frame.camPos_ambient.xyz);
         float h = clamp(ray.y, -1.0, 1.0);
-        vec3 zenith = vec3(0.20, 0.42, 0.85);
-        vec3 horizon = vec3(0.62, 0.72, 0.82);
-        vec3 ground_haze = vec3(0.09, 0.09, 0.11);
+        vec3 zenith = frame.sky_zenith.rgb;
+        vec3 horizon = frame.sky_horizon.rgb;
+        vec3 ground_haze = frame.sky_ground.rgb;
         vec3 sky = (h >= 0.0) ? mix(horizon, zenith, pow(h, 0.6))
                               : mix(horizon, ground_haze, clamp(-h * 3.0, 0.0, 1.0));
         if (frame.dirLight_dir_enable.w > 0.5) {
@@ -128,7 +138,7 @@ void main() {
             float disk = smoothstep(0.9996, 0.99985, cos_a);
             float glow = pow(cos_a, 600.0) * 0.6 + pow(cos_a, 24.0) * 0.12;
             vec3 sun_col = frame.dirLight_color_int.rgb * frame.dirLight_color_int.a;
-            sky += sun_col * (disk * 4.0 + glow);
+            sky += sun_col * (disk * 4.0 * frame.sky_params.y + glow * frame.sky_params.z);
         }
         out_color = vec4(sky, 1.0);
         return;
