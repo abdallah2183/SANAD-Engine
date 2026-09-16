@@ -208,6 +208,16 @@ target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)
 nf_target_set_warnings(NetworkTests)
 
+# --- AI tests (grid pathfinding, behavior trees) ---
+add_executable(AITests
+    TestFramework.cpp
+    AITests/test_navgrid.cpp
+    AITests/test_behavior_tree.cpp
+)
+target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AITests PRIVATE NFCore NFAI)
+nf_target_set_warnings(AITests)
+
 # --- Save tests (slots, async save, autosave, schema migration) ---
 add_executable(SaveTests
     TestFramework.cpp
@@ -301,7 +311,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests NetworkTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests NetworkTests AITests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -326,6 +336,7 @@ add_test(NAME ScriptTests COMMAND ScriptTests)
 add_test(NAME UITests COMMAND UITests)
 add_test(NAME PlatformTests COMMAND PlatformTests)
 add_test(NAME NetworkTests COMMAND NetworkTests)
+add_test(NAME AITests COMMAND AITests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()
