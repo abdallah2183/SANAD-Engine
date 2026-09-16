@@ -17,7 +17,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-blue.svg" alt="اللغة" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-00599C.svg?logo=c%2B%2B" alt="C++23" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-636%20Passed-brightgreen.svg" alt="Tests" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-682%20Passed-brightgreen.svg" alt="Tests" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Validation-0%20Errors-success.svg" alt="Validation" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
@@ -106,13 +106,13 @@ SANAD Engine Architecture
 
 ---
 
-## Current Status (Phase 12–15 Verification)
+## Current Status (Phase 12–16 Verification)
 
-- **636 Automated Tests Passed** across 15 test suites (0 failed, 1 benchmark skipped).
+- **682 Automated Tests Passed** across 18 test suites (0 failed, 1 benchmark skipped).
 - **0 Vulkan Validation Layer Errors** and zero memory leaks.
 - Clean compilation under `/W4 /WX` with MSVC.
-- End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, and scene transform hierarchies in lockstep.
-- Native dockable **ImGui Editor** with Outliner, Reflected Inspector, Asset Browser, Undo/Redo, 3D Viewport, and Sky/Shadow environment editing.
+- End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, input replays, and scene transform hierarchies in lockstep.
+- Native dockable **ImGui Editor** with Outliner, Reflected Inspector, Asset Browser, Undo/Redo, 3D Viewport, Sky/Shadow environment editing, live Profiler, and full Arabic RTL localisation.
 - Virtual File System (`content://`, `cache://`, `project://`, `saves://`) and standalone CLI project tooling (`nf new`, `nf build`, `nf run`).
 
 ---
@@ -128,7 +128,9 @@ SANAD Engine Architecture
 | **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, WAV/OGG/MP3/FLAC import pipeline, and headless test driver. |
 | **Asset Pipeline** | glTF 2.0 importer (`.gltf`/`.glb` → `.nfmesh` via `NFModelImporter`), mesh cooking, and asset registry management. |
 | **Lua Scripting** | Sandboxed Lua 5.4 VM with `nf.*` host library, entity bindings, per-entity `ScriptComponent` ticking, and instruction budgets. |
-| **Gameplay Framework** | Hierarchical gameplay tags + queries, staged quest log, stacked inventory, and CPU profiler with Chrome-trace export. |
+| **Gameplay Framework** | Hierarchical gameplay tags + queries, staged quest log, stacked inventory, deterministic input replays, and CPU profiler with Chrome-trace export. |
+| **Arabic UI & Localization** | UCD-verified Arabic shaper (contextual forms, lam-alef, bidi), Amiri font pipeline, and EN/AR editor localisation. |
+| **World & Time** | Day/night cycle driver, procedural heightfield terrain, and UDP transport (multiplayer kickoff). |
 | **Reflection & Serialization** | Zero-codegen reflection macros (`NF_CLASS`, `NF_PROPERTY`, `NF_ENUM`), bidirectional text serialization, and automated inspector panels. |
 | **Native Editor** | Dear ImGui docking shell, scene outliner, entity inspector, live viewport gizmos, undo/redo command history, and game save manager. |
 | **Build & Packaging CLI** | `nf` CLI tool supporting project templating, cooking, asset registry management, and single-directory relocatable standalone distribution. |
@@ -193,8 +195,8 @@ cd MyGame/dist && .\NFPlayer.exe
 - **Phase 12:** Dynamic Mesh LOD Generation & Model Importer (Completed)
 - **Phase 13:** Directional Shadow Mapping (PCF 3x3) & Procedural Sky Atmosphere (Completed)
 - **Phase 14:** Compressed Audio Import (WAV/OGG/MP3/FLAC) & glTF 2.0 Asset Importer (Completed)
-- **Phase 15:** Lua Scripting Integration (Completed) & Arabic RTL Editor Localisation (Open for Contribution)
-- **Phase 16:** Jolt Physics Solver Integration & Multiplayer Replication (Planned)
+- **Phase 15:** Lua Scripting Integration (Completed) & Arabic RTL Editor Localisation (Completed)
+- **Phase 16:** UDP Transport (Completed) + Jolt Physics & Multiplayer Replication (Planned)
 
 Full details are documented in [ROADMAP.md](ROADMAP.md).
 
