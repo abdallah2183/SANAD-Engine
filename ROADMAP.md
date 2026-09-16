@@ -57,7 +57,11 @@
 - [x] معالج الأعطال (Minidump + SEH).
 - [x] مؤثرات ما بعد المعالجة (Vignette + Saturation) واهتزاز الكاميرا.
 - [x] نافذة Profiler حية في المحرر + تصدير Chrome Trace.
-- [x] نظام Quest/Inventory وGameplay Tags.
+- [x] نظام Quest/Inventory/Dialogue وGameplay Tags.
+- [x] شخصيات متحركة فيزيائياً (Character Controller) وIK تحليلي.
+- [x] ذكاء اصطناعي: A* شبكي + Behavior Trees.
+- [x] جزيئات حتمية (Particles) وشبكات موثوقة (Reliable + Snapshots).
+- [x] ربط ملفات الصوت بالمشاهد (`buffer=` يُفك تلقائياً).
 
 ### المرحلة 16: فيزياء متطورة وشبكات ألعاب (Advanced Physics & Multiplayer)
 - [ ] دمج محرك الفيزياء العالمي Jolt Physics لدعم تصادمات الشبكات والمجسمات المعقدة.
