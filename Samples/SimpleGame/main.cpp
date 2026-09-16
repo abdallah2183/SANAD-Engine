@@ -16,6 +16,7 @@
 #include <NF/Rendering/Camera.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
 #include <NF/Runtime/SceneExtraction.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/Scene/Transform.hpp>
 
@@ -54,7 +55,6 @@ struct GameState {
     bool won_flash = false;
     float invincible_timer = 2.0f; // spawn protection
     float time = 0.0f;
-    float enemy_phase = 2.6f; // start enemy away from the player
 };
 
 float rand_range(std::mt19937& rng, float lo, float hi) {
@@ -148,12 +148,25 @@ int run() {
         coins.push_back(e);
     }
 
-    // Enemy
+    // Enemy (driven by a Lua script — see the patrol source below)
     ecs::Entity enemy = world.create_entity();
     world.add<scene::Transform>(enemy, scene::Transform{});
     world.get<scene::Transform>(enemy)->local_y = 0.5f;
     world.get<scene::Transform>(enemy)->local_z = -3.0f;
     world.add<rendering::MeshComponent>(enemy, rendering::MeshComponent{cube_handle, enemy_mat, true});
+    nf::scripting::ScriptComponent patrol;
+    patrol.source =
+        "phase = 0\n"
+        "function update(dt)\n"
+        "  phase = phase + dt * (level_speed or 1.0)\n"
+        "  local id, gen = nf.self()\n"
+        "  local x = math.sin(phase) * 8.0\n"
+        "  local z = -3.0 + math.cos(phase * 0.7) * 4.0\n"
+        "  nf.set_entity_pos(id, gen, x, 0.5, z)\n"
+        "end\n";
+    world.add<nf::scripting::ScriptComponent>(enemy, patrol);
+    nf::scripting::ScriptSystem scripts;
+    scripts.set_instruction_limit(1000000);
 
     renderer.set_directional_light(rendering::DirectionalLight{
         rendering::Vec3{-0.5f, -1.0f, -0.3f}, rendering::Vec3{1.0f, 1.0f, 1.0f}, 1.0f, true});
@@ -172,7 +185,7 @@ int run() {
 
     auto reset_game = [&]() {
         gs.score = 0; gs.lives = 3; gs.level = 1; gs.coins_to_next = 5;
-        gs.game_over = false; gs.invincible_timer = 2.0f; gs.enemy_phase = 2.6f;
+        gs.game_over = false; gs.invincible_timer = 2.0f;
         auto* pt = world.get<scene::Transform>(player);
         pt->local_x = 0; pt->local_z = 0; pt->local_y = 0.5f;
         for (auto c : coins) {
@@ -239,12 +252,11 @@ int run() {
                 }
             }
 
-            // --- Enemy patrol ---
-            float enemy_speed = 1.0f + (gs.level - 1) * 0.45f;
-            gs.enemy_phase += dt * enemy_speed;
+            // --- Enemy patrol (Lua-driven: speed follows the level) ---
+            scripts.vm().set_global_number(
+                "level_speed", 1.0 + static_cast<double>(gs.level - 1) * 0.45);
+            scripts.update(world, dt);
             auto* et = world.get<scene::Transform>(enemy);
-            et->local_x = std::sin(gs.enemy_phase) * 8.0f;
-            et->local_z = -3.0f + std::cos(gs.enemy_phase * 0.7f) * 4.0f;
             et->rot_y += dt * 60.0f;
 
             float edx = et->local_x - pt->local_x;

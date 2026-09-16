@@ -70,7 +70,7 @@ endif()
 add_executable(NFSampleSimpleGame
     SimpleGame/main.cpp
 )
-target_link_libraries(NFSampleSimpleGame PRIVATE NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFRuntime)
+target_link_libraries(NFSampleSimpleGame PRIVATE NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFRuntime NFScripting)
 nf_target_set_warnings(NFSampleSimpleGame)
 
 target_compile_definitions(NFSampleSimpleGame PRIVATE
