@@ -38,7 +38,7 @@ add_library(NFEditorCore STATIC
     ${NFEDITOR_CORE_SOURCES}
 )
 target_include_directories(NFEditorCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics NFGameplay imgui)
+target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics NFGameplay NFUI imgui)
 nf_target_set_warnings(NFEditorCore)
 
 add_executable(NOVAForgeEditor
@@ -49,7 +49,7 @@ add_executable(NOVAForgeEditor
 target_include_directories(NOVAForgeEditor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NOVAForgeEditor PRIVATE
     NFEditorCore NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFRuntime
-    NFProjectTool
+    NFProjectTool NFUI
     imgui
 )
 target_compile_definitions(NOVAForgeEditor PRIVATE

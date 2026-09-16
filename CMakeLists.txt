@@ -69,6 +69,7 @@ add_subdirectory(ThirdParty)
 # ---------------------------------------------------------------------------
 
 add_subdirectory(Engine/Core)
+add_subdirectory(Engine/UI)
 add_subdirectory(Engine/Jobs)
 add_subdirectory(Engine/Platform)
 add_subdirectory(Engine/RHI)

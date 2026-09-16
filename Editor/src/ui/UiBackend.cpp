@@ -10,6 +10,9 @@
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
 
+#include <filesystem>
+#include <string>
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -25,6 +28,49 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #endif
 
 namespace nf::editor {
+
+namespace {
+
+// Latin + Arabic blocks + presentation forms (the shaper emits FE70-FEFF).
+const ImWchar* arabic_glyph_ranges() {
+    static const ImWchar kRanges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1
+        0x0600, 0x06FF, // Arabic
+        0x0750, 0x077F, // Arabic Supplement
+        0x08A0, 0x08FF, // Arabic Extended-A
+        0xFB50, 0xFDFF, // Arabic Presentation Forms-A
+        0xFE70, 0xFEFF, // Arabic Presentation Forms-B
+        0,
+    };
+    return kRanges;
+}
+
+// Walks up from the working directory for Resources/fonts/<file> (the same
+// root-finding the VFS uses for Content/). Returns empty when absent.
+std::string find_bundled_font(const char* file) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path dir = fs::current_path(ec);
+    if (ec) return {};
+    for (int i = 0; i < 6; ++i) {
+        const fs::path cand = dir / "Resources" / "fonts" / file;
+        if (fs::exists(cand, ec) && !ec) return cand.string();
+        if (!dir.has_parent_path()) break;
+        dir = dir.parent_path();
+    }
+    return {};
+}
+
+ImFont* load_arabic_font(ImGuiIO& io) {
+    const std::string path = find_bundled_font("Amiri-Regular.ttf");
+    if (path.empty()) return nullptr;
+    ImFontConfig cfg;
+    cfg.MergeMode = true; // merge into the active (Latin) font
+    cfg.PixelSnapH = true;
+    return io.Fonts->AddFontFromFileTTF(path.c_str(), 16.0f, &cfg, arabic_glyph_ranges());
+}
+
+} // namespace
 
 UiInitResult ui_init(void* hwnd) {
     UiInitResult out;
@@ -46,6 +92,14 @@ UiInitResult ui_init(void* hwnd) {
     } else {
         io.Fonts->AddFontDefault();
         out.font_used = "ImGui default";
+    }
+    // Arabic companion font (Phase 15): merged into the same atlas so Latin
+    // and shaped Arabic (presentation forms, see NF/UI/ArabicShaper) render
+    // in one draw. Resolved from Resources/fonts next to the project root;
+    // absence only disables Arabic glyphs, never the editor.
+    if (ImFont* arabic = load_arabic_font(io)) {
+        (void)arabic;
+        out.font_used += " + Amiri (AR)";
     }
     // The font atlas texture itself is uploaded by UiRenderer::init() (GPU
     // path, waited). Building here as well satisfies NewFrame()'s TexIsBuilt

@@ -17,6 +17,8 @@
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayModule.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
+#include <NF/UI/ArabicShaper.hpp>
+#include <NF/UI/Localization.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder: default layout only (first frame)
@@ -114,6 +116,17 @@ void push_info(ConsoleBuffer& console, const std::string& what) {
 void push_error(ConsoleBuffer& console, const std::string& what, const std::string& err) {
     console.push(LogMessage{LogLevel::Error, LogCategory::Editor, what + ": " + err,
                             std::chrono::system_clock::now(), __FILE__, __LINE__});
+}
+
+// --- Localisation helpers (Phase 15) ----------------------------------------
+// TR(key): translated string (logical UTF-8). AV(key): translated + shaped
+// for display. Window/header labels append a stable "###id" so switching
+// languages never resets docking or widget state (IDs stay English).
+inline std::string TR(const char* key) {
+    return ui::tr(key);
+}
+inline std::string AV(const char* key) {
+    return ui::shape_arabic(ui::tr(key));
 }
 
 // MaterialEdit assembled from the inspector cache (sliders + color widgets).
@@ -336,7 +349,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
     // --- Top toolbar ---------------------------------------------------------
     if (ImGui::BeginMainMenuBar()) {
-            if (ImGui::Button("New")) {
+            if (ImGui::Button(AV("new").c_str())) {
                 std::string err;
                 if (!app.new_scene(err)) {
                     push_error(app.console(), "New scene failed", err);
@@ -344,24 +357,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             ImGui::SameLine();
             static char open_path[256]{};
-            if (ImGui::Button("Open...")) {
+            if (ImGui::Button((AV("open") + "...").c_str())) {
                 ImGui::OpenPopup("OpenScene");
             }
-            if (ImGui::BeginPopupModal("OpenScene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (ImGui::BeginPopupModal((AV("open") + "###OpenScene").c_str(), nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::InputText("content:// path", open_path, sizeof(open_path));
-                if (ImGui::Button("Open")) {
+                if (ImGui::Button(AV("open").c_str())) {
                     intents.open_scene_dialog_confirm = true;
                     intents.open_scene_path = open_path;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
+                if (ImGui::Button(AV("cancel").c_str())) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Save")) {
+            if (ImGui::Button(AV("save").c_str())) {
                 std::string err;
                 if (!app.save(err)) {
                     push_error(app.console(), "Save failed", err);
@@ -369,45 +383,46 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             ImGui::SameLine();
             static char saveas_path[256]{};
-            if (ImGui::Button("Save As...")) {
+            if (ImGui::Button(AV("save_as").c_str())) {
                 ImGui::OpenPopup("SaveSceneAs");
             }
-            if (ImGui::BeginPopupModal("SaveSceneAs", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (ImGui::BeginPopupModal((AV("save_as") + "###SaveSceneAs").c_str(), nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::InputText("content:// path", saveas_path, sizeof(saveas_path));
-                if (ImGui::Button("Save")) {
+                if (ImGui::Button(AV("save").c_str())) {
                     intents.save_as_confirm = true;
                     intents.save_as_path = saveas_path;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
+                if (ImGui::Button(AV("cancel").c_str())) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
             }
             ImGui::SameLine();
-            if (!app.playing() && ImGui::Button("Play")) {
+            if (!app.playing() && ImGui::Button(AV("play").c_str())) {
                 std::string err;
                 if (!app.play(err)) {
                     push_error(app.console(), "Play failed", err);
                 }
             }
             ImGui::SameLine();
-            if (app.playing() && ImGui::Button("Stop")) {
+            if (app.playing() && ImGui::Button(AV("stop").c_str())) {
                 std::string err;
                 if (!app.stop(err)) {
                     push_error(app.console(), "Stop failed", err);
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("Game##save_menu")) {
+            if (ImGui::Button((AV("game") + "##save_menu").c_str())) {
                 ImGui::OpenPopup("GameSaves");
             }
             if (ImGui::BeginPopup("GameSaves")) {
                 static char slot[64] = "slot1";
-                ImGui::InputText("Slot", slot, sizeof(slot));
+                ImGui::InputText(AV("slot").c_str(), slot, sizeof(slot));
 
-                if (ImGui::Button("Save Game")) {
+                if (ImGui::Button(AV("save_game").c_str())) {
                     std::string err;
                     if (!app.save_game(slot, err)) {
                         push_error(app.console(), "Save game failed", err);
@@ -416,7 +431,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Load Game")) {
+                if (ImGui::Button(AV("load_game").c_str())) {
                     std::string err;
                     if (!app.load_game(slot, err)) {
                         push_error(app.console(), "Load game failed", err);
@@ -426,20 +441,21 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
                 ImGui::SameLine();
                 if (!app.has_save(slot)) {
-                    ImGui::TextDisabled("(no such slot)");
+                    ImGui::TextDisabled("%s", AV("no_such_slot").c_str());
                 }
 
                 // Autosave. The interval is a real duration rather than a frame
                 // count, so the behaviour does not change with frame rate.
                 static float interval = 120.0f;
                 bool enabled = app.autosave_enabled();
-                if (ImGui::Checkbox("Autosave", &enabled)) {
+                if (ImGui::Checkbox(AV("autosave").c_str(), &enabled)) {
                     app.set_autosave(enabled ? interval : 0.0f, "autosave_");
                 }
                 if (enabled) {
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(120.0f);
-                    if (ImGui::DragFloat("Interval (s)", &interval, 5.0f, 5.0f, 3600.0f)) {
+                    if (ImGui::DragFloat(AV("interval_s").c_str(), &interval, 5.0f, 5.0f,
+                                         3600.0f)) {
                         app.set_autosave(interval, "autosave_");
                     }
                     ImGui::TextDisabled("autosaves written: %u", app.autosaves_performed());
@@ -448,7 +464,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::Separator();
                 const std::vector<runtime::SaveSystem::SlotInfo> slots = app.list_saves();
                 if (slots.empty()) {
-                    ImGui::TextDisabled("no save slots");
+                    ImGui::TextDisabled("%s", AV("no_save_slots").c_str());
                 }
                 for (const runtime::SaveSystem::SlotInfo& info : slots) {
                     ImGui::Text("%s  (%s, schema %u, %s)", info.name.c_str(),
@@ -465,7 +481,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (app.has_project()) {
                 ImGui::Text("Project: %s", app.project_name().c_str());
                 ImGui::SameLine();
-                if (ImGui::Button("Build")) {
+                if (ImGui::Button(AV("build").c_str())) {
                     intents.build_project = true;
                 }
             } else {
@@ -474,20 +490,21 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::SameLine();
             static char newproj_dir[256]{};
             static char newproj_name[128]{};
-            if (ImGui::Button("New Project...")) {
+            if (ImGui::Button((AV("new") + "...").c_str())) {
                 ImGui::OpenPopup("NewProject");
             }
-            if (ImGui::BeginPopupModal("NewProject", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (ImGui::BeginPopupModal((AV("new") + "###NewProject").c_str(), nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::InputText("directory", newproj_dir, sizeof(newproj_dir));
                 ImGui::InputText("name", newproj_name, sizeof(newproj_name));
-                if (ImGui::Button("Create")) {
+                if (ImGui::Button(AV("create").c_str())) {
                     intents.new_project_confirm = true;
                     intents.new_project_dir = newproj_dir;
                     intents.new_project_name = newproj_name;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
+                if (ImGui::Button(AV("cancel").c_str())) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
@@ -506,28 +523,42 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::SameLine();
             ImGui::TextUnformatted("|");
             ImGui::SameLine();
-            if (ImGui::Button("About")) {
+            if (ImGui::Button(AV("about").c_str())) {
                 ImGui::OpenPopup("AboutSANAD");
             }
-            if (ImGui::BeginPopupModal("AboutSANAD", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextColored(ImVec4(1.0f, 0.62f, 0.15f, 1.0f), "SANAD Engine (محرك سند)");
-                ImGui::Text("Founder & Project Lead: Abdallah (عبدالله)");
+            if (ImGui::BeginPopupModal((AV("about") + "###AboutSANAD").c_str(), nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextColored(ImVec4(1.0f, 0.62f, 0.15f, 1.0f), "SANAD Engine (%s)",
+                                   ui::shape_arabic("محرك سند").c_str());
+                ImGui::Text("Founder & Project Lead: Abdallah (%s)",
+                            ui::shape_arabic("عبدالله").c_str());
                 ImGui::Text("The Modern Extensible Arabic C++23 & Vulkan Game Engine");
                 ImGui::Separator();
-                ImGui::Text("Phase: 11 / 13 (Foundation + PBR + ECS + Physics + Audio + Animation)");
-                ImGui::Text("Validation: 0 errors | 534 automated tests passing");
+                ImGui::Text("Phases 12-16: LOD + Shadows/Sky + Audio/glTF + Lua + Arabic UI");
+                ImGui::Text("Validation: 0 errors | 636 automated tests passing");
                 ImGui::Text("Open Source Community: We welcome all contributors to build SANAD together!");
                 ImGui::Separator();
-                if (ImGui::Button("Close", ImVec2(120, 0))) {
+                if (ImGui::Button(AV("close").c_str(), ImVec2(120, 0))) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
+            }
+            ImGui::SameLine();
+            // Language toggle (Phase 15): English <-> Arabic, shaped + Amiri.
+            if (ui::current_language() == ui::Language::Arabic) {
+                if (ImGui::Button("English")) {
+                    ui::set_language(ui::Language::English);
+                }
+            } else {
+                if (ImGui::Button(ui::shape_arabic("العربية").c_str())) {
+                    ui::set_language(ui::Language::Arabic);
+                }
             }
         ImGui::EndMainMenuBar();
     }
 
     // --- Left: Scene Outliner --------------------------------------------------
-    if (ImGui::Begin("Outliner")) {
+    if (ImGui::Begin((AV("outliner") + "###Outliner").c_str())) {
         if (ImGui::Button("+ Empty")) {
             std::string err;
             const int n = static_cast<int>(app.status().entity_count);
@@ -651,7 +682,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui::End();
 
     // --- Center: Viewport ------------------------------------------------------
-    if (ImGui::Begin("Viewport")) {
+    if (ImGui::Begin((AV("viewport") + "###Viewport").c_str())) {
         const float avail_w = ImGui::GetContentRegionAvail().x;
         const float avail_h = ImGui::GetContentRegionAvail().y;
         ImGui::Text("Gizmo: [W] Translate  [E] Rotate  [R] Scale   (%s, %s)",
@@ -747,11 +778,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui::End();
 
     // --- Right: Inspector ------------------------------------------------------
-    if (ImGui::Begin("Inspector")) {
+    if (ImGui::Begin((AV("inspector") + "###Inspector").c_str())) {
         ecs::World* w = app.world();
         const ecs::Entity sel = app.selection().primary();
         if (w == nullptr || !sel.valid() || !w->is_alive(sel)) {
-            ImGui::TextDisabled("Nothing selected.");
+            ImGui::TextDisabled("%s", AV("nothing_selected").c_str());
         } else {
             InspectorCache& ic = inspector_cache();
             if (!ic.valid || !(ic.entity == sel)) {
@@ -891,7 +922,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (!ic.error.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "Error: %s", ic.error.c_str());
             }
-            if (ImGui::CollapsingHeader("Name", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader((AV("name") + "###Name").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::InputText("##name", ic.name, sizeof(ic.name));
                 ImGui::SameLine();
                 if (ImGui::Button("Apply##name")) {
@@ -904,7 +935,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
             }
-            if (w->has<scene::Transform>(sel) && ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (w->has<scene::Transform>(sel) && ImGui::CollapsingHeader((AV("transform") + "###Transform").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::DragFloat3("Position", ic.pos, 0.05f);
                 ImGui::DragFloat3("Rotation", ic.rot, 0.5f);
                 ImGui::DragFloat3("Scale", ic.scl, 0.02f, 0.01f, 1000.0f);
@@ -937,7 +968,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             if (const auto* m = w->get<runtime::MeshComponent>(sel)) {
-                if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::CollapsingHeader((AV("mesh") + "###Mesh").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::InputText("AssetId", ic.mesh_id, sizeof(ic.mesh_id));
                     // Shared material assignment (combo over known .nfmat paths).
                     std::vector<std::string> mat_list = app.known_materials();
@@ -1009,7 +1040,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             // Shared PBR material of the selected mesh (scalar params, v0.1).
             if (w->has<runtime::MeshComponent>(sel) &&
-                ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::CollapsingHeader((AV("material") + "###Material").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::TextWrapped("%s", ic.mat_path);
                 if (app.runtime() != nullptr && app.runtime()->material_dirty(ic.mat_path)) {
                     ImGui::SameLine();
@@ -1134,7 +1165,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             if (const auto* pl = w->get<scene::PrefabLinkComponent>(sel)) {
-                if (ImGui::CollapsingHeader("Prefab", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::CollapsingHeader((AV("prefab") + "###Prefab").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::TextWrapped("%s", pl->prefab_path.c_str());
                     if (ImGui::Button("Apply to prefab")) {
                         std::string err;
@@ -1159,7 +1190,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             bool has_cam = w->has<runtime::CameraComponent>(sel);
-            if (has_cam && ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (has_cam && ImGui::CollapsingHeader((AV("camera") + "###Camera").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Checkbox("Active", &ic.cam_active);
                 ImGui::DragFloat("FOV", &ic.cam[0], 0.5f, 1.0f, 179.0f);
                 ImGui::DragFloat("Near", &ic.cam[1], 0.01f, 0.001f, 100.0f);
@@ -1180,15 +1211,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             if (w->has<runtime::DirectionalLight>(sel) &&
-                ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::DragFloat3("Direction", ic.light_dir, 0.02f);
-                ImGui::ColorEdit3("Color", ic.light_color);
-                ImGui::DragFloat("Intensity", &ic.light_intensity, 0.05f, 0.0f, 16.0f);
-                ImGui::Checkbox("Cast shadows", &ic.light_shadows);
-                ImGui::SliderFloat("Shadow strength", &ic.light_shadow_strength, 0.0f, 1.0f);
-                ImGui::DragFloat("Shadow bias", &ic.light_shadow_bias, 0.00005f, 0.0f, 0.01f,
+                ImGui::CollapsingHeader((AV("directional_light") + "###DirectionalLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::DragFloat3(AV("direction").c_str(), ic.light_dir, 0.02f);
+                ImGui::ColorEdit3(AV("color").c_str(), ic.light_color);
+                ImGui::DragFloat(AV("intensity").c_str(), &ic.light_intensity, 0.05f, 0.0f, 16.0f);
+                ImGui::Checkbox(AV("cast_shadows").c_str(), &ic.light_shadows);
+                ImGui::SliderFloat(AV("shadow_strength").c_str(), &ic.light_shadow_strength, 0.0f, 1.0f);
+                ImGui::DragFloat(AV("shadow_bias").c_str(), &ic.light_shadow_bias, 0.00005f, 0.0f, 0.01f,
                                  "%.5f");
-                if (ImGui::Button("Apply##light")) {
+                if (ImGui::Button((AV("apply") + "##light").c_str())) {
                     LightEdit e;
                     e.dir_x = ic.light_dir[0];
                     e.dir_y = ic.light_dir[1];
@@ -1210,10 +1241,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             // --- Sky / environment (Phase 13) ---
-            if (ImGui::CollapsingHeader("Sky", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader((AV("sky") + "###Sky").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (!ic.sky_has) {
-                    ImGui::TextDisabled("No sky settings on this entity.");
-                    if (ImGui::Button("Add Sky Settings")) {
+                    ImGui::TextDisabled("%s", AV("no_sky_settings").c_str());
+                    if (ImGui::Button((AV("add_sky") + "##addsky").c_str())) {
                         SkyEdit e; // defaults; command adds the component
                         std::string err;
                         if (!app.set_sky(sel, e, err)) {
@@ -1224,13 +1255,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         }
                     }
                 } else {
-                    ImGui::Checkbox("Enabled", &ic.sky_enabled);
-                    ImGui::ColorEdit3("Zenith", ic.sky_zenith);
-                    ImGui::ColorEdit3("Horizon", ic.sky_horizon);
-                    ImGui::ColorEdit3("Ground", ic.sky_ground);
-                    ImGui::SliderFloat("Sun disk", &ic.sky_sun_disk, 0.0f, 8.0f);
-                    ImGui::SliderFloat("Sun glow", &ic.sky_sun_glow, 0.0f, 8.0f);
-                    if (ImGui::Button("Apply##sky")) {
+                    ImGui::Checkbox(AV("enabled").c_str(), &ic.sky_enabled);
+                    ImGui::ColorEdit3(AV("zenith").c_str(), ic.sky_zenith);
+                    ImGui::ColorEdit3(AV("horizon").c_str(), ic.sky_horizon);
+                    ImGui::ColorEdit3(AV("ground").c_str(), ic.sky_ground);
+                    ImGui::SliderFloat(AV("sun_disk").c_str(), &ic.sky_sun_disk, 0.0f, 8.0f);
+                    ImGui::SliderFloat(AV("sun_glow").c_str(), &ic.sky_sun_glow, 0.0f, 8.0f);
+                    if (ImGui::Button((AV("apply") + "##sky").c_str())) {
                         SkyEdit e;
                         e.zenith[0] = ic.sky_zenith[0];
                         e.zenith[1] = ic.sky_zenith[1];
@@ -1256,7 +1287,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             // --- Physics: RigidBody ---
             if (w->has<physics::RigidBodyComponent>(sel) &&
-                ImGui::CollapsingHeader("Rigid Body", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::CollapsingHeader((AV("rigid_body") + "###RigidBody").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 const char* types[] = {"Static", "Dynamic", "Kinematic"};
                 ImGui::Combo("Type", &ic.rb_type, types, 3);
                 if (ic.rb_type != 0) { // mass only matters for Dynamic/Kinematic
@@ -1290,7 +1321,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             // --- Physics: Collider ---
             if (w->has<physics::ColliderComponent>(sel) &&
-                ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::CollapsingHeader((AV("collider") + "###Collider").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 const char* shapes[] = {"Sphere", "Box", "Plane"};
                 ImGui::Combo("Shape", &ic.col_shape, shapes, 3);
                 if (ic.col_shape == 0) {
@@ -1325,7 +1356,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             // --- Animation ---
             if (w->has<animation::AnimationComponent>(sel) &&
-                ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::CollapsingHeader((AV("animation") + "###Animation").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (const auto* anim = w->get<animation::AnimationComponent>(sel)) {
                     ImGui::TextDisabled("bones: %d", static_cast<int>(anim->skeleton.bones.size()));
                     if (anim->has_procedural) {
@@ -1382,7 +1413,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             // --- Audio ---
             if (w->has<audio::AudioComponent>(sel) &&
-                ImGui::CollapsingHeader("Audio", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::CollapsingHeader((AV("audio") + "###Audio").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (const auto* aud = w->get<audio::AudioComponent>(sel)) {
                     ImGui::TextDisabled("buffer: %s%s",
                                         aud->buffer_name.empty() ? "(generated)"
@@ -1427,7 +1458,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // component's map. During a session the module owns its state and the
             // component is the saved snapshot, so editing the map would show the
             // user a value the module would immediately overwrite.
-            if (ImGui::CollapsingHeader("Gameplay", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader((AV("gameplay") + "###Gameplay").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 const std::vector<std::string> candidates = gameplay_module_candidates();
                 if (candidates.empty()) {
                     ImGui::TextDisabled("no gameplay modules are registered in this build");
@@ -1515,7 +1546,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui::End();
 
     // --- Bottom: Assets + Console ------------------------------------------------
-    if (ImGui::Begin("Assets")) {
+    if (ImGui::Begin((AV("assets") + "###Assets").c_str())) {
         char filter[128]{};
         std::strncpy(filter, app.browser().filter_text.c_str(), sizeof(filter) - 1);
         if (ImGui::InputText("Filter", filter, sizeof(filter))) {
@@ -1629,7 +1660,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     }
     ImGui::End();
 
-    if (ImGui::Begin("Console")) {
+    if (ImGui::Begin((AV("console") + "###Console").c_str())) {
         static int level_filter = 2; // Info+
         const char* levels[] = {"Trace", "Debug", "Info", "Warn", "Error"};
         ImGui::Combo("Level", &level_filter, levels, 5);

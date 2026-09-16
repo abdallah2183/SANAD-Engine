@@ -174,6 +174,16 @@ target_include_directories(ScriptTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(ScriptTests PRIVATE NFCore NFEcs NFScene NFScripting)
 nf_target_set_warnings(ScriptTests)
 
+# --- UI tests (Arabic shaping/bidi, localisation) ---
+add_executable(UITests
+    TestFramework.cpp
+    UITests/test_arabic.cpp
+    UITests/test_localization.cpp
+)
+target_include_directories(UITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(UITests PRIVATE NFCore NFUI)
+nf_target_set_warnings(UITests)
+
 # --- Save tests (slots, async save, autosave, schema migration) ---
 add_executable(SaveTests
     TestFramework.cpp
@@ -267,7 +277,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -289,6 +299,7 @@ add_test(NAME SaveTests COMMAND SaveTests)
 add_test(NAME StreamingTests COMMAND StreamingTests)
 add_test(NAME ToolTests  COMMAND ToolTests)
 add_test(NAME ScriptTests COMMAND ScriptTests)
+add_test(NAME UITests COMMAND UITests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()
