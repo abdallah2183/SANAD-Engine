@@ -84,6 +84,7 @@ add_subdirectory(Engine/Gameplay)
 add_subdirectory(Engine/Scripting)
 add_subdirectory(Engine/Networking)
 add_subdirectory(Engine/AI)
+add_subdirectory(Engine/VFX)
 add_subdirectory(Engine/Runtime)
 
 # ---------------------------------------------------------------------------

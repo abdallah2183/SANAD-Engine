@@ -166,6 +166,7 @@ add_executable(GameplayTests
     GameplayTests/test_gameplay.cpp
     GameplayTests/test_gameplay_serialization.cpp
     GameplayTests/test_tags_quest_inventory.cpp
+    GameplayTests/test_dialogue.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
@@ -217,6 +218,15 @@ add_executable(AITests
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)
 nf_target_set_warnings(AITests)
+
+# --- VFX tests (deterministic particle simulation) ---
+add_executable(VFXTests
+    TestFramework.cpp
+    VFXTests/test_particles.cpp
+)
+target_include_directories(VFXTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(VFXTests PRIVATE NFCore NFVfx)
+nf_target_set_warnings(VFXTests)
 
 # --- Save tests (slots, async save, autosave, schema migration) ---
 add_executable(SaveTests
@@ -311,7 +321,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests NetworkTests AITests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests NetworkTests AITests VFXTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -337,6 +347,7 @@ add_test(NAME UITests COMMAND UITests)
 add_test(NAME PlatformTests COMMAND PlatformTests)
 add_test(NAME NetworkTests COMMAND NetworkTests)
 add_test(NAME AITests COMMAND AITests)
+add_test(NAME VFXTests COMMAND VFXTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()

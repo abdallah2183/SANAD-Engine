@@ -13,6 +13,7 @@ set(NFGAMEPLAY_SOURCES
     src/Tags.cpp
     src/Quest.cpp
     src/Inventory.cpp
+    src/Dialogue.cpp
 )
 
 nf_engine_library(NFGameplay
