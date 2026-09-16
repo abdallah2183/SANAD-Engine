@@ -21,6 +21,8 @@ set(NFRENDERING_SOURCES
     src/MeshLibrary.cpp
     src/Renderer3D.cpp
     src/Sky.cpp
+    src/TimeOfDay.cpp
+    src/Terrain.cpp
     src/LodGenerator.cpp
     src/GpuPicker.cpp
     src/Camera.cpp

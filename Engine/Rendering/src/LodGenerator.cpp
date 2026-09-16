@@ -33,53 +33,6 @@ float lod_diagonal(const MeshLOD& lod) {
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-void compute_lod_bounds(MeshLOD& lod) {
-    // Same convention as StaticMesh::compute_bounds (AABB + max-corner
-    // sphere, submesh bounds follow the LOD) without the "ensure drawable"
-    // side effects — the generator preserves the source's submesh layout.
-    if (lod.vertices.empty()) {
-        lod.bounds = {};
-        lod.sphere = {};
-        return;
-    }
-    float min_x = lod.vertices[0].position[0];
-    float min_y = lod.vertices[0].position[1];
-    float min_z = lod.vertices[0].position[2];
-    float max_x = min_x, max_y = min_y, max_z = min_z;
-    for (const auto& v : lod.vertices) {
-        min_x = std::min(min_x, v.position[0]);
-        min_y = std::min(min_y, v.position[1]);
-        min_z = std::min(min_z, v.position[2]);
-        max_x = std::max(max_x, v.position[0]);
-        max_y = std::max(max_y, v.position[1]);
-        max_z = std::max(max_z, v.position[2]);
-    }
-    lod.bounds.min_x = min_x;
-    lod.bounds.min_y = min_y;
-    lod.bounds.min_z = min_z;
-    lod.bounds.max_x = max_x;
-    lod.bounds.max_y = max_y;
-    lod.bounds.max_z = max_z;
-    const float cx = (min_x + max_x) * 0.5f;
-    const float cy = (min_y + max_y) * 0.5f;
-    const float cz = (min_z + max_z) * 0.5f;
-    float max_dist_sq = 0.0f;
-    for (const auto& v : lod.vertices) {
-        const float dx = v.position[0] - cx;
-        const float dy = v.position[1] - cy;
-        const float dz = v.position[2] - cz;
-        max_dist_sq = std::max(max_dist_sq, dx * dx + dy * dy + dz * dz);
-    }
-    lod.sphere.cx = cx;
-    lod.sphere.cy = cy;
-    lod.sphere.cz = cz;
-    lod.sphere.radius = std::sqrt(max_dist_sq);
-    for (auto& sm : lod.submeshes) {
-        sm.bounds = lod.bounds;
-        sm.sphere = lod.sphere;
-    }
-}
-
 u32 count_triangles(const MeshLOD& lod) {
     u32 tris = 0;
     for (const auto& sm : lod.submeshes) tris += sm.index_count / 3;
@@ -217,7 +170,7 @@ MeshLOD simplify_lod(const MeshLOD& src, float cell_size) {
         }
     }
 
-    compute_lod_bounds(out);
+    StaticMesh::compute_lod_bounds(out);
     return out;
 }
 

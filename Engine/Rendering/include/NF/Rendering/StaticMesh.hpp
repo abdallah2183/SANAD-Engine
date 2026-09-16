@@ -82,6 +82,11 @@ public:
     AABB bounds() const;
     BoundingSphere bounding_sphere() const;
 
+    /// Recomputes a LOD's AABB + sphere (+ submesh bounds follow the LOD).
+    /// Pure bounds work, unlike compute_bounds: no default submesh/slot is
+    /// created, so generators that own their layout (LOD, terrain) use this.
+    static void compute_lod_bounds(MeshLOD& lod);
+
     // GPU upload — creates vertex/index buffers for each LOD (uses UploadContext internally, no vkQueueWaitIdle in hot path)
     bool upload(rhi::IGraphicsDevice& device);
     bool is_uploaded() const { return m_uploaded; }

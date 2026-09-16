@@ -68,6 +68,8 @@ add_executable(RHITests
     RHITests/test_lod.cpp
     RHITests/test_lod_gen.cpp
     RHITests/test_sky.cpp
+    RHITests/test_timeofday.cpp
+    RHITests/test_terrain.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).

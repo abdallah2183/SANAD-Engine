@@ -30,7 +30,7 @@ BoundingSphere StaticMesh::bounding_sphere() const {
     return m_lods[0].sphere;
 }
 
-void StaticMesh::compute_bounds(MeshLOD& lod) {
+void StaticMesh::compute_lod_bounds(MeshLOD& lod) {
     if (lod.vertices.empty()) {
         lod.bounds = {};
         lod.sphere = {};
@@ -62,6 +62,15 @@ void StaticMesh::compute_bounds(MeshLOD& lod) {
     }
     lod.sphere.cx = cx; lod.sphere.cy = cy; lod.sphere.cz = cz;
     lod.sphere.radius = std::sqrt(max_dist_sq);
+    for (auto& sm : lod.submeshes) {
+        sm.bounds = lod.bounds;
+        sm.sphere = lod.sphere;
+    }
+}
+
+void StaticMesh::compute_bounds(MeshLOD& lod) {
+    compute_lod_bounds(lod);
+    if (lod.vertices.empty()) return;
     // A mesh built procedurally gets a single default submesh + material slot
     // so it is drawable the moment it is created (not only after upload()).
     if (lod.submeshes.empty()) {
