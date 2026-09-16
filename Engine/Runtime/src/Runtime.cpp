@@ -8,6 +8,7 @@
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/Core/Logger.hpp>
+#include <NF/Core/Profiler.hpp>
 #include <NF/Rendering/Camera.hpp>
 #include <NF/Rendering/Culling.hpp>
 #include <NF/Rendering/RenderWorld.hpp>
@@ -1409,6 +1410,7 @@ void Runtime::fallback_clear(rhi::Texture& target, rhi::CommandBuffer& cmd, bool
 }
 
 void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
+    NF_PROFILE_SCOPE("Runtime::render");
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime::render: no scene loaded, using fallback clear");
         if (m_swapchain != nullptr) {

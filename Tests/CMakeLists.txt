@@ -21,6 +21,7 @@ add_executable(CoreTests
     CoreTests/test_filesystem.cpp
     CoreTests/test_reflection.cpp
     CoreTests/test_profiler.cpp
+    CoreTests/test_crash_handler.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)
@@ -70,6 +71,7 @@ add_executable(RHITests
     RHITests/test_sky.cpp
     RHITests/test_timeofday.cpp
     RHITests/test_terrain.cpp
+    RHITests/test_postfx_shake.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).

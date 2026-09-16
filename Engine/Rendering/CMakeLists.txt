@@ -23,6 +23,7 @@ set(NFRENDERING_SOURCES
     src/Sky.cpp
     src/TimeOfDay.cpp
     src/Terrain.cpp
+    src/CameraShake.cpp
     src/LodGenerator.cpp
     src/GpuPicker.cpp
     src/Camera.cpp

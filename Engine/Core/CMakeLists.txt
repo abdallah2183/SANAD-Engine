@@ -15,6 +15,7 @@ set(NFCORE_SOURCES
     src/Containers.cpp
     src/Reflection.cpp
     src/Profiler.cpp
+    src/CrashHandler.cpp
 )
 
 nf_engine_library(NFCore

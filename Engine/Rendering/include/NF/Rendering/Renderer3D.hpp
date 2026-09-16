@@ -69,6 +69,18 @@ struct SpotLight {
     float outer_angle_rad = 0.6f;
 };
 
+// Post-processing applied in the tonemap pass (after gamma). Neutral values
+// (saturation 1, vignette 0) are exactly identity, so existing content and
+// golden pixels are unaffected until a game opts in.
+struct PostFxParams {
+    float saturation = 1.0f; // 0 = grayscale, 1 = neutral, >1 = vivid
+    float vignette = 0.0f;   // 0 = off .. 1 = strong corner darkening
+};
+
+/// CPU mirror of the tonemap tail (saturation + vignette on LDR color).
+/// Matches tonemap.frag exactly; uv is the fullscreen uv in [0, 1].
+Vec3 apply_postfx(Vec3 color, Vec2 uv, const PostFxParams& params);
+
 class Renderer3D {
 public:
     static constexpr u32 kMaxPointLights = 8;  // must match lighting.frag
@@ -132,6 +144,10 @@ public:
 
     void set_exposure(float exposure) { m_exposure = exposure; }
     float exposure() const { return m_exposure; }
+
+    // --- Post FX (tonemap tail) ---
+    void set_postfx(const PostFxParams& params) { m_postfx = params; }
+    const PostFxParams& postfx() const { return m_postfx; }
 
     // --- LOD policy ---
     // max_distances[i] is the farthest camera distance still drawn at lod i
@@ -293,6 +309,7 @@ private:
     std::vector<SpotLight> m_spot_lights;
     float m_ambient = 0.03f;
     float m_exposure = 1.0f;
+    PostFxParams m_postfx{};
     Stats m_stats;
     std::vector<float> m_lod_max_distances{40.0f, 100.0f, 250.0f};
 

@@ -8,6 +8,7 @@
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Editor/ReflectedInspector.hpp>
 #include <NF/Editor/UiRenderer.hpp>
+#include <NF/Core/Profiler.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -28,6 +29,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <vector>
 
 namespace nf::editor {
@@ -106,6 +108,12 @@ struct InspectorCache {
 InspectorCache& inspector_cache() {
     static InspectorCache cache;
     return cache;
+}
+
+// Profiler window visibility (toolbar toggle below).
+bool& show_profiler_window() {
+    static bool show = false;
+    return show;
 }
 
 void push_info(ConsoleBuffer& console, const std::string& what) {
@@ -553,6 +561,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 if (ImGui::Button(ui::shape_arabic("العربية").c_str())) {
                     ui::set_language(ui::Language::Arabic);
                 }
+            }
+            ImGui::SameLine();
+            // Profiler window toggle (live CPU zones + trace export).
+            bool show_prof = show_profiler_window();
+            if (ImGui::Checkbox("Profiler", &show_prof)) {
+                show_profiler_window() = show_prof;
             }
         ImGui::EndMainMenuBar();
     }
@@ -1683,6 +1697,48 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         ImGui::EndChild();
     }
     ImGui::End();
+
+    // --- Profiler (Phase 11+): live frame aggregates + chrome-trace export --
+    if (show_profiler_window()) {
+        if (ImGui::Begin("Profiler###ProfilerWindow")) {
+            const auto& profiler = Profiler::instance();
+            ImGui::Text("Frame %llu (%zu events)", profiler.frame_index(),
+                        profiler.last_events().size());
+            if (ImGui::Button("Save Chrome Trace")) {
+                namespace fs = std::filesystem;
+                std::error_code ec;
+                const fs::path path = fs::temp_directory_path(ec) / "nf_profile_trace.json";
+                std::string err;
+                if (!ec && profiler.save_chrome_trace(path.string(), err)) {
+                    push_info(app.console(), std::string("Trace saved to ") + path.string());
+                } else {
+                    push_error(app.console(), "Trace save failed", err.empty() ? "temp dir?" : err);
+                }
+            }
+            if (ImGui::BeginTable("##profiletable", 4,
+                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                                      ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+                ImGui::TableSetupColumn("Zone");
+                ImGui::TableSetupColumn("Calls");
+                ImGui::TableSetupColumn("Incl us");
+                ImGui::TableSetupColumn("Excl us");
+                ImGui::TableHeadersRow();
+                for (const ProfileAggregate& agg : profiler.last_aggregates()) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(agg.name.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%llu", agg.calls);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%llu", agg.inclusive_us);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%llu", agg.exclusive_us);
+                }
+                ImGui::EndTable();
+            }
+        }
+        ImGui::End();
+    }
 
     return intents;
 }

@@ -253,7 +253,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         tpd.rasterizer.cull_mode = rhi::CullMode::None;
         tpd.depth.test_enabled = false;
         tpd.depth.write_enabled = false;
-        tpd.push_constant_size = 4; // exposure
+        tpd.push_constant_size = 16; // exposure + vignette + saturation + pad
         tpd.push_constant_stages = rhi::ShaderStage::Fragment;
         m_tonemap_pipeline_off = m_pipeline_cache->get_or_create(tpd);
 
@@ -877,7 +877,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             tppd.rasterizer.cull_mode = rhi::CullMode::None;
             tppd.depth.test_enabled = false;
             tppd.depth.write_enabled = false;
-            tppd.push_constant_size = 4;
+            tppd.push_constant_size = 16; // exposure + vignette + saturation + pad
             tppd.push_constant_stages = rhi::ShaderStage::Fragment;
             m_tonemap_pipeline_present = m_pipeline_cache->get_or_create(tppd);
             if (!m_tonemap_pipeline_present) {
@@ -915,7 +915,9 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.bind_pipeline(pipe);
         const std::array<const rhi::DescriptorSet*, 1> sets{tonemap_set.get()};
         gcmd.bind_descriptor_sets(*m_tonemap_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
-        gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(float), &m_exposure);
+        // Must match tonemap.frag PushConstants (std140-adjacent packing).
+        const float tonemap_push[4] = {m_exposure, m_postfx.vignette, m_postfx.saturation, 0.0f};
+        gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(tonemap_push), &tonemap_push);
         gcmd.set_viewport(0, 0, m_width, m_height);
         gcmd.set_scissor(0, 0, m_width, m_height);
         gcmd.draw(3);
@@ -933,6 +935,24 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     NF_LOG_TRACE(LogCategory::RHI, "Renderer3D prepared meshes: {}", prepared.size());
     m_graph->execute(cmd);
     return true;
+}
+
+Vec3 apply_postfx(Vec3 color, Vec2 uv, const PostFxParams& params) {
+    // Must match tonemap.frag exactly (Rec.709 luma, same smoothstep band).
+    const float luma = color.x * 0.2126f + color.y * 0.7152f + color.z * 0.0722f;
+    Vec3 out{luma + (color.x - luma) * params.saturation,
+             luma + (color.y - luma) * params.saturation,
+             luma + (color.z - luma) * params.saturation};
+    const float dx = uv.x - 0.5f;
+    const float dy = uv.y - 0.5f;
+    const float dist = std::sqrt(dx * dx + dy * dy);
+    const float t = std::clamp((dist - 0.3f) / (0.9f - 0.3f), 0.0f, 1.0f);
+    const float vig = t * t * (3.0f - 2.0f * t);
+    const float dark = 1.0f - params.vignette * vig;
+    out.x *= dark;
+    out.y *= dark;
+    out.z *= dark;
+    return out;
 }
 
 } // namespace nf::rendering
