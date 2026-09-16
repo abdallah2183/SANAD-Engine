@@ -32,7 +32,6 @@ struct NetPacket {
 class ReliableChannel {
 public:
     explicit ReliableChannel(u16 initial_seq = 0, u64 resend_timeout_ms = 100);
-
     /// Queues a payload for reliable delivery (assigned the next sequence).
     /// Empty payloads are rejected (use a 1-byte code instead): every queued
     /// packet must be distinguishable from a pure ack.
@@ -71,5 +70,10 @@ private:
     std::vector<u16> m_recent;
     u64 m_resends = 0;
 };
+
+/// Datagram framing for channel packets: magic(4) version(1) seq(2) ack(2)
+/// bits(4) + payload. decode validates and fails loudly on corruption.
+std::vector<u8> encode_packet(const NetPacket& packet);
+bool decode_packet(const u8* data, usize size, NetPacket& out, std::string& out_error);
 
 } // namespace nf::net

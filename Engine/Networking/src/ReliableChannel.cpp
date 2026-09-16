@@ -4,6 +4,31 @@
 
 namespace nf::net {
 
+namespace {
+
+void push_u16(std::vector<u8>& out, u16 v) {
+    out.push_back(static_cast<u8>(v & 0xFF));
+    out.push_back(static_cast<u8>((v >> 8) & 0xFF));
+}
+
+void push_u32(std::vector<u8>& out, u32 v) {
+    out.push_back(static_cast<u8>(v & 0xFF));
+    out.push_back(static_cast<u8>((v >> 8) & 0xFF));
+    out.push_back(static_cast<u8>((v >> 16) & 0xFF));
+    out.push_back(static_cast<u8>((v >> 24) & 0xFF));
+}
+
+u16 read_u16(const u8* p) {
+    return static_cast<u16>(p[0] | (static_cast<u16>(p[1]) << 8));
+}
+
+u32 read_u32(const u8* p) {
+    return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) |
+           (static_cast<u32>(p[2]) << 16) | (static_cast<u32>(p[3]) << 24);
+}
+
+} // namespace
+
 ReliableChannel::ReliableChannel(u16 initial_seq, u64 resend_timeout_ms)
     : m_next_seq(initial_seq),
       m_resend_timeout_ms(resend_timeout_ms > 0 ? resend_timeout_ms : 1),
@@ -120,6 +145,42 @@ std::vector<std::vector<u8>> ReliableChannel::receive(const NetPacket& packet) {
         m_receive_buffer.emplace(packet.seq, packet.payload);
     }
     return ready;
+}
+
+std::vector<u8> encode_packet(const NetPacket& packet) {
+    std::vector<u8> out;
+    out.push_back('N');
+    out.push_back('F');
+    out.push_back('C');
+    out.push_back('H');
+    out.push_back(1); // version
+    push_u16(out, packet.seq);
+    push_u16(out, packet.ack);
+    push_u32(out, packet.ack_bits);
+    out.insert(out.end(), packet.payload.begin(), packet.payload.end());
+    return out; // 13-byte header + payload
+}
+
+bool decode_packet(const u8* data, usize size, NetPacket& out, std::string& out_error) {
+    out = NetPacket{};
+    constexpr usize kHeader = 13;
+    if (!data || size < kHeader) {
+        out_error = "channel packet too short";
+        return false;
+    }
+    if (data[0] != 'N' || data[1] != 'F' || data[2] != 'C' || data[3] != 'H') {
+        out_error = "not a channel packet (bad magic)";
+        return false;
+    }
+    if (data[4] != 1) {
+        out_error = "unsupported channel packet version";
+        return false;
+    }
+    out.seq = read_u16(data + 5);
+    out.ack = read_u16(data + 7);
+    out.ack_bits = read_u32(data + 9);
+    out.payload.assign(data + kHeader, data + size);
+    return true;
 }
 
 } // namespace nf::net
