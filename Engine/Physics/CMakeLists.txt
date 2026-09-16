@@ -23,4 +23,4 @@ nf_engine_library(NFPhysics
 
 # Jolt headers are warning-noisy: this TU alone opts out of /W4 /WX.
 set_source_files_properties(src/JoltWorld.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
-target_link_libraries(NFPhysics PUBLIC jolt)
+target_link_libraries(NFPhysics PUBLIC Jolt)
