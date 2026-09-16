@@ -113,6 +113,7 @@ if(NF_BUILD_TOOLS)
     # NFProjectTool is added above, unconditionally.
     add_subdirectory(Tools/AssetCooker)
     add_subdirectory(Tools/BuildTool)
+    add_subdirectory(Tools/ModelImporter)
     # NFPlayer is what packaging copies into a package, so it is built alongside
     # the tool that needs it.
     add_subdirectory(Tools/Player)

@@ -65,6 +65,7 @@ add_executable(RHITests
     RHITests/test_gpu_picking.cpp
     RHITests/test_benchmarks_3d.cpp
     RHITests/test_lod.cpp
+    RHITests/test_lod_gen.cpp
     RHITests/test_sky.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
