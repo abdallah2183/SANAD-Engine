@@ -197,6 +197,15 @@ target_include_directories(PlatformTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(PlatformTests PRIVATE NFCore NFPlatform)
 nf_target_set_warnings(PlatformTests)
 
+# --- Network tests (UDP loopback transport) ---
+add_executable(NetworkTests
+    TestFramework.cpp
+    NetworkTests/test_udp.cpp
+)
+target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)
+nf_target_set_warnings(NetworkTests)
+
 # --- Save tests (slots, async save, autosave, schema migration) ---
 add_executable(SaveTests
     TestFramework.cpp
@@ -290,7 +299,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests NetworkTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -314,6 +323,7 @@ add_test(NAME ToolTests  COMMAND ToolTests)
 add_test(NAME ScriptTests COMMAND ScriptTests)
 add_test(NAME UITests COMMAND UITests)
 add_test(NAME PlatformTests COMMAND PlatformTests)
+add_test(NAME NetworkTests COMMAND NetworkTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()
