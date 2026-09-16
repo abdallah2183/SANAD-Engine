@@ -163,6 +163,15 @@ target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
 nf_target_set_warnings(GameplayTests)
 
+# --- Scripting tests (Lua VM, sandboxing, entity bindings, ticking) ---
+add_executable(ScriptTests
+    TestFramework.cpp
+    ScriptTests/test_scripting.cpp
+)
+target_include_directories(ScriptTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ScriptTests PRIVATE NFCore NFEcs NFScene NFScripting)
+nf_target_set_warnings(ScriptTests)
+
 # --- Save tests (slots, async save, autosave, schema migration) ---
 add_executable(SaveTests
     TestFramework.cpp
@@ -256,7 +265,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -277,6 +286,7 @@ add_test(NAME GameplayTests COMMAND GameplayTests)
 add_test(NAME SaveTests COMMAND SaveTests)
 add_test(NAME StreamingTests COMMAND StreamingTests)
 add_test(NAME ToolTests  COMMAND ToolTests)
+add_test(NAME ScriptTests COMMAND ScriptTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()
