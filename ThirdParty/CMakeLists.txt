@@ -65,3 +65,6 @@ if(MSVC)
     set_property(TARGET lua PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_definitions(lua PUBLIC NOMINMAX)
 endif()
+
+# --- Jolt Physics v5.6.0 (advanced rigid-body backend, see jolt/) ------------
+add_subdirectory(jolt)

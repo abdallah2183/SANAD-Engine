@@ -132,6 +132,7 @@ add_executable(PhysicsTests
     PhysicsTests/test_solver.cpp
     PhysicsTests/test_determinism.cpp
     PhysicsTests/test_character.cpp
+    PhysicsTests/test_jolt.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)

@@ -13,9 +13,14 @@ set(NFPHYSICS_SOURCES
     src/Narrowphase.cpp
     src/PhysicsWorld.cpp
     src/CharacterController.cpp
+    src/JoltWorld.cpp
 )
 
 nf_engine_library(NFPhysics
     SOURCES ${NFPHYSICS_SOURCES}
     DEPENDS NFCore
 )
+
+# Jolt headers are warning-noisy: this TU alone opts out of /W4 /WX.
+set_source_files_properties(src/JoltWorld.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
+target_link_libraries(NFPhysics PUBLIC jolt)
