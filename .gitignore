@@ -55,6 +55,9 @@ imgui.ini
 *.tmp
 *.bak
 
+# Agent scratch scripts
+_agent_*
+
 # OS
 Thumbs.db
 .DS_Store

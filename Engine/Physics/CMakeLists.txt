@@ -1,11 +1,13 @@
 # NFPhysics — rigid-body simulation.
 #
-# Self-contained on purpose. The design document plans a Jolt integration, and
-# that is the right long-term answer, but vendoring a large third-party solver is
-# a decision for the project owner rather than a side effect of a phase. What
-# this module commits to is the *interface*: the rest of the engine talks to
-# PhysicsWorld and to generation-checked body handles, never to a solver detail,
-# so a Jolt backend can be dropped in behind the same surface.
+# Jolt backend layout (Phase 16, hard-won — do NOT "simplify"):
+#   - JoltWorld.cpp is the ONLY TU that touches Jolt headers/objects (chassis
+#     Body*, VehicleConstraint, tester, RagdollSettings, JPH::Ragdoll...).
+#     It opts out of /W4 /WX because Jolt headers are warning-noisy.
+#   - JoltVehicle.cpp / JoltRagdoll.cpp are THIN Jolt-free handles over
+#     JoltWorld wiring. Cross-TU Jolt allocation heap-corrupts (Jolt's custom
+#     allocator + per-TU operator new/delete) — proven by a 0xC0000374 crash
+#     when the vehicle built its Body*/constraint in its own TU.
 
 set(NFPHYSICS_SOURCES
     src/Shapes.cpp
@@ -14,6 +16,8 @@ set(NFPHYSICS_SOURCES
     src/PhysicsWorld.cpp
     src/CharacterController.cpp
     src/JoltWorld.cpp
+    src/JoltVehicle.cpp
+    src/JoltRagdoll.cpp
 )
 
 nf_engine_library(NFPhysics
@@ -22,5 +26,6 @@ nf_engine_library(NFPhysics
 )
 
 # Jolt headers are warning-noisy: this TU alone opts out of /W4 /WX.
+# (JoltVehicle.cpp / JoltRagdoll.cpp are Jolt-free by design: no opt-out.)
 set_source_files_properties(src/JoltWorld.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
 target_link_libraries(NFPhysics PUBLIC Jolt)
