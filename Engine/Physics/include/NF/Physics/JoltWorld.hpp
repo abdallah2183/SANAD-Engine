@@ -108,6 +108,48 @@ public:
     void remove_body(JoltBody handle);
     bool is_alive(JoltBody handle) const;
 
+    // --- Complex colliders (design §38; additive, Jolt-only) --------------
+    //
+    // The shared Shape/ShapeType vocabulary stays closed (sphere/box/plane,
+    // see Shapes.hpp): these three entry points are the only way to get a
+    // Jolt-native collider that the first-party solver has no opinion about.
+    // They are not a separate species of body. Each one returns a NORMAL
+    // JoltBody, so everything downstream keeps working unchanged — is_alive /
+    // state / set_linear_velocity / remove_body / body_count, every query
+    // (ray_cast, sphere_cast, overlap_sphere, overlap_box, trigger_overlaps),
+    // set_continuous_collision, constraints, vehicles and ragdolls all treat a
+    // capsule/hull/mesh body exactly like a sphere.
+    //
+    // Invalid input (bad shape parameters, a degenerate cloud, a malformed
+    // index buffer) yields an invalid handle and adds no body — never a crash
+    // and never a silent fallback to a different shape: a capsule that
+    // quietly becomes a sphere is a wrong collider, which is worse than a
+    // missing one. Inherited from add_body(): the BodyDesc's initial
+    // *velocity* fields are not applied at creation — use
+    // set_linear_velocity() (velocity lives on the body, not the settings).
+
+    /// Creates a body whose collider is a capsule (Y-axis, like Jolt's own
+    /// capsule): `half_height` is the cylinder half-height, `radius` the cap
+    /// radius. `base` supplies type/position/orientation/velocity/mass/friction/
+    /// restitution/damping/sleep — its `shape` field is ignored (the capsule
+    /// parameters replace it). Returns an invalid handle for a non-positive
+    /// radius, a negative half_height, an invalid world, or a failed creation.
+    JoltBody add_capsule_body(const BodyDesc& base, float radius, float half_height);
+
+    /// Creates a body whose collider is the convex hull of `local_points`
+    /// (body-local space). Fewer than 4 points, or a degenerate/coplanar cloud
+    /// (Jolt builds a zero-volume hull from those instead of failing, which is
+    /// rejected here as well), yields an invalid handle instead of a crash.
+    JoltBody add_convex_hull_body(const BodyDesc& base, const std::vector<Vec3>& local_points);
+
+    /// Creates a STATIC body whose collider is a triangle mesh built from
+    /// `vertices` (body-local) and `indices` (3 per triangle). Mesh colliders may
+    /// not move in Jolt, so the body is forced to Static regardless of
+    /// `base.type` (documented); an empty or malformed index list yields an
+    /// invalid handle.
+    JoltBody add_mesh_body(const BodyDesc& base, const std::vector<Vec3>& vertices,
+                           const std::vector<u32>& indices);
+
     // --- Scene queries, sensors (triggers) and continuous collision -------
     //
     // Design rules, shared by every entry point below:

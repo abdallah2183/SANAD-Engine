@@ -27,6 +27,8 @@
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -159,6 +161,60 @@ std::vector<JoltBody> collect_overlaps(const JPH::PhysicsSystem& physics, const 
         body.id = id;
         out.push_back(body);
     }
+    return out;
+}
+
+// --- Body creation plumbing -----------------------------------------------
+//
+// add_body, add_trigger and the complex-shape entry points (capsule, convex
+// hull, mesh) all end the same way: shape-independent settings, mass override,
+// activation, handle. Keeping that tail in ONE place is what makes a capsule
+// or a mesh body indistinguishable from a sphere to the rest of the wrapper
+// (remove_body / body_count / is_alive / every query), and what keeps a new
+// shape from silently drifting away from that bookkeeping.
+
+/// Rejects NaN/Inf coordinates before they reach Jolt: its shape builders
+/// assert on non-finite input, so this is the difference between an invalid
+/// handle and a debug-build crash.
+bool all_finite(const std::vector<Vec3>& points) {
+    for (const Vec3& p : points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return false;
+    }
+    return true;
+}
+
+/// Shape-independent tail of every creation path. `shape` must be non-null
+/// (callers bail out on a failed Create()). `sensor` is the trigger flag.
+/// `force_static` overrides `desc.type`: a STATIC body whatever the caller
+/// asked for (a Jolt mesh collider may not move).
+JoltBody create_body_from_shape(JPH::PhysicsSystem& physics, const JPH::ShapeRefC& shape,
+                                const BodyDesc& desc, bool sensor, bool force_static) {
+    JoltBody out;
+    if (shape == nullptr) return out;
+    // Kinematic maps to Static here (as in add_body): the wrapper's motion
+    // vocabulary is "static or dynamic", and a body that only moves through
+    // set_linear_velocity() must not be integrated by the solver.
+    const bool dynamic = !force_static && desc.type == BodyType::Dynamic;
+    JPH::BodyCreationSettings settings(
+        shape, JPH::RVec3(desc.position.x, desc.position.y, desc.position.z),
+        JPH::Quat(desc.orientation.x, desc.orientation.y, desc.orientation.z,
+                  desc.orientation.w),
+        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+        dynamic ? Layers::kMoving : Layers::kNonMoving);
+    settings.mFriction = desc.friction;
+    settings.mRestitution = desc.restitution;
+    settings.mLinearDamping = desc.linear_damping;
+    settings.mAngularDamping = desc.angular_damping;
+    settings.mAllowSleeping = desc.allow_sleep;
+    settings.mIsSensor = sensor; // triggers: overlap detection, no response
+    if (dynamic && desc.mass > 0.0f) {
+        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        settings.mMassPropertiesOverride.mMass = desc.mass;
+    }
+    JPH::BodyID id =
+        physics.GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::Activate);
+    if (id.IsInvalid()) return out;
+    out.id = id.GetIndexAndSequenceNumber();
     return out;
 }
 
@@ -306,34 +362,93 @@ JoltBody JoltWorld::add_body_internal(const BodyDesc& desc, bool sensor) {
             break;
         }
         default:
-            // Unsupported shape (capsule/mesh/...): fall back to a bounding
-            // sphere so the body still simulates instead of vanishing.
+            // Unsupported shape (the closed first-party vocabulary has no
+            // capsule/cylinder/...): fall back to a bounding sphere so the body
+            // still simulates instead of vanishing. Complex colliders are a
+            // separate, explicit decision — see add_capsule_body /
+            // add_convex_hull_body / add_mesh_body, which never guess.
             shape = new JPH::SphereShape(0.5f);
             break;
     }
 
-    const bool dynamic = desc.type == BodyType::Dynamic;
-    JPH::BodyCreationSettings settings(
-        shape, JPH::RVec3(desc.position.x, desc.position.y, desc.position.z),
-        JPH::Quat(desc.orientation.x, desc.orientation.y, desc.orientation.z,
-                  desc.orientation.w),
-        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::kMoving : Layers::kNonMoving);
-    settings.mFriction = desc.friction;
-    settings.mRestitution = desc.restitution;
-    settings.mLinearDamping = desc.linear_damping;
-    settings.mAngularDamping = desc.angular_damping;
-    settings.mAllowSleeping = desc.allow_sleep;
-    settings.mIsSensor = sensor; // triggers: overlap detection, no response
-    if (dynamic && desc.mass > 0.0f) {
-        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-        settings.mMassPropertiesOverride.mMass = desc.mass;
+    return create_body_from_shape(impl.physics, shape, desc, sensor, /*force_static=*/false);
+}
+
+JoltBody JoltWorld::add_capsule_body(const BodyDesc& base, float radius, float half_height) {
+    JoltBody out;
+    if (!valid()) return out;
+    // `!(x > 0)` rather than `x <= 0`: a NaN radius is rejected here too.
+    // half_height == 0 is legal and Jolt turns it into a sphere.
+    if (!(radius > 0.0f) || !(half_height >= 0.0f)) return out;
+    // Settings rather than the JPH::CapsuleShape constructor on purpose: that
+    // constructor asserts half_height > 0, while CapsuleShapeSettings accepts
+    // 0 and builds a SphereShape (the degenerate capsule).
+    const JPH::CapsuleShapeSettings settings(half_height, radius);
+    const JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError()) return out;
+    return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
+                                  /*force_static=*/false);
+}
+
+JoltBody JoltWorld::add_convex_hull_body(const BodyDesc& base,
+                                         const std::vector<Vec3>& local_points) {
+    JoltBody out;
+    if (!valid()) return out;
+    // The documented floor: a hull is at least a tetrahedron. (Jolt would
+    // accept 3 non-collinear points, but a triangle collider is a mesh's job,
+    // and the doc promises an invalid handle here.)
+    if (local_points.size() < 4 || !all_finite(local_points)) return out;
+    JPH::Array<JPH::Vec3> points;
+    points.reserve(local_points.size());
+    for (const Vec3& p : local_points) points.push_back(to_jph(p));
+    // The first Jolt call that can fail on its own: a collinear or coplanar
+    // cloud has no hull, and ConvexHullBuilder reports that as an error string
+    // rather than building a degenerate shape.
+    const JPH::ConvexHullShapeSettings settings(points);
+    const JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError()) return out;
+    // Measured on v5.6: an exactly coplanar cloud does NOT take that error
+    // path — the builder accepts it and produces a hull whose volume is 0, and
+    // the convex radius then inflates it into a thin slab. Such a shape has no
+    // meaningful mass properties (CalculateInertia scales a zero volume, so
+    // the body ends up with zero inertia and can never rotate): reject it
+    // instead of handing back a silent almost-collider.
+    if (!(result.Get()->GetVolume() > 0.0f)) return out;
+    return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
+                                  /*force_static=*/false);
+}
+
+JoltBody JoltWorld::add_mesh_body(const BodyDesc& base, const std::vector<Vec3>& vertices,
+                                  const std::vector<u32>& indices) {
+    JoltBody out;
+    if (!valid()) return out;
+    // Validate before handing anything to Jolt: MeshShapeSettings::Sanitize()
+    // runs from its constructor and indexes the vertex list with the raw
+    // triangle indices, so an out-of-range index is an out-of-bounds read
+    // there — not a reportable error. Same for a ragged index list.
+    if (vertices.size() < 3 || indices.empty() || indices.size() % 3 != 0) return out;
+    if (!all_finite(vertices)) return out;
+    for (u32 index : indices) {
+        if (index >= vertices.size()) return out;
     }
-    JPH::BodyID id =
-        impl.physics.GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::Activate);
-    if (id.IsInvalid()) return out;
-    out.id = id.GetIndexAndSequenceNumber();
-    return out;
+
+    JPH::VertexList jph_vertices;
+    jph_vertices.reserve(vertices.size());
+    for (const Vec3& v : vertices) jph_vertices.push_back(JPH::Float3(v.x, v.y, v.z));
+    JPH::IndexedTriangleList jph_triangles;
+    jph_triangles.reserve(indices.size() / 3);
+    for (usize i = 0; i + 2 < indices.size(); i += 3) {
+        jph_triangles.push_back(JPH::IndexedTriangle(indices[i], indices[i + 1], indices[i + 2],
+                                                     /*material=*/0));
+    }
+    const JPH::MeshShapeSettings settings(std::move(jph_vertices), std::move(jph_triangles));
+    const JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError()) return out; // e.g. every triangle was degenerate
+    // Mesh colliders may not move in Jolt (Shape::MustBeStatic), so the body
+    // is forced Static: a Dynamic mesh would either be rejected or fall apart,
+    // and neither is what a caller asking for a wall wants.
+    return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
+                                  /*force_static=*/true);
 }
 
 void JoltWorld::remove_body(JoltBody handle) {
