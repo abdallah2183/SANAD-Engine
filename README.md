@@ -17,7 +17,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-blue.svg" alt="اللغة" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-00599C.svg?logo=c%2B%2B" alt="C++23" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-534%20Passed-brightgreen.svg" alt="Tests" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-636%20Passed-brightgreen.svg" alt="Tests" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Validation-0%20Errors-success.svg" alt="Validation" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
@@ -106,13 +106,13 @@ SANAD Engine Architecture
 
 ---
 
-## Current Status (Phase 11 Verification)
+## Current Status (Phase 12–15 Verification)
 
-- **534 Automated Tests Passed** across 14 test suites (0 failed, 1 benchmark skipped).
+- **636 Automated Tests Passed** across 15 test suites (0 failed, 1 benchmark skipped).
 - **0 Vulkan Validation Layer Errors** and zero memory leaks.
 - Clean compilation under `/W4 /WX` with MSVC.
-- End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, and scene transform hierarchies in lockstep.
-- Native dockable **ImGui Editor** with Outliner, Reflected Inspector, Asset Browser, Undo/Redo, and 3D Viewport.
+- End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, and scene transform hierarchies in lockstep.
+- Native dockable **ImGui Editor** with Outliner, Reflected Inspector, Asset Browser, Undo/Redo, 3D Viewport, and Sky/Shadow environment editing.
 - Virtual File System (`content://`, `cache://`, `project://`, `saves://`) and standalone CLI project tooling (`nf new`, `nf build`, `nf run`).
 
 ---
@@ -121,11 +121,14 @@ SANAD Engine Architecture
 
 | Subsystem | Description and Capabilities |
 | :--- | :--- |
-| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, Tonemapping, GPU Picking). |
+| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, 2048 PCF shadows, procedural sky, Tonemapping, GPU Picking, distance LOD + LOD generator). |
 | **Data-Oriented ECS** | Cache-friendly sparse-set Entity-Component-System with high memory locality and hierarchical transform propagation. |
 | **Physics Solver** | Fully deterministic rigid-body solver (Sequential Impulses, Warm Starting, Baumgarte position correction, SAT narrowphase, Coulomb friction). |
 | **Skeletal Animation** | Bone hierarchy evaluation, animation clips with slerp/lerp keyframe sampling, state machine with transitions and cross-fading, procedural clip generator. |
-| **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, and headless test driver. |
+| **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, WAV/OGG/MP3/FLAC import pipeline, and headless test driver. |
+| **Asset Pipeline** | glTF 2.0 importer (`.gltf`/`.glb` → `.nfmesh` via `NFModelImporter`), mesh cooking, and asset registry management. |
+| **Lua Scripting** | Sandboxed Lua 5.4 VM with `nf.*` host library, entity bindings, per-entity `ScriptComponent` ticking, and instruction budgets. |
+| **Gameplay Framework** | Hierarchical gameplay tags + queries, staged quest log, stacked inventory, and CPU profiler with Chrome-trace export. |
 | **Reflection & Serialization** | Zero-codegen reflection macros (`NF_CLASS`, `NF_PROPERTY`, `NF_ENUM`), bidirectional text serialization, and automated inspector panels. |
 | **Native Editor** | Dear ImGui docking shell, scene outliner, entity inspector, live viewport gizmos, undo/redo command history, and game save manager. |
 | **Build & Packaging CLI** | `nf` CLI tool supporting project templating, cooking, asset registry management, and single-directory relocatable standalone distribution. |
@@ -187,10 +190,10 @@ cd MyGame/dist && .\NFPlayer.exe
 ## Project Roadmap
 
 - **Phase 1–11:** Core Engine Foundation (Completed)
-- **Phase 12:** Dynamic Mesh LOD & Streaming Optimizations (In Progress)
-- **Phase 13:** Directional Shadow Mapping (PCF 3x3) & Procedural Sky Atmosphere (In Progress)
-- **Phase 14:** MiniAudio Hardware Backend & glTF 2.0 Asset Importer (Open for Contribution)
-- **Phase 15:** Scripting Language Integration (C# / Lua) & Arabic RTL Editor Localisation (Open for Contribution)
+- **Phase 12:** Dynamic Mesh LOD Generation & Model Importer (Completed)
+- **Phase 13:** Directional Shadow Mapping (PCF 3x3) & Procedural Sky Atmosphere (Completed)
+- **Phase 14:** Compressed Audio Import (WAV/OGG/MP3/FLAC) & glTF 2.0 Asset Importer (Completed)
+- **Phase 15:** Lua Scripting Integration (Completed) & Arabic RTL Editor Localisation (Open for Contribution)
 - **Phase 16:** Jolt Physics Solver Integration & Multiplayer Replication (Planned)
 
 Full details are documented in [ROADMAP.md](ROADMAP.md).
