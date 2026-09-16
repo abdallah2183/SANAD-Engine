@@ -19,6 +19,10 @@ set(NFPHYSICS_SOURCES
     src/JoltVehicle.cpp
     src/JoltRagdoll.cpp
     src/JoltCharacter.cpp
+    # Cloth is first-party and deliberately Jolt-free: Jolt has no deformable
+    # solver, so §38's Cloth entry is a PBD implementation over the engine's own
+    # shapes. It includes no Jolt header — do not "unify" it with the Jolt TUs.
+    src/Cloth.cpp
 )
 
 nf_engine_library(NFPhysics

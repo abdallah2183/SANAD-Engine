@@ -138,6 +138,9 @@ add_executable(PhysicsTests
     PhysicsTests/test_jolt_queries.cpp
     PhysicsTests/test_jolt_character.cpp
     PhysicsTests/test_jolt_shapes.cpp
+    # Cloth is first-party (Jolt has no deformable solver), so it lives in its own
+    # file rather than next to the Jolt cases.
+    PhysicsTests/test_cloth.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)
