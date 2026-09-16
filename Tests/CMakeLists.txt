@@ -186,6 +186,15 @@ target_include_directories(UITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(UITests PRIVATE NFCore NFUI)
 nf_target_set_warnings(UITests)
 
+# --- Platform tests (input recording/playback; window tests stay manual) ---
+add_executable(PlatformTests
+    TestFramework.cpp
+    PlatformTests/test_replay.cpp
+)
+target_include_directories(PlatformTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(PlatformTests PRIVATE NFCore NFPlatform)
+nf_target_set_warnings(PlatformTests)
+
 # --- Save tests (slots, async save, autosave, schema migration) ---
 add_executable(SaveTests
     TestFramework.cpp
@@ -279,7 +288,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -302,6 +311,7 @@ add_test(NAME StreamingTests COMMAND StreamingTests)
 add_test(NAME ToolTests  COMMAND ToolTests)
 add_test(NAME ScriptTests COMMAND ScriptTests)
 add_test(NAME UITests COMMAND UITests)
+add_test(NAME PlatformTests COMMAND PlatformTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()

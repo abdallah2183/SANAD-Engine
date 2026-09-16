@@ -4,6 +4,7 @@ set(NFPLATFORM_SOURCES
     src/Platform.cpp
     src/Window.cpp
     src/InputSystem.cpp
+    src/Replay.cpp
 )
 
 if(NF_PLATFORM_WINDOWS)
