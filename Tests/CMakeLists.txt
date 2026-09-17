@@ -225,6 +225,7 @@ add_executable(NetworkTests
     NetworkTests/test_udp.cpp
     NetworkTests/test_reliable.cpp
     NetworkTests/test_replication.cpp
+    NetworkTests/test_vehicle_replication.cpp
 )
 target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)

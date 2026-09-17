@@ -7,6 +7,7 @@ set(NFNETWORKING_SOURCES
     src/ReliableChannel.cpp
     src/Snapshot.cpp
     src/Authoritative.cpp
+    src/PhysicsReplication.cpp
 )
 
 if(WIN32)

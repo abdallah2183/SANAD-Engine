@@ -684,8 +684,8 @@
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">811 / 811</div>
-                <div class="stat-label" data-i18n="stat_tests">اختبار مؤتمت ناجح عبر 14 حزمة</div>
+                <div class="stat-num">843 / 843</div>
+                <div class="stat-label" data-i18n="stat_tests">اختبار مؤتمت ناجح عبر 21 حزمة</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">0</div>
@@ -767,7 +767,7 @@
             <div class="feature-card">
                 <span class="feature-tag">Networking</span>
                 <h3 data-i18n="feat_net_title">شبكات اللعب الجماعي</h3>
-                <p data-i18n="feat_net_desc">نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، ولقطات حالة مُصدَرة — أساس اللعب الجماعي الموثوق.</p>
+                <p data-i18n="feat_net_desc">نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، لقطات حالة مُصدَرة، سيرفر Authoritative مع تنبؤ، ونسخ المركبات والقيود على الشبكة.</p>
             </div>
 
             <div class="feature-card">
@@ -834,7 +834,7 @@
                     <li>معمارية ECS موجهة للبيانات</li>
                     <li>فيزياء وتحريك وهيكل عظام أصلي</li>
                     <li>محرر ImGui مع تفقد الخصائص</li>
-                    <li>811 اختباراً مؤتمتاً ناجحاً عبر 20 حزمة</li>
+                    <li>843 اختباراً مؤتمتاً ناجحاً عبر 21 حزمة</li>
                 </ul>
             </div>
 
@@ -865,7 +865,8 @@
                     <li>Jolt v5.6: مركبات وقيود وRagdolls وCloth</li>
                     <li>استعلامات ومستشعرات وCCD وأشكال معقدة</li>
                     <li>UDP موثوق + سيرفر Authoritative + تنبؤ</li>
-                    <li>811 اختباراً عبر 20 حزمة، كلها ناجحة</li>
+                    <li>قيادة المركبات وحالاتها + أحداث القيود على الشبكة</li>
+                    <li>843 اختباراً عبر 21 حزمة، كلها ناجحة</li>
                 </ul>
             </div>
 
@@ -873,7 +874,6 @@
                 <span class="roadmap-status active">مفتوح للمساهمة</span>
                 <h4>ما بعد Phase 16</h4>
                 <ul>
-                    <li>نسخ القيود على نطاق الشبكة (Constraint Replication)</li>
                     <li>ربط C# الكامل (بجانب Lua)</li>
                     <li>عرض فيديو/صور حية للميزات الجديدة</li>
                 </ul>
@@ -1100,7 +1100,7 @@
                 feat_gameplay_title: "إطار لعب متكامل",
                 feat_gameplay_desc: "وسوم هرمية واستعلامات منطقية، مهام مرحلية، مخزون، حوارات مربوطة بالوسوم، وتسجيل/إعادة تشغيل للمدخلات.",
                 feat_net_title: "شبكات اللعب الجماعي",
-                feat_net_desc: "نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، ولقطات حالة مُصدَرة — أساس اللعب الجماعي الموثوق.",
+                feat_net_desc: "نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، لقطات حالة مُصدَرة، سيرفر Authoritative مع تنبؤ، ونسخ المركبات والقيود على الشبكة.",
                 feat_world_title: "عالم حي: شمس وتضاريس",
                 feat_world_desc: "دورة ليل ونهار تقود الشمس والسماء، وتضاريس heightfield إجرائية بضجيج حتمي، ومولد LOD شبكي.",
                 feat_asset_title: "استيراد glTF حقيقي",
@@ -1117,7 +1117,7 @@
                 hero_cta_build: "البناء والتشغيل",
                 hero_cta_explore: "استعراض المميزات",
                 canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
-                stat_tests: "اختبار مؤتمت ناجح عبر 20 حزمة",
+                stat_tests: "اختبار مؤتمت ناجح عبر 21 حزمة",
                 stat_val: "أخطاء Vulkan Validation (خالٍ من التسريب)",
                 stat_cpp: "معيار C++ الحديث للأداء الأقصى",
                 stat_det: "محاكاة حتمية متوافقة مع الخوادم",
@@ -1167,7 +1167,7 @@
                 feat_gameplay_title: "Complete Gameplay Framework",
                 feat_gameplay_desc: "Hierarchical tags with boolean queries, staged quests, inventories, tag-driven dialogue, and input record/replay.",
                 feat_net_title: "Multiplayer Networking",
-                feat_net_desc: "Non-blocking UDP transport, reliable channel (sequence/ack/resend), and versioned state snapshots — the multiplayer foundation.",
+                feat_net_desc: "Non-blocking UDP transport, reliable channel (sequence/ack/resend), versioned state snapshots, authoritative server with prediction, and vehicle/constraint replication (drive inputs, chassis snapshots, joint events).",
                 feat_world_title: "Living World: Sun & Terrain",
                 feat_world_desc: "Day/night cycle driving sun and sky, procedural heightfield terrain on deterministic noise, and a grid LOD generator.",
                 feat_asset_title: "Real glTF Import",
@@ -1184,7 +1184,7 @@
                 hero_cta_build: "Build and Run",
                 hero_cta_explore: "Explore Features",
                 canvas_hint: "Click and drag to orbit the 3D entity in world space",
-                stat_tests: "Automated Tests Passed Across 20 Suites",
+                stat_tests: "Automated Tests Passed Across 21 Suites",
                 stat_val: "Vulkan Validation Errors (Zero Leaks)",
                 stat_cpp: "Modern C++23 ISO Standard",
                 stat_det: "Deterministic & Server-Authoritative Ready",
