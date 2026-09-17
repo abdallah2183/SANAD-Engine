@@ -210,6 +210,15 @@ target_include_directories(PlatformTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(PlatformTests PRIVATE NFCore NFPlatform)
 nf_target_set_warnings(PlatformTests)
 
+# --- Input tests (action mapping, contexts, deadzones, rebinding) ---
+add_executable(InputTests
+    TestFramework.cpp
+    InputTests/test_input.cpp
+)
+target_include_directories(InputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(InputTests PRIVATE NFCore NFPlatform NFInput)
+nf_target_set_warnings(InputTests)
+
 # --- Network tests (UDP loopback transport, reliable channel, snapshots) ---
 add_executable(NetworkTests
     TestFramework.cpp
@@ -333,7 +342,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests NetworkTests AITests VFXTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)

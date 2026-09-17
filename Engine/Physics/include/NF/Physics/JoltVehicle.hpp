@@ -40,6 +40,12 @@ public:
     JoltBodyState chassis_state() const;
     /// Horizontal speed in m/s.
     float speed_ms() const;
+    /// Per-wheel state for rendering and surface feedback (4 entries for the
+    /// default config, in creation order FL, FR, RL, RR).
+    std::vector<JoltWheelState> wheel_states() const;
+    /// Teleports the chassis upright-ish at `position` with zero velocity — the
+    /// respawn / un-flip path. Keeps the vehicle intact (no rebuild).
+    void reset(Vec3 position);
 
 private:
     JoltWorld* m_world = nullptr;

@@ -156,4 +156,19 @@ void InputSystem::on_mouse_scroll(f32 delta) {
     m_state.scroll_delta = delta;
 }
 
+void InputSystem::on_gamepad_axis(GamepadAxis axis, f32 value) {
+    const auto idx = static_cast<usize>(axis);
+    if (idx < static_cast<usize>(GamepadAxis::Count)) {
+        m_state.gamepad_axes[idx] = value;
+    }
+}
+
+bool InputSystem::is_gamepad_down(GamepadButton btn) const {
+    return m_state.gamepad_buttons[static_cast<usize>(btn)];
+}
+
+void InputSystem::on_gamepad_button(GamepadButton btn, bool pressed) {
+    m_state.gamepad_buttons[static_cast<usize>(btn)] = pressed;
+}
+
 } // namespace nf

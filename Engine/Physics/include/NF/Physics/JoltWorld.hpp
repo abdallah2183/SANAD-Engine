@@ -35,6 +35,27 @@ struct JoltBodyState {
     bool active = false;
 };
 
+/// Per-wheel read state for a JoltVehicle: where the wheel is and what it is
+/// touching. Use this to pose render meshes and play surface effects — the
+/// physics side is authoritative, the renderer just reads it back.
+struct JoltWheelState {
+    /// Wheel center in world space (suspension travel applied).
+    Vec3 position{0, 0, 0};
+    /// Unit contact normal of the ground under the wheel (up if airborne).
+    Vec3 contact_normal{0, 1, 0};
+    /// Whether the wheel currently touches ground. A vehicle with all wheels
+    /// off the ground is airborne: kill downforce-style logic here.
+    bool in_contact = false;
+    /// Suspension compression from the rest length, in meters (positive =
+    /// compressed, 0 at full extension). 0 when airborne.
+    float suspension_compression = 0.0f;
+    /// Angular velocity of the wheel around its spin axis (rad/s).
+    float angular_velocity = 0.0f;
+    /// Steering angle of the wheel around the vertical axis (radians; 0 for
+    /// non-steered axles).
+    float steer_angle = 0.0f;
+};
+
 struct RagdollJointState {
     Vec3 position{0, 0, 0};
     Vec3 linear_velocity{0, 0, 0};
@@ -245,6 +266,15 @@ public:
     void vehicle_destroy(VehicleHandle handle);
     JoltBodyState vehicle_chassis_state(VehicleHandle handle) const;
     void vehicle_drive(VehicleHandle handle, float forward, float steer, float brake);
+    /// Per-wheel state (position, contact, suspension, spin, steer), one entry
+    /// per wheel in creation order: [FL, FR, RL, RR] for the default config.
+    /// An invalid handle yields an empty vector.
+    std::vector<JoltWheelState> vehicle_wheel_states(VehicleHandle handle) const;
+    /// Teleports the chassis to `position` and zeroes its velocity, keeping the
+    /// vehicle's constraint and wheels intact — the respawn/flip-recovery path
+    /// (a rolled car resets upright without rebuilding the whole vehicle).
+    /// A dead/invalid handle is a no-op.
+    void vehicle_reset(VehicleHandle handle, Vec3 position);
 
     // --- Ragdoll wiring (same single-TU rule as vehicles: skeleton,
     // --- RagdollSettings, JPH::Ragdoll all born in JoltWorld.cpp).
@@ -338,6 +368,24 @@ public:
     /// limit_min/limit_max per axis; 0 = locked, negative = free.
     JoltConstraint add_sixdof(JoltBody a, JoltBody b, Vec3 world_point,
                               const Vec3 limit_min[6], const Vec3 limit_max[6]);
+
+    /// Copies a two-body constraint onto a DIFFERENT pair of bodies. The clone
+    /// keeps the original's type, limits, axis and anchor configuration, and
+    /// is created between `new_a` and `new_b` in their CURRENT relative pose.
+    ///
+    /// This is the "instance the same joint many times" primitive: build one
+    /// hinge/distance/sixdof on a template pair, then stamp copies of it
+    /// between spawned bodies (a chain, a ragdoll limb pair, a row of doors)
+    /// without re-specifying the geometry. Constraints created this way are
+    /// ordinary constraints: remove_constraint() frees them, and their
+    /// world-space anchors are recomputed relative to the new bodies.
+    ///
+    /// Returns invalid for a source constraint that is gone, a Vehicle or
+    /// other non-two-body constraint (which carry their own dedicated wiring),
+    /// or bodies that are not alive. The source constraint itself is left
+    /// untouched — cloning never destroys the template.
+    JoltConstraint clone_constraint(JoltConstraint source, JoltBody new_a, JoltBody new_b);
+
     void remove_constraint(JoltConstraint handle);
 
 private:

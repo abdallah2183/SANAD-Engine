@@ -43,5 +43,15 @@ float JoltVehicle::speed_ms() const {
     return std::sqrt(vx * vx + vz * vz);
 }
 
+std::vector<JoltWheelState> JoltVehicle::wheel_states() const {
+    if (!m_world || !m_ok) return {};
+    return m_world->vehicle_wheel_states(m_handle);
+}
+
+void JoltVehicle::reset(Vec3 position) {
+    if (!m_world || !m_ok) return;
+    m_world->vehicle_reset(m_handle, position);
+}
+
 } // namespace nf::physics
 

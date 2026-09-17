@@ -99,11 +99,23 @@ struct InputState {
     std::bitset<static_cast<usize>(MouseButton::Count)> mouse_pressed_this_frame;
     std::bitset<static_cast<usize>(MouseButton::Count)> mouse_released_this_frame;
 
+    std::bitset<static_cast<usize>(GamepadButton::Count)> gamepad_buttons;
+
+    // Analog gamepad axes in [-1, 1]. Zero when no device is attached.
+    f32 gamepad_axes[static_cast<usize>(GamepadAxis::Count)] = {};
+
     f32 mouse_x = 0.0f;
     f32 mouse_y = 0.0f;
     f32 mouse_delta_x = 0.0f;
     f32 mouse_delta_y = 0.0f;
     f32 scroll_delta = 0.0f;
+
+    // Live gamepad axis reading in [-1, 1] (no deadzone applied here; the
+    // gameplay-facing InputMapper owns deadzone policy).
+    f32 axis(GamepadAxis axis) const {
+        const auto idx = static_cast<usize>(axis);
+        return idx < static_cast<usize>(GamepadAxis::Count) ? gamepad_axes[idx] : 0.0f;
+    }
 };
 
 // --- Input action mapping ---
@@ -137,11 +149,14 @@ public:
     bool is_mouse_pressed(MouseButton btn) const;
     bool is_mouse_released(MouseButton btn) const;
 
+    bool is_gamepad_down(GamepadButton btn) const;
+
     f32 mouse_x() const { return m_state.mouse_x; }
     f32 mouse_y() const { return m_state.mouse_y; }
     f32 mouse_delta_x() const { return m_state.mouse_delta_x; }
     f32 mouse_delta_y() const { return m_state.mouse_delta_y; }
     f32 scroll_delta() const { return m_state.scroll_delta; }
+    f32 gamepad_axis(GamepadAxis axis) const { return m_state.axis(axis); }
 
     // Actions
     void register_action(const InputAction& action);
@@ -154,6 +169,8 @@ public:
     void on_mouse_button(MouseButton btn, bool pressed);
     void on_mouse_move(f32 x, f32 y);
     void on_mouse_scroll(f32 delta);
+    void on_gamepad_axis(GamepadAxis axis, f32 value);
+    void on_gamepad_button(GamepadButton btn, bool pressed);
 
     const InputState& state() const { return m_state; }
 

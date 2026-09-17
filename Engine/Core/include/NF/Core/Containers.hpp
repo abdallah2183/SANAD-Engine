@@ -251,6 +251,14 @@ public:
 
     void reserve(usize capacity) { rehash(capacity); }
 
+    void clear() {
+        m_keys.clear();
+        m_values.clear();
+        m_occupied.clear();
+        m_capacity = 0;
+        m_count = 0;
+    }
+
     usize size() const { return m_count; }
     bool empty() const { return m_count == 0; }
 

@@ -2,6 +2,7 @@
 
 #include <NF/Physics/JoltWorld.hpp>
 #include <NF/Physics/JoltRagdoll.hpp>
+#include <NF/Physics/JoltVehicle.hpp>
 #include <NF/Physics/PhysicsWorld.hpp>
 #include <NF/Test/TestFramework.hpp>
 
@@ -325,3 +326,150 @@ NF_TEST(jolt_ragdoll_invalid_is_safe) {
     ragdoll.apply_impulse(0, Vec3{1, 0, 0}); // no-op, no crash
     ragdoll.activate(); // no-op, no crash
 }
+
+// ---------------------------------------------------------------------------
+// clone_constraint (نسخ القيود): stamp a joint configuration onto a fresh pair.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::pair<JoltBody, JoltBody> two_boxes(JoltWorld& world, Vec3 a_pos, Vec3 b_pos) {
+    BodyDesc a;
+    a.shape = Shape::make_box(Vec3{0.4f, 0.4f, 0.4f});
+    a.position = a_pos;
+    const JoltBody ba = world.add_body(a);
+    BodyDesc b = a;
+    b.position = b_pos;
+    const JoltBody bb = world.add_body(b);
+    return {ba, bb};
+}
+
+} // namespace
+
+NF_TEST(jolt_clone_constraint_rejects_bad_input) {
+    JoltWorld world;
+    world.add_body(static_plane());
+    auto [ba, bb] = two_boxes(world, Vec3{0, 4, 0}, Vec3{0, 5.2f, 0});
+    const JoltConstraint weld = world.add_fixed(ba, bb);
+    NF_CHECK(weld.valid());
+    NF_CHECK(!world.clone_constraint(weld, ba, ba).valid()); // same body twice
+    NF_CHECK(!world.clone_constraint(weld, ba, JoltBody{}).valid()); // dead body
+    NF_CHECK(!world.clone_constraint(JoltConstraint{}, ba, bb).valid()); // dead source
+    world.remove_constraint(weld);
+    // The source is gone now: cloning a removed constraint must fail cleanly.
+    NF_CHECK(!world.clone_constraint(weld, ba, bb).valid());
+}
+
+NF_TEST(jolt_clone_fixed_holds_new_pair_together) {
+    JoltWorld world;
+    world.add_body(static_plane());
+    auto [ba, bb] = two_boxes(world, Vec3{0, 4, 0}, Vec3{0, 5.2f, 0});
+    const JoltConstraint weld = world.add_fixed(ba, bb);
+    NF_CHECK(weld.valid());
+
+    // A second pair, elsewhere in the world, gets a copy of the same weld.
+    auto [bc, bd] = two_boxes(world, Vec3{6, 4, 0}, Vec3{6, 5.2f, 0});
+    const JoltConstraint clone = world.clone_constraint(weld, bc, bd);
+    NF_CHECK(clone.valid());
+    NF_CHECK(clone != weld);
+
+    step(world, 300);
+    // The template pair stayed 1.2 apart (box centers, edge-to-edge stack).
+    const float sep_template =
+        (world.state(bb).position - world.state(ba).position).length();
+    // ...and so did the cloned pair, at its own spawn offset.
+    const float sep_clone = (world.state(bd).position - world.state(bc).position).length();
+    NF_CHECK_NEAR(sep_template, 1.2f, 0.2f);
+    NF_CHECK_NEAR(sep_clone, 1.2f, 0.2f);
+    NF_CHECK_NEAR(sep_template, sep_clone, 0.1f); // identical behavior
+
+    // The clone is a first-class constraint: removing it frees only it.
+    world.remove_constraint(clone);
+    step(world, 120);
+    NF_CHECK(world.is_alive(bc) && world.is_alive(bd));
+}
+
+NF_TEST(jolt_clone_hinge_preserves_anchor_and_axis) {
+    // Pendulum built on a template pair, then cloned to a second pivot.
+    JoltWorld world;
+    world.add_body(static_plane());
+    BodyDesc pivot_a;
+    pivot_a.type = BodyType::Static;
+    pivot_a.shape = Shape::make_box(Vec3{0.1f, 0.1f, 0.1f});
+    pivot_a.position = Vec3{0, 8, 0};
+    const JoltBody pa = world.add_body(pivot_a);
+    BodyDesc bob_a;
+    bob_a.shape = Shape::make_sphere(0.3f);
+    bob_a.position = Vec3{0, 5, 0};
+    const JoltBody ba = world.add_body(bob_a);
+    const JoltConstraint hinge = world.add_hinge(pa, ba, Vec3{0, 8, 0}, Vec3{0, 0, 1});
+    NF_CHECK(hinge.valid());
+
+    // Clone at x=4: same local anchor geometry relative to the new bodies.
+    BodyDesc pivot_b = pivot_a;
+    pivot_b.position = Vec3{4, 8, 0};
+    const JoltBody pb = world.add_body(pivot_b);
+    BodyDesc bob_b = bob_a;
+    bob_b.position = Vec3{4, 5, 0};
+    const JoltBody bb = world.add_body(bob_b);
+    const JoltConstraint clone = world.clone_constraint(hinge, pb, bb);
+    NF_CHECK(clone.valid());
+
+    world.set_linear_velocity(ba, Vec3{3, 0, 0});
+    world.set_linear_velocity(bb, Vec3{3, 0, 0});
+    float max_swing_a = 0.0f, max_swing_b = 0.0f;
+    for (int i = 0; i < 300; ++i) {
+        world.step(1.0f / 60.0f);
+        if (i < 30) continue;
+        const Vec3 pa_pos = world.state(ba).position;
+        const Vec3 pb_pos = world.state(bb).position;
+        max_swing_a = std::max(max_swing_a, std::abs(pa_pos.x));
+        max_swing_b = std::max(max_swing_b, std::abs(pb_pos.x - 4.0f));
+    }
+    // Both pendulums swing around their own pivot instead of falling.
+    NF_CHECK(max_swing_a > 0.3f);
+    NF_CHECK(max_swing_b > 0.3f);
+    NF_CHECK_NEAR(max_swing_a, max_swing_b, 0.25f);
+}
+
+NF_TEST(jolt_clone_constraint_source_untouched) {
+    JoltWorld world;
+    world.add_body(static_plane());
+    auto [ba, bb] = two_boxes(world, Vec3{0, 4, 0}, Vec3{0, 5.2f, 0});
+    const JoltConstraint weld = world.add_fixed(ba, bb);
+    const usize before = world.body_count();
+
+    auto [bc, bd] = two_boxes(world, Vec3{3, 4, 0}, Vec3{3, 5.2f, 0});
+    const JoltConstraint clone = world.clone_constraint(weld, bc, bd);
+    NF_CHECK(clone.valid());
+    // Cloning never destroys or alters the template pair.
+    NF_CHECK(world.is_alive(ba) && world.is_alive(bb));
+    NF_CHECK(world.body_count() == before + 2);
+}
+
+NF_TEST(jolt_clone_constraint_safe_around_vehicles) {
+    // Vehicles hold their own constraint type (not a two-body constraint).
+    // Cloning ordinary constraints in a world that also runs a vehicle must
+    // neither corrupt the vehicle nor be corrupted by it.
+    JoltWorld world;
+    world.add_body(static_plane());
+    JoltVehicle car(world, JoltVehicleConfig{}, Vec3{0, 2, 0});
+    NF_CHECK(car.valid());
+
+    auto [ba, bb] = two_boxes(world, Vec3{4, 4, 0}, Vec3{4, 5.2f, 0});
+    const JoltConstraint weld = world.add_fixed(ba, bb);
+    NF_CHECK(weld.valid());
+    auto [bc, bd] = two_boxes(world, Vec3{8, 4, 0}, Vec3{8, 5.2f, 0});
+    const JoltConstraint clone = world.clone_constraint(weld, bc, bd);
+    NF_CHECK(clone.valid());
+
+    for (int i = 0; i < 240; ++i) {
+        car.drive(1.0f, 0.0f);
+        world.step(1.0f / 60.0f);
+    }
+    NF_CHECK(car.speed_ms() > 0.5f); // the vehicle still drives
+    const float sep_clone = (world.state(bd).position - world.state(bc).position).length();
+    NF_CHECK_NEAR(sep_clone, 1.2f, 0.2f); // and the cloned weld still holds
+}
+
+

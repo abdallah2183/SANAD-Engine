@@ -40,6 +40,7 @@
 #include <Jolt/Physics/Constraints/ConeConstraint.h>
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
 #include <Jolt/Skeleton/Skeleton.h>
@@ -822,6 +823,66 @@ void JoltWorld::vehicle_drive(VehicleHandle handle, float forward, float steer, 
                                std::clamp(brake, 0.0f, 1.0f), 0.0f);
 }
 
+std::vector<JoltWheelState> JoltWorld::vehicle_wheel_states(VehicleHandle handle) const {
+    std::vector<JoltWheelState> out;
+    if (!valid() || handle.constraint_id == 0) return out;
+    const Impl& impl = *m_impl;
+    const auto it = impl.constraints.find(handle.constraint_id);
+    if (it == impl.constraints.end() || it->second == nullptr) return out;
+    const auto* vehicle = static_cast<JPH::VehicleConstraint*>(it->second.GetPtr());
+    // Wheel world positions come from the chassis body transform, so a read
+    // lock on the chassis is enough; the wheel states themselves are plain
+    // values the step listener writes between steps (no lock needed to read).
+    JPH::BodyLockRead lock(impl.physics.GetBodyLockInterfaceNoLock(),
+                           JPH::BodyID(handle.chassis.id));
+    if (!lock.Succeeded()) return out;
+    const JPH::Body& chassis = lock.GetBody();
+    const JPH::RMat44 chassis_tm = chassis.GetCenterOfMassTransform();
+    const JPH::Vec3 world_up =
+        chassis_tm.GetRotation().Multiply3x3(vehicle->GetLocalUp()).Normalized();
+    for (JPH::uint i = 0; i < vehicle->GetWheels().size(); ++i) {
+        const JPH::Wheel* w = vehicle->GetWheel(i);
+        if (w == nullptr) continue;
+        JoltWheelState ws;
+        ws.in_contact = w->HasContact();
+        ws.suspension_compression =
+            std::max(0.0f, w->GetSettings()->mSuspensionMaxLength - w->GetSuspensionLength());
+        ws.angular_velocity = w->GetAngularVelocity();
+        ws.steer_angle = w->GetSteerAngle();
+        if (ws.in_contact) {
+            ws.contact_normal = Vec3{w->GetContactNormal().GetX(), w->GetContactNormal().GetY(),
+                                     w->GetContactNormal().GetZ()};
+        } else {
+            ws.contact_normal = Vec3{world_up.GetX(), world_up.GetY(), world_up.GetZ()};
+        }
+        // Wheel center: start at the suspension hard point, travel down the
+        // current suspension length along the world-space suspension axis.
+        const JPH::Vec3 local_attach = w->GetSettings()->mPosition;
+        const JPH::Vec3 local_dir =
+            chassis_tm.GetRotation().Multiply3x3(w->GetSettings()->mSuspensionDirection);
+        const JPH::RVec3 world_attach = chassis_tm * JPH::RVec3(local_attach);
+        const JPH::RVec3 center = world_attach + JPH::RVec3(local_dir * w->GetSuspensionLength());
+        ws.position = Vec3{static_cast<float>(center.GetX()), static_cast<float>(center.GetY()),
+                           static_cast<float>(center.GetZ())};
+        out.push_back(ws);
+    }
+    return out;
+}
+
+void JoltWorld::vehicle_reset(VehicleHandle handle, Vec3 position) {
+    if (!valid() || !handle.chassis.valid()) return;
+    Impl& impl = *m_impl;
+    JPH::BodyInterface& bi = impl.physics.GetBodyInterface();
+    if (!bi.IsAdded(JPH::BodyID(handle.chassis.id))) return;
+    // Move the chassis and wipe its velocity in one interface call so the
+    // constraint's cached body transform stays consistent with the new pose.
+    bi.SetPosition(JPH::BodyID(handle.chassis.id),
+                   JPH::RVec3(position.x, position.y, position.z),
+                   JPH::EActivation::Activate);
+    bi.SetLinearVelocity(JPH::BodyID(handle.chassis.id), JPH::Vec3::sZero());
+    bi.SetAngularVelocity(JPH::BodyID(handle.chassis.id), JPH::Vec3::sZero());
+}
+
 // --- Ragdoll wiring (moved verbatim from the old JoltRagdoll.cpp TU so all
 // --- Jolt allocation stays in this TU — see JoltRagdoll.hpp note).
 // --- (Bodies + constraint creation below; queries follow in the next block.)
@@ -1285,6 +1346,38 @@ JoltConstraint JoltWorld::add_sixdof(JoltBody a, JoltBody b, Vec3 world_point,
         settings.mLimitMax[i] = limit_max[i].x;
     }
     JPH::Ref<JPH::Constraint> c = settings.Create(lock_a.GetBody(), lock_b.GetBody());
+    if (!c) return out;
+    impl.physics.AddConstraint(c);
+    const JPH::uint32 id = impl.next_constraint++;
+    impl.constraints[id] = c;
+    out.id = id;
+    return out;
+}
+
+JoltConstraint JoltWorld::clone_constraint(JoltConstraint source, JoltBody new_a, JoltBody new_b) {
+    JoltConstraint out;
+    if (!valid() || !source.valid() || !is_alive(new_a) || !is_alive(new_b)) return out;
+    if (new_a == new_b) return out; // a two-body constraint needs two bodies
+    Impl& impl = *m_impl;
+    const auto src_it = impl.constraints.find(source.id);
+    if (src_it == impl.constraints.end() || src_it->second == nullptr) return out;
+    JPH::Constraint* src = src_it->second.GetPtr();
+    // Only two-body constraints carry a portable settings object: vehicles
+    // (and ragdolls) own extra state the settings alone cannot rebuild
+    // (tester, step listener, chassis wiring), so they are refused here and
+    // cloned through their own dedicated APIs instead.
+    if (src->GetType() != JPH::EConstraintType::TwoBodyConstraint) return out;
+    JPH::Ref<JPH::ConstraintSettings> settings = src->GetConstraintSettings();
+    if (settings == nullptr) return out;
+
+    JPH::BodyLockWrite lock_a(impl.physics.GetBodyLockInterfaceNoLock(), JPH::BodyID(new_a.id));
+    JPH::BodyLockWrite lock_b(impl.physics.GetBodyLockInterfaceNoLock(), JPH::BodyID(new_b.id));
+    if (!lock_a.Succeeded() || !lock_b.Succeeded()) return out;
+    // Re-home the settings to the new pair, then rebuild. TwoBodyConstraintSettings
+    // is polymorphic, so Create() dispatches to the original constraint's type.
+    JPH::TwoBodyConstraintSettings& two =
+        static_cast<JPH::TwoBodyConstraintSettings&>(*settings);
+    JPH::Ref<JPH::Constraint> c = two.Create(lock_a.GetBody(), lock_b.GetBody());
     if (!c) return out;
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;

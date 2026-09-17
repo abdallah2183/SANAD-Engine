@@ -665,6 +665,18 @@
                 <h3 data-i18n="show_game_title">لعبة عاملة: جامع المكعبات</h3>
                 <p data-i18n="show_game_desc">عدو يتحرك بسكربت Lua، فيزياء إضاءة PBR، ظلال PCF، ونقاط ومستويات — مبنية بالمحرك نفسه.</p>
             </div>
+
+            <div class="feature-card">
+                <video id="joltVideo" muted loop playsinline preload="none"
+                       style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;background:#0d1119;display:none;"
+                       onclick="if (this.paused) { this.play(); } else { this.pause(); }"></video>
+                <div id="joltVideoPlaceholder" style="width:100%;height:200px;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;background:linear-gradient(135deg,#10141d,#1a2030);display:flex;align-items:center;justify-content:center;color:#9aa5be;font-size:0.9rem;">
+                    <span data-i18n="show_jolt_placeholder">الفيديو قيد التسجيل — ابقَ بالمرصاد</span>
+                </div>
+                <span class="feature-tag">Jolt Physics</span>
+                <h3 data-i18n="show_jolt_title">مركبات وقيود Jolt</h3>
+                <p data-i18n="show_jolt_desc">مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومختبرة بـ 173 اختباراً.</p>
+            </div>
         </div>
     </section>
 
@@ -672,7 +684,7 @@
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">722 / 722</div>
+                <div class="stat-num">811 / 811</div>
                 <div class="stat-label" data-i18n="stat_tests">اختبار مؤتمت ناجح عبر 14 حزمة</div>
             </div>
             <div class="stat-card">
@@ -714,6 +726,12 @@
                 <span class="feature-tag">Simulation</span>
                 <h3 data-i18n="feat_phys_title">محرك فيزياء حتمي</h3>
                 <p data-i18n="feat_phys_desc">محلل تصادمات مستقل للأجسام الصلبة مبني على عزم الدفع المتسلسل (Sequential Impulses) مع خوارزميات SAT وتقليم Sutherland-Hodgman.</p>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-tag">Jolt Physics</span>
+                <h3 data-i18n="feat_jolt_title">فيزياء Jolt المتقدمة ومركباتها</h3>
+                <p data-i18n="feat_jolt_desc">خلفية Jolt v5.6 حتمية: مركبات بعجلاتها ومحركها، قيود قابلة للنسخ بين الأجسام، راجدول، استعلامات مشهد (Raycast/Sweep/Overlap)، مستشعرات، CCD، وأشكال كبسولة/محدبة/شبكية.</p>
             </div>
 
             <div class="feature-card">
@@ -816,7 +834,7 @@
                     <li>معمارية ECS موجهة للبيانات</li>
                     <li>فيزياء وتحريك وهيكل عظام أصلي</li>
                     <li>محرر ImGui مع تفقد الخصائص</li>
-                    <li>722 اختباراً مؤتمتاً ناجحاً عبر 20 حزمة</li>
+                    <li>811 اختباراً مؤتمتاً ناجحاً عبر 20 حزمة</li>
                 </ul>
             </div>
 
@@ -840,13 +858,24 @@
                 </ul>
             </div>
 
-            <div class="roadmap-card active">
-                <span class="roadmap-status active">بدأ التنفيذ</span>
-                <h4>Phase 16: الشبكات والذكاء والعالم</h4>
+            <div class="roadmap-card done">
+                <span class="roadmap-status done">مكتمل ومثبت</span>
+                <h4>Phase 16: فيزياء Jolt والشبكات</h4>
                 <ul>
-                    <li>UDP + قناة موثوقة ولقطات حالة</li>
-                    <li>A*‎ وسلوكيات وحوارات وجزيئات</li>
-                    <li>Jolt Physics والنسخ الاحتياطي للخوادم</li>
+                    <li>Jolt v5.6: مركبات وقيود وRagdolls وCloth</li>
+                    <li>استعلامات ومستشعرات وCCD وأشكال معقدة</li>
+                    <li>UDP موثوق + سيرفر Authoritative + تنبؤ</li>
+                    <li>811 اختباراً عبر 20 حزمة، كلها ناجحة</li>
+                </ul>
+            </div>
+
+            <div class="roadmap-card active">
+                <span class="roadmap-status active">مفتوح للمساهمة</span>
+                <h4>ما بعد Phase 16</h4>
+                <ul>
+                    <li>نسخ القيود على نطاق الشبكة (Constraint Replication)</li>
+                    <li>ربط C# الكامل (بجانب Lua)</li>
+                    <li>عرض فيديو/صور حية للميزات الجديدة</li>
                 </ul>
             </div>
         </div>
@@ -1061,6 +1090,9 @@
                 show_ar_desc: "تشكيل سياقي للحروف، ligatures، وترتيب RTL بخط أميري — أول محرك ألعاب بواجهة عربية حقيقية.",
                 show_game_title: "لعبة عاملة: جامع المكعبات",
                 show_game_desc: "عدو يتحرك بسكربت Lua، فيزياء إضاءة PBR، ظلال PCF، ونقاط ومستويات — مبنية بالمحرك نفسه.",
+                show_jolt_title: "مركبات وقيود Jolt",
+                show_jolt_desc: "مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومختبرة بـ 173 اختباراً.",
+                show_jolt_placeholder: "الفيديو قيد التسجيل — ابقَ بالمرصاد",
                 feat_script_title: "سكربت Lua معزول",
                 feat_script_desc: "آلة Lua 5.4 افتراضية ببيئات منفصلة لكل سكربت، مكتبة nf.*‎، ربط الكيانات، وحد تعليمات ضد الحلقات اللانهائية.",
                 feat_ai_title: "ذكاء اصطناعي حتمي",
@@ -1097,6 +1129,8 @@
                 feat_ecs_desc: "نظام Sparse-Set متقدم يوفر أعلى سرعة وصول للذاكرة وتوافقاً كاملاً مع ذاكرة الكاش، مع دعم الهرميات وتحويلات المشاهد وقوالب Prefabs.",
                 feat_phys_title: "محرك فيزياء حتمي",
                 feat_phys_desc: "محلل تصادمات مستقل للأجسام الصلبة مبني على عزم الدفع المتسلسل (Sequential Impulses) مع خوارزميات SAT وتقليم Sutherland-Hodgman.",
+                feat_jolt_title: "فيزياء Jolt المتقدمة ومركباتها",
+                feat_jolt_desc: "خلفية Jolt v5.6 حتمية: مركبات بعجلاتها ومحركها، قيود قابلة للنسخ بين الأجسام، راجدول، استعلامات مشهد (Raycast/Sweep/Overlap)، مستشعرات، CCD، وأشكال كبسولة/محدبة/شبكية.",
                 feat_anim_title: "نظام تحريك هيكلي",
                 feat_anim_desc: "حسابات حركة العظام، آلة حالات التحريك (State Machine) مع الانتقالات والتلاشي والدمج المتعدد، وتوليد مقاطع حركية إجرائية حتمية.",
                 feat_audio_title: "صوتيات ثلاثية الأبعاد",
@@ -1123,6 +1157,9 @@
                 show_ar_desc: "Contextual shaping, ligatures, and RTL ordering in the Amiri typeface — the first game engine with a real Arabic UI.",
                 show_game_title: "Playable: Cube Collector",
                 show_game_desc: "Lua-scripted enemy AI, PBR lighting, PCF shadows, score and levels — built with the engine itself.",
+                show_jolt_title: "Jolt Vehicles & Constraints",
+                show_jolt_desc: "Wheeled vehicle with engine, constraint cloning between bodies, ragdolls, and scene queries — deterministic and covered by 173 tests.",
+                show_jolt_placeholder: "Video coming soon — stay tuned",
                 feat_script_title: "Sandboxed Lua Scripting",
                 feat_script_desc: "Lua 5.4 VM with per-script sandboxed environments, the nf.* host library, entity bindings, and instruction budgets against infinite loops.",
                 feat_ai_title: "Deterministic Game AI",
@@ -1159,6 +1196,8 @@
                 feat_ecs_desc: "Cache-optimized sparse-set Entity Component System with hierarchical transform propagation and high memory locality.",
                 feat_phys_title: "Deterministic 3D Physics Solver",
                 feat_phys_desc: "Rigid-body solver featuring sequential impulses, warm starting, SAT narrowphase, Coulomb friction, and fixed-timestep clock.",
+                feat_jolt_title: "Advanced Jolt Physics & Vehicles",
+                feat_jolt_desc: "Deterministic Jolt v5.6 backend: wheeled vehicles with engines and clonable constraints, ragdolls, scene queries (Raycast/Sweep/Overlap), sensors, CCD, and capsule/convex/mesh colliders.",
                 feat_anim_title: "Skeletal Animation & State Machines",
                 feat_anim_desc: "Hierarchical bone evaluation, clip blending, state machines with cross-fading, and procedural motion clip generators.",
                 feat_audio_title: "3D Spatial Audio & Mixer",
@@ -1192,6 +1231,24 @@
                 }
             });
         });
+
+        // Jolt showcase video: play if the capture exists, otherwise show a
+        // placeholder so the card never renders a broken element.
+        (function () {
+            const video = document.getElementById('joltVideo');
+            const placeholder = document.getElementById('joltVideoPlaceholder');
+            if (!video) return;
+            video.src = 'Docs/images/vid_jolt.mp4';
+            video.addEventListener('error', function () {
+                video.style.display = 'none';
+                if (placeholder) placeholder.style.display = 'flex';
+            });
+            video.addEventListener('loadeddata', function () {
+                video.style.display = 'block';
+                if (placeholder) placeholder.style.display = 'none';
+                video.play().catch(function () {});
+            });
+        })();
     </script>
 </body>
 </html>
