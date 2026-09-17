@@ -182,13 +182,23 @@ target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
 nf_target_set_warnings(GameplayTests)
 
-# --- Scripting tests (Lua VM, sandboxing, entity bindings, ticking) ---
+# --- Scripting tests (Lua VM, sandboxing, entity bindings, ticking, C#) ---
 add_executable(ScriptTests
     TestFramework.cpp
     ScriptTests/test_scripting.cpp
+    ScriptTests/test_csharp.cpp
 )
 target_include_directories(ScriptTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ScriptTests PRIVATE NFCore NFEcs NFScene NFScripting)
+if(NF_CSHARP_HOSTING)
+    # Managed sandbox must exist before the hosting tests run; its absolute
+    # dir is baked in so tests find the DLL + runtimeconfig without CWD games.
+    add_dependencies(ScriptTests NFCSharpSandbox)
+    target_compile_definitions(ScriptTests PRIVATE NF_CSHARP_ASM_DIR="${NF_CSHARP_OUT}")
+    target_compile_definitions(ScriptTests PRIVATE NF_CSHARP_HOSTING=1)
+else()
+    target_compile_definitions(ScriptTests PRIVATE NF_CSHARP_HOSTING=0)
+endif()
 nf_target_set_warnings(ScriptTests)
 
 # --- UI tests (Arabic shaping/bidi, localisation) ---

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Managed gameplay sandbox for SANAD C# scripting tests.
+       Dependency-free class library: only the shared framework, so the test
+       assembly loads anywhere the .NET runtime exists. Unsafe is required for
+       the raw-pointer interop boundary (UnmanagedCallersOnly + spans). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>NFGameScript</AssemblyName>
+    <RootNamespace>NF.GameScript</RootNamespace>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <SignAssembly>false</SignAssembly>
+  </PropertyGroup>
+
+</Project>
