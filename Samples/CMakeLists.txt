@@ -81,6 +81,21 @@ if(NF_GLSLC_EXECUTABLE)
     add_dependencies(NFSampleSimpleGame NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DTonemapShaders)
 endif()
 
+# --- VehicleDemo — drivable Jolt car: chassis + 4 posed wheels, obstacles, gates ---
+add_executable(NFSampleVehicleDemo
+    VehicleDemo/main.cpp
+)
+target_link_libraries(NFSampleVehicleDemo PRIVATE NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFRuntime NFPhysics)
+nf_target_set_warnings(NFSampleVehicleDemo)
+
+target_compile_definitions(NFSampleVehicleDemo PRIVATE
+    "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
+)
+
+if(NF_GLSLC_EXECUTABLE)
+    add_dependencies(NFSampleVehicleDemo NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DTonemapShaders)
+endif()
+
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
     set_property(TARGET NFSampleTriangle
@@ -92,5 +107,7 @@ if(MSVC)
     set_property(TARGET NFSampleRuntimeScene
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET NFSampleSimpleGame
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set_property(TARGET NFSampleVehicleDemo
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()

@@ -122,6 +122,7 @@ bool GpuPicker::init(rhi::IGraphicsDevice& device, const std::filesystem::path& 
     pd.vertex_layout.stride = sizeof(Vertex);
     pd.vertex_layout.attributes = std::span<const rhi::VertexAttrib>(kMeshAttribs);
     pd.rasterizer.cull_mode = rhi::CullMode::Back;
+    pd.rasterizer.front_face = rhi::FrontFace::CW; // pairs the Vulkan Y-flip
     // Depth test + write so the nearest surface at each pixel owns the id.
     pd.depth.test_enabled = true;
     pd.depth.write_enabled = true;

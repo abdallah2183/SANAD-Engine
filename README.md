@@ -37,9 +37,9 @@
 
 صور ملتقطة مباشرة من المحرر واللعبة العاملة — بدون فوتوشوب:
 
-| محرر سند (إنجليزي) | محرر سند (عربي RTL) | لعبة جامع المكعبات |
-| :---: | :---: | :---: |
-| ![SANAD Editor](Docs/images/shot_editor_en.png) | ![Arabic UI](Docs/images/shot_editor_ar.png) | ![Cube Collector](Docs/images/shot_game.png) |
+| محرر سند (إنجليزي) | محرر سند (عربي RTL) | لعبة جامع المكعبات | ديمو قيادة المركبة |
+| :---: | :---: | :---: | :---: |
+| ![SANAD Editor](Docs/images/shot_editor_en.png) | ![Arabic UI](Docs/images/shot_editor_ar.png) | ![Cube Collector](Docs/images/shot_game.png) | ![Vehicle Demo](Docs/images/shot_vehicle.png) |
 
 ---
 

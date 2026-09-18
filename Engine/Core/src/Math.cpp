@@ -70,16 +70,21 @@ Mat4 Mat4::rotation(const Vec3& axis, f32 angle) {
 }
 
 Mat4 Mat4::perspective(f32 fovy, f32 aspect, f32 near_z, f32 far_z) {
-    // Right-handed, camera looking down -Z, Vulkan depth range [0, 1].
+    // Right-handed, camera looking down -Z, Vulkan depth range [0, 1] AND
+    // Vulkan Y direction (NDC y = -1 at the TOP of the framebuffer).
     // Row-vector application (v' = v * M): clip.w comes from m[2][3] * z,
     // which must be positive for visible (negative-z) geometry, hence the
     // -1. Near maps to NDC 0, far to NDC 1. (An earlier revision used the
     // D3D-LH signs here, which collapsed the whole depth range to ~[1, 2].)
+    // m[1][1] is NEGATED on purpose: an OpenGL-style +f renders every frame
+    // upside down on Vulkan (view-up lands at the bottom of the screen).
+    // The Y mirror reverses triangle winding, so every Back-culled pipeline
+    // pairs this with FrontFace::CW (see Renderer3D/GpuPicker setup).
     const f32 f = 1.0f / std::tan(fovy * 0.5f);
     Mat4 r{};
 
     r.m[0][0] = f / aspect;
-    r.m[1][1] = f;
+    r.m[1][1] = -f;
     r.m[2][2] = far_z / (near_z - far_z);
     r.m[2][3] = -1.0f;
     r.m[3][2] = (near_z * far_z) / (near_z - far_z);
@@ -87,10 +92,11 @@ Mat4 Mat4::perspective(f32 fovy, f32 aspect, f32 near_z, f32 far_z) {
 }
 
 Mat4 Mat4::orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 near_z, f32 far_z) {
-    // Same convention as perspective: -Z forward, NDC depth [0, 1].
+    // Same convention as perspective: -Z forward, NDC depth [0, 1], and the
+    // Vulkan Y-flip (NDC y = -1 at the top of the framebuffer).
     Mat4 r = identity();
     r.m[0][0] = 2.0f / (right - left);
-    r.m[1][1] = 2.0f / (top - bottom);
+    r.m[1][1] = -2.0f / (top - bottom);
     r.m[2][2] = -1.0f / (far_z - near_z);
     r.m[3][0] = -(left + right) / (right - left);
     r.m[3][1] = -(top + bottom) / (top - bottom);

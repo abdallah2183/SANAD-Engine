@@ -197,6 +197,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         dpd.render_pass = m_depth_rp.get();
         dpd.vertex_layout = depth_vl;
         dpd.rasterizer.cull_mode = rhi::CullMode::Back;
+        // Pairs the Vulkan Y-flip in Mat4::perspective: mirroring Y reverses
+        // triangle winding, so Back culling needs the CW face to keep eating
+        // the same (back) faces it always ate.
+        dpd.rasterizer.front_face = rhi::FrontFace::CW;
         dpd.depth.test_enabled = true;
         dpd.depth.write_enabled = true;
         dpd.push_constant_size = 128; // view_proj + model
@@ -215,6 +219,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         gpd.descriptor_set_layout = m_material_layout.get();
         gpd.vertex_layout = gvl;
         gpd.rasterizer.cull_mode = rhi::CullMode::Back;
+        gpd.rasterizer.front_face = rhi::FrontFace::CW; // pairs the Y-flip (see above)
         gpd.depth.test_enabled = true;
         gpd.depth.write_enabled = false; // prepass owns the depth buffer
         gpd.depth.compare = rhi::CompareOp::LessEqual;

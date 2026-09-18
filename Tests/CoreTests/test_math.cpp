@@ -107,8 +107,7 @@ NF_TEST(test_mat4_look_at_points_down_minus_z) {
     NF_CHECK_NEAR(target_on_axis.z, -dist, 1e-4f);
 }
 
-NF_TEST(test_mat4_perspective_maps_near_to_zero_far_to_one) {
-    // Pins the Vulkan [0,1] depth convention: a second, GL-style [-1,1]
+NF_TEST(test_mat4_perspective_maps_near_to_zero_far_to_one) {    // Pins the Vulkan [0,1] depth convention: a second, GL-style [-1,1]
     // projection once lived beside this one and the two are only visibly
     // different at the near plane.
     Mat4 p = Mat4::perspective(to_radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
@@ -116,6 +115,19 @@ NF_TEST(test_mat4_perspective_maps_near_to_zero_far_to_one) {
     Vec3 far = p.transform_point({0, 0, -100.0f});
     NF_CHECK_NEAR(near.z, 0.0f, 1e-4f);
     NF_CHECK_NEAR(far.z, 1.0f, 1e-4f);
+}
+
+NF_TEST(test_mat4_perspective_points_up_at_negative_ndc_y) {
+    // Pins the Vulkan Y direction: view-up must land at NEGATIVE NDC y (the
+    // top of the framebuffer). An OpenGL-style +f here once rendered every
+    // frame in the engine upside down, and nothing but this sign caught it:
+    // symmetric test scenes look plausible either way.
+    Mat4 p = Mat4::perspective(to_radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+    Vec3 up = p.transform_point({0, 1.0f, -5.0f});
+    Vec3 down = p.transform_point({0, -1.0f, -5.0f});
+    NF_CHECK(up.y < -0.05f);
+    NF_CHECK(down.y > 0.05f);
+    NF_CHECK_NEAR(up.y, -down.y, 1e-5f); // symmetric about the axis
 }
 
 NF_TEST(test_mat4_transpose_swaps_off_diagonal) {
