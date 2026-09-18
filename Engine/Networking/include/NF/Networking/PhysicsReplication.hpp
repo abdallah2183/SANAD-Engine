@@ -12,8 +12,12 @@
 //      throttle/steer/brake). Fixed 20-byte payload with exact-size decode;
 //      rides the ReliableChannel exactly like NetInput.
 //   2. VehicleSnapshot — server→client chassis truth (tick + per-vehicle
-//      position/velocity). Own magic 'NFVS', versioned framing; ships as raw
-//      UDP datagrams, loss-tolerant because the next tick supersedes.
+//      position/velocity/ORIENTATION as a unit quaternion). Own magic 'NFVS',
+//      versioned framing; ships as raw UDP datagrams, loss-tolerant because
+//      the next tick supersedes. Orientation is part of the pose, not an
+//      extra: a ghost that only translates renders as a car sliding sideways
+//      through every corner, and deriving heading from velocity makes a
+//      reversing car spin 180 degrees the moment it slows past zero.
 //   3. ConstraintEvent — reliable ordered joint spawn/remove/clone (magic
 //      'NFCE'). Endpoints are NET entity ids; each side maps net id → local
 //      JoltBody, and the server assigns net constraint ids. Bodies' motion
@@ -34,7 +38,8 @@
 //     VehicleSnapshot from JoltVehicle::chassis_state() → encode + UDP send.
 //   client: input mapper → VehicleDriveInput → send_reliable; on each datagram
 //     → decode + ghost.apply_vehicle_snapshot() → pose ghost transforms from
-//     ghost.state(). ConstraintEvent bytes ride the same reliable channel as
+//     ghost.state() (position AND orientation — see VehicleNetState).
+//     ConstraintEvent bytes ride the same reliable channel as
 //     the drive inputs; applying one is the matching JoltWorld::add_* call
 //     with the endpoints resolved through the net-id → JoltBody map.
 //
@@ -83,17 +88,25 @@ bool decode_drive_input(const u8* data, usize size, VehicleDriveInput& out,
 // --- Vehicle snapshot (server → client, raw UDP datagram) ------------------
 
 /// Authoritative chassis state for one vehicle. Mirrors JoltBodyState
-/// (position + linear velocity); orientation is NOT carried — the game layer
-/// keeps heading on its ghost Transform (or derives it from velocity), so a
-/// snapshot stays a flat pod the renderer can apply without touching Jolt.
+/// (position + linear velocity + rotation). The rotation is stored as four
+/// raw floats rather than a nf::Quat so the wire record stays a flat pod the
+/// renderer can apply without pulling the math library into this module; the
+/// game layer reassembles it as Quat(qx, qy, qz, qw).
+///
+/// The wire rejects any quaternion that is not unit length (see decode): a
+/// rotation that is not a rotation would silently skew every transform it
+/// touches, and "fix it by normalizing" is exactly the silent repair this
+/// module refuses to do.
 struct VehicleNetState {
     u32 entity = 0; // net id of the vehicle (never 0)
     float x = 0.0f, y = 0.0f, z = 0.0f;
     float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    float qx = 0.0f, qy = 0.0f, qz = 0.0f, qw = 1.0f; // unit quaternion
 
     bool operator==(const VehicleNetState& o) const {
         return entity == o.entity && x == o.x && y == o.y && z == o.z &&
-               vx == o.vx && vy == o.vy && vz == o.vz;
+               vx == o.vx && vy == o.vy && vz == o.vz && qx == o.qx &&
+               qy == o.qy && qz == o.qz && qw == o.qw;
     }
 };
 
@@ -103,7 +116,8 @@ struct VehicleSnapshot {
 };
 
 /// Deterministic bytes: magic 'NFVS'(4) version(u16) tick(4) count(4) +
-/// 28-byte records (entity + 6 floats).
+/// 44-byte records (entity + 10 floats). Version 2 added the four
+/// orientation floats; version 1 records were 28 bytes.
 std::vector<u8> encode_vehicle_snapshot(const VehicleSnapshot& snapshot);
 bool decode_vehicle_snapshot(const u8* data, usize size, VehicleSnapshot& out,
                              std::string& out_error);
@@ -201,6 +215,12 @@ public:
     /// Positional snap distance the focused ghost moved under the last
     /// APPLIED snapshot (0 when the snapshot was stale or the ghost is new).
     float last_correction() const { return m_last_correction; }
+    /// How far the focused ghost's ORIENTATION snapped under the last APPLIED
+    /// snapshot, in radians [0, pi] (0 when stale or new). Position and
+    /// heading are separate corrections on purpose: a car that teleports 5m
+    /// but keeps its heading is a very different problem from one that spins
+    /// 90 degrees on the spot, and one blended number hides both.
+    float last_angle_correction() const { return m_last_angle; }
 
 private:
     u32 m_focus = 0;
@@ -208,6 +228,7 @@ private:
     u32 m_acked = 0;
     bool m_has_acked = false;
     float m_last_correction = 0.0f;
+    float m_last_angle = 0.0f;
 };
 
 } // namespace nf::net

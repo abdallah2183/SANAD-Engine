@@ -601,9 +601,14 @@ JoltBodyState JoltWorld::state(JoltBody handle) const {
         const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).GetCenterOfMassPosition(id);
     const JPH::Vec3 v =
         const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).GetLinearVelocity(id);
+    const JPH::Quat r =
+        const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).GetRotation(id);
     out.position = Vec3{static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
                         static_cast<float>(p.GetZ())};
     out.linear_velocity = Vec3{v.GetX(), v.GetY(), v.GetZ()};
+    // Jolt stores (x, y, z, w) in the same order as nf::Quat, and keeps body
+    // rotations normalized, so the components copy straight across.
+    out.rotation = Quat{r.GetX(), r.GetY(), r.GetZ(), r.GetW()};
     return out;
 }
 
@@ -878,6 +883,11 @@ void JoltWorld::vehicle_reset(VehicleHandle handle, Vec3 position) {
     // constraint's cached body transform stays consistent with the new pose.
     bi.SetPosition(JPH::BodyID(handle.chassis.id),
                    JPH::RVec3(position.x, position.y, position.z),
+                   JPH::EActivation::Activate);
+    // Upright is part of the documented contract ("a rolled car resets
+    // upright"): a respawn that only moved the chassis would drop a flipped
+    // car back onto its roof, which is the one thing the caller asked against.
+    bi.SetRotation(JPH::BodyID(handle.chassis.id), JPH::Quat::sIdentity(),
                    JPH::EActivation::Activate);
     bi.SetLinearVelocity(JPH::BodyID(handle.chassis.id), JPH::Vec3::sZero());
     bi.SetAngularVelocity(JPH::BodyID(handle.chassis.id), JPH::Vec3::sZero());

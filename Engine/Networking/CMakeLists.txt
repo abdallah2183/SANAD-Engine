@@ -8,6 +8,8 @@ set(NFNETWORKING_SOURCES
     src/Snapshot.cpp
     src/Authoritative.cpp
     src/PhysicsReplication.cpp
+    src/BodyReplication.cpp
+    src/ConstraintReplicator.cpp
 )
 
 if(WIN32)

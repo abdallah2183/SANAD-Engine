@@ -99,6 +99,8 @@ NF_TEST(vehicle_snapshot_codec_roundtrip) {
     b.entity = 9;
     b.x = 1.0f;
     b.vx = 3.0f;
+    b.qy = 0.70710678f; // 90 degrees about +Y
+    b.qw = 0.70710678f;
     VehicleNetState a;
     a.entity = 4;
     a.x = -2.0f;
@@ -106,7 +108,7 @@ NF_TEST(vehicle_snapshot_codec_roundtrip) {
     snap.vehicles.push_back(b); // out of order on purpose...
     snap.vehicles.push_back(a);
     const std::vector<u8> bytes = encode_vehicle_snapshot(snap);
-    NF_CHECK(bytes.size() == 14 + 2 * 28);
+    NF_CHECK(bytes.size() == 14 + 2 * 44);
     NF_CHECK(bytes[0] == 'N' && bytes[1] == 'F' && bytes[2] == 'V' && bytes[3] == 'S');
 
     VehicleSnapshot back;
@@ -117,6 +119,9 @@ NF_TEST(vehicle_snapshot_codec_roundtrip) {
     NF_CHECK(back.vehicles[0].entity == 4); // ...sorted by entity on the wire
     NF_CHECK(back.vehicles[1].entity == 9);
     NF_CHECK(back.vehicles[1].vx == 3.0f);
+    // Heading rides the wire too: a pose is position AND orientation.
+    NF_CHECK(back.vehicles[1].qy == b.qy && back.vehicles[1].qw == b.qw);
+    NF_CHECK(back.vehicles[0].qw == 1.0f); // untouched vehicle stays upright
 
     // Empty snapshot is legal (no vehicles replicated this tick).
     VehicleSnapshot empty;
@@ -147,7 +152,9 @@ NF_TEST(vehicle_snapshot_rejects_corruption) {
     NF_CHECK(!decode_vehicle_snapshot(magic.data(), magic.size(), bad, err));
 
     std::vector<u8> version = bytes;
-    version[4] = 2; // version 1 expected
+    version[4] = 1; // v1 (28-byte records, no orientation) is not accepted
+    NF_CHECK(!decode_vehicle_snapshot(version.data(), version.size(), bad, err));
+    version[4] = 3; // nor is a version from the future
     NF_CHECK(!decode_vehicle_snapshot(version.data(), version.size(), bad, err));
 
     // Declared count disagrees with the byte count.
@@ -166,6 +173,57 @@ NF_TEST(vehicle_snapshot_rejects_corruption) {
     nan_snap.vehicles.push_back(nan_v);
     const std::vector<u8> nan_bytes = encode_vehicle_snapshot(nan_snap);
     NF_CHECK(!decode_vehicle_snapshot(nan_bytes.data(), nan_bytes.size(), bad, err));
+}
+
+NF_TEST(vehicle_snapshot_rejects_non_unit_orientation) {
+    // A quaternion that is not unit length is not a rotation: applied as one
+    // it scales and skews the chassis. The wire refuses it instead of
+    // normalizing it — the same "loud, never silent" rule as every codec here.
+    VehicleNetState v;
+    v.entity = 2;
+    VehicleSnapshot snap;
+    snap.tick = 1;
+    snap.vehicles.push_back(v);
+    const usize one = 14 + 44; // header + one record
+
+    VehicleSnapshot ok;
+    std::string err;
+    NF_CHECK(decode_vehicle_snapshot(encode_vehicle_snapshot(snap).data(), one, ok, err));
+
+    auto rejected = [&](const VehicleNetState& state) {
+        VehicleSnapshot s;
+        s.tick = 1;
+        s.vehicles.push_back(state);
+        VehicleSnapshot out;
+        return !decode_vehicle_snapshot(encode_vehicle_snapshot(s).data(), one, out, err);
+    };
+
+    VehicleNetState half = v;
+    half.qw = 0.5f; // length 0.5
+    NF_CHECK(rejected(half));
+    VehicleNetState zero = v;
+    zero.qw = 0.0f; // the zero quaternion is not a rotation at all
+    NF_CHECK(rejected(zero));
+    VehicleNetState stretched = v;
+    stretched.qw = 2.0f; // too long is just as wrong as too short
+    NF_CHECK(rejected(stretched));
+    VehicleNetState nan = v;
+    nan.qx = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(rejected(nan));
+
+    // A legitimate unit quaternion still passes, including one built from
+    // four halves (length exactly 1) rather than the identity default.
+    VehicleNetState unit = v;
+    unit.qx = 0.5f;
+    unit.qy = 0.5f;
+    unit.qz = 0.5f;
+    unit.qw = 0.5f;
+    VehicleSnapshot s5;
+    s5.tick = 1;
+    s5.vehicles.push_back(unit);
+    VehicleSnapshot back;
+    NF_CHECK(decode_vehicle_snapshot(encode_vehicle_snapshot(s5).data(), one, back, err));
+    NF_CHECK(back.vehicles[0].qx == 0.5f && back.vehicles[0].qw == 0.5f);
 }
 
 // --- constraint event codec -----------------------------------------------------
@@ -393,6 +451,53 @@ NF_TEST(ghost_client_rejects_stale_snapshots) {
     NF_CHECK(ghost.state(5, read) && read.x == 1.0f);
 }
 
+NF_TEST(ghost_client_reports_orientation_correction) {
+    // Position and heading are reported separately on purpose: a car that
+    // teleports 5m keeping its heading is a different bug from one that spins
+    // 90 degrees on the spot, and one blended number hides both.
+    VehicleGhostClient ghost(7);
+    VehicleSnapshot s0;
+    s0.tick = 0;
+    VehicleNetState v;
+    v.entity = 7;
+    s0.vehicles.push_back(v);
+    ghost.apply_vehicle_snapshot(s0);
+    NF_CHECK(ghost.last_angle_correction() == 0.0f); // brand-new ghost
+
+    // A quarter turn about +Y on the spot: full angle, zero distance.
+    VehicleSnapshot s1;
+    s1.tick = 1;
+    VehicleNetState turned;
+    turned.entity = 7;
+    turned.qy = 0.70710678f;
+    turned.qw = 0.70710678f;
+    s1.vehicles.push_back(turned);
+    ghost.apply_vehicle_snapshot(s1);
+    NF_CHECK_NEAR(ghost.last_angle_correction(), 1.5707963f, 1e-4f);
+    NF_CHECK_NEAR(ghost.last_correction(), 0.0f, 1e-6f);
+
+    // q and -q are the SAME orientation: no correction at all.
+    VehicleSnapshot s2;
+    s2.tick = 2;
+    VehicleNetState neg = turned;
+    neg.qy = -neg.qy;
+    neg.qw = -neg.qw;
+    s2.vehicles.push_back(neg);
+    ghost.apply_vehicle_snapshot(s2);
+    NF_CHECK_NEAR(ghost.last_angle_correction(), 0.0f, 1e-5f);
+
+    // A stale snapshot neither rewinds the heading nor reports a correction.
+    VehicleSnapshot stale;
+    stale.tick = 1;
+    VehicleNetState elsewhere;
+    elsewhere.entity = 7;
+    stale.vehicles.push_back(elsewhere);
+    ghost.apply_vehicle_snapshot(stale);
+    NF_CHECK_NEAR(ghost.last_angle_correction(), 0.0f, 1e-5f);
+    VehicleNetState read;
+    NF_CHECK(ghost.state(7, read) && read.qy == -0.70710678f);
+}
+
 // --- full stack over real UDP ----------------------------------------------------------
 
 NF_TEST(vehicle_replication_over_loopback_sockets) {
@@ -410,7 +515,9 @@ NF_TEST(vehicle_replication_over_loopback_sockets) {
     ReliableChannel down;     // server -> client acks
 
     float server_x = 0.0f, server_vx = 0.0f;
+    float server_yaw = 0.0f; // the car turns as it drives, so heading travels too
     constexpr float kSpeed = 6.0f;
+    constexpr float kYawRate = 0.5f; // rad/s
     constexpr float kDt = 1.0f / 60.0f;
 
     auto send_packets = [&](ReliableChannel& from, UdpSocket& sock, u16 port, u64 now_ms) {
@@ -480,12 +587,15 @@ NF_TEST(vehicle_replication_over_loopback_sockets) {
         NF_CHECK(drive.throttle == 1.0f);
         server_vx = drive.throttle * kSpeed;
         server_x += server_vx * kDt;
+        server_yaw += kYawRate * kDt;
         VehicleSnapshot snap;
         snap.tick = t;
         VehicleNetState state;
         state.entity = 7;
         state.x = server_x;
         state.vx = server_vx;
+        state.qy = std::sin(server_yaw * 0.5f);
+        state.qw = std::cos(server_yaw * 0.5f);
         snap.vehicles.push_back(state);
         server_sock.send_to(encode_vehicle_snapshot(snap), kIpv4Loopback, client_port);
         send_packets(down, server_sock, client_port, static_cast<u64>(t) * 20);
@@ -512,6 +622,10 @@ NF_TEST(vehicle_replication_over_loopback_sockets) {
     NF_CHECK_NEAR(read.x, server_x, 1e-4f);
     NF_CHECK_NEAR(read.x, 6.0f, 1e-3f); // 60/60 * 6 u/s at full throttle
     NF_CHECK_NEAR(read.vx, 6.0f, 1e-4f);
+    // The heading made the round trip over real UDP, not just the position.
+    NF_CHECK_NEAR(read.qy, std::sin(server_yaw * 0.5f), 1e-6f);
+    NF_CHECK_NEAR(read.qw, std::cos(server_yaw * 0.5f), 1e-6f);
+    NF_CHECK(read.qy > 0.05f); // 60 ticks at 0.5 rad/s is a real turn
     NF_CHECK(queue.pending(7) == 0);   // every input consumed exactly once
     NF_CHECK(up.unacked_count() == 0); // every input acked over real UDP
 }

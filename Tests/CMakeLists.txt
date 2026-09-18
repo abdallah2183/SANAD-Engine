@@ -118,6 +118,9 @@ add_executable(RuntimeTests
     RuntimeTests/test_runtime_streaming.cpp
     RuntimeTests/test_runtime_sky.cpp
     RuntimeTests/test_runtime_audio_import.cpp
+    # VehicleSystem is header-only: this file is what makes the build
+    # translate it at all (and pins the chassis pose it writes back).
+    RuntimeTests/test_runtime_vehicle.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
@@ -236,6 +239,7 @@ add_executable(NetworkTests
     NetworkTests/test_reliable.cpp
     NetworkTests/test_replication.cpp
     NetworkTests/test_vehicle_replication.cpp
+    NetworkTests/test_constraint_replication.cpp
 )
 target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)

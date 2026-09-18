@@ -16,6 +16,7 @@
 //   - VehicleComponent::vehicle is a non-owning view, cleared on teardown.
 
 #include <NF/ECS/ECS.hpp>
+#include <NF/Physics/Components.hpp> // VehicleComponent: this system reads it
 #include <NF/Physics/JoltVehicle.hpp>
 #include <NF/Physics/JoltWorld.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -84,6 +85,11 @@ public:
             tf->local_x = st.position.x;
             tf->local_y = st.position.y;
             tf->local_z = st.position.z;
+            // Heading, not just position: a transform that only translates
+            // renders a car sliding sideways through a corner. The scene
+            // stores XYZ euler degrees, so the conversion lives here, in the
+            // one place that knows both conventions.
+            scene::euler_xyz_degrees_from_quat(st.rotation, tf->rot_x, tf->rot_y, tf->rot_z);
             tf->dirty = true;
         }
     }
@@ -100,8 +106,9 @@ public:
         return out;
     }
 
-    /// Respawn: teleports the vehicle's chassis and zeroes velocity. The system
-    /// owns the vehicle, so the reset must go through here (not the component).
+    /// Respawn: teleports the vehicle's chassis, sets it upright and zeroes
+    /// velocity. The system owns the vehicle, so the reset must go through
+    /// here (not the component).
     void reset(ecs::Entity e, ecs::World& world, Vec3 position) {
         const auto it = m_vehicles.find(e);
         if (it == m_vehicles.end() || it->second == nullptr) return;
@@ -111,6 +118,12 @@ public:
             tf->local_x = position.x;
             tf->local_y = position.y;
             tf->local_z = position.z;
+            // vehicle_reset puts the chassis upright (identity rotation), so
+            // the transform follows: a recovered car must not keep rendering
+            // on its roof while the physics says it is upright.
+            tf->rot_x = 0.0f;
+            tf->rot_y = 0.0f;
+            tf->rot_z = 0.0f;
             tf->dirty = true;
         }
     }

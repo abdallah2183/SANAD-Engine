@@ -32,6 +32,13 @@ struct JoltBody {
 struct JoltBodyState {
     Vec3 position{0, 0, 0};
     Vec3 linear_velocity{0, 0, 0};
+    /// World-space orientation, unit length. Read back together with the
+    /// position on purpose: a pose is one atomic fact, and a second query for
+    /// the rotation could return a state from a different step than the
+    /// position. Vehicles need it on the wire (a snapshot carrying only
+    /// position renders a car sliding sideways) and the renderer needs it on
+    /// the transform, so both read it from here.
+    Quat rotation = Quat::identity();
     bool active = false;
 };
 

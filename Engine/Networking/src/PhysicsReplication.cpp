@@ -72,6 +72,35 @@ bool tick_less(u32 a, u32 b) {
     return a != b && static_cast<u32>(b - a) < 0x80000000u;
 }
 
+// A quaternion is only a rotation while it is unit length; anything else
+// scales and skews every transform it touches. The tolerance is on the
+// SQUARED length, so checking it costs no sqrt.
+constexpr float kUnitQuatTolerance = 1e-3f;
+
+bool is_unit_quat(float x, float y, float z, float w) {
+    const float len2 = x * x + y * y + z * z + w * w;
+    return std::fabs(len2 - 1.0f) <= kUnitQuatTolerance;
+}
+
+/// Angle between two orientations, radians [0, pi]. q and -q are the SAME
+/// orientation, so the sign is folded before anything is measured.
+///
+/// 4*atan2(|a-b|, |a+b|) and not the textbook 2*acos(|dot|): acos has an
+/// infinite derivative at 1, so two quaternions whose dot differs from 1 by
+/// float noise (1e-8, i.e. a heading that never moved) still reported ~3e-4
+/// rad of phantom correction. atan2 is well conditioned at both ends, needs
+/// no clamp, and cannot produce NaN from a dot of 1+epsilon.
+float quat_angle(float ax, float ay, float az, float aw, float bx, float by, float bz,
+                 float bw) {
+    const float dot = ax * bx + ay * by + az * bz + aw * bw;
+    const float s = (dot < 0.0f) ? -1.0f : 1.0f; // fold q onto -q
+    const float dx = ax - s * bx, dy = ay - s * by, dz = az - s * bz, dw = aw - s * bw;
+    const float sx = ax + s * bx, sy = ay + s * by, sz = az + s * bz, sw = aw + s * bw;
+    const float diff = std::sqrt(dx * dx + dy * dy + dz * dz + dw * dw); // 2*sin(phi/2)
+    const float sum = std::sqrt(sx * sx + sy * sy + sz * sz + sw * sw);  // 2*cos(phi/2)
+    return 4.0f * std::atan2(diff, sum);
+}
+
 } // namespace
 
 // --- Vehicle drive input ----------------------------------------------------
@@ -134,7 +163,7 @@ std::vector<u8> encode_vehicle_snapshot(const VehicleSnapshot& snapshot) {
     out.push_back('F');
     out.push_back('V');
     out.push_back('S');
-    push_u16(out, 1); // version
+    push_u16(out, 2); // version (2 = records carry orientation)
     push_u32(out, snapshot.tick);
     push_u32(out, static_cast<u32>(sorted.size()));
     for (const auto& v : sorted) {
@@ -145,6 +174,10 @@ std::vector<u8> encode_vehicle_snapshot(const VehicleSnapshot& snapshot) {
         push_f32(out, v.vx);
         push_f32(out, v.vy);
         push_f32(out, v.vz);
+        push_f32(out, v.qx);
+        push_f32(out, v.qy);
+        push_f32(out, v.qz);
+        push_f32(out, v.qw);
     }
     return out;
 }
@@ -152,9 +185,11 @@ std::vector<u8> encode_vehicle_snapshot(const VehicleSnapshot& snapshot) {
 bool decode_vehicle_snapshot(const u8* data, usize size, VehicleSnapshot& out,
                              std::string& out_error) {
     out = VehicleSnapshot{};
-    // Header: magic(4) version(2) tick(4) count(4) = 14 bytes; record = 28.
+    // Header: magic(4) version(2) tick(4) count(4) = 14 bytes. Version 2
+    // widened the record from 28 to 44 bytes by appending the orientation
+    // quaternion; version 1 is not silently accepted, it is refused.
     constexpr usize kHeader = 14;
-    constexpr usize kRecord = 28;
+    constexpr usize kRecord = 44;
     if (!data || size < kHeader) {
         out_error = "vehicle snapshot too short";
         return false;
@@ -163,7 +198,7 @@ bool decode_vehicle_snapshot(const u8* data, usize size, VehicleSnapshot& out,
         out_error = "not a vehicle snapshot (bad magic)";
         return false;
     }
-    if (read_u16(data + 4) != 1) {
+    if (read_u16(data + 4) != 2) {
         out_error = "unsupported vehicle snapshot version";
         return false;
     }
@@ -187,14 +222,28 @@ bool decode_vehicle_snapshot(const u8* data, usize size, VehicleSnapshot& out,
         v.vx = read_f32(p + 16);
         v.vy = read_f32(p + 20);
         v.vz = read_f32(p + 24);
+        v.qx = read_f32(p + 28);
+        v.qy = read_f32(p + 32);
+        v.qz = read_f32(p + 36);
+        v.qw = read_f32(p + 40);
         if (v.entity == 0) {
             out_error = "vehicle snapshot entity id is zero";
             out = VehicleSnapshot{};
             return false;
         }
         if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z) ||
-            !std::isfinite(v.vx) || !std::isfinite(v.vy) || !std::isfinite(v.vz)) {
+            !std::isfinite(v.vx) || !std::isfinite(v.vy) || !std::isfinite(v.vz) ||
+            !std::isfinite(v.qx) || !std::isfinite(v.qy) || !std::isfinite(v.qz) ||
+            !std::isfinite(v.qw)) {
             out_error = "vehicle snapshot not finite";
+            out = VehicleSnapshot{};
+            return false;
+        }
+        // A quaternion that is not unit length is not a rotation: applied as
+        // one it scales and skews the chassis. Normalizing here would be the
+        // silent repair this module refuses to make.
+        if (!is_unit_quat(v.qx, v.qy, v.qz, v.qw)) {
+            out_error = "vehicle snapshot orientation is not a unit quaternion";
             out = VehicleSnapshot{};
             return false;
         }
@@ -501,12 +550,17 @@ void VehicleGhostClient::apply_vehicle_snapshot(const VehicleSnapshot& snapshot)
         return; // stale snapshot: ignore, never rewind
     }
     float px = 0.0f, py = 0.0f, pz = 0.0f;
+    float pqx = 0.0f, pqy = 0.0f, pqz = 0.0f, pqw = 1.0f;
     bool had_focus = false;
     const auto prev = m_ghosts.find(m_focus);
     if (prev != m_ghosts.end()) {
         px = prev->second.x;
         py = prev->second.y;
         pz = prev->second.z;
+        pqx = prev->second.qx;
+        pqy = prev->second.qy;
+        pqz = prev->second.qz;
+        pqw = prev->second.qw;
         had_focus = true;
     }
     for (const auto& v : snapshot.vehicles) {
@@ -515,18 +569,17 @@ void VehicleGhostClient::apply_vehicle_snapshot(const VehicleSnapshot& snapshot)
     m_acked = snapshot.tick;
     m_has_acked = true;
     const auto cur = m_ghosts.find(m_focus);
-    if (cur == m_ghosts.end()) {
+    if (cur == m_ghosts.end() || !had_focus) {
         m_last_correction = 0.0f;
-        return;
-    }
-    if (!had_focus) {
-        m_last_correction = 0.0f; // brand-new ghost: nothing to snap from
+        m_last_angle = 0.0f; // brand-new ghost: nothing to snap from
         return;
     }
     const float dx = cur->second.x - px;
     const float dy = cur->second.y - py;
     const float dz = cur->second.z - pz;
     m_last_correction = std::sqrt(dx * dx + dy * dy + dz * dz);
+    m_last_angle = quat_angle(pqx, pqy, pqz, pqw, cur->second.qx, cur->second.qy,
+                              cur->second.qz, cur->second.qw);
 }
 
 bool VehicleGhostClient::state(u32 entity, VehicleNetState& out) const {

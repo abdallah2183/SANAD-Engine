@@ -67,6 +67,38 @@ NF_TEST(jolt_box_stack_settles) {
     NF_CHECK(world.body_count() == 1);
 }
 
+NF_TEST(jolt_state_reports_body_orientation) {
+    JoltWorld world;
+    BodyDesc box;
+    box.type = BodyType::Static; // static: nothing integrates over the spawn pose
+    box.shape = Shape::make_box(Vec3{0.5f, 0.5f, 0.5f});
+    box.position = Vec3{0, 1, 0};
+    const Quat yaw = Quat::from_axis_angle(Vec3{0, 1, 0}, 1.5707963f); // 90 degrees
+    box.orientation = yaw;
+    const JoltBody b = world.add_body(box);
+    NF_CHECK(b.valid());
+
+    const JoltBodyState st = world.state(b);
+    NF_CHECK_NEAR(st.rotation.length_sq(), 1.0f, 1e-5f);
+    // Compare the rotation by what it DOES, not by its components: q and -q
+    // describe the same orientation, and which of the two Jolt hands back is
+    // not a contract anyone should depend on.
+    const Vec3 axis{0, 0, 1};
+    const Vec3 want = yaw.rotate(axis);
+    const Vec3 got = st.rotation.rotate(axis);
+    NF_CHECK_NEAR(got.x, want.x, 1e-4f);
+    NF_CHECK_NEAR(got.y, want.y, 1e-4f);
+    NF_CHECK_NEAR(got.z, want.z, 1e-4f);
+
+    // An unrotated body reports identity; so does a dead handle.
+    BodyDesc plain;
+    plain.type = BodyType::Static;
+    plain.shape = Shape::make_box(Vec3{0.5f, 0.5f, 0.5f});
+    const JoltBody p = world.add_body(plain);
+    NF_CHECK_NEAR(world.state(p).rotation.w, 1.0f, 1e-5f);
+    NF_CHECK_NEAR(world.state(JoltBody{}).rotation.w, 1.0f, 1e-6f);
+}
+
 NF_TEST(jolt_set_velocity_moves_bodies) {
     JoltWorld world;
     NF_CHECK(world.add_body(static_plane()).valid());

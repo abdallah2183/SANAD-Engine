@@ -94,6 +94,29 @@ NF_TEST(jolt_vehicle_steering_changes_heading) {
     NF_CHECK(std::sqrt(dx * dx + dz * dz) > 1.0f);
 }
 
+NF_TEST(jolt_vehicle_chassis_state_carries_heading) {
+    // A snapshot that carries position but no orientation renders a car
+    // sliding sideways through a corner, so chassis_state() must report the
+    // pose the renderer and the wire both need.
+    auto run = [](float steer) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltVehicle car(world, JoltVehicleConfig{}, Vec3{0, 2, 0});
+        for (int i = 0; i < 120; ++i) world.step(1.0f / 60.0f);
+        for (int i = 0; i < 180; ++i) {
+            car.drive(1.0f, steer);
+            world.step(1.0f / 60.0f);
+        }
+        return car.chassis_state();
+    };
+    const JoltBodyState straight = run(0.0f);
+    const JoltBodyState turned = run(0.8f);
+    NF_CHECK_NEAR(straight.rotation.length_sq(), 1.0f, 1e-4f);
+    NF_CHECK_NEAR(turned.rotation.length_sq(), 1.0f, 1e-4f);
+    // |dot| == 1 is the identical orientation; a real turn reads below it.
+    NF_CHECK(std::fabs(straight.rotation.dot(turned.rotation)) < 0.999f);
+}
+
 NF_TEST(jolt_vehicle_reverses) {
     auto run = [](float throttle) {
         JoltWorld world;
