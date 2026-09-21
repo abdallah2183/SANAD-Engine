@@ -69,6 +69,7 @@ add_executable(RHITests
     RHITests/test_lod.cpp
     RHITests/test_lod_gen.cpp
     RHITests/test_sky.cpp
+    RHITests/test_shadow_cascades.cpp
     RHITests/test_timeofday.cpp
     RHITests/test_terrain.cpp
     RHITests/test_postfx_shake.cpp

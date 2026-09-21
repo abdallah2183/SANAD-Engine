@@ -199,6 +199,17 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                 if (ss_pos != std::string::npos) sscanf(line.c_str()+ss_pos, "shadow_strength=%f", &light.shadow_strength);
                 size_t sb_pos = line.find("shadow_bias=");
                 if (sb_pos != std::string::npos) sscanf(line.c_str()+sb_pos, "shadow_bias=%f", &light.shadow_bias);
+                size_t sc_pos = line.find("shadow_cascades=");
+                if (sc_pos != std::string::npos) {
+                    // Scanned into an unsigned rather than a u32 directly: %u's
+                    // argument type is fixed by the C standard, and u32 is only
+                    // incidentally unsigned on this platform.
+                    unsigned cascades = light.shadow_cascades;
+                    sscanf(line.c_str()+sc_pos, "shadow_cascades=%u", &cascades);
+                    light.shadow_cascades = cascades;
+                }
+                size_t sd_pos = line.find("shadow_distance=");
+                if (sd_pos != std::string::npos) sscanf(line.c_str()+sd_pos, "shadow_distance=%f", &light.shadow_distance);
                 scene->world().add<DirectionalLight>(e, light);
             } else if (line.rfind("  Sky:",0)==0) {
                 SkyComponent sky;
@@ -502,6 +513,11 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             // both keys) keep rendering exactly as before.
             if (l->shadow_strength != 1.0f) out << " shadow_strength=" << l->shadow_strength;
             if (l->shadow_bias != 0.0005f) out << " shadow_bias=" << l->shadow_bias;
+            // Written only when the scene departs from the renderer's default, so
+            // a scene authored before cascades existed round-trips to the exact
+            // same bytes it was loaded from.
+            if (l->shadow_cascades != 4u) out << " shadow_cascades=" << l->shadow_cascades;
+            if (l->shadow_distance != 0.0f) out << " shadow_distance=" << l->shadow_distance;
             out << "\n";
         }
         const auto* sky = scene_obj.world().get<SkyComponent>(e);

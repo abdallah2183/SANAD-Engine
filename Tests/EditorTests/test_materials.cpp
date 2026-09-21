@@ -898,8 +898,15 @@ NF_TEST(render_memory_rows_follow_vulkan_top_left_origin) {
         }
     }
     rb->unmap();
-    NF_CHECK(red_bottom > 100);        // the cube rendered, above centre...
-    NF_CHECK(red_top * 4 < red_bottom); // ...into memory-bottom rows (NDC +Y)
+    // Orientation: memory row 0 is the TOP of the image, and the cube sits ABOVE
+    // the view centre in world +Y, so it must land in the low-numbered rows.
+    // Mat4::perspective negates m[1][1] precisely to arrange this: Vulkan's NDC
+    // +Y points down the screen, so without that sign flip a point above centre
+    // comes out with a positive NDC y and is drawn near the image bottom — the
+    // whole frame upside down. These two counters were written before that flip
+    // existed and asserted the upside-down result.
+    NF_CHECK(red_top > 100);           // the cube rendered, above centre...
+    NF_CHECK(red_bottom * 4 < red_top); // ...into memory-top rows (Vulkan origin)
 
     NF_CHECK(rhi::validation_error_count() == 0);
     device.wait_idle();

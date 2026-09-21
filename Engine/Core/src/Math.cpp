@@ -93,13 +93,18 @@ Mat4 Mat4::perspective(f32 fovy, f32 aspect, f32 near_z, f32 far_z) {
 
 Mat4 Mat4::orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 near_z, f32 far_z) {
     // Same convention as perspective: -Z forward, NDC depth [0, 1], and the
-    // Vulkan Y-flip (NDC y = -1 at the top of the framebuffer).
+    // Vulkan Y-flip (bottom -> +1, top -> -1, i.e. NDC y = -1 is the top of the
+    // framebuffer). Plugging the bounds back in is the only way to check the
+    // constant term: a sign slip there survives every SYMMETRIC range
+    // (bottom == -top makes it vanish) and silently squashes a large part of
+    // the box out of the clip cube the moment the range is off-centre. CSM's
+    // per-cascade boxes are exactly such a range; the ortho camera is not.
     Mat4 r = identity();
     r.m[0][0] = 2.0f / (right - left);
     r.m[1][1] = -2.0f / (top - bottom);
     r.m[2][2] = -1.0f / (far_z - near_z);
     r.m[3][0] = -(left + right) / (right - left);
-    r.m[3][1] = -(top + bottom) / (top - bottom);
+    r.m[3][1] = (top + bottom) / (top - bottom);
     r.m[3][2] = -near_z / (far_z - near_z);
     return r;
 }

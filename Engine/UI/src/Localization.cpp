@@ -80,6 +80,8 @@ constexpr Entry kEntries[] = {
     {"save_game", "Save Game", "حفظ اللعبة"},
     {"scale", "Scale", "الحجم"},
     {"shadow_bias", "Shadow bias", "انحياز الظل"},
+    {"shadow_cascades", "Shadow cascades", "طبقات الظل"},
+    {"shadow_distance", "Shadow distance", "مسافة الظل"},
     {"shadow_strength", "Shadow strength", "قوة الظل"},
     {"slot", "Slot", "الخانة"},
     {"stop", "Stop", "إيقاف"},

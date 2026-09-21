@@ -45,6 +45,12 @@ struct LightEdit {
     bool cast_shadows = true;
     float shadow_strength = 1.0f;
     float shadow_bias = 0.0005f;
+    // Cascaded shadow maps. Both are clamped to what the shadow atlas can hold
+    // ([1, kMaxShadowCascades], and a distance that leaves the cascades ordered),
+    // so an out-of-range value is rejected by validation rather than silently
+    // accepted and then re-clamped somewhere further down the pipeline.
+    int shadow_cascades = 4;
+    float shadow_distance = 0.0f;
 };
 
 // Procedural sky settings for the selected entity (Phase 13). Mirrors

@@ -328,36 +328,11 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         return false;
     }
 
-    // Directional shadow map (fixed size): depth-only target, sampled by the
+    // Directional shadow atlas (cascades): depth-only target, sampled by the
     // lighting pass. The depth-only render pass already exists above.
-    {
-        rhi::TextureDesc shadow_desc{};
-        shadow_desc.width = kShadowMapSize;
-        shadow_desc.height = kShadowMapSize;
-        shadow_desc.format = rhi::Format::D32_SFloat;
-        shadow_desc.usage = rhi::ImageUsage::DepthAtt | rhi::ImageUsage::Sampled;
-        m_shadow_map = device.create_texture(shadow_desc);
-        if (m_shadow_map) {
-            rhi::TextureViewDesc svd{};
-            svd.dimension = rhi::ViewDimension::View2D;
-            svd.aspect = rhi::ImageAspect::Depth;
-            svd.base_mip = 0;
-            svd.mip_count = 1;
-            svd.base_layer = 0;
-            svd.layer_count = 1;
-            svd.texture = m_shadow_map.get();
-            m_shadow_view = device.create_texture_view(svd);
-        }
-        if (m_shadow_map && m_shadow_view) {
-            const std::array<rhi::Texture*, 0> no_colors{};
-            m_shadow_fb =
-                device.create_framebuffer(*m_depth_rp, std::span<rhi::Texture* const>(no_colors),
-                                          m_shadow_map.get());
-        }
-        if (!m_shadow_map || !m_shadow_view || !m_shadow_fb) {
-            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shadow map target");
-            return false;
-        }
+    if (!ensure_shadow_atlas(m_shadow_tile_size)) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shadow atlas");
+        return false;
     }
 
     // --- graph-owned targets ---
@@ -522,14 +497,81 @@ void Renderer3D::shutdown() {
     m_shadow_fb.reset();
     m_shadow_view.reset();
     m_shadow_map.reset();
+    m_shadow_atlas_size = 0;
     m_sampler.reset();
     m_device = nullptr;
+}
+
+void Renderer3D::set_shadow_tile_size(u32 tile) {
+    // Zero would make a zero-sized atlas; the rebuild below is what actually
+    // applies this, so a later render() picks it up.
+    m_shadow_tile_size = (tile == 0) ? 1u : tile;
+}
+
+void Renderer3D::set_shadow_lambda(float lambda) {
+    m_cascades.lambda = std::clamp(lambda, 0.0f, 1.0f);
+}
+
+void Renderer3D::set_shadow_fade_range(float fade_range) {
+    m_cascades.fade_range = std::clamp(fade_range, 0.0f, 1.0f);
+}
+
+bool Renderer3D::ensure_shadow_atlas(u32 tile_size) {
+    if (!m_device || !m_depth_rp) return false;
+    if (tile_size == 0) tile_size = 1;
+    const u32 size = tile_size * kShadowTileGrid;
+    if (m_shadow_map && m_shadow_view && m_shadow_fb) {
+        if (m_shadow_atlas_size == size) return true;
+    }
+
+    // Build the replacement BEFORE releasing the old one: a device that refuses
+    // the new atlas then leaves the renderer with a working one rather than with
+    // none, and m_shadow_atlas_size keeps describing what is actually bound.
+    rhi::TextureDesc shadow_desc{};
+    shadow_desc.width = size;
+    shadow_desc.height = size;
+    shadow_desc.format = rhi::Format::D32_SFloat;
+    shadow_desc.usage = rhi::ImageUsage::DepthAtt | rhi::ImageUsage::Sampled;
+    auto texture = m_device->create_texture(shadow_desc);
+    if (!texture) return false;
+
+    rhi::TextureViewDesc svd{};
+    svd.dimension = rhi::ViewDimension::View2D;
+    svd.aspect = rhi::ImageAspect::Depth;
+    svd.base_mip = 0;
+    svd.mip_count = 1;
+    svd.base_layer = 0;
+    svd.layer_count = 1;
+    svd.texture = texture.get();
+    auto view = m_device->create_texture_view(svd);
+    if (!view) return false;
+
+    const std::array<rhi::Texture*, 0> no_colors{};
+    auto fb = m_device->create_framebuffer(
+        *m_depth_rp, std::span<rhi::Texture* const>(no_colors), texture.get());
+    if (!fb) return false;
+
+    // The atlas being replaced may still be referenced by a frame in flight —
+    // descriptor sets sampled from its view are only released at the next fence
+    // wait, and a tile-size change can arrive mid-frame.
+    m_device->wait_idle();
+    m_shadow_map = std::move(texture);
+    m_shadow_view = std::move(view);
+    m_shadow_fb = std::move(fb);
+    m_shadow_atlas_size = size;
+    m_shadow_tile_size = tile_size;
+    return true;
 }
 
 bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world,
                         const Camera& camera, rhi::Texture& out_target,
                         bool out_is_present_source) {
     if (!m_device || !m_graph) return false;
+
+    // Applies a set_shadow_tile_size() issued since the last frame. A no-op in
+    // steady state; the atlas is deliberately not rebuilt on resize(), because
+    // it does not depend on the output resolution.
+    if (!ensure_shadow_atlas(m_shadow_tile_size)) return false;
 
     // --- Frustum culling: RenderWorld → Visible Objects ---
     nf::Clock cull_clock;
@@ -556,28 +598,76 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     fu.dir_color_int[1] = m_directional.color.y;
     fu.dir_color_int[2] = m_directional.color.z;
     fu.dir_color_int[3] = m_directional.intensity;
-    // Directional shadow transform: ortho box around the origin with the
-    // light placed along -direction. Row-vector order matches update_camera
-    // (view * projection), so the shader consumes it the same way.
+    // Cascaded shadow transforms, each fitted around the slice of THIS camera's
+    // frustum it covers. The previous code built one ortho box around the world
+    // origin with the light parked at `dir * -20`, so walking the camera more
+    // than ~12 units from (0,0,0) silently deleted every shadow in the scene.
+    // Row-vector order matches update_camera (view * projection), so the shader
+    // consumes each matrix the same way it consumes the camera's.
+    const CascadeConfig cfg = sanitize_cascade_config(m_cascades);
+    const u32 cascade_count = std::clamp(m_directional.shadow_cascades, 1u, kMaxShadowCascades);
+    // The atlas always holds kMaxShadowCascades tiles; cascades past the active
+    // count must still hold a VALID matrix, because the shader's blend reads
+    // cascade i+1 and a zero matrix would blank the shadow instead of lighting
+    // it. Duplicating the last real cascade is the safe filler.
+    CascadeFit fits[kMaxShadowCascades];
     {
-        Mat4 light_vp = Mat4::identity();
-        Vec3 dir = m_directional.direction;
-        const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-        if (len >= 1e-6f) {
-            dir *= (1.0f / len);
-            const Vec3 eye = dir * -20.0f;
-            const Vec3 up = (std::abs(dir.y) > 0.98f) ? Vec3{1.0f, 0.0f, 0.0f}
-                                                      : Vec3{0.0f, 1.0f, 0.0f};
-            light_vp = Mat4::look_at(eye, Vec3{0.0f, 0.0f, 0.0f}, up) *
-                       Mat4::orthographic(-12.0f, 12.0f, -12.0f, 12.0f, 1.0f, 60.0f);
+        // Shadow reach: the light's own cap, itself capped by the far plane the
+        // camera actually renders to, so we never fit a range nothing draws.
+        float far_z = camera.far_plane;
+        if (m_directional.shadow_distance > 0.0f) {
+            far_z = std::min(far_z, m_directional.shadow_distance);
         }
-        std::memcpy(fu.light_view_proj, light_vp.m, sizeof(fu.light_view_proj));
+        // Keep the range non-degenerate for the split maths; a far plane at or
+        // inside the near plane is a broken camera, not a reason to emit NaNs.
+        if (!(far_z > camera.near_plane)) far_z = camera.near_plane * 1.001f;
+
+        float splits[kMaxShadowCascades + 1]{};
+        compute_cascade_splits(camera.near_plane, far_z, cascade_count, cfg.lambda, splits);
+
+        for (u32 i = 0; i < cascade_count; ++i) {
+            fits[i] = fit_cascade(camera, m_directional.direction, splits[i], splits[i + 1],
+                                  m_shadow_tile_size, cfg.caster_extrusion);
+            fu.cascade_splits[i] = splits[i + 1];
+        }
+        for (u32 i = cascade_count; i < kMaxShadowCascades; ++i) {
+            fits[i] = fits[cascade_count - 1];
+            fu.cascade_splits[i] = splits[cascade_count];
+        }
+        // Each cascade gets its OWN minimum bias, derived from its texel size,
+        // because that minimum is a world distance and the cascades do not share
+        // one. The artist's shadow_bias is added on top of it by the shader as
+        // extra, which keeps that field's documented range and meaning intact.
+        for (u32 i = 0; i < kMaxShadowCascades; ++i) {
+            fu.cascade_bias[i] = cascade_auto_bias(fits[i], m_shadow_tile_size);
+        }
+        for (u32 i = 0; i < kMaxShadowCascades; ++i) {
+            std::memcpy(fu.light_view_proj[i], fits[i].light_view_proj.m,
+                        sizeof(fu.light_view_proj[i]));
+        }
+    }
+    fu.cascade_info[0] = static_cast<float>(cascade_count);
+    fu.cascade_info[1] = cascade_tile_scale();
+    fu.cascade_info[2] = cfg.fade_range;
+    fu.cascade_info[3] = 0.0f;
+    {
+        // Cascade selection happens in the shader, which only has world
+        // positions — so it needs the camera's forward axis to turn one into a
+        // view-space distance. Falls back to -Z (the unrotated camera basis)
+        // when the target coincides with the eye, where there is no axis.
+        Vec3 fwd = camera.target - camera.position;
+        const float flen = fwd.length();
+        fwd = (flen > 1e-6f) ? fwd / flen : Vec3{0.0f, 0.0f, -1.0f};
+        fu.cam_forward[0] = fwd.x;
+        fu.cam_forward[1] = fwd.y;
+        fu.cam_forward[2] = fwd.z;
+        fu.cam_forward[3] = 0.0f;
     }
     const bool shadows_on = m_directional.enabled && m_directional.shadows_enabled;
     fu.shadow_params[0] = shadows_on ? 1.0f : 0.0f;
     fu.shadow_params[1] = m_directional.shadow_strength;
     fu.shadow_params[2] = m_directional.shadow_bias;
-    fu.shadow_params[3] = 1.0f / static_cast<float>(kShadowMapSize);
+    fu.shadow_params[3] = 1.0f / static_cast<float>(m_shadow_atlas_size);
     // Procedural sky (Phase 13): std140 vec4s straight from SkyParams.
     fu.sky_zenith[0] = m_sky.zenith.x; fu.sky_zenith[1] = m_sky.zenith.y;
     fu.sky_zenith[2] = m_sky.zenith.z; fu.sky_zenith[3] = 0.0f;
@@ -727,12 +817,19 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // The shadow map is a standalone fixed-size texture; importing it lets
     // the graph transition it (depth write in the shadow pass, fragment read
     // in lighting) with the same barriers as owned targets.
-    auto rg_shadow = m_graph->import_texture("ShadowMap", m_shadow_map.get());
+    auto rg_shadow = m_graph->import_texture("ShadowAtlas", m_shadow_map.get());
 
-    // Shadow map (depth from the light). Runs first: nothing else reads it
-    // until lighting, and early writing keeps the barrier chain linear.
+    // Shadow atlas (depth from the light). All cascades are rendered inside ONE
+    // pass: begin_render_pass clears the whole atlas once, then each cascade
+    // gets its own viewport/scissor + light matrix and re-draws the same caster
+    // list. One pass means one barrier in the graph, and it is legal because the
+    // backend issues a straight vkCmdSetViewport/vkCmdSetScissor per call.
+    //
+    // Layered rendering would be tidier, but VulkanFramebuffer binds
+    // texture->view(), which is a single-layer View2D — an array target needs an
+    // RHI change for no gain at four cascades. See ShadowCascades.hpp.
     RGPassDesc shadow_pass{};
-    shadow_pass.name = "ShadowMap";
+    shadow_pass.name = "ShadowAtlas";
     shadow_pass.depth_attachment = rg_shadow;
     shadow_pass.execute = [&](rhi::CommandBuffer& gcmd) {
         const std::array<rhi::ClearValue, 0> no_clears{};
@@ -740,22 +837,27 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.bind_pipeline(*m_depth_pipeline);
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
-        static_assert(sizeof(fu.light_view_proj) == sizeof(push.view_proj));
-        std::memcpy(push.view_proj, fu.light_view_proj, sizeof(push.view_proj));
-        gcmd.set_viewport(0, 0, kShadowMapSize, kShadowMapSize);
-        gcmd.set_scissor(0, 0, kShadowMapSize, kShadowMapSize);
-        for (auto& pd : prepared) {
-            std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
-            gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
-            const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
-            const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
-            if (!vb || !ib) continue;
-            const std::array<const rhi::Buffer*, 1> vbs{vb};
-            gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
-            gcmd.bind_index_buffer(*ib, 0);
-            const MeshLOD& lod = pd.mesh->lods()[pd.lod];
-            for (const SubMesh& sm : lod.submeshes) {
-                gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
+        static_assert(sizeof(fu.light_view_proj[0]) == sizeof(push.view_proj));
+        const u32 tile = m_shadow_tile_size;
+        for (u32 cascade = 0; cascade < cascade_count; ++cascade) {
+            const u32 col = cascade % kShadowTileGrid;
+            const u32 row = cascade / kShadowTileGrid;
+            std::memcpy(push.view_proj, fu.light_view_proj[cascade], sizeof(push.view_proj));
+            gcmd.set_viewport(col * tile, row * tile, tile, tile);
+            gcmd.set_scissor(col * tile, row * tile, tile, tile);
+            for (auto& pd : prepared) {
+                std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
+                gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
+                const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
+                const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
+                if (!vb || !ib) continue;
+                const std::array<const rhi::Buffer*, 1> vbs{vb};
+                gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+                gcmd.bind_index_buffer(*ib, 0);
+                const MeshLOD& lod = pd.mesh->lods()[pd.lod];
+                for (const SubMesh& sm : lod.submeshes) {
+                    gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
+                }
             }
         }
         gcmd.end_render_pass();

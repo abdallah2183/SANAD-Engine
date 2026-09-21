@@ -84,7 +84,6 @@ bool render_full_chain(rhi::IGraphicsDevice& dev, u32 width, u32 height,
     if (!renderer.init(dev, basic3d_shader_dir(), width, height)) return false;
     MeshLibrary meshes;
     renderer.set_mesh_library(&meshes);
-
     ecs::World world;
     const Camera fallback_cam = make_camera(3.0f, float(width) / float(height));
     const Camera& camera = camera_override ? *camera_override : fallback_cam;
@@ -921,6 +920,8 @@ struct SceneSpec {
     std::vector<SpotLight> spots;
     float camera_z = 3.0f;
     bool light_enabled = true;
+    bool shadows = true;
+    u32 cascades = kMaxShadowCascades;
 };
 
 bool render_spec(rhi::IGraphicsDevice& dev, u32 W, u32 H, const SceneSpec& spec,
@@ -939,6 +940,8 @@ bool render_spec(rhi::IGraphicsDevice& dev, u32 W, u32 H, const SceneSpec& spec,
 
             DirectionalLight d = spec.directional;
             d.enabled = spec.light_enabled;
+            d.shadows_enabled = spec.shadows;
+            d.shadow_cascades = spec.cascades;
             renderer.set_directional_light(d);
             for (const PointLight& l : spec.points) renderer.add_point_light(l);
             for (const SpotLight& l : spec.spots) renderer.add_spot_light(l);
@@ -974,9 +977,14 @@ NF_TEST(lighting_pass) {
     // Lit geometry in the middle; procedural sky (Phase 13) around it —
     // blue-dominant and clearly non-black, so sky and geometry stay
     // distinguishable the way black background used to be.
-    // Orientation note: the readback buffer stores NDC row order, which is
-    // vertically mirrored versus the displayed image (the panel flips V on
-    // display). World-up lands on readback BOTTOM rows, ground haze on top.
+    // Orientation note: the readback buffer stores framebuffer row order (row 0
+    // is the top of the image). Mat4::perspective carries a deliberate Y-flip
+    // (m[1][1] negated) so that world-up ends up at the top of the framebuffer,
+    // which puts world-up on readback TOP rows and the below-horizon haze on the
+    // bottom ones. This is the reverse of the pre-Y-flip engine, where every
+    // frame was drawn upside down and world-up really did land on the bottom
+    // rows — the two counters below were written for that engine and sampled the
+    // opposite corners of the frame.
     NF_CHECK(count_pixels_above(lit, 30) > 300);
     u32 sky = 0;
     u32 haze = 0;
@@ -984,15 +992,57 @@ NF_TEST(lighting_pass) {
         const u32 x = static_cast<u32>(i % 64);
         const u32 y = static_cast<u32>(i / 64);
         if (x < 6 || x > 57) {
-            if (y > 57) {
+            if (y < 6) {
                 if (lit[i].b > lit[i].r + 10 && lit[i].b > 30) ++sky;
-            } else if (y < 6) {
+            } else if (y > 57) {
                 if (lit[i].r > 20 && lit[i].g > 20 && lit[i].b > 20) ++haze;
             }
         }
     }
-    NF_CHECK(sky > 60);  // world-up (readback bottom) shows blue sky
-    NF_CHECK(haze > 60); // world-down (readback top) shows lit haze, not black
+    NF_CHECK(sky > 60);  // world-up (readback top) shows blue sky
+    NF_CHECK(haze > 60); // world-down (readback bottom) shows lit haze, not black
+}
+
+NF_TEST(directional_shadow_does_not_darken_an_unoccluded_face) {
+    // The cube's front face points at the camera, and the light arrives from
+    // above-and-in-front of it, so nothing stands between the two: enabling
+    // shadows must leave that face untouched. Any darkening here is acne.
+    //
+    // This is the failure mode cascading makes easy to introduce, and it is
+    // invisible in a shadow-coverage test — acne is *extra* shadow, and the
+    // coverage tests only count that shadow exists. The shader compares a bias
+    // against the shadow map in NDC, and a cascade's NDC depth span is its own
+    // light-space depth range, so the WORLD offset a fixed bias buys is that
+    // range. Fitting a cascade to the near slice makes the range far shorter
+    // than the single fixed box it replaced, the world offset shrinks with it,
+    // and a bias that used to clear the depth slope across a texel no longer
+    // does. Every texel on the face then self-shadows and the face dims evenly.
+    //
+    // Both cascade counts are checked because they size the bias very
+    // differently: one cascade fits the entire near-to-far range, so its texels
+    // and its depth span are both far larger, and the derived bias has to come
+    // out right in both regimes rather than only in the four-cascade default.
+    const GpuFixture& f = require_gpu();
+
+    for (const u32 cascades : {1u, kMaxShadowCascades}) {
+        SceneSpec s = base_spec();
+        s.cascades = cascades;
+
+        std::vector<Pixel> shadowed, unshadowed;
+        NF_CHECK(render_spec(*f.device, 64, 64, s, shadowed));
+        s.shadows = false;
+        NF_CHECK(render_spec(*f.device, 64, 64, s, unshadowed));
+
+        const u64 with_shadows = pixel_sum_center(shadowed, 64, 64, 16);
+        const u64 without = pixel_sum_center(unshadowed, 64, 64, 16);
+        NF_LOG_WARN(nf::LogCategory::Core,
+                    "unoccluded face, {} cascade(s): with_shadows={} without={}",
+                    cascades, with_shadows, without);
+        // Exact: with no occluder the shader's `dir_lo *= 1 - strength * 0` is
+        // the identity, so the two frames must agree bit for bit on this face.
+        NF_CHECK_EQ(with_shadows, without);
+        NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+    }
 }
 
 NF_TEST(directional_light) {
@@ -1365,11 +1415,30 @@ namespace {
 // factor, so lit pixels must be identical and shadowed ones strictly darker.
 struct ShadowScene {
     bool shadows_on = true;
+    /// World offset applied to the camera and to every entity, so the identical
+    /// scene can be rendered at the origin or far away from it. Nothing about
+    /// the shadow depends on where in the world the scene sits — that is the
+    /// property the cascades exist to provide, and this is what measures it.
+    float offset = 0.0f;
+    /// Cascade count handed to the light. 1 is the single-fitted-map case.
+    u32 cascades = kMaxShadowCascades;
+    /// Whether the caster is present. Dropping it isolates self-shadowing: the
+    /// floor alone must render identically with shadows on and off, which is the
+    /// only way to tell floor acne from the cube's shadow, since both show up as
+    /// "pixels that got darker" in the on/off comparison.
+    bool cube = true;
+    /// Shadow reach handed to the light. 0 is the "cast to the camera's far
+    /// plane" sentinel, which is also the default, so leaving this alone keeps
+    /// every other case in this file unchanged.
+    float distance = 0.0f;
 };
 
 bool render_shadow_scene(rhi::IGraphicsDevice& dev, const ShadowScene& spec, std::vector<Pixel>& out) {
     const u32 W = 128, H = 128;
-    const Camera cam = make_camera(6.0f, float(W) / float(H));
+    Camera cam = make_camera(6.0f, float(W) / float(H));
+    cam.position = {spec.offset, 0.0f, spec.offset + 6.0f};
+    cam.target = {spec.offset, 0.0f, spec.offset};
+    update_camera(cam);
     return render_full_chain(dev, W, H,
         [&](ecs::World& world, MeshLibrary& meshes, Renderer3D& renderer) {
             auto cube = StaticMesh::create_cube(1.5f);
@@ -1386,7 +1455,9 @@ bool render_shadow_scene(rhi::IGraphicsDevice& dev, const ShadowScene& spec, std
 
             Entity floor_e = world.create_entity();
             world.add<scene::Transform>(floor_e, scene::Transform{});
+            world.get<scene::Transform>(floor_e)->local_x = spec.offset;
             world.get<scene::Transform>(floor_e)->local_y = -1.6f;
+            world.get<scene::Transform>(floor_e)->local_z = spec.offset;
             world.get<scene::Transform>(floor_e)->scale_x = 14.0f;
             world.get<scene::Transform>(floor_e)->scale_y = 0.2f;
             world.get<scene::Transform>(floor_e)->scale_z = 14.0f;
@@ -1394,17 +1465,88 @@ bool render_shadow_scene(rhi::IGraphicsDevice& dev, const ShadowScene& spec, std
 
             Entity cube_e = world.create_entity();
             world.add<scene::Transform>(cube_e, scene::Transform{});
+            world.get<scene::Transform>(cube_e)->local_x = spec.offset;
             world.get<scene::Transform>(cube_e)->local_y = 0.4f;
-            world.add<MeshComponent>(cube_e, MeshComponent{h_cube, m, true});
+            world.get<scene::Transform>(cube_e)->local_z = spec.offset;
+            if (spec.cube) {
+                world.add<MeshComponent>(cube_e, MeshComponent{h_cube, m, true});
+            }
 
             DirectionalLight d{Vec3{-0.55f, -1.0f, -0.35f}, Vec3{1, 1, 1}, 2.5f, true};
             d.shadows_enabled = spec.shadows_on;
+            d.shadow_cascades = spec.cascades;
+            d.shadow_distance = spec.distance;
             renderer.set_directional_light(d);
         },
         out, nullptr, &cam);
 }
 
+/// Pixels the shadow darkened, and pixels it wrongly brightened.
+void count_shadow_delta(const std::vector<Pixel>& on, const std::vector<Pixel>& off,
+                        u32& darkened, u32& brightened) {
+    darkened = 0;
+    brightened = 0;
+    for (usize i = 0; i < on.size(); ++i) {
+        const int dr = int(off[i].r) - int(on[i].r);
+        const int dg = int(off[i].g) - int(on[i].g);
+        const int db = int(off[i].b) - int(on[i].b);
+        if (dr > 10 || dg > 10 || db > 10) ++darkened;
+        if (dr < -10 || dg < -10 || db < -10) ++brightened;
+    }
+}
+
+/// Total occlusion the shadow removed, summed over every pixel.
+///
+/// This is the blur-invariant way to ask "how much shadow is there". The count
+/// above is not: a coarser cascade has a wider 3x3 PCF footprint, so its
+/// penumbra drags a band of partially-lit pixels over any fixed threshold and
+/// inflates the count without occluding anything extra. Summing instead of
+/// counting is indifferent to how the same occlusion is spread across pixels,
+/// so it moves only when shadow is genuinely gained or lost.
+u64 shadow_energy(const std::vector<Pixel>& on, const std::vector<Pixel>& off) {
+    u64 sum = 0;
+    for (usize i = 0; i < on.size(); ++i) {
+        const int d = int(off[i].g) - int(on[i].g);
+        if (d > 0) sum += static_cast<u64>(d);
+    }
+    return sum;
+}
+
 } // namespace
+
+NF_TEST(directional_shadow_floor_alone_does_not_self_shadow) {
+    // With the caster removed, nothing in the scene can legally cast onto the
+    // floor, so shadows on and off must agree everywhere. Whatever darkens is
+    // the floor self-shadowing against its own depth — acne — and this is the
+    // case a cascade makes dangerous, because the bias needed to clear it is a
+    // WORLD distance derived from the cascade's texel size, and cascading
+    // changes that texel size out from under any single tuned constant.
+    //
+    // This also disambiguates the coverage test: floor pixels that darken there
+    // can be either the cube's shadow or floor acne, and only this scene tells
+    // the two apart.
+    const GpuFixture& f = require_gpu();
+    for (const u32 cascades : {1u, kMaxShadowCascades}) {
+        std::vector<Pixel> on, off;
+        ShadowScene spec{};
+        spec.shadows_on = true;
+        spec.cube = false;
+        spec.cascades = cascades;
+        NF_CHECK(render_shadow_scene(*f.device, spec, on));
+        spec.shadows_on = false;
+        NF_CHECK(render_shadow_scene(*f.device, spec, off));
+
+        u32 darkened = 0;
+        u32 brightened = 0;
+        count_shadow_delta(on, off, darkened, brightened);
+        NF_LOG_WARN(nf::LogCategory::Core,
+                    "floor acne probe, {} cascade(s): darkened={} brightened={}",
+                    cascades, darkened, brightened);
+        NF_CHECK_EQ(darkened, 0u);
+        NF_CHECK_EQ(brightened, 0u);
+        NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+    }
+}
 
 NF_TEST(directional_shadow_darkens_floor) {
     const GpuFixture& f = require_gpu();
@@ -1416,17 +1558,175 @@ NF_TEST(directional_shadow_darkens_floor) {
     // Shadows only ever darken: no pixel may get brighter with them on.
     u32 darkened = 0;
     u32 brightened = 0;
-    for (usize i = 0; i < on.size(); ++i) {
-        const int dr = int(off[i].r) - int(on[i].r);
-        const int dg = int(off[i].g) - int(on[i].g);
-        const int db = int(off[i].b) - int(on[i].b);
-        if (dr > 10 || dg > 10 || db > 10) ++darkened;
-        if (dr < -10 || dg < -10 || db < -10) ++brightened;
-    }
+    count_shadow_delta(on, off, darkened, brightened);
+    // Not just "some pixels moved": floor acne would inflate this count with
+    // shadow that is not the cube's. `directional_shadow_floor_alone_...` pins
+    // that the floor contributes none of it, so this number is the cube's own
+    // shadow and nothing else.
     NF_LOG_WARN(nf::LogCategory::Core, "shadow debug: darkened={} brightened={}", darkened,
                 brightened);
     NF_CHECK(darkened > 30);   // the cube's shadow lands on the floor
     NF_CHECK_EQ(brightened, 0u); // ...and nothing else moved
+    NF_CHECK(shadow_energy(on, off) > 0u);
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+}
+
+NF_TEST(directional_shadow_survives_being_split_into_more_cascades) {
+    // Cascading must redistribute shadow ACROSS the atlas without ever dropping
+    // any of it: each fragment is tested against exactly one cascade's map, and
+    // a fragment whose cascade happened to be fitted without its caster stops
+    // being shadowed entirely. That failure is silent — the frame still renders,
+    // it just quietly loses the occlusion — so it needs a test.
+    //
+    // The measured quantity is energy, not a darkened-pixel count. The count is
+    // NOT comparable across cascade counts and looks like a bug if you compare
+    // it: one cascade fits a box around the whole frustum, so its texel is ~15x
+    // coarser, its PCF penumbra proportionally wider, and ~2.6x as many pixels
+    // cross any fixed darkness threshold without a single extra photon being
+    // blocked. Summing the darkening is invariant to that re-filtering, so it
+    // changes only if occlusion is really gained or lost.
+    const GpuFixture& f = require_gpu();
+
+    std::vector<Pixel> off;
+    ShadowScene off_spec{};
+    off_spec.shadows_on = false;
+    NF_CHECK(render_shadow_scene(*f.device, off_spec, off));
+
+    const u64 single = [&] {
+        std::vector<Pixel> on;
+        ShadowScene spec{};
+        spec.cascades = 1; // ShadowScene's default is the full cascade count
+        NF_CHECK(render_shadow_scene(*f.device, spec, on));
+        NF_CHECK_EQ(on.size(), off.size());
+        // Sanity: the reference case has to be a real shadow, or every
+        // comparison below is comparing nothing against nothing.
+        NF_CHECK(shadow_energy(on, off) > 0u);
+        return shadow_energy(on, off);
+    }();
+
+    for (const u32 cascades : {2u, 3u, kMaxShadowCascades}) {
+        ShadowScene spec{};
+        spec.cascades = cascades;
+        std::vector<Pixel> on;
+        NF_CHECK(render_shadow_scene(*f.device, spec, on));
+        NF_CHECK_EQ(on.size(), off.size());
+
+        u32 darkened = 0;
+        u32 brightened = 0;
+        count_shadow_delta(on, off, darkened, brightened);
+        const u64 energy = shadow_energy(on, off);
+        NF_LOG_WARN(nf::LogCategory::Core,
+                    "cascade energy: cascades={} darkened={} energy={} (single={})", cascades,
+                    darkened, energy, single);
+
+        // Splitting can only ever resolve the same occlusion better — a sharper
+        // map puts genuinely-dark pixels further down, never further up. So the
+        // energy may rise modestly but must never fall, and a real caster loss
+        // would show up as a collapse toward zero.
+        NF_CHECK(energy >= single);
+        NF_CHECK(energy <= single * 2);
+        NF_CHECK_EQ(brightened, 0u);
+        NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+    }
+}
+
+NF_TEST(directional_shadow_distance_caps_the_shadow_reach) {
+    // `shadow_distance` is the open-world knob: it stops the cascades at a chosen
+    // range so the atlas is spent where a player can actually read it instead of
+    // stretched to the camera's far plane. The contracts worth pinning are that
+    // it BITES (a cap below the caster's distance removes the shadow) and that 0
+    // means "no cap" rather than "no shadows" — 0 is a plausible-looking value
+    // that a mangled default or a bad scene parse would produce.
+    const GpuFixture& f = require_gpu();
+
+    std::vector<Pixel> off;
+    ShadowScene off_spec{};
+    off_spec.shadows_on = false;
+    NF_CHECK(render_shadow_scene(*f.device, off_spec, off));
+
+    // The caster stands ~6.4 units from the camera, so a 0.5 reach cannot see it.
+    ShadowScene capped{};
+    capped.distance = 0.5f;
+    std::vector<Pixel> capped_on;
+    NF_CHECK(render_shadow_scene(*f.device, capped, capped_on));
+    NF_CHECK_EQ(capped_on.size(), off.size());
+    NF_CHECK_EQ(shadow_energy(capped_on, off), 0u);
+
+    // The sentinel: 0 leaves the full camera far plane in play.
+    ShadowScene uncapped{};
+    uncapped.distance = 0.0f;
+    std::vector<Pixel> uncapped_on;
+    NF_CHECK(render_shadow_scene(*f.device, uncapped, uncapped_on));
+    NF_CHECK_EQ(uncapped_on.size(), off.size());
+    const u64 full = shadow_energy(uncapped_on, off);
+    NF_CHECK(full > 0u);
+
+    // A cap ABOVE the caster's distance must leave the shadow present. It is not
+    // exactly equal to the uncapped case and cannot be: the cap also shortens the
+    // far plane the cascades are split over, which reshuffles every slice and so
+    // re-filters the shadow. What matters is that it survives — without this case
+    // the two above would also pass if any non-zero distance simply disabled
+    // shadows, which is not a cap at all, and is the likelier bug since it is
+    // what a mistaken `> 0` treated as a boolean would do.
+    ShadowScene generous{};
+    generous.distance = 8.0f;
+    std::vector<Pixel> generous_on;
+    NF_CHECK(render_shadow_scene(*f.device, generous, generous_on));
+    NF_CHECK_EQ(generous_on.size(), off.size());
+    const u64 generous_energy = shadow_energy(generous_on, off);
+    NF_LOG_WARN(nf::LogCategory::Core, "shadow reach: uncapped={} capped8={} capped0.5=0",
+                full, generous_energy);
+    NF_CHECK(generous_energy > 0u);
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+}
+
+NF_TEST(directional_shadow_follows_the_camera_far_from_the_origin) {
+    // This is the defect the cascades exist to fix, measured from GPU output
+    // rather than inferred from the code. The shadow transform used to be a
+    // single ortho box pinned to the WORLD ORIGIN (a +-12 box with the light
+    // parked at dir * -20), so translating this exact scene away from (0,0,0)
+    // did not dim the shadow — it deleted it: zero darkened pixels, in a scene
+    // that shades well over a thousand at the origin.
+    const GpuFixture& f = require_gpu();
+    std::vector<Pixel> near_on, far_on, far_off;
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{true, 0.0f}, near_on));
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{true, 300.0f}, far_on));
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{false, 300.0f}, far_off));
+
+    u32 near_dark = 0, near_bright = 0, far_dark = 0, far_bright = 0;
+    count_shadow_delta(near_on, far_off, near_dark, near_bright);
+    count_shadow_delta(far_on, far_off, far_dark, far_bright);
+    NF_LOG_WARN(nf::LogCategory::Core,
+                "far shadow debug: near_darkened={} far_darkened={} far_brightened={}",
+                near_dark, far_dark, far_bright);
+
+    NF_CHECK(far_dark > 30);
+    NF_CHECK_EQ(far_bright, 0u);
+
+    // ...and it must be the SAME shadow, not merely a shadow. The offset is a
+    // rigid translation of camera, floor and caster together, so the cascades
+    // see an identical frustum and the shaded pixel count is preserved. A
+    // cascade that drifted or lost its far range would shade a different area.
+    NF_CHECK(far_dark > near_dark * 8 / 10);
+    NF_CHECK(far_dark < near_dark * 12 / 10);
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+}
+
+NF_TEST(directional_shadow_single_cascade_still_shadows) {
+    // Non-regression for the count knob: 1 cascade is the degenerate
+    // single-fitted-map case, and it must still work — including far from the
+    // origin, which is where the old single map failed.
+    const GpuFixture& f = require_gpu();
+    std::vector<Pixel> on, off;
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{true, 300.0f, 1u}, on));
+    NF_CHECK(render_shadow_scene(*f.device, ShadowScene{false, 300.0f, 1u}, off));
+
+    u32 darkened = 0, brightened = 0;
+    count_shadow_delta(on, off, darkened, brightened);
+    NF_LOG_WARN(nf::LogCategory::Core, "single-cascade debug: darkened={} brightened={}",
+                darkened, brightened);
+    NF_CHECK(darkened > 30);
+    NF_CHECK_EQ(brightened, 0u);
     NF_CHECK_EQ(rhi::validation_error_count(), 0u);
 }
 

@@ -9,6 +9,7 @@
 #include <NF/Editor/ReflectedInspector.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Core/Profiler.hpp>
+#include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -52,6 +53,8 @@ struct InspectorCache {
     bool light_shadows = true;
     float light_shadow_strength = 1.0f;
     float light_shadow_bias = 0.0005f;
+    int light_shadow_cascades = 4;
+    float light_shadow_distance = 0.0f;
     // Sky / environment (Phase 13)
     bool sky_has = false;
     bool sky_enabled = true;
@@ -841,6 +844,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ic.light_shadows = l.cast_shadows;
                 ic.light_shadow_strength = l.shadow_strength;
                 ic.light_shadow_bias = l.shadow_bias;
+                ic.light_shadow_cascades = l.shadow_cascades;
+                ic.light_shadow_distance = l.shadow_distance;
                 const SkyEdit s = read_sky(*w, sel, ic.sky_has);
                 ic.sky_enabled = s.enabled;
                 ic.sky_zenith[0] = s.zenith[0];
@@ -1233,6 +1238,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::SliderFloat(AV("shadow_strength").c_str(), &ic.light_shadow_strength, 0.0f, 1.0f);
                 ImGui::DragFloat(AV("shadow_bias").c_str(), &ic.light_shadow_bias, 0.00005f, 0.0f, 0.01f,
                                  "%.5f");
+                // Cascades are whole tiles of the atlas, so this is a slider, not
+                // a drag: the only meaningful values are 1..4 and every step
+                // changes how the atlas is spent. Distance 0 is the documented
+                // "cast to the camera's far plane" sentinel, and the upper bound
+                // is deliberately generous — the useful range depends on the
+                // scene's scale, not on anything the editor can know.
+                ImGui::SliderInt(AV("shadow_cascades").c_str(), &ic.light_shadow_cascades, 1,
+                                 static_cast<int>(rendering::kMaxShadowCascades));
+                ImGui::DragFloat(AV("shadow_distance").c_str(), &ic.light_shadow_distance, 1.0f,
+                                 0.0f, 1000.0f, "%.1f");
                 if (ImGui::Button((AV("apply") + "##light").c_str())) {
                     LightEdit e;
                     e.dir_x = ic.light_dir[0];
@@ -1245,6 +1260,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     e.cast_shadows = ic.light_shadows;
                     e.shadow_strength = ic.light_shadow_strength;
                     e.shadow_bias = ic.light_shadow_bias;
+                    e.shadow_cascades = ic.light_shadow_cascades;
+                    e.shadow_distance = ic.light_shadow_distance;
                     std::string err;
                     if (!app.set_light(sel, e, err)) {
                         ic.error = err;

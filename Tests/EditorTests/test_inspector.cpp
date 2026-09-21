@@ -194,6 +194,63 @@ NF_TEST(editor_inspector_light_shadow_tuning) {
     NF_CHECK(editor::make_light_command(scene.world(), e, bad_bias, err) == nullptr);
 }
 
+NF_TEST(editor_inspector_light_cascade_tuning) {
+    scene::Scene scene("LightCascades");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    scene.world().add<runtime::DirectionalLight>(e, runtime::DirectionalLight{});
+
+    editor::LightEdit edit;
+    edit.shadow_cascades = 2;
+    edit.shadow_distance = 60.0f;
+    std::string err;
+    auto cmd = editor::make_light_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+    const auto* l = scene.world().get<runtime::DirectionalLight>(e);
+    NF_CHECK(l != nullptr);
+    NF_CHECK_EQ(l->shadow_cascades, 2u);
+    NF_CHECK_NEAR(l->shadow_distance, 60.0f, 1e-5f);
+
+    // The panel's edit flow is read -> display -> write back, so the read path
+    // must hand back exactly what was stored and the result must survive
+    // validation unchanged. A read that loses or rounds a value makes the panel
+    // silently rewrite the artist's setting every time the selection changes.
+    bool has = false;
+    const editor::LightEdit read_back = editor::read_light(scene.world(), e, has);
+    NF_CHECK(has);
+    NF_CHECK_EQ(read_back.shadow_cascades, 2);
+    NF_CHECK_NEAR(read_back.shadow_distance, 60.0f, 1e-5f);
+    std::string round_trip_err;
+    NF_CHECK(editor::make_light_command(scene.world(), e, read_back, round_trip_err) != nullptr);
+
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK_EQ(scene.world().get<runtime::DirectionalLight>(e)->shadow_cascades, 4u);
+    NF_CHECK_NEAR(scene.world().get<runtime::DirectionalLight>(e)->shadow_distance, 0.0f, 1e-7f);
+
+    // The count indexes a fixed 2x2 atlas, so it is bounded at both ends: 0 tiles
+    // means no shadow map at all and 5 has nowhere to go. Rejecting here is the
+    // point — the renderer would otherwise silently clamp and the artist would
+    // see a number in the panel that is not the number being rendered.
+    editor::LightEdit too_many = edit;
+    too_many.shadow_cascades = 5;
+    NF_CHECK(editor::make_light_command(scene.world(), e, too_many, err) == nullptr);
+    NF_CHECK(!err.empty());
+    editor::LightEdit none = edit;
+    none.shadow_cascades = 0;
+    NF_CHECK(editor::make_light_command(scene.world(), e, none, err) == nullptr);
+
+    // 0 is the documented "cast to the camera's far plane" sentinel, not a
+    // distance, so only a negative one is invalid.
+    editor::LightEdit negative = edit;
+    negative.shadow_distance = -1.0f;
+    NF_CHECK(editor::make_light_command(scene.world(), e, negative, err) == nullptr);
+    editor::LightEdit far_plane = edit;
+    far_plane.shadow_distance = 0.0f;
+    NF_CHECK(editor::make_light_command(scene.world(), e, far_plane, err) != nullptr);
+}
+
 NF_TEST(editor_inspector_sky_edit_add_and_undo) {
     scene::Scene scene("SkyEdit");
     ecs::Entity e = scene.world().create_entity();

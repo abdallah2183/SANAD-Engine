@@ -29,8 +29,10 @@
 #include <NF/Rendering/PipelineCache.hpp>
 #include <NF/Rendering/RenderGraph.hpp>
 #include <NF/Rendering/RenderWorld.hpp>
+#include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Rendering/Sky.hpp>
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -46,11 +48,21 @@ struct DirectionalLight {
     Vec3 color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
     bool enabled = true;
-    // Shadow mapping (Phase 13): depth-tested PCF against a fixed 2048
-    // ortho shadow map. Strength scales the occlusion 0..1 (1 = full dark).
+    // Shadow mapping (Phase 13): depth-tested PCF against a shadow atlas.
+    // Strength scales the occlusion 0..1 (1 = full dark).
     bool shadows_enabled = true;
     float shadow_strength = 1.0f;
     float shadow_bias = 0.0005f;
+    // Cascades fitted around the camera frustum, clamped to
+    // [1, kMaxShadowCascades]. 1 is the degenerate single fitted map and is
+    // what a scene gets when it wants the cheapest shadows; the default spends
+    // the same atlas memory on four ranges that follow the viewer. See
+    // ShadowCascades.hpp for why the box is no longer pinned to the origin.
+    u32 shadow_cascades = kMaxShadowCascades;
+    // Farthest view-space distance shadows are cast to. 0 means the camera's
+    // far plane. Capping below the far plane concentrates the atlas on the
+    // range that is actually readable — the usual open-world knob.
+    float shadow_distance = 0.0f;
 };
 
 struct PointLight {
@@ -157,6 +169,27 @@ public:
     void set_lod_max_distances(std::vector<float> bands) { m_lod_max_distances = std::move(bands); }
     const std::vector<float>& lod_max_distances() const { return m_lod_max_distances; }
 
+    // --- Shadow quality ---
+    // Global, unlike the per-light count/distance above: these describe the
+    // atlas itself. Cascade count and distance are art direction and travel on
+    // the light (DirectionalLight::shadow_cascades / ::shadow_distance); tile
+    // resolution and the split blend are engine settings that must not differ
+    // between two lights sharing one atlas.
+    //
+    // The tile size may be changed at any time, including after init(): the
+    // atlas is rebuilt on the next render(). Default 1024 makes the 2x2 atlas
+    // 2048x2048 — byte-for-byte the memory the single shadow map used before
+    // cascades existed, now spent on four ranges instead of one.
+    void set_shadow_tile_size(u32 tile);
+    u32 shadow_tile_size() const { return m_shadow_tile_size; }
+    u32 shadow_atlas_size() const { return m_shadow_tile_size * kShadowTileGrid; }
+    void set_shadow_lambda(float lambda);
+    float shadow_lambda() const { return m_cascades.lambda; }
+    void set_shadow_fade_range(float fade_range);
+    float shadow_fade_range() const { return m_cascades.fade_range; }
+    /// The effective global cascade settings (sanitised).
+    CascadeConfig shadow_config() const { return sanitize_cascade_config(m_cascades); }
+
     /// Records one full frame into `cmd` (which must be in recording state):
     ///   Frustum Culling → DepthPrepass → GBuffer → Lighting → Tonemap.
     /// The tonemapped result lands in `out_target`. When the target is a
@@ -185,8 +218,15 @@ private:
         float cam_pos_ambient[4];   // xyz camera, w ambient
         float dir_dir_enable[4];    // xyz direction, w enabled
         float dir_color_int[4];     // rgb color, a intensity
-        float light_view_proj[16];  // shadow-map transform (Phase 13)
-        float shadow_params[4];     // x enabled, y strength, z bias, w texel (1/size)
+        // One world -> shadow-clip transform per cascade. A std140 mat4 array is
+        // tightly packed (each element already 16-byte aligned), so this is laid
+        // out exactly like four consecutive mat4s.
+        float light_view_proj[kMaxShadowCascades][16];
+        float shadow_params[4];     // x enabled, y strength, z bias, w texel (1/atlas)
+        float cascade_splits[4];    // view-space FAR distance covered by cascade i
+        float cascade_info[4];      // x count, y tile uv scale, z fade range, w unused
+        float cascade_bias[4];      // per-cascade MINIMUM bias, in NDC (added to z above)
+        float cam_forward[4];       // xyz camera forward axis (cascade selection)
         float sky_zenith[4];        // rgb zenith, w unused (Phase 13 sky)
         float sky_horizon[4];       // rgb horizon, w unused
         float sky_ground[4];        // rgb below-horizon, w unused
@@ -207,9 +247,31 @@ private:
         PointGPU points[kMaxPointLights];
         SpotGPU spots[kMaxSpotLights];
     };
-    static_assert(sizeof(FrameUniforms) == 64 + 16 + 16 + 16 + 64 + 16 + 5 * 16 + 16 +
-                                         kMaxPointLights * 48 + kMaxSpotLights * 64,
-                   "FrameUniforms must match the shader's std140 layout");
+    // Per-field offsets rather than one hand-summed total: a field inserted in
+    // the middle shifts everything after it, and the sum only notices when the
+    // shift happens to change the total. The named offsets say exactly which
+    // field drifted, and where the shader expects it.
+    static_assert(offsetof(FrameUniforms, inv_view_proj) == 0);
+    static_assert(offsetof(FrameUniforms, cam_pos_ambient) == 64);
+    static_assert(offsetof(FrameUniforms, dir_dir_enable) == 80);
+    static_assert(offsetof(FrameUniforms, dir_color_int) == 96);
+    static_assert(offsetof(FrameUniforms, light_view_proj) == 112);
+    static_assert(offsetof(FrameUniforms, shadow_params) == 368);
+    static_assert(offsetof(FrameUniforms, cascade_splits) == 384);
+    static_assert(offsetof(FrameUniforms, cascade_info) == 400);
+    static_assert(offsetof(FrameUniforms, cascade_bias) == 416);
+    static_assert(offsetof(FrameUniforms, cam_forward) == 432);
+    static_assert(offsetof(FrameUniforms, sky_zenith) == 448);
+    static_assert(offsetof(FrameUniforms, sky_horizon) == 464);
+    static_assert(offsetof(FrameUniforms, sky_ground) == 480);
+    static_assert(offsetof(FrameUniforms, sky_params) == 496);
+    static_assert(offsetof(FrameUniforms, sky_clear) == 512);
+    static_assert(offsetof(FrameUniforms, counts) == 528);
+    static_assert(offsetof(FrameUniforms, points) == 544);
+    static_assert(offsetof(FrameUniforms, spots) ==
+                  544 + kMaxPointLights * 48); // both are 16-byte aligned vec4s
+    static_assert(sizeof(FrameUniforms) == 544 + kMaxPointLights * 48 + kMaxSpotLights * 64,
+                  "FrameUniforms must match the shader's std140 layout");
 
     rhi::IGraphicsDevice* m_device = nullptr;
 
@@ -318,12 +380,26 @@ private:
     std::unique_ptr<rhi::Texture> m_white_texture;
     std::unique_ptr<rhi::TextureView> m_white_view;
 
-    // Directional shadow map: fixed size, resolution-independent (survives
-    // resize without recreation, like the white fallback).
-    static constexpr u32 kShadowMapSize = 2048;
+    // Directional shadow atlas: resolution-independent (survives resize without
+    // recreation, like the white fallback), but NOT tile-independent — changing
+    // the tile size rebuilds it via ensure_shadow_atlas().
+    static constexpr u32 kShadowTileSize = 1024;
+    static constexpr u32 kShadowAtlasSize = kShadowTileSize * kShadowTileGrid;
+    CascadeConfig m_cascades{};
+    u32 m_shadow_tile_size = kShadowTileSize;
+    // Edge length the LIVE atlas was created at. Tracked separately from
+    // m_shadow_tile_size because a tile-size request only takes effect once the
+    // rebuild succeeds, and because a failed rebuild must not leave the
+    // renderer believing it has an atlas it does not.
+    u32 m_shadow_atlas_size = 0;
     std::unique_ptr<rhi::Texture> m_shadow_map;
     std::unique_ptr<rhi::TextureView> m_shadow_view;
     std::unique_ptr<rhi::Framebuffer> m_shadow_fb;
+
+    /// Recreates the atlas (texture + view + framebuffer) when it is missing or
+    /// was built at a different edge length. Returns false only if the device
+    /// refused the resource, in which case the previous atlas is left intact.
+    bool ensure_shadow_atlas(u32 tile_size);
 };
 
 } // namespace nf::rendering

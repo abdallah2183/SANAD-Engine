@@ -32,6 +32,8 @@ NF_TEST(scene_sky_and_shadow_tuning_round_trip) {
     light.cast_shadows = true;
     light.shadow_strength = 0.5f;
     light.shadow_bias = 0.001f;
+    light.shadow_cascades = 2;
+    light.shadow_distance = 45.5f;
     w.add<DirectionalLight>(e, light);
 
     SkyComponent sky;
@@ -62,6 +64,8 @@ NF_TEST(scene_sky_and_shadow_tuning_round_trip) {
     NF_CHECK(loaded_light);
     NF_CHECK_NEAR(loaded_light->shadow_strength, 0.5f, 1e-5f);
     NF_CHECK_NEAR(loaded_light->shadow_bias, 0.001f, 1e-6f);
+    NF_CHECK_EQ(loaded_light->shadow_cascades, 2u);
+    NF_CHECK_NEAR(loaded_light->shadow_distance, 45.5f, 1e-5f);
     NF_CHECK(loaded_light->cast_shadows);
 
     const auto* loaded_sky = result.scene->world().get<SkyComponent>(loaded_e);
@@ -83,8 +87,11 @@ NF_TEST(scene_sky_and_shadow_tuning_round_trip) {
 }
 
 NF_TEST(scene_old_light_line_keeps_shadow_defaults) {
-    // A pre-Phase-13 Light line (no shadow keys) must load with strength 1
-    // and the standard bias: old scenes render exactly as before.
+    // A Light line without shadow keys must load with strength 1 and the standard
+    // bias: old scenes render exactly as before. This also covers the default
+    // cascade settings, since save writes those keys only when a scene departs
+    // from them — so a default light round-trips through a file that never
+    // mentions cascades at all, which is what a pre-cascade scene is.
     VirtualFileSystem vfs;
     auto tmp = std::filesystem::temp_directory_path() / "nf_scene_sky_compat_test";
     std::filesystem::create_directories(tmp);
@@ -105,6 +112,8 @@ NF_TEST(scene_old_light_line_keeps_shadow_defaults) {
     NF_CHECK(loaded_light);
     NF_CHECK_NEAR(loaded_light->shadow_strength, 1.0f, 1e-6f);
     NF_CHECK_NEAR(loaded_light->shadow_bias, 0.0005f, 1e-7f);
+    NF_CHECK_EQ(loaded_light->shadow_cascades, 4u);
+    NF_CHECK_NEAR(loaded_light->shadow_distance, 0.0f, 1e-7f);
     NF_CHECK(result.scene->world().get<SkyComponent>(loaded_e) == nullptr);
 
     std::filesystem::remove_all(tmp);

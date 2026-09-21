@@ -1295,6 +1295,8 @@ void Runtime::extract_light() {
         rl.shadows_enabled = l->cast_shadows;
         rl.shadow_strength = l->shadow_strength;
         rl.shadow_bias = l->shadow_bias;
+        rl.shadow_cascades = l->shadow_cascades;
+        rl.shadow_distance = l->shadow_distance;
         m_renderer->set_directional_light(rl);
         return;
     }

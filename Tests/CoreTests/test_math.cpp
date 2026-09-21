@@ -130,6 +130,47 @@ NF_TEST(test_mat4_perspective_points_up_at_negative_ndc_y) {
     NF_CHECK_NEAR(up.y, -down.y, 1e-5f); // symmetric about the axis
 }
 
+NF_TEST(test_mat4_orthographic_maps_an_off_centre_box_onto_the_clip_cube) {
+    // The constant term of the Y row used to carry the wrong sign, which is
+    // invisible for every SYMMETRIC range (bottom == -top makes it cancel) and
+    // squashes an off-centre box out of the clip cube. Both callers at the time
+    // passed -12..12, so nothing failed; cascaded shadow maps fit per-cascade
+    // boxes like 6.207..-2.650 and lost half of every cascade to the bug.
+    constexpr float l = -6.3855295f, r = 7.6763678f;
+    constexpr float b = -2.6503382f, t = 6.2070093f;
+    const Mat4 o = Mat4::orthographic(l, r, b, t, 1.0f, 60.0f);
+
+    // Each bound must land on its own clip-plane edge, exactly.
+    NF_CHECK_NEAR(o.transform_point({l, b, -1.0f}).x, -1.0f, 1e-4f);
+    NF_CHECK_NEAR(o.transform_point({r, t, -1.0f}).x, 1.0f, 1e-4f);
+    // Vulkan Y-flip: bottom -> +1, top -> -1.
+    NF_CHECK_NEAR(o.transform_point({l, b, -1.0f}).y, 1.0f, 1e-4f);
+    NF_CHECK_NEAR(o.transform_point({r, t, -1.0f}).y, -1.0f, 1e-4f);
+
+    // And the interior must stay inside: a wrong constant shifts the whole box.
+    for (const float fx : {-1.0f, -0.3f, 0.0f, 0.55f, 1.0f}) {
+        for (const float fy : {-1.0f, -0.4f, 0.0f, 0.8f, 1.0f}) {
+            const float x = l + (r - l) * (fx * 0.5f + 0.5f);
+            const float y = b + (t - b) * (fy * 0.5f + 0.5f);
+            const Vec3 ndc = o.transform_point({x, y, -1.0f});
+            NF_CHECK(ndc.x >= -1.0f - 1e-4f && ndc.x <= 1.0f + 1e-4f);
+            NF_CHECK(ndc.y >= -1.0f - 1e-4f && ndc.y <= 1.0f + 1e-4f);
+        }
+    }
+    // Depth still follows the Vulkan [0,1] convention, near -> 0, far -> 1.
+    NF_CHECK_NEAR(o.transform_point({0.0f, 0.0f, -1.0f}).z, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(o.transform_point({0.0f, 0.0f, -60.0f}).z, 1.0f, 1e-4f);
+}
+
+NF_TEST(test_mat4_orthographic_agrees_with_a_symmetric_range) {
+    // The pre-existing ortho camera path must be bit-for-bit unaffected by the
+    // fix above, since bottom == -top there.
+    const Mat4 o = Mat4::orthographic(-12.0f, 12.0f, -12.0f, 12.0f, 1.0f, 60.0f);
+    NF_CHECK_NEAR(o.transform_point({-12.0f, 12.0f, -1.0f}).y, -1.0f, 1e-4f);
+    NF_CHECK_NEAR(o.transform_point({12.0f, -12.0f, -1.0f}).y, 1.0f, 1e-4f);
+    NF_CHECK_NEAR(o.m[3][1], 0.0f, 1e-6f);
+}
+
 NF_TEST(test_mat4_transpose_swaps_off_diagonal) {
     Mat4 r = Mat4::rotate_z(0.7f);
     Mat4 t = r.transposed();

@@ -27,6 +27,16 @@ struct DirectionalLight {
     bool cast_shadows = true; // Phase 13: feeds the renderer's shadow map
     float shadow_strength = 1.0f; // 0 = no darkening .. 1 = full shadow
     float shadow_bias = 0.0005f;  // depth bias against shadow acne
+    // Cascaded shadow maps: how many camera-following ranges the atlas is split
+    // into. One map fitted around the whole frustum is cheap but its texel is
+    // coarse; splitting follows the viewer with far more detail up close, and
+    // costs no extra memory because the tiles share the map the single cascade
+    // used to occupy. Clamped by the renderer to [1, kMaxShadowCascades].
+    u32 shadow_cascades = 4;
+    // Farthest distance shadows are cast to; 0 means "the camera's far plane".
+    // Lowering it concentrates the atlas on the range a player can actually
+    // read, which is the usual open-world trade.
+    float shadow_distance = 0.0f;
 };
 
 /// Procedural sky settings (Phase 13). Attach to any entity; the first one

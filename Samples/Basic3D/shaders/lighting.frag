@@ -38,8 +38,12 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
     vec4 camPos_ambient;          // xyz = camera world position, w = ambient
     vec4 dirLight_dir_enable;     // xyz = light direction (travels this way), w = enabled
     vec4 dirLight_color_int;      // rgb = color, a = intensity
-    mat4 lightViewProj;           // world -> shadow-map clip
-    vec4 shadow_params;           // x = enabled, y = strength, z = bias, w = texel (1/size)
+    mat4 lightViewProj[4];        // world -> shadow clip, one per cascade
+    vec4 shadow_params;           // x = enabled, y = strength, z = bias, w = texel (1/atlas)
+    vec4 cascade_splits;          // view-space FAR distance covered by cascade i
+    vec4 cascade_info;            // x = count, y = tile uv scale, z = fade range
+    vec4 cascade_bias;            // per-cascade MINIMUM bias, in NDC (added to z above)
+    vec4 cam_forward;             // xyz = camera forward axis (cascade selection)
     vec4 sky_zenith;              // rgb zenith color
     vec4 sky_horizon;             // rgb horizon color
     vec4 sky_ground;              // rgb below-horizon color
@@ -51,27 +55,90 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
 } frame;
 
 const float PI = 3.14159265358979;
+const int kCascadeCount = 4;      // must match kMaxShadowCascades
 
-// Directional shadow factor via the fixed ortho shadow map (3x3 PCF).
-// Same NDC convention as the main passes (uv = ndc*0.5+0.5, depth [0,1]),
-// so the lookup is self-consistent with how the map was rendered.
-float shadow_factor(vec3 pos) {
-    vec4 lp = frame.lightViewProj * vec4(pos, 1.0);
-    vec3 ndc = lp.xyz / max(lp.w, 1e-6);
-    vec2 suv = ndc.xy * 0.5 + 0.5;
-    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0 || ndc.z > 1.0) {
-        return 0.0; // outside the ortho box: fully lit
+// Cascade selection: the shader only ever has a world position, so the camera's
+// forward axis is what turns one into the view-space distance the splits are
+// expressed in. Returns the last cascade whose far split the point is inside;
+// anything past the final split falls into the last cascade rather than off the
+// end, so a distant fragment is lit by the widest map instead of unshadowed.
+int select_cascade(float view_depth) {
+    int count = int(frame.cascade_info.x);
+    int idx = 0;
+    for (int i = 0; i < kCascadeCount; ++i) {
+        if (i >= count - 1) break;
+        if (view_depth > frame.cascade_splits[i]) idx = i + 1;
     }
-    float bias = frame.shadow_params.z;
-    float texel = frame.shadow_params.w;
+    return idx;
+}
+
+// One cascade's occlusion, 3x3 PCF against its tile of the atlas.
+//
+// Every tap is clamped into the tile's own rect. Without that, a tap near a
+// tile edge samples the NEIGHBOURING cascade — a different projection of a
+// different slice — and shadows leak across the seam as bright or dark flecks.
+float sample_cascade(vec3 pos, int cascade) {
+    vec4 lp = frame.lightViewProj[cascade] * vec4(pos, 1.0);
+    vec3 ndc = lp.xyz / max(lp.w, 1e-6);
+    if (ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 ||
+        ndc.z < 0.0 || ndc.z > 1.0) {
+        return 0.0; // outside this cascade's box: nothing occludes it
+    }
+
+    float scale = frame.cascade_info.y;                  // tile size in atlas uv
+    vec2 tile = vec2(float(cascade % 2), float(cascade / 2)) * scale;
+    vec2 uv = tile + (ndc.xy * 0.5 + 0.5) * scale;
+
+    float texel = frame.shadow_params.w;                 // one atlas texel, in uv
+    // Two bias terms. `cascade_bias` is this cascade's own minimum, derived on
+    // the CPU from its texel size (cascade_auto_bias) — the near cascade has
+    // both smaller texels and a shorter depth span than the fixed box it
+    // replaced, so a constant tuned against that box is now far too small and
+    // the lit faces self-shadow. `shadow_params.z` is the artist's bias on top.
+    float bias = frame.shadow_params.z + frame.cascade_bias[cascade];
+    // Half-texel inset so a clamped tap lands on the tile's edge texel centre
+    // instead of halfway into the neighbour.
+    vec2 lo = tile + vec2(texel * 0.5);
+    vec2 hi = tile + vec2(scale - texel * 0.5);
+
     float occ = 0.0;
     for (int oy = -1; oy <= 1; ++oy) {
         for (int ox = -1; ox <= 1; ++ox) {
-            float map_depth = texture(shadow_map, suv + vec2(float(ox), float(oy)) * texel).r;
+            vec2 tap = clamp(uv + vec2(float(ox), float(oy)) * texel, lo, hi);
+            float map_depth = texture(shadow_map, tap).r;
             occ += (ndc.z - bias > map_depth) ? 1.0 : 0.0;
         }
     }
     return occ / 9.0;
+}
+
+// Directional shadow factor across the cascade atlas.
+//
+// The bias travels through cascade_bias because a constant NDC bias is a
+// smaller WORLD offset in a wider cascade, which is how acne shows up only in
+// the far ones; scaling by each cascade's depth span keeps the physical offset
+// the artist tuned constant across all four.
+float shadow_factor(vec3 pos) {
+    float view_depth = dot(pos - frame.camPos_ambient.xyz, frame.cam_forward.xyz);
+    int cascade = select_cascade(view_depth);
+    float occ = sample_cascade(pos, cascade);
+
+    // Cross-fade into the next cascade over the tail of this one. The two maps
+    // have different texel densities, so a hard hand-off is visible as a line
+    // where the shadow edge changes resolution; blending over a short band
+    // hides it. Skipped on the last cascade, which has no successor.
+    int count = int(frame.cascade_info.x);
+    float fade = frame.cascade_info.z;
+    if (fade > 0.0 && cascade < count - 1) {
+        float far_i = frame.cascade_splits[cascade];
+        float near_i = (cascade == 0) ? 0.0 : frame.cascade_splits[cascade - 1];
+        float band = max(fade * (far_i - near_i), 1e-4);
+        float t = (view_depth - (far_i - band)) / band;
+        if (t > 0.0) {
+            occ = mix(occ, sample_cascade(pos, cascade + 1), clamp(t, 0.0, 1.0));
+        }
+    }
+    return occ;
 }
 
 float D_GGX(float NoH, float alpha) {

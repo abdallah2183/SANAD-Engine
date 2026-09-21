@@ -1,9 +1,11 @@
 #include <NF/Editor/Inspector.hpp>
 #include <NF/Editor/Commands.hpp>
 #include <NF/Assets/AssetId.hpp>
+#include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Runtime/Runtime.hpp>
 
 #include <cmath>
+#include <string>
 
 namespace nf::editor {
 
@@ -93,6 +95,8 @@ LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.cast_shadows = l->cast_shadows;
     out.shadow_strength = l->shadow_strength;
     out.shadow_bias = l->shadow_bias;
+    out.shadow_cascades = static_cast<int>(l->shadow_cascades);
+    out.shadow_distance = l->shadow_distance;
     return out;
 }
 
@@ -197,6 +201,22 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
         out_err = "Shadow bias must be within [0, 0.01]";
         return nullptr;
     }
+    // The cascade count indexes a fixed 2x2 atlas, so anything outside
+    // [1, kMaxShadowCascades] has nowhere to render. Rejected here rather than
+    // passed on for the renderer to clamp: a count the artist cannot achieve
+    // should say so, not quietly render as some other number.
+    if (edit.shadow_cascades < 1 ||
+        edit.shadow_cascades > static_cast<int>(rendering::kMaxShadowCascades)) {
+        out_err = "Shadow cascades must be within [1, " +
+                  std::to_string(rendering::kMaxShadowCascades) + "]";
+        return nullptr;
+    }
+    // 0 is the documented "cast to the camera's far plane" sentinel, so only
+    // negative distances are invalid.
+    if (edit.shadow_distance < 0.0f) {
+        out_err = "Shadow distance must be non-negative";
+        return nullptr;
+    }
     const auto* cur = world.get<runtime::DirectionalLight>(e);
     const bool had = (cur != nullptr);
     const runtime::DirectionalLight before = had ? *cur : runtime::DirectionalLight{};
@@ -211,6 +231,8 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
     after.cast_shadows = edit.cast_shadows;
     after.shadow_strength = edit.shadow_strength;
     after.shadow_bias = edit.shadow_bias;
+    after.shadow_cascades = static_cast<u32>(edit.shadow_cascades);
+    after.shadow_distance = edit.shadow_distance;
     return std::make_unique<SetLightCommand>(e, had, before, after);
 }
 
