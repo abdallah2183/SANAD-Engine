@@ -114,7 +114,13 @@ int run() {
         return renderer.materials().create_instance(*renderer.gbuffer_material(), p, name);
     };
     rendering::MaterialHandle chassis_mat = make_mat(0.15f, 0.45f, 0.95f, "chassis");
+    rendering::MaterialHandle cabin_mat = make_mat(0.75f, 0.85f, 0.95f, "cabin");
+    rendering::MaterialHandle glass_mat = make_mat(0.04f, 0.07f, 0.12f, "glass");
+    rendering::MaterialHandle bumper_mat = make_mat(0.10f, 0.10f, 0.12f, "bumper");
+    rendering::MaterialHandle headlight_mat = make_mat(1.0f, 0.95f, 0.75f, "headlight");
+    rendering::MaterialHandle taillight_mat = make_mat(0.9f, 0.08f, 0.08f, "taillight");
     rendering::MaterialHandle wheel_mat = make_mat(0.08f, 0.08f, 0.10f, "wheel");
+    rendering::MaterialHandle hub_mat = make_mat(0.55f, 0.57f, 0.60f, "hub");
     rendering::MaterialHandle ground_mat = make_mat(0.25f, 0.27f, 0.32f, "ground");
     rendering::MaterialHandle obstacle_mat = make_mat(0.95f, 0.45f, 0.10f, "obstacle");
     rendering::MaterialHandle gate_mat = make_mat(1.0f, 0.8f, 0.15f, "gate");
@@ -175,6 +181,10 @@ int run() {
         t->local_x = kSpawn.x; t->local_y = kSpawn.y; t->local_z = kSpawn.z;
     }
     physics::VehicleComponent vc; // default JoltVehicleConfig: front = +Z
+    // Stability tune for the demo: a touch wider and less twitchy than the
+    // raw defaults, so full-lock steering at speed slides instead of rolling.
+    vc.config.track_half_width = 1.0f;
+    vc.config.max_steer_deg = 22.0f;
     world.add<physics::VehicleComponent>(car, vc);
     {
         // Chassis visual matches the default config half extents (0.9/0.5/2.0).
@@ -182,16 +192,44 @@ int run() {
         auto* t = world.get<scene::Transform>(car);
         t->scale_x = 1.8f; t->scale_y = 1.0f; t->scale_z = 4.0f;
     }
-    // NOTE: VehicleSystem only writes translation + euler rotation into the
-    // car Transform (never scale), so the chassis size set here persists.
+    // --- Body panels: plain Transform+Mesh parts posed rigidly from the
+    // --- chassis state every step (Transform v0.1 does not propagate parent
+    // --- rotation, so hierarchy parenting would leave the cabin behind in
+    // --- corners — explicit offsets rotated by the chassis quaternion instead).
+    struct BodyPanel { ecs::Entity entity; Vec3 offset; };
+    std::vector<BodyPanel> panels;
+    auto add_panel = [&](rendering::MaterialHandle mat, Vec3 offset, Vec3 size) {
+        ecs::Entity e = world.create_entity();
+        world.add<scene::Transform>(e, scene::Transform{});
+        auto* t = world.get<scene::Transform>(e);
+        t->scale_x = size.x; t->scale_y = size.y; t->scale_z = size.z;
+        world.add<rendering::MeshComponent>(e, rendering::MeshComponent{cube_handle, mat, true});
+        panels.push_back({e, offset});
+    };
+    add_panel(cabin_mat, Vec3{0.0f, 0.75f, -0.3f}, Vec3{1.5f, 0.55f, 2.0f});      // cabin
+    add_panel(glass_mat, Vec3{0.0f, 0.70f, 0.75f}, Vec3{1.3f, 0.40f, 0.15f});     // windshield
+    add_panel(glass_mat, Vec3{0.0f, 0.70f, -1.30f}, Vec3{1.3f, 0.40f, 0.15f});    // rear glass
+    add_panel(bumper_mat, Vec3{0.0f, -0.30f, 2.00f}, Vec3{1.9f, 0.30f, 0.30f});   // front bumper
+    add_panel(bumper_mat, Vec3{0.0f, -0.30f, -2.00f}, Vec3{1.9f, 0.30f, 0.30f});  // rear bumper
+    add_panel(headlight_mat, Vec3{-0.55f, -0.05f, 2.00f}, Vec3{0.30f, 0.20f, 0.10f});
+    add_panel(headlight_mat, Vec3{0.55f, -0.05f, 2.00f}, Vec3{0.30f, 0.20f, 0.10f});
+    add_panel(taillight_mat, Vec3{-0.55f, -0.05f, -2.00f}, Vec3{0.30f, 0.20f, 0.10f});
+    add_panel(taillight_mat, Vec3{0.55f, -0.05f, -2.00f}, Vec3{0.30f, 0.20f, 0.10f});
     std::vector<ecs::Entity> wheels;
+    std::vector<ecs::Entity> hubs;
     for (int i = 0; i < 4; ++i) {
         ecs::Entity w = world.create_entity();
         world.add<scene::Transform>(w, scene::Transform{});
         auto* t = world.get<scene::Transform>(w);
-        t->scale_x = 0.3f; t->scale_y = 0.7f; t->scale_z = 0.7f; // tire-ish cube
+        t->scale_x = 0.32f; t->scale_y = 0.72f; t->scale_z = 0.72f; // tire
         world.add<rendering::MeshComponent>(w, rendering::MeshComponent{cube_handle, wheel_mat, true});
         wheels.push_back(w);
+        ecs::Entity h = world.create_entity();
+        world.add<scene::Transform>(h, scene::Transform{});
+        auto* ht = world.get<scene::Transform>(h);
+        ht->scale_x = 0.34f; ht->scale_y = 0.30f; ht->scale_z = 0.30f; // rim
+        world.add<rendering::MeshComponent>(h, rendering::MeshComponent{cube_handle, hub_mat, true});
+        hubs.push_back(h);
     }
     float wheel_spin[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
@@ -279,7 +317,24 @@ int run() {
         }
         if (substeps == 5) physics_acc = 0.0f; // spiral-of-death guard
 
-        // --- Wheels: world-space pose + steer + spin -------------------------
+        // Chassis truth for this frame (pose every visual off this one read).
+        auto* drive_comp = world.get<physics::VehicleComponent>(car);
+        const physics::JoltBodyState chassis = drive_comp->vehicle->chassis_state();
+        float chassis_rx = 0.0f, chassis_ry = 0.0f, chassis_rz = 0.0f;
+        scene::euler_xyz_degrees_from_quat(chassis.rotation, chassis_rx, chassis_ry,
+                                           chassis_rz);
+
+        // --- Body panels: rigid offsets rotated by the chassis quaternion ---
+        for (const BodyPanel& p : panels) {
+            auto* t = world.get<scene::Transform>(p.entity);
+            if (t == nullptr) continue;
+            const Vec3 wp = chassis.position + chassis.rotation.rotate(p.offset);
+            t->local_x = wp.x; t->local_y = wp.y; t->local_z = wp.z;
+            t->rot_x = chassis_rx; t->rot_y = chassis_ry; t->rot_z = chassis_rz;
+            t->dirty = true;
+        }
+
+        // --- Wheels: world-space pose + steer + spin (hubs copy the wheel) --
         if (auto* drive = world.get<physics::VehicleComponent>(car)) {
             if (drive->vehicle != nullptr) {
                 const std::vector<physics::JoltWheelState> states = drive->vehicle->wheel_states();
@@ -293,6 +348,14 @@ int run() {
                     t->rot_x = wheel_spin[i] * kRadToDeg;
                     t->rot_y = states[i].steer_angle * kRadToDeg;
                     t->dirty = true;
+                    if (auto* ht = world.get<scene::Transform>(hubs[i])) {
+                        ht->local_x = t->local_x;
+                        ht->local_y = t->local_y;
+                        ht->local_z = t->local_z;
+                        ht->rot_x = t->rot_x;
+                        ht->rot_y = t->rot_y;
+                        ht->dirty = true;
+                    }
                 }
             }
         }
@@ -310,8 +373,6 @@ int run() {
         }
 
         // --- Gates: spin, collect on XZ proximity to the chassis -------------
-        const physics::JoltBodyState chassis =
-            world.get<physics::VehicleComponent>(car)->vehicle->chassis_state();
         for (auto g : gates) {
             auto* t = world.get<scene::Transform>(g);
             t->rot_y += dt * 90.0f;

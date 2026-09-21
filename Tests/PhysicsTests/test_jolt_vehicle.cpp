@@ -25,6 +25,27 @@ void step(JoltWorld& world, int n, float dt = 1.0f / 60.0f) {
 
 } // namespace
 
+NF_TEST(jolt_vehicle_drives_straight_with_no_steer) {
+    // No uncommanded yaw: full throttle and zero steer for 10 s must carry
+    // the car down +Z, not into a spin. (A drift here reads in-game as the
+    // car "veering on its own".)
+    JoltWorld world;
+    world.add_body(static_plane());
+    JoltVehicle car(world, JoltVehicleConfig{}, Vec3{0, 2, 0});
+    step(world, 120); // settle, no input
+    for (int i = 0; i < 600; ++i) {
+        car.drive(1.0f, 0.0f);
+        world.step(1.0f / 60.0f);
+    }
+    const JoltBodyState st = car.chassis_state();
+    NF_CHECK(car.speed_ms() > 5.0f);
+    NF_CHECK(st.position.z > 10.0f);
+    NF_CHECK(std::fabs(st.position.x) < 0.30f * st.position.z); // mostly +Z
+    const Vec3 fwd = st.rotation.rotate(Vec3{0, 0, 1});
+    NF_CHECK(fwd.z > 0.95f); // heading still ~straight
+    NF_CHECK(std::fabs(fwd.x) < 0.30f);
+}
+
 NF_TEST(jolt_vehicle_ctor_only_no_step) {
     JoltWorld world;
     NF_CHECK(world.add_body(static_plane()).valid());
