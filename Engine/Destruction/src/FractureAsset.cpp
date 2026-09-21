@@ -51,4 +51,13 @@ void FractureAsset::bonds_of(u32 chunk, std::vector<u32>& out) const {
     }
 }
 
+u32 FractureAsset::split_bond(u32 chunk) const {
+    if (chunk >= chunks.size()) return kInvalidBond;
+    if (chunks[chunk].is_leaf()) return kInvalidBond;
+    for (usize i = 0u; i < bonds.size(); ++i) {
+        if (bonds[i].parent == chunk) return static_cast<u32>(i);
+    }
+    return kInvalidBond;
+}
+
 } // namespace nf::destruction

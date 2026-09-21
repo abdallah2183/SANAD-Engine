@@ -19,6 +19,7 @@
 namespace nf::destruction {
 
 inline constexpr u32 kInvalidChunk = 0xFFFFFFFFu;
+inline constexpr u32 kInvalidBond  = 0xFFFFFFFFu;
 
 /// One region of a breakable mesh, in the asset's local space.
 ///
@@ -83,6 +84,11 @@ struct FractureAsset {
     /// Bonds still holding `chunk` to the tree — the ones a damage query has to
     /// consider for that chunk's subtree.
     void bonds_of(u32 chunk, std::vector<u32>& out) const;
+
+    /// The bond made by the split that produced `chunk`'s two children, or
+    /// kInvalidBond when `chunk` is a leaf. Every internal chunk has exactly
+    /// one, which is what lets the emitter walk the tree without searching.
+    u32 split_bond(u32 chunk) const;
 };
 
 /// Builds a fracture asset from `source`. The mesh is reduced to its convex

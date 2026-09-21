@@ -141,6 +141,9 @@ add_executable(PhysicsTests
     PhysicsTests/test_jolt_queries.cpp
     PhysicsTests/test_jolt_character.cpp
     PhysicsTests/test_jolt_shapes.cpp
+    # The Jolt-backed IDebrisSink: the first implementation of the destruction
+    # seam, so this is where "the shard really became a body" gets asserted.
+    PhysicsTests/test_jolt_debris_sink.cpp
     # Cloth is first-party (Jolt has no deformable solver), so it lives in its own
     # file rather than next to the Jolt cases.
     PhysicsTests/test_cloth.cpp
@@ -265,10 +268,11 @@ target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)
 nf_target_set_warnings(Scene2DTests)
 
-# --- Destruction tests (convex geometry, fracture assets, determinism) ---
+# --- Destruction tests (fracture geometry, damage, debris budgets) ---
 add_executable(DestructionTests
     TestFramework.cpp
     DestructionTests/test_fracture.cpp
+    DestructionTests/test_destruction_world.cpp
 )
 target_include_directories(DestructionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(DestructionTests PRIVATE NFCore NFDestruction)
