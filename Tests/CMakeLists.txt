@@ -255,6 +255,16 @@ target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)
 nf_target_set_warnings(AITests)
 
+# --- Scene2D tests (atlas, batcher, tilemap, 2D solver) ---
+add_executable(Scene2DTests
+    TestFramework.cpp
+    Scene2DTests/test_scene2d.cpp
+    Scene2DTests/test_systems.cpp
+)
+target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)
+nf_target_set_warnings(Scene2DTests)
+
 # --- VFX tests (deterministic particle simulation) ---
 add_executable(VFXTests
     TestFramework.cpp
@@ -357,7 +367,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests Scene2DTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -384,6 +394,7 @@ add_test(NAME PlatformTests COMMAND PlatformTests)
 add_test(NAME NetworkTests COMMAND NetworkTests)
 add_test(NAME AITests COMMAND AITests)
 add_test(NAME VFXTests COMMAND VFXTests)
+add_test(NAME Scene2DTests COMMAND Scene2DTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()
