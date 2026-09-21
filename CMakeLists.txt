@@ -78,6 +78,11 @@ add_subdirectory(Engine/ECS)
 add_subdirectory(Engine/Scene)
 add_subdirectory(Engine/Rendering)
 add_subdirectory(Engine/Assets)
+# Destruction must precede Physics: NFPhysics implements the destruction
+# IDebrisSink seam (JoltDebrisSink), so it links NFDestruction, and a module
+# can only link one defined before it. NFDestruction itself depends on nothing
+# but NFCore, so it is free to sit here.
+add_subdirectory(Engine/Destruction)
 add_subdirectory(Engine/Physics)
 add_subdirectory(Engine/Animation)
 add_subdirectory(Engine/Audio)
@@ -87,7 +92,6 @@ add_subdirectory(Engine/Networking)
 add_subdirectory(Engine/AI)
 add_subdirectory(Engine/VFX)
 add_subdirectory(Engine/Scene2D)
-add_subdirectory(Engine/Destruction)
 add_subdirectory(Engine/Runtime)
 
 # ---------------------------------------------------------------------------

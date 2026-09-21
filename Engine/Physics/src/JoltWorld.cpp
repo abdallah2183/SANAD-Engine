@@ -619,6 +619,13 @@ void JoltWorld::set_linear_velocity(JoltBody handle, const Vec3& velocity) {
         JPH::BodyID(handle.id), JPH::Vec3(velocity.x, velocity.y, velocity.z));
 }
 
+void JoltWorld::set_angular_velocity(JoltBody handle, const Vec3& velocity) {
+    if (!is_alive(handle)) return;
+    Impl& impl = *m_impl;
+    impl.physics.GetBodyInterface().SetAngularVelocity(
+        JPH::BodyID(handle.id), JPH::Vec3(velocity.x, velocity.y, velocity.z));
+}
+
 void JoltWorld::step(float dt) {
     if (!valid() || !(dt > 0.0f)) return;
     Impl& impl = *m_impl;

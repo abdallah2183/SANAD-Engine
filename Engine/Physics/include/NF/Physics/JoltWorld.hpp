@@ -250,6 +250,15 @@ public:
     JoltBodyState state(JoltBody handle) const;
     void set_linear_velocity(JoltBody handle, const Vec3& velocity);
 
+    /// Sets the angular velocity directly (radians/second, world space). This
+    /// exists for the same reason as the linear setter: a BodyDesc's velocity
+    /// fields are documented as NOT applied at creation, so anything that
+    /// spawns a body already moving must set both afterwards. Debris is the
+    /// case that needs it — a shard's spin comes from the blast impulse landing
+    /// off-centre, and a shard whose angular velocity is dropped lands flat.
+    /// Dead or invalid handles are a no-op.
+    void set_angular_velocity(JoltBody handle, const Vec3& velocity);
+
     /// One fixed step (dt <= 0 is a no-op).
     void step(float dt);
 

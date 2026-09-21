@@ -19,6 +19,9 @@ set(NFPHYSICS_SOURCES
     src/JoltVehicle.cpp
     src/JoltRagdoll.cpp
     src/JoltCharacter.cpp
+    # The Jolt-backed IDebrisSink: Jolt-free (it goes through JoltWorld's API
+    # only, like the three TUs above) so it stays under /W4 /WX.
+    src/JoltDebrisSink.cpp
     # Cloth is first-party and deliberately Jolt-free: Jolt has no deformable
     # solver, so §38's Cloth entry is a PBD implementation over the engine's own
     # shapes. It includes no Jolt header — do not "unify" it with the Jolt TUs.
@@ -27,7 +30,10 @@ set(NFPHYSICS_SOURCES
 
 nf_engine_library(NFPhysics
     SOURCES ${NFPHYSICS_SOURCES}
-    DEPENDS NFCore
+    # NFDestruction is pure arithmetic behind the IDebrisSink seam; physics is
+    # the layer that implements it for real (JoltDebrisSink). NFDestruction
+    # depends on nothing but NFCore, so this edge cannot cycle.
+    DEPENDS NFCore NFDestruction
 )
 
 # Jolt headers are warning-noisy: this TU alone opts out of /W4 /WX.
