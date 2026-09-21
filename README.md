@@ -17,7 +17,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-blue.svg" alt="اللغة" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-00599C.svg?logo=c%2B%2B" alt="C++23" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-880%20Passed-brightgreen.svg" alt="Tests" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-994%20Passed-brightgreen.svg" alt="Tests" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Validation-0%20Errors-success.svg" alt="Validation" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
@@ -62,7 +62,7 @@
 ### مجالات المساهمة والتطوير المطلوبة
 
 1. **الرسوميات والتظليل (Vulkan & Shaders):**
-   - خرائط الظلال الاتجاهية (Directional Shadow Maps).
+   - ظلال الأضواء النقطية والكاشفة (Point/Spot Shadows)، والظلال الافتراضية (Virtual Shadow Maps).
    - نظام السماء الإجرائية وتأثيرات الإضاءة الجوية.
    - تأثيرات ما بعد المعالجة (Bloom, Tonemapping, SSAO).
 
@@ -116,9 +116,9 @@ SANAD Engine Architecture
 
 ---
 
-## Current Status (Phase 12–16 Verification)
+## Current Status (Phase 12–20 Verification)
 
-- **880 Automated Tests Passed** across 21 test suites (0 failed, 1 benchmark skipped).
+- **994 Automated Tests Passed** across 23 test suites (0 failed, 1 benchmark skipped). Verified by a full clean build + run, not a doc estimate.
 - **0 Vulkan Validation Layer Errors** and zero memory leaks.
 - Clean compilation under `/W4 /WX` with MSVC.
 - End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, input replays, and scene transform hierarchies in lockstep.
@@ -131,8 +131,10 @@ SANAD Engine Architecture
 
 | Subsystem | Description and Capabilities |
 | :--- | :--- |
-| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, 2048 PCF shadows, procedural sky, Tonemapping, GPU Picking, distance LOD + LOD generator). |
+| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, **cascaded shadows** — 4 camera-fitted cascades tiled into a 2048 atlas with texel snapping, per-cascade derived bias and cross-fade blending — procedural sky, Tonemapping, GPU Picking, distance LOD + LOD generator). |
 | **Data-Oriented ECS** | Cache-friendly sparse-set Entity-Component-System with high memory locality and hierarchical transform propagation. |
+| **2D Scene (`NFScene2D`)** | CPU-only, Jolt-independent: y-down cameras with pixel snap, shelf atlas, sprite batcher, 16×16 signed tile chunks (auto-tile / greedy collision / octile A* / streaming), sequential-impulse 2D world (spatial hash, SAT, generation handles, distance + revolute). |
+| **Destruction (`NFDestruction`)** | Fracture assets (convex-hull chunk tree, plane cuts), damage world with linear falloff and accumulated bond stress, shard emission whose volumes partition the detached region exactly, and a performance budget enforced inside `apply_damage` (per-frame break allowance, live-shard cap retiring oldest-first, lifetime expiry). Arithmetic-only behind an `IDebrisSink` seam, so the suite runs with no physics backend and no GPU; `JoltDebrisSink` implements it in `NFPhysics`. |
 | **Physics Solver** | Fully deterministic rigid-body solver (Sequential Impulses, Warm Starting, Baumgarte position correction, SAT narrowphase, Coulomb friction) + dynamic-body character controller + **Jolt v5.6 advanced backend** (vehicles with per-wheel state readback and reset/respawn, ragdolls, constraints with cross-body cloning, scene queries — ray casts, sphere sweeps, sphere/box overlaps — sensor triggers, continuous collision detection, and complex colliders: capsule, convex hull, static triangle mesh) + **cloth / soft body** (first-party deterministic PBD grid: structural/shear/bend constraints, pins, wind, and sphere/box/plane collision — independent of Jolt, which has no deformable solver). |
 | **Skeletal Animation** | Bone hierarchy evaluation, animation clips with slerp/lerp keyframe sampling, state machine with transitions and cross-fading, procedural clip generator, analytic two-bone IK. |
 | **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, WAV/OGG/MP3/FLAC import pipeline, and headless test driver. |
@@ -210,6 +212,9 @@ cd MyGame/dist && .\NFPlayer.exe
 - **Phase 15:** Lua Scripting Integration (Completed) + C# Scripting via .NET 10 Hosting (Completed) & Arabic RTL Editor Localisation (Completed)
 - **Phase 16:** Jolt Physics Backend (Completed) + UDP/Reliable/Snapshots + Authoritative Server & Prediction (Completed) — vehicle wheel-state readback/reset and cross-body constraint cloning (Completed) — vehicle/constraint network replication: drive inputs, chassis snapshots, joint events (Completed) — C# bindings (Completed)
 - **Phase 17:** Body & joint replication over the wire (vehicle orientation snapshots, body registry, constraint applier) (Completed)
+- **Phase 18:** Independent 2D layer (`NFScene2D`) — deterministic atlas/batcher, signed-chunk tilemaps, sequential-impulse 2D physics (circle/box, distance/revolute), `Scene2DTests` 37/37 (Completed)
+- **Phase 19:** Destruction — fracture geometry & chunk assets, damage world, debris budgets, `IDebrisSink` seam with a Jolt implementation (Completed)
+- **Phase 20:** Cascaded Shadow Maps — camera-fitted shadow cascades in a 2x2 atlas, per-cascade derived bias, texel snapping, cross-fade blending (Completed)
 
 Full details are documented in [ROADMAP.md](ROADMAP.md).
 
