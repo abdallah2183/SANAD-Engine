@@ -72,6 +72,10 @@ add_executable(RHITests
     RHITests/test_timeofday.cpp
     RHITests/test_terrain.cpp
     RHITests/test_postfx_shake.cpp
+    # Pure arithmetic (splits, fit, tiling, bias) over NFRendering's cascade
+    # math, so it runs without a GPU — the one suite that proves the committed
+    # CSM work, which had been sitting unregistered and unrun.
+    RHITests/test_shadow_cascades.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
