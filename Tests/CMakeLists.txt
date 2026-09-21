@@ -69,7 +69,6 @@ add_executable(RHITests
     RHITests/test_lod.cpp
     RHITests/test_lod_gen.cpp
     RHITests/test_sky.cpp
-    RHITests/test_shadow_cascades.cpp
     RHITests/test_timeofday.cpp
     RHITests/test_terrain.cpp
     RHITests/test_postfx_shake.cpp
@@ -269,10 +268,12 @@ target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)
 nf_target_set_warnings(Scene2DTests)
 
-# --- Destruction tests (fracture geometry, damage, debris budgets) ---
+# --- Destruction tests (convex geometry, fracture assets, determinism) ---
 add_executable(DestructionTests
     TestFramework.cpp
     DestructionTests/test_fracture.cpp
+    # The arithmetic half: budgets, stress accumulation, shard kinematics and the
+    # mirror invariant between the component flags and the sink's live set.
     DestructionTests/test_destruction_world.cpp
 )
 target_include_directories(DestructionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

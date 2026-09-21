@@ -247,6 +247,14 @@ public:
     /// step — enable it for fast-moving bodies only. Dead handles are a no-op.
     void set_continuous_collision(JoltBody handle, bool enabled);
 
+    /// The pose and velocity of one body. `position` is the body's shape-local
+    /// origin in world space — the same point BodyDesc.position placed, so
+    /// state() of a freshly added body returns what was asked for regardless of
+    /// shape, and writing it into a scene Transform draws the mesh where the
+    /// shape is. It is deliberately not Jolt's centre-of-mass position, which
+    /// differs from this by the shape's local COM for any hull that is not
+    /// centred on its own origin (every fracture shard). Dead or invalid handles
+    /// return a zeroed state.
     JoltBodyState state(JoltBody handle) const;
     void set_linear_velocity(JoltBody handle, const Vec3& velocity);
 

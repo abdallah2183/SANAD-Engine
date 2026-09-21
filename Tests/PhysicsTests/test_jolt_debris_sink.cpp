@@ -144,26 +144,6 @@ float quat_angle(const Quat& a, const Quat& b) {
 // One shard: shape, pose, mass, velocities
 // =========================================================================
 
-NF_TEST(tmp_probe) {
-    const FractureAsset asset = four_piece_asset();
-    JoltWorld world;
-    JoltDebrisSink sink(world);
-
-    DebrisSpawn spawn;
-    spawn.position = Vec3{0.0f, 10.0f, 0.0f};
-    spawn.mass = 2.0f;
-    spawn.hull_points = leaf_hull(asset, 1u);
-    printf("hull pts=%zu\n", spawn.hull_points.size());
-    for (const Vec3& v : spawn.hull_points) printf("  pt %.6f %.6f %.6f\n", v.x, v.y, v.z);
-    const u32 id = sink.spawn(spawn);
-    printf("id=%u active=%zu\n", id, sink.active_count());
-    const JoltBodyState s = world.state(sink.body_of(id));
-    printf("pos %.6f %.6f %.6f vel %.6f %.6f %.6f\n",
-           s.position.x, s.position.y, s.position.z,
-           s.linear_velocity.x, s.linear_velocity.y, s.linear_velocity.z);
-    NF_CHECK(true);
-}
-
 NF_TEST(jolt_debris_sink_spawn_makes_one_dynamic_body) {
     const FractureAsset asset = four_piece_asset();
     NF_CHECK(asset.leaf_count() >= 2u);
@@ -190,9 +170,15 @@ NF_TEST(jolt_debris_sink_spawn_makes_one_dynamic_body) {
     NF_CHECK(body.valid());
     NF_CHECK(world.is_alive(body));
 
-    // The pose the spawn asked for, and no velocity yet.
+    // The pose the spawn asked for, and no velocity yet. A generated fracture
+    // chunk's hull is 14 points whose local centre of mass is well off the
+    // origin, so asserting on all three axes is also the regression guard for
+    // the Jolt trap behind state(): reporting the COM position rather than the
+    // shape-local origin would send this back offset by that COM.
     const JoltBodyState state = world.state(body);
+    NF_CHECK_NEAR(state.position.x, 0.0f, 1e-4f);
     NF_CHECK_NEAR(state.position.y, 10.0f, 1e-4f);
+    NF_CHECK_NEAR(state.position.z, 0.0f, 1e-4f);
     NF_CHECK_NEAR(state.linear_velocity.length_sq(), 0.0f, 1e-6f);
 }
 

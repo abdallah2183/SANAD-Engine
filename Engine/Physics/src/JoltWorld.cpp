@@ -597,8 +597,18 @@ JoltBodyState JoltWorld::state(JoltBody handle) const {
     if (!is_alive(handle)) return out;
     const Impl& impl = *m_impl;
     JPH::BodyID id(handle.id);
+    // GetPosition(), not GetCenterOfMassPosition(): the body's *shape-local
+    // origin* in world space, which is what BodyDesc.position was set to and
+    // what every caller writes into a scene Transform the mesh is drawn from.
+    // Jolt stores the centre-of-mass position in mPosition and derives the
+    // origin from it, so reporting the COM would round-trip a hull whose local
+    // COM is off-centre (every fracture shard) back offset by that COM — the
+    // shard would render displaced and state() would disagree with the pose it
+    // was spawned with. Boxes, spheres, capsules and ragdoll parts are all
+    // centred, so this is a no-op for every body that existed before hull
+    // debris; it makes the round trip exact for the one shape that isn't.
     const JPH::RVec3 p =
-        const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).GetCenterOfMassPosition(id);
+        const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).GetPosition(id);
     const JPH::Vec3 v =
         const_cast<JPH::BodyInterface&>(impl.physics.GetBodyInterface()).GetLinearVelocity(id);
     const JPH::Quat r =
@@ -1011,7 +1021,10 @@ std::vector<RagdollJointState> JoltWorld::ragdoll_joint_states(RagdollHandle han
         RagdollJointState s;
         s.body = b;
         if (is_alive(b)) {
-            const JPH::RVec3 p = bi.GetCenterOfMassPosition(JPH::BodyID(b.id));
+            // GetPosition() to match state(): shape-local origin in world, not
+            // the COM. Ragdoll parts are spheres, so the two coincide here
+            // anyway; the call stays consistent with the rest of the API.
+            const JPH::RVec3 p = bi.GetPosition(JPH::BodyID(b.id));
             const JPH::Vec3 v = bi.GetLinearVelocity(JPH::BodyID(b.id));
             s.position = Vec3{static_cast<float>(p.GetX()), static_cast<float>(p.GetY()),
                               static_cast<float>(p.GetZ())};
