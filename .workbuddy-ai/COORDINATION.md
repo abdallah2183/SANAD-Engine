@@ -2145,3 +2145,30 @@ sources).
 
 **Evidence.** `Tests/ScriptTests` → `ui_csharp_managed_driver_drives_the_flow`
 runs (not skipped) and passes; the managed DLL contains `NFUiDriver`.
+
+---
+
+## G10 (stability) — FINAL: opaque state-sort kept; transparency "flake" was a coplanar test bug
+
+**Resolution of the `transparent_pane_blends_over_opaque_geometry` failure.** The
+opaque draw-order state sort (mesh, lod, material_set) in `Renderer3D.cpp` is
+**kept**. The failure was deterministic given draw order, not intermittent:
+
+- The test's pane quad sat at `z=0.5`, **exactly coplanar** with the wall cube's
+  +Z face (`create_cube(3.0)` half-size 1.5 centered at z=-1 → face at +0.5).
+  Coplanar fragments compare EQUAL in depth; the gbuffer's LessEqual passes both
+  and the **last-drawn fragment wins**. The test passed only because insertion
+  order drew the wall first; the sort made order pointer-dependent → lottery.
+- Diagnosed by forcing permutations (env-gated probes, since removed): pane→wall
+  → `opaque_pane == bare` (495471); wall→pane → 508872. Draw-command logging
+  proved all draws are issued in both orders — pure z-fight.
+- **Fix (test-side):** `Tests/RHITests/test_3d_renderer.cpp` pane moved to
+  `z=0.6` (strictly between the wall face and the camera at z=+5), so the depth
+  test decides. Renderer3D comment updated: permutations are pixel-identical
+  for non-coplanar surfaces; coplanar z-fight is scene-authoring territory.
+- Note for engine policy: this confirms gbuffer depth-test/LOAD path is correct.
+
+**Evidence.** Isolated: 5/5 pass, `bare=495471 < blended=503142 < opaque=507102`,
+`transparent_objects=1`, validation clean. Full suite sweep: **26 suites,
+1546 passed / 0 failed / 2 skipped** (the 2 skips are the pre-existing
+ECS/Input ones). Build green (`nfb.sh` EXIT=0).

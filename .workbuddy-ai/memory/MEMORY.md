@@ -7,7 +7,7 @@
 
 ## Build / verify
 - **Sandbox: `bash .workbuddy-ai/nfb.sh [--target X]`, NOT `build_nf.bat`** (vcvars→`reg.exe` sandbox-blacklisted → C1083 stddef.h / LNK1104 ole32.lib = uninitialised env, not a source break). Also restores Windows profile vars so `dotnet build` (NFCSharpSandbox) doesn't die in NuGet.targets; needs `env` for `ProgramFiles(x86)`. Outside sandbox: `.\build_nf.bat --target <T>`; binaries `build/DebugNinja/bin/`.
-- Tests: `NF_TEST/NF_CHECK/NF_CHECK_NEAR/NF_SKIP`; register in `Tests/CMakeLists.txt`; skip ≠ pass; confirm new test names in run OUTPUT (silent registration drop). Counts drift — re-run and count, never quote from memory. Last green 2026-09-22: 1540/0/2 across 26 suites.
+- Tests: `NF_TEST/NF_CHECK/NF_CHECK_NEAR/NF_SKIP`; register in `Tests/CMakeLists.txt`; skip ≠ pass; confirm new test names in run OUTPUT (silent registration drop). Counts drift — re-run and count, never quote from memory. Last green 2026-09-22 (post shadow pass + recovery commit bb27b1f): 1542/0/2 across 26 suites.
 - Sweep in background: `for exe in build/DebugNinja/bin/*Tests.exe; do timeout 240 "$exe" | tail -6; done`. `RHITests` intermittent flake (exit 139), not a regression.
 - Shaders: GLSL in `Samples/Basic3D/shaders/` (lighting.frag + forward.frag share brdf.glsl), compiled by build (CMake/NFShaders.cmake — DEPENDS globs *.glsl, so brdf.glsl edits rebuild includer .spv) AND at runtime via ShaderManager (glslc from VULKAN_SDK).
 
