@@ -1,7 +1,7 @@
 # Medieval Village: Harvest Run — design notes
 
 A third-person collection game built on NOVAForge and the Medieval Village
-MegaKit[Standard]. The player brings six supply crates to the wagon in the
+MegaKit[Standard]. The player brings ten supply crates to the wagon in the
 village square, three at a time, before dusk. This file records *why* it is
 built the way it is; the header comment in `main.cpp` records *what* it
 exercises.

@@ -13,6 +13,11 @@ struct ApplicationConfig {
     bool vsync = true;
     bool validation = false;
     bool headless = false;
+    // A windowed run is a played run: gameplay drives the scene and reads the
+    // keyboard (KeyboardInputSource) unless the embedder opts out. Headless
+    // runs ignore this and keep the editor-safe defaults, so test harnesses
+    // see exactly the behaviour they saw before.
+    bool enable_input = true;
     // Empty means "not specified": a project's startup_scene is used when one is
     // given, otherwise content://Scenes/Example.nfscene. Empty rather than a
     // default path so a caller can distinguish "I did not choose" from "I chose

@@ -115,6 +115,8 @@ void add_house(const Kit& kit, std::vector<PlacedPiece>& out, const HouseSpec& s
     };
 
     // --- walls -------------------------------------------------------------
+    // A BottomCover skirt runs under every wall module: without it the walls
+    // sit on a knife edge and daylight leaks visibly underneath.
     const int mid = spec.modules / 2;
     for (int side = 0; side < 4; ++side) {
         const SideBasis sb = side_basis(side);
@@ -135,12 +137,29 @@ void add_house(const Kit& kit, std::vector<PlacedPiece>& out, const HouseSpec& s
                 which = spec.wall_window;
             }
             place_grounded(kit, out, which, w.x, 0.0f, w.z, yaw, PlacementTag::Structure);
+            place_grounded(kit, out, "Wall_BottomCover", w.x, 0.0f, w.z, yaw,
+                           PlacementTag::Decor);
         }
 
         // Corner column at this side's far end (each corner is claimed once).
         const Vec3 corner_w = to_world(sb.nx * h, sb.nz * h);
         place_grounded(kit, out, spec.corner, corner_w.x, 0.0f, corner_w.z,
                        spec.rot_y + sb.rot_y, PlacementTag::Structure);
+    }
+
+    // --- eaves ---------------------------------------------------------------
+    // A flat overhang ring just under the roof line closes the gap between the
+    // wall tops and the roof eave — the "unfinished" slit the old build showed.
+    {
+        const char* eave = (std::string(spec.wall).find("UnevenBrick") != std::string::npos)
+                               ? "Overhang_Roof_UnevenBricks"
+                               : "Overhang_Roof_Plaster";
+        for (int side = 0; side < 4; ++side) {
+            const SideBasis sb = side_basis(side);
+            const Vec3 w = to_world(sb.nx * (h + 0.55f), sb.nz * (h + 0.55f));
+            place_grounded(kit, out, eave, w.x, wall_top - 0.30f, w.z,
+                           spec.rot_y + sb.rot_y, PlacementTag::Decor);
+        }
     }
 
     // --- floor -------------------------------------------------------------
@@ -303,12 +322,124 @@ Village build_village(const Kit& kit) {
     place_grounded(kit, v.pieces, "Prop_Wagon", v.wagon.x, 0.0f, v.wagon.z, 90.0f,
                    PlacementTag::Wagon);
 
+    // --- inn balcony + stairs ------------------------------------------------
+    // The inn (9, 9) gets the kit's balcony on its plaza face and a stone
+    // stair up to it, so at least one building is more than a box with a roof.
+    place_grounded(kit, v.pieces, "Balcony_Simple_Straight", 6.0f, 1.55f, 9.0f, 270.0f,
+                   PlacementTag::Decor);
+    place_grounded(kit, v.pieces, "Stairs_Exterior_Straight", 6.0f, 0.0f, 11.5f, 270.0f,
+                   PlacementTag::Structure);
+    place_grounded(kit, v.pieces, "Prop_Support", 6.0f, 0.0f, 8.0f, 0.0f,
+                   PlacementTag::Decor);
+    place_grounded(kit, v.pieces, "Prop_Support", 6.0f, 0.0f, 10.0f, 0.0f,
+                   PlacementTag::Decor);
+
+    // --- market stalls -------------------------------------------------------
+    // Two open stalls flank the plaza: four posts, a wooden roof, a plank
+    // floor. Crates wait beside them, so the long game has somewhere to go.
+    const struct {
+        float x, z, yaw;
+    } stalls[] = {{5.5f, 3.5f, 30.0f}, {-5.5f, -6.5f, -20.0f}};
+    for (const auto& s : stalls) {
+        const float c = std::cos(s.yaw * kPi / 180.0f);
+        const float si = std::sin(s.yaw * kPi / 180.0f);
+        const float ox[4] = {-1.1f, 1.1f, -1.1f, 1.1f};
+        const float oz[4] = {-1.1f, -1.1f, 1.1f, 1.1f};
+        for (int i = 0; i < 4; ++i) {
+            const float lx = ox[i] * c + oz[i] * si;
+            const float lz = -ox[i] * si + oz[i] * c;
+            place_grounded(kit, v.pieces, "Prop_Support", s.x + lx, 0.0f, s.z + lz, s.yaw,
+                           PlacementTag::Fence);
+        }
+        place_grounded(kit, v.pieces, "Floor_WoodLight", s.x, -0.02f, s.z, s.yaw,
+                       PlacementTag::Decor);
+        place_grounded(kit, v.pieces, "Roof_Wooden_2x1", s.x, 2.35f, s.z, s.yaw,
+                       PlacementTag::Decor);
+    }
+
+    // --- well ----------------------------------------------------------------
+    // A brick base, two posts and a wooden cap north-west of the wagon: the
+    // plaza's landmark, and the thing the night lamps are arranged around.
+    place_grounded(kit, v.pieces, "Prop_Chimney2", -4.5f, -2.2f, 3.0f, 0.0f,
+                   PlacementTag::Structure);
+    place_grounded(kit, v.pieces, "Prop_Support", -5.2f, 0.0f, 3.0f, 90.0f,
+                   PlacementTag::Decor);
+    place_grounded(kit, v.pieces, "Prop_Support", -3.8f, 0.0f, 3.0f, 90.0f,
+                   PlacementTag::Decor);
+    place_grounded(kit, v.pieces, "Roof_Wooden_2x1", -4.5f, 2.2f, 3.0f, 90.0f,
+                   PlacementTag::Decor);
+
+    // --- lamp pillars --------------------------------------------------------
+    // Rock pillars at the plaza corners. The game lights each one, so dusk is
+    // readable and the square has a night-time edge. Positions are published
+    // in Village::lamps for the renderer's point lights.
+    v.lamps = {
+        Vec3{4.5f, 2.1f, 4.5f}, Vec3{-4.5f, 2.1f, 4.5f},
+        Vec3{4.5f, 2.1f, -4.5f}, Vec3{-4.5f, 2.1f, -4.5f},
+    };
+    for (const Vec3& l : v.lamps) {
+        place_grounded(kit, v.pieces, "Prop_Chimney", l.x, -2.0f, l.z, 0.0f,
+                       PlacementTag::Structure);
+        place_grounded(kit, v.pieces, "Prop_Brick1", l.x, 1.05f, l.z, 0.0f,
+                       PlacementTag::Decor);
+    }
+
+    // --- stone paths ---------------------------------------------------------
+    // Brick runners tile the desire lines (gate -> plaza -> doors) so the
+    // ground stops being one empty field with crates on it.
+    for (float z = -8.0f; z <= 12.0f; z += 2.0f) {
+        place_grounded(kit, v.pieces, "Floor_Brick", 0.0f, -0.02f, z, 0.0f,
+                       PlacementTag::Decor);
+    }
+    for (float x = -6.0f; x <= 6.0f; x += 2.0f) {
+        place_grounded(kit, v.pieces, "Floor_Brick", x, -0.02f, 9.0f, 0.0f,
+                       PlacementTag::Decor);
+        place_grounded(kit, v.pieces, "Floor_Brick", x, -0.02f, -9.0f, 0.0f,
+                       PlacementTag::Decor);
+    }
+
+    // --- outer fence ---------------------------------------------------------
+    // A low wooden boundary with four gate gaps: the playable area finally has
+    // an edge, and the bot can no longer wander into the void.
+    for (int i = -12; i <= 12; ++i) {
+        const float t = static_cast<float>(i) * 2.0f;
+        if (std::abs(t) < 2.5f) {
+            continue; // gates on all four sides
+        }
+        place_grounded(kit, v.pieces, "Prop_WoodenFence_Extension1", t, 0.0f, 24.0f, 0.0f,
+                       PlacementTag::Fence);
+        place_grounded(kit, v.pieces, "Prop_WoodenFence_Extension1", t, 0.0f, -24.0f, 0.0f,
+                       PlacementTag::Fence);
+        place_grounded(kit, v.pieces, "Prop_WoodenFence_Extension1", 24.0f, 0.0f, t, 90.0f,
+                       PlacementTag::Fence);
+        place_grounded(kit, v.pieces, "Prop_WoodenFence_Extension1", -24.0f, 0.0f, t, 90.0f,
+                       PlacementTag::Fence);
+    }
+
+    // --- bushes --------------------------------------------------------------
+    // Vine clusters double as shrubs at the house corners, breaking the hard
+    // wall-to-dirt line.
+    const Vec3 bushes[] = {
+        {-5.5f, 0.0f, 5.5f}, {5.5f, 0.0f, 5.5f}, {-5.5f, 0.0f, -5.5f}, {5.5f, 0.0f, -5.5f},
+        {-12.5f, 0.0f, 9.0f}, {12.5f, 0.0f, 9.0f}, {-12.5f, 0.0f, -9.0f}, {12.5f, 0.0f, -9.0f},
+    };
+    for (const Vec3& b : bushes) {
+        PlacedPiece p;
+        p.piece = "Prop_Vine6";
+        p.position = Vec3{b.x, 0.35f, b.z};
+        p.scale = Vec3{1.2f, 1.2f, 1.2f};
+        p.tag = PlacementTag::Decor;
+        v.pieces.push_back(p);
+    }
+
     // --- supply crates -----------------------------------------------------
-    // Spread around and behind the houses so collecting them means walking the
-    // village rather than crossing the square six times.
+    // Ten crates in four trips: the square, the stalls, the well and one
+    // behind each house, so collecting them means walking the whole village.
     const Vec3 crates[] = {
         {-12.5f, 0.0f, 3.0f},  {12.0f, 0.0f, -4.5f}, {3.5f, 0.0f, -14.0f},
         {-4.5f, 0.0f, 14.5f},  {14.5f, 0.0f, 12.0f}, {-15.0f, 0.0f, -12.5f},
+        {6.9f, 0.0f, 4.7f},    {-6.9f, 0.0f, -5.3f}, {-3.1f, 0.0f, 4.3f},
+        {1.6f, 0.0f, 12.6f},
     };
     for (const Vec3& c : crates) {
         place_grounded(kit, v.pieces, "Prop_Crate", c.x, 0.0f, c.z, 0.0f, PlacementTag::Crate);

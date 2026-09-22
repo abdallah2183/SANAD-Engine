@@ -89,7 +89,12 @@ public:
     const std::vector<KitPiece>& pieces() const { return m_pieces; }
     const LoadReport& report() const { return m_report; }
 
+    /// Manifest only, no GPU: bounds + texture names for layout/export tools.
+    bool load_manifest(const std::filesystem::path& content_dir, std::string& out_error);
+
 private:
+    bool parse_manifest_file(const std::filesystem::path& content_dir, std::string& out_error);
+
     struct TextureEntry {
         std::unique_ptr<rhi::Texture> texture;
         std::unique_ptr<rhi::TextureView> view;

@@ -3,7 +3,7 @@
 // A third-person collection game built inside NOVAForge on the Medieval Village
 // MegaKit[Standard]. See DESIGN.md beside this file for the design rationale.
 //
-// The goal: the harvest festival needs its six supply crates brought to the
+// The goal: the harvest festival needs its ten supply crates brought to the
 // wagon in the village square before dusk. Crates are scattered around and
 // behind the four houses; the player carries at most three at a time, so the
 // run is two trips. Doors swing open, the camera is a third-person orbit, and
@@ -49,8 +49,10 @@
 #include <NF/Rendering/Camera.hpp>
 #include <NF/Rendering/Components.hpp>
 #include <NF/Rendering/MeshLibrary.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Rendering/TimeOfDay.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/UI/GameUI.hpp>
 #include <NF/UI/Localization.hpp>
@@ -62,6 +64,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -84,9 +87,9 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
 
 // --- tuning -----------------------------------------------------------------
-constexpr int kCrateTotal = 6;         // the harvest needs six crates
+constexpr int kCrateTotal = 10;          // the harvest needs ten crates now
 constexpr int kCarryCapacity = 3;      // ... and the player carries three at a time
-constexpr float kRoundSeconds = 240.0f;// dusk
+constexpr float kRoundSeconds = 360.0f;// afternoon -> dusk
 constexpr float kInteractRange = 2.6f; // metres, player centre to interactable
 constexpr float kSprintDrain = 28.0f;  // stamina per second
 constexpr float kStaminaRegen = 18.0f;
@@ -116,6 +119,7 @@ struct Options {
     std::string content_dir;
     std::string shader_dir;
     std::string imgui_shader_dir;
+    std::string export_layout_dir; // --export-layout <dir>: headless layout dump, then exit
 };
 
 void print_help() {
@@ -126,6 +130,9 @@ void print_help() {
         "  --autoplay        Drive the player automatically (end-to-end check)\n"
         "  --lang en|ar      HUD language (default ar)\n"
         "  --content <dir>   Kit content directory (default: the source tree)\n"
+        "  --export-layout <dir>\n"
+        "                    Dump the village layout (layout.txt + ground.nfmesh)\n"
+        "                    without opening a window, for the editor project\n"
         "  --help            This text\n";
 }
 
@@ -213,8 +220,8 @@ struct GameTag {
 
 struct CameraRig {
     float yaw = 0.0f;       // degrees; 0 looks down -Z
-    float pitch = 22.0f;    // degrees above the horizon
-    float distance = 7.5f;
+    float pitch = 24.0f;    // degrees above the horizon
+    float distance = 7.0f;
 };
 
 rendering::Camera make_camera(const CameraRig& rig, const Vec3& target, float aspect) {
@@ -301,7 +308,12 @@ struct World {
     std::vector<ecs::Entity> doors;
     std::vector<ecs::Entity> carried_visuals; // crate meshes riding on the player
     ecs::Entity wagon = ecs::kInvalidEntity;
-    ecs::Entity player_visual = ecs::kInvalidEntity;
+    // The kit ships no character, so the player is a small stylised villager
+    // built from primitives: tunic (body), skin (head), hood. Three entities,
+    // one collider — what you see is still what collides.
+    ecs::Entity player_body = ecs::kInvalidEntity;
+    ecs::Entity player_head = ecs::kInvalidEntity;
+    ecs::Entity player_hood = ecs::kInvalidEntity;
     // World AABBs of the pieces that BLOCK movement (structures, fences, the
     // wagon) — the autoplay whisker steerer reads these. Crates and doors are
     // deliberately excluded: they are things the bot walks TO, not around, and
@@ -390,6 +402,72 @@ Vec3 steer_around(const std::vector<WorldAabb>& boxes, const Vec3& pos, const Ve
     return want;
 }
 
+/// Headless layout export for the editor project (`--export-layout <dir>`).
+/// Loads only the manifest (no window, no GPU), builds the exact village the
+/// game plays in, and writes `layout.txt` + `ground.nfmesh`. The project
+/// exporter turns those into a `.nfproj` the editor opens by drag-and-drop.
+int export_layout(const std::string& content_dir_opt, const std::string& out_dir_str) {
+    namespace fs = std::filesystem;
+    const fs::path content =
+        content_dir_opt.empty() ? find_content_dir() : fs::path(content_dir_opt);
+    if (content.empty()) {
+        std::cerr << "export-layout: kit content not found (pass --content <dir>)\n";
+        return 2;
+    }
+    Kit kit;
+    {
+        std::string err;
+        if (!kit.load_manifest(content, err)) {
+            std::cerr << "export-layout: " << err << "\n";
+            return 2;
+        }
+    }
+    const Village village = build_village(kit);
+
+    std::error_code ec;
+    fs::create_directories(out_dir_str, ec);
+    if (ec) {
+        std::cerr << "export-layout: cannot create '" << out_dir_str << "': " << ec.message()
+                  << "\n";
+        return 1;
+    }
+    const fs::path out_dir(out_dir_str);
+
+    {
+        std::ofstream out(out_dir / "layout.txt");
+        if (!out) {
+            std::cerr << "export-layout: cannot write layout.txt\n";
+            return 1;
+        }
+        out << "# MedievalVillage layout v1\n";
+        out << "spawn " << village.spawn.x << ' ' << village.spawn.y << ' '
+            << village.spawn.z << '\n';
+        out << "wagon " << village.wagon.x << ' ' << village.wagon.y << ' '
+            << village.wagon.z << '\n';
+        for (const Vec3& l : village.lamps) {
+            out << "lamp " << l.x << ' ' << l.y << ' ' << l.z << '\n';
+        }
+        for (const PlacedPiece& p : village.pieces) {
+            out << "placed " << p.piece << ' ' << p.position.x << ' ' << p.position.y << ' '
+                << p.position.z << ' ' << p.rot_y << ' ' << p.scale.x << ' ' << p.scale.y
+                << ' ' << p.scale.z << ' ' << static_cast<int>(p.tag) << '\n';
+        }
+    }
+    {
+        auto grid = make_ground_grid(village.ground_half_extent, 2.0f);
+        auto asset = rendering::make_mesh_asset(*grid, assets::AssetId::generate(),
+                                                "content://Meshes/ground.nfmesh");
+        std::string err;
+        if (!asset || !asset->save_to_file((out_dir / "ground.nfmesh").string(), err)) {
+            std::cerr << "export-layout: ground mesh save failed: " << err << "\n";
+            return 1;
+        }
+    }
+    std::cout << "export-layout: " << village.pieces.size() << " pieces, "
+              << village.lamps.size() << " lamps -> " << out_dir.string() << "\n";
+    return 0;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -457,6 +535,7 @@ int run_game(const Options& opt) {
         rhi::DeviceDesc ddesc{};
         ddesc.window_handle = window.native_handle();
         ddesc.enable_validation = opt.validation;
+        ddesc.disable_validation = !opt.validation;
         if (!device->init(ddesc)) {
             NF_LOG_FATAL(LogCategory::RHI, "MedievalVillage: device init failed");
             window.destroy();
@@ -548,11 +627,11 @@ int run_game(const Options& opt) {
         auto grid = make_ground_grid(village.ground_half_extent, 2.0f);
         const rendering::StaticMeshHandle grid_handle = meshes.add(std::move(grid));
         rendering::PBRMaterialParams gp{};
-        gp.base_color[0] = 1.0f;
-        gp.base_color[1] = 1.0f;
-        gp.base_color[2] = 1.0f;
+        gp.base_color[0] = 0.60f;
+        gp.base_color[1] = 0.56f;
+        gp.base_color[2] = 0.49f;
         gp.base_color[3] = 1.0f;
-        gp.roughness = 0.9f;
+        gp.roughness = 0.96f;
         gp.use_base_color_texture = 1.0f;
         const rendering::MaterialHandle ground_mat =
             renderer.materials().create_instance(*renderer.gbuffer_material(), gp, "ground");
@@ -628,30 +707,61 @@ int run_game(const Options& opt) {
     scene::propagate_transforms(w.ecs);
 
     // --- player ---------------------------------------------------------------
-    // The kit is an environment kit: it ships no character mesh, so the player is
-    // a sphere of exactly the controller's radius — the thing you see is the
-    // thing that collides. Carried crates use the kit's own crate mesh.
+    // The kit is an environment kit: it ships no character mesh, so the player
+    // is a small stylised villager assembled from primitives — brown tunic
+    // body, skin head, dark hood. Same 0.45 m collider as before, so the
+    // physics and the bot need no retuning; it just stops looking like a ball.
     physics::CharacterConfig char_cfg;
     char_cfg.radius = 0.45f;
     char_cfg.max_speed = kWalkSpeed;
     char_cfg.jump_speed = 6.2f;
     physics::CharacterController player(w.physics, char_cfg, Vec3{village.spawn.x, 1.2f, village.spawn.z});
 
-    rendering::PBRMaterialParams pp{};
-    pp.base_color[0] = 0.16f;
-    pp.base_color[1] = 0.62f;
-    pp.base_color[2] = 0.72f;
-    pp.base_color[3] = 1.0f;
-    pp.roughness = 0.35f;
-    const rendering::MaterialHandle player_mat =
-        renderer.materials().create_instance(*renderer.gbuffer_material(), pp, "player");
+    rendering::PBRMaterialParams tunic{};
+    tunic.base_color[0] = 0.45f;
+    tunic.base_color[1] = 0.22f;
+    tunic.base_color[2] = 0.12f;
+    tunic.base_color[3] = 1.0f;
+    tunic.roughness = 0.8f;
+    const rendering::MaterialHandle tunic_mat =
+        renderer.materials().create_instance(*renderer.gbuffer_material(), tunic, "player_tunic");
+    rendering::PBRMaterialParams skin{};
+    skin.base_color[0] = 0.92f;
+    skin.base_color[1] = 0.72f;
+    skin.base_color[2] = 0.55f;
+    skin.base_color[3] = 1.0f;
+    skin.roughness = 0.6f;
+    const rendering::MaterialHandle skin_mat =
+        renderer.materials().create_instance(*renderer.gbuffer_material(), skin, "player_skin");
+    rendering::PBRMaterialParams hood{};
+    hood.base_color[0] = 0.25f;
+    hood.base_color[1] = 0.18f;
+    hood.base_color[2] = 0.12f;
+    hood.base_color[3] = 1.0f;
+    hood.roughness = 0.85f;
+    const rendering::MaterialHandle hood_mat =
+        renderer.materials().create_instance(*renderer.gbuffer_material(), hood, "player_hood");
     {
-        auto sphere = rendering::StaticMesh::create_sphere(char_cfg.radius, 20);
-        const rendering::StaticMeshHandle handle = meshes.add(std::move(sphere));
-        w.player_visual = w.ecs.create_entity();
-        w.ecs.add<scene::Transform>(w.player_visual, scene::Transform{});
+        auto body_mesh = rendering::StaticMesh::create_cube(1.0f);
+        const rendering::StaticMeshHandle body_handle = meshes.add(std::move(body_mesh));
+        w.player_body = w.ecs.create_entity();
+        w.ecs.add<scene::Transform>(w.player_body, scene::Transform{});
         w.ecs.add<rendering::MeshComponent>(
-            w.player_visual, rendering::MeshComponent{handle, player_mat, true, 0});
+            w.player_body, rendering::MeshComponent{body_handle, tunic_mat, true, 0});
+
+        auto head_mesh = rendering::StaticMesh::create_sphere(0.22f, 20);
+        const rendering::StaticMeshHandle head_handle = meshes.add(std::move(head_mesh));
+        w.player_head = w.ecs.create_entity();
+        w.ecs.add<scene::Transform>(w.player_head, scene::Transform{});
+        w.ecs.add<rendering::MeshComponent>(
+            w.player_head, rendering::MeshComponent{head_handle, skin_mat, true, 0});
+
+        auto hood_mesh = rendering::StaticMesh::create_sphere(0.27f, 16);
+        const rendering::StaticMeshHandle hood_handle = meshes.add(std::move(hood_mesh));
+        w.player_hood = w.ecs.create_entity();
+        w.ecs.add<scene::Transform>(w.player_hood, scene::Transform{});
+        w.ecs.add<rendering::MeshComponent>(
+            w.player_hood, rendering::MeshComponent{hood_handle, hood_mat, true, 0});
     }
     if (!meshes.upload_all(*device)) {
         NF_LOG_WARN(LogCategory::Core, "MedievalVillage: a runtime-generated mesh failed to upload");
@@ -689,10 +799,16 @@ int run_game(const Options& opt) {
     // one canvas, and the snapshot the overlay draws is the whole of it.
     ui::Canvas& hud = flow.hud().canvas();
     const bool ar = !opt.english;
-    hud.add_label(ui::Label{kObjectiveId, ui::UiRect{0.5f, 0.015f, 0.9f, 0.04f},
-                            ar ? "أوصل ٦ صناديق مؤن إلى العربة قبل الغروب"
-                               : "Deliver 6 supply crates to the wagon before dusk",
-                            22.0f, ui::UiColor{1.0f, 0.93f, 0.72f, 1.0f}, ui::TextAlign::Center});
+    {
+        char obj[128];
+        std::snprintf(obj, sizeof(obj),
+                      ar ? "أوصل %d صناديق مؤن إلى العربة قبل الغروب"
+                         : "Deliver %d supply crates to the wagon before dusk",
+                      kCrateTotal);
+        hud.add_label(ui::Label{kObjectiveId, ui::UiRect{0.5f, 0.015f, 0.9f, 0.04f}, obj,
+                                22.0f, ui::UiColor{1.0f, 0.93f, 0.72f, 1.0f},
+                                ui::TextAlign::Center});
+    }
     {
         ui::ProgressBar delivered_bar;
         delivered_bar.id = kDeliveredBarId;
@@ -782,18 +898,80 @@ int run_game(const Options& opt) {
     flow.on_restart = restart_round;
 
     // --- frame resources ------------------------------------------------------
-    auto image_available = device->create_semaphore();
-    auto frame_fence = device->create_fence(true);
-    auto cmd = device->create_command_buffer();
+    // Two frames in flight (see Renderer3D kFramesInFlight): while the GPU
+    // draws frame N the CPU records frame N+1. One cmd/fence pair serialized
+    // the CPU against the GPU every frame — with the village's thousands of
+    // kit instances that wait was the stutter.
+    static constexpr u32 kFramesInFlight = 2;
+    std::array<std::unique_ptr<rhi::Semaphore>, kFramesInFlight> image_available;
+    std::array<std::unique_ptr<rhi::Fence>, kFramesInFlight> frame_fence;
+    std::array<std::unique_ptr<rhi::CommandBuffer>, kFramesInFlight> cmd;
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        image_available[slot] = device->create_semaphore();
+        frame_fence[slot] = device->create_fence(true);
+        cmd[slot] = device->create_command_buffer();
+    }
     std::vector<std::unique_ptr<rhi::Semaphore>> render_finished;
     for (u32 i = 0; i < swapchain->image_count(); ++i) {
         render_finished.push_back(device->create_semaphore());
     }
 
-    renderer.set_directional_light(rendering::DirectionalLight{
-        rendering::Vec3{-0.45f, -0.82f, -0.35f}, rendering::Vec3{1.0f, 0.96f, 0.88f}, 1.15f, true});
-    renderer.set_ambient(0.28f);
-    renderer.set_exposure(1.05f);
+    renderer.set_ambient(0.22f);
+    renderer.set_exposure(1.12f);
+    renderer.set_tonemap_mode(rendering::TonemapMode::ACES);
+    renderer.set_postfx(rendering::PostFxParams{1.15f, 0.28f});
+    renderer.set_shadow_tile_size(1024);
+    {
+        rendering::Renderer3D::FogParams fog{};
+        fog.enabled = true;
+        fog.color = rendering::Vec3{0.55f, 0.62f, 0.75f};
+        fog.start = 45.0f;
+        fog.end = 150.0f;
+        renderer.set_fog(fog);
+    }
+
+    // Daylight cycle: the round starts mid-afternoon and dies into ember dusk
+    // exactly as the timer runs out — the clock on the HUD is the sky itself.
+    rendering::TimeOfDay tod;
+    tod.set_time_hours(15.5f);
+    tod.set_day_length_seconds(kRoundSeconds * 3.0f); // 15:30 -> ~18:30 over a round
+    renderer.set_directional_light(tod.make_light());
+    renderer.set_sky(tod.make_sky());
+
+    // Warm lamps on the plaza pillars + a lantern over the wagon. Unshadowed
+    // on purpose: five point lights are cheap, five shadow maps are not.
+    renderer.clear_point_lights();
+    for (const Vec3& l : village.lamps) {
+        rendering::PointLight pl{};
+        pl.position = rendering::Vec3{l.x, l.y + 0.4f, l.z};
+        pl.color = rendering::Vec3{1.0f, 0.55f, 0.22f};
+        pl.intensity = 14.0f;
+        pl.radius = 10.0f;
+        renderer.add_point_light(pl);
+    }
+    {
+        rendering::PointLight wagon_light{};
+        wagon_light.position =
+            rendering::Vec3{village.wagon.x, 2.6f, village.wagon.z};
+        wagon_light.color = rendering::Vec3{1.0f, 0.62f, 0.30f};
+        wagon_light.intensity = 10.0f;
+        wagon_light.radius = 8.0f;
+        renderer.add_point_light(wagon_light);
+    }
+
+    // A fresh round starts mid-afternoon again, not at whatever dusk the last
+    // round died in. restart_round owns the counters; this wrapper adds the sun.
+    {
+        auto round_only = flow.on_restart;
+        flow.on_restart = [&, round_only]() {
+            if (round_only) {
+                round_only();
+            }
+            tod.set_time_hours(15.5f);
+            renderer.set_directional_light(tod.make_light());
+            renderer.set_sky(tod.make_sky());
+        };
+    }
 
     // --- loop -----------------------------------------------------------------
     Timer timer;
@@ -1233,9 +1411,19 @@ int run_game(const Options& opt) {
             }
         }
 
-        // --- clock ------------------------------------------------------------
+        // --- clock + daylight -------------------------------------------------
         if (playing && !round_over) {
             time_left -= dt;
+            tod.advance(dt);
+            renderer.set_directional_light(tod.make_light());
+            const rendering::SkyParams sky = tod.make_sky();
+            renderer.set_sky(sky);
+            rendering::Renderer3D::FogParams fog{};
+            fog.enabled = true;
+            fog.color = sky.horizon;
+            fog.start = 45.0f;
+            fog.end = 150.0f;
+            renderer.set_fog(fog);
             if (time_left <= 0.0f) {
                 time_left = 0.0f;
                 round_over = true;
@@ -1249,13 +1437,34 @@ int run_game(const Options& opt) {
         }
 
         // --- player visual ----------------------------------------------------
+        // Villager: tunic block, head ball, hood shell. The collider is still
+        // the 0.45 m controller — the body is 0.5 wide / 0.8 tall so it reads
+        // as a person without lying about what collides.
         {
-            scene::Transform* tr = w.ecs.get<scene::Transform>(w.player_visual);
-            if (tr != nullptr) {
+            if (scene::Transform* tr = w.ecs.get<scene::Transform>(w.player_body)) {
                 tr->local_x = player_pos.x;
-                tr->local_y = player_pos.y;
+                tr->local_y = player_pos.y + 0.45f;
                 tr->local_z = player_pos.z;
                 tr->rot_y = rig.yaw;
+                tr->scale_x = 0.52f;
+                tr->scale_y = 0.80f;
+                tr->scale_z = 0.34f;
+            }
+            if (scene::Transform* tr = w.ecs.get<scene::Transform>(w.player_head)) {
+                tr->local_x = player_pos.x;
+                tr->local_y = player_pos.y + 1.08f;
+                tr->local_z = player_pos.z;
+                tr->rot_y = rig.yaw;
+                tr->scale_x = tr->scale_y = tr->scale_z = 1.0f;
+            }
+            if (scene::Transform* tr = w.ecs.get<scene::Transform>(w.player_hood)) {
+                tr->local_x = player_pos.x;
+                tr->local_y = player_pos.y + 1.14f;
+                tr->local_z = player_pos.z;
+                tr->rot_y = rig.yaw;
+                tr->scale_x = 1.0f;
+                tr->scale_y = 0.72f;
+                tr->scale_z = 1.0f;
             }
             // Carried crates ride above the player's head, so "how much am I
             // carrying" is answered by the world and not only by a number.
@@ -1320,9 +1529,10 @@ int run_game(const Options& opt) {
                                              static_cast<float>(window.height()));
         extract_trs_render_world(w.ecs, meshes, render_world);
 
-        frame_fence->wait();
-        frame_fence->reset();
-        const u32 image_index = swapchain->acquire_next_image(*image_available);
+        const u32 slot = frames % kFramesInFlight;
+        frame_fence[slot]->wait();
+        frame_fence[slot]->reset();
+        const u32 image_index = swapchain->acquire_next_image(*image_available[slot]);
         if (image_index == u32_max) {
             break;
         }
@@ -1340,28 +1550,28 @@ int run_game(const Options& opt) {
         }
         overlay.end_frame();
 
-        cmd->reset();
-        cmd->begin();
-        bool frame_ok = renderer.render(*cmd, render_world, cam, *backbuffer, true);
+        cmd[slot]->reset();
+        cmd[slot]->begin();
+        bool frame_ok = renderer.render(*cmd[slot], render_world, cam, *backbuffer, true, slot);
         if (frame_ok) {
-            frame_ok = overlay.render(*cmd, *backbuffer, image_index, window.width(),
+            frame_ok = overlay.render(*cmd[slot], *backbuffer, image_index, window.width(),
                                       window.height());
         }
-        cmd->end();
+        cmd[slot]->end();
         if (!frame_ok) {
             NF_LOG_ERROR(LogCategory::RHI, "MedievalVillage: frame {} render failed", frames);
             break;
         }
 
-        const std::array<const rhi::Semaphore*, 1> wait_sems{image_available.get()};
+        const std::array<const rhi::Semaphore*, 1> wait_sems{image_available[slot].get()};
         const std::array<rhi::PipelineStage, 1> wait_stages{rhi::PipelineStage::ColorAttachmentOutput};
         const std::array<const rhi::Semaphore*, 1> signal_sems{render_finished[image_index].get()};
         rhi::SubmitInfo submit{};
         submit.wait_semaphores = std::span<const rhi::Semaphore* const>(wait_sems);
         submit.wait_stages = std::span<const rhi::PipelineStage>(wait_stages);
         submit.signal_semaphores = std::span<const rhi::Semaphore* const>(signal_sems);
-        submit.signal_fence = frame_fence.get();
-        device->submit(*cmd, submit);
+        submit.signal_fence = frame_fence[slot].get();
+        device->submit(*cmd[slot], submit);
         swapchain->present(image_index, std::span<const rhi::Semaphore* const>(signal_sems));
 
         InputSystem::instance().end_frame();
@@ -1437,6 +1647,8 @@ int main(int argc, char** argv) {
             opt.english = std::string_view(argv[++i]) == "en";
         } else if (arg == "--content" && i + 1 < argc) {
             opt.content_dir = argv[++i];
+        } else if (arg == "--export-layout" && i + 1 < argc) {
+            opt.export_layout_dir = argv[++i];
         } else if (arg == "--shaders" && i + 1 < argc) {
             opt.shader_dir = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
@@ -1447,6 +1659,9 @@ int main(int argc, char** argv) {
             print_help();
             return 2;
         }
+    }
+    if (!opt.export_layout_dir.empty()) {
+        return export_layout(opt.content_dir, opt.export_layout_dir);
     }
     return run_game(opt);
 }

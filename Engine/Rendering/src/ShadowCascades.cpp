@@ -162,7 +162,6 @@ CascadeFit fit_cascade(const Camera& camera, const Vec3& light_dir, float split_
     if (!(wupt > 1e-9f)) {
         return fit;
     }
-
     const float x0 = std::floor(llo.x / wupt) * wupt;
     const float y0 = std::floor(llo.y / wupt) * wupt;
     const float x1 = std::ceil(lhi.x / wupt) * wupt;
@@ -182,6 +181,9 @@ CascadeFit fit_cascade(const Camera& camera, const Vec3& light_dir, float split_
         light_view * Mat4::orthographic(x0, x1, y0, y1, near_d, far_d);
     fit.depth_range = far_d - near_d;
     fit.world_extent = std::max(extent_x, extent_y);
+    // Every bail above leaves the identity-projection default; only a box that
+    // was actually fitted marks the fit usable (see cascade_keeps_caster).
+    fit.valid = true;
     return fit;
 }
 
@@ -217,6 +219,38 @@ float cascade_auto_bias(const CascadeFit& fit, u32 tile_size, float slope) {
     }
     const float texel_world = fit.world_extent / static_cast<float>(tile_size);
     return (texel_world * slope) / fit.depth_range;
+}
+
+bool cascade_keeps_caster(const CascadeFit& fit, float cx, float cy, float cz,
+                          float radius) {
+    // Degenerate fit (fit_cascade bailed on a zero-length light direction or a
+    // degenerate extent and returned an identity projection): there is no box
+    // to test against, so keep everything — testing world positions against an
+    // identity projection would reject arbitrarily.
+    if (!fit.valid) return true;
+
+    const Vec4 clip = fit.light_view_proj * Vec4{cx, cy, cz, 1.0f};
+    // Behind the light's eye: cannot happen for a sane ortho fit (w stays 1),
+    // but keep it for safety rather than dividing by zero.
+    if (clip.w <= 0.0f) return true;
+    const float inv_w = 1.0f / clip.w;
+
+    // Ortho NDC extents: x/y span [-1, 1] over world_extent, z spans [0, 1]
+    // over depth_range. The sphere's radius converts into each axis's units.
+    const float margin_xy = (2.0f * radius) / fit.world_extent;
+    const float margin_z = radius / fit.depth_range;
+    const float nx = clip.x * inv_w;
+    const float ny = clip.y * inv_w;
+    const float nz = clip.z * inv_w;
+
+    if (nx < -1.0f - margin_xy || nx > 1.0f + margin_xy) return false;
+    if (ny < -1.0f - margin_xy || ny > 1.0f + margin_xy) return false;
+    // Casters nearer than the light's near plane are kept when the sphere
+    // straddles it (they may still reach into the box via the extrusion) and
+    // rejected only once the whole sphere is beyond the far plane, where every
+    // ray lands past the map.
+    if (nz < -margin_z || nz > 1.0f + margin_z) return false;
+    return true;
 }
 
 CascadeConfig sanitize_cascade_config(const CascadeConfig& config) {

@@ -282,6 +282,7 @@ bool VulkanDevice::init(void* native_window_handle) {
 
 bool VulkanDevice::init(const DeviceDesc& desc) {
     m_requested_validation = desc.enable_validation;
+    m_validation_disabled = desc.disable_validation;
 
     if (!is_vulkan_loader_loaded()) {
         NF_LOG_ERROR(LogCategory::RHI, "Vulkan loader is not available");
@@ -403,7 +404,13 @@ bool VulkanDevice::create_instance() {
 
     bool want_validation = m_requested_validation;
 #ifndef NDEBUG
-    want_validation = true; // Debug always enables validation when available
+    // Debug enables validation when available because the test suites assert a
+    // clean layer — unless the caller explicitly opted out (interactive editor
+    // sessions, where per-call layer cost on hundreds of draws dominates the
+    // frame). An explicit request always wins over the opt-out.
+    if (!m_validation_disabled) {
+        want_validation = true;
+    }
 #endif
     // In Release, validation is only enabled when explicitly requested via
     // DeviceDesc::enable_validation (wired to --validation).

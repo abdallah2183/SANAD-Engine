@@ -86,12 +86,29 @@ public:
     // The caller is responsible for acquiring the image and presenting.
     // Records Depth → GBuffer → Lighting → Tonemap via Renderer3D.
     // On failure records a distinct fallback clear (magenta) and logs.
-    void render(uint32_t image_index, rhi::CommandBuffer& cmd);
+    //
+    // `frame_slot` selects the renderer's per-slot frame resources; the caller
+    // must have waited the GPU work previously recorded through the same slot
+    // (see Renderer3D::render). Default 0 keeps serial callers unchanged.
+    void render(uint32_t image_index, rhi::CommandBuffer& cmd, u32 frame_slot = 0);
 
     // For headless/offscreen rendering (tests).
     // Records the full Renderer3D pipeline into `cmd` targeting `target`
     // (no swapchain, no PRESENT layout). On failure records fallback clear.
-    void render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd);
+    void render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd, u32 frame_slot = 0);
+
+    /// Presents an already-finished offscreen frame (the editor's viewport
+    /// target) onto swapchain image `image_index` WITHOUT re-running the scene
+    /// pipeline: a straight texture copy of `offscreen` into the swapchain,
+    /// followed by nothing — the caller draws its UI over it. The editor used
+    /// to render its whole scene a second time per frame to fill the swapchain
+    /// behind the UI; this replaces that second render.
+    /// Returns false (and records a fallback clear) when there is no scene or
+    /// the renderer failed; the caller then owns the same fallback behaviour
+    /// render() has.
+    bool present_viewport(uint32_t image_index, rhi::CommandBuffer& cmd,
+                          rhi::Texture& offscreen, rhi::TextureView& offscreen_view,
+                          u32 frame_slot = 0);
 
     /// Builds and returns the render world for the current frame — the same one
     /// render() hands to Renderer3D, scene objects and debris together.
@@ -713,6 +730,12 @@ private:
     rendering::MaterialHandle m_default_material{};
     std::string m_loaded_scene_path;
     uint64_t m_scene_version = 0;
+
+    // Scratch render world reused across frames: build_render_world() clears
+    // and refills it, so a 5000-object scene stops allocating 5000 RenderObjects
+    // through the heap on every frame. render_world_snapshot()/picking still
+    // build into locals — they are not per-frame paths.
+    rendering::RenderWorld m_render_world;
 
     // Path -> renderer instance (includes gray fallbacks for missing files, so
     // file IO happens at most once per path; Hot Reload drops entries).

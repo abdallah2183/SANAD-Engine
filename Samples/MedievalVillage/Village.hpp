@@ -52,6 +52,8 @@ struct Village {
     std::vector<PlacedPiece> pieces;
     Vec3 spawn{0.0f, 1.0f, 10.0f};
     Vec3 wagon{0.0f, 0.0f, -2.0f};
+    /// Lamp post tops: the game puts a warm point light on each one.
+    std::vector<Vec3> lamps;
     /// Half extent of the flat playable ground, in metres.
     float ground_half_extent = 34.0f;
 };

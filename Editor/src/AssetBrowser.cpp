@@ -213,9 +213,12 @@ std::vector<AssetEntry> list_project_assets(assets::VirtualFileSystem& vfs) {
         }
         // Skip the build output and any VCS/tooling directory: a packaged game
         // is not the author's source, and listing it buries the real assets.
+        // Cache/ holds the cooked copies the registry already points at: listing
+        // them would show every mesh twice, with the cooked copy sorting first
+        // and carrying no AssetId, so a drag-and-drop would grab the wrong one.
         const std::string dir = it->path().parent_path().generic_string();
         if (dir.find("/dist") != std::string::npos || dir.find("/.git") != std::string::npos ||
-            dir.find("/build") != std::string::npos) {
+            dir.find("/build") != std::string::npos || dir.find("/Cache") != std::string::npos) {
             continue;
         }
         const assets::AssetType type = project_asset_type_for(it->path().extension().string());

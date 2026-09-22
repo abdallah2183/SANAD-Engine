@@ -10,7 +10,21 @@
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 
+// CreateProcessW for launching the game player next to the editor. The defines
+// come first: engine headers above do not pull <windows.h>, and NOMINMAX keeps
+// the engine's own min/max use unambiguous. Both are already on the compiler
+// command line, so the guards only cover a build that stops passing them.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <chrono>
 #include <cmath>
+#include <filesystem>
 
 namespace nf::editor {
 
@@ -1454,6 +1468,9 @@ const ImportJob* EditorApp::process_one_import() {
     if (terminal != nullptr && terminal->state == ImportJob::State::Done) {
         watch_imported(*terminal);
     }
+    if (terminal != nullptr) {
+        invalidate_browser();
+    }
     return terminal;
 }
 
@@ -1474,6 +1491,9 @@ size_t EditorApp::process_imports() {
         if (j.state == ImportJob::State::Done) {
             watch_imported(j);
         }
+    }
+    if (done_now > 0) {
+        invalidate_browser();
     }
     return done_now;
 }
@@ -1654,6 +1674,7 @@ bool EditorApp::create_prefab(ecs::Entity root, const std::string& prefab_path, 
     after_mutation(root);
     m_console.push(LogMessage{LogLevel::Info, LogCategory::Editor, "Prefab saved '" + prefab_path + "'",
                               std::chrono::system_clock::now(), __FILE__, __LINE__});
+    invalidate_browser();
     return true;
 }
 
@@ -1784,20 +1805,123 @@ bool EditorApp::play(std::string& out_err) {
 }
 
 bool EditorApp::stop(std::string& out_err) {
-    // Integrity: the edit scene must still match the pre-play snapshot in
-    // structure (edits are locked during play, so this always holds; the
-    // check turns a silent-loss bug into a loud error).
-    if (m_play.playing() && m_play.snapshot() != nullptr && m_runtime != nullptr &&
+    if (!m_play.playing()) {
+        return m_play.stop(out_err);
+    }
+    // Restore the pre-play edit world: physics/animation/gameplay all wrote
+    // into the live Transforms during the session (fallen boxes, driven
+    // entities). Without this, Stop leaves the play-mutated poses behind and
+    // the next Play starts from the wreckage — "Stop does not undo the game".
+    // Structural edits are locked while playing, so the snapshot and the live
+    // world differ only in values, never in membership; restore is exact.
+    if (m_play.snapshot() != nullptr && m_runtime != nullptr &&
         m_runtime->edit_scene() != nullptr) {
-        std::string diff;
-        if (!scenes_equal_structure(*m_play.snapshot(), *m_runtime->edit_scene(), diff)) {
-            // Locked UI prevents this; report but still stop cleanly.
-            m_console.push(LogMessage{LogLevel::Warn, LogCategory::Editor,
-                                      "Play session ended with edit-world drift: " + diff,
-                                      std::chrono::system_clock::now(), __FILE__, __LINE__});
+        restore_scene(*m_runtime->edit_scene(), *m_play.snapshot());
+        m_runtime->rebuild_physics_from_scene();
+        m_runtime->mark_scene_edited();
+        m_selection.prune(*world());
+        {
+            std::string dummy;
+            viewport_abort_drag(dummy);
         }
     }
     return m_play.stop(out_err);
+}
+
+bool EditorApp::launch_game(std::string& out_err) {
+    if (m_runtime == nullptr || m_runtime->edit_scene() == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    if (m_runtime->edit_scene()->world().alive_entity_count() == 0) {
+        out_err = "Nothing to play (empty scene)";
+        return false;
+    }
+
+    // Home for the play-session scene: the first scheme this session's VFS
+    // mounts. The player process mounts the same set — the same .nfproj, or
+    // the same engine-tree fallback — so the path written here is the path
+    // read there, with no second source of truth to drift.
+    std::string session_logical;
+    for (const char* scheme : {"cache://", "project://", "content://"}) {
+        const std::string candidate = std::string(scheme) + "EditorPlaySession.nfscene";
+        if (m_vfs.resolve(candidate).ok) {
+            session_logical = candidate;
+            break;
+        }
+    }
+    if (session_logical.empty()) {
+        out_err = "No mounted scheme for the play-session scene (cache://, project://, content://)";
+        return false;
+    }
+    // The live edit scene, not the on-disk file: Play must play exactly what
+    // is on screen, saved or not. This writes no dirty flag and moves no
+    // editor state — the session file is a handoff, not a save.
+    if (!m_runtime->save_scene(session_logical, out_err)) {
+        out_err = "Could not write the play session scene: " + out_err;
+        return false;
+    }
+
+    // The player ships beside the editor in every build layout (both CMake
+    // targets land in build/<preset>/bin). Prefer the dedicated player; the
+    // runtime sample hosts the same loop as a fallback.
+    wchar_t exe_buf[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exe_buf, MAX_PATH) == 0) {
+        out_err = "Could not locate the editor executable";
+        return false;
+    }
+    const std::filesystem::path editor_dir = std::filesystem::path(exe_buf).parent_path();
+    std::filesystem::path player = editor_dir / L"NFGamePlayer.exe";
+    if (!std::filesystem::exists(player)) {
+        player = editor_dir / L"NFSampleRuntimeScene.exe";
+    }
+    if (!std::filesystem::exists(player)) {
+        out_err = "Game player not found next to the editor (build the NFGamePlayer target)";
+        return false;
+    }
+
+    // Wide characters throughout: project paths are user input and may be
+    // non-ASCII.
+    std::wstring cmd = L"\"" + player.wstring() + L"\" --scene \"" +
+                       std::filesystem::path(session_logical).wstring() + L"\"";
+    if (!m_project_path.empty()) {
+        cmd += L" --project \"" + std::filesystem::path(m_project_path).wstring() + L"\"";
+    }
+
+    // Working directory: without a project the player walks up from here
+    // looking for Engine/ + Content/, so it gets the engine root (the parent
+    // of the content mount). With a project the mounts come from the .nfproj
+    // and the project directory is simply the sensible home.
+    std::filesystem::path cwd = editor_dir;
+    if (!m_project_path.empty()) {
+        cwd = std::filesystem::path(m_project_path).parent_path();
+    } else if (const auto content = m_vfs.resolve("content://"); content.ok) {
+        cwd = content.value.parent_path();
+    }
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    // DETACHED_PROCESS: the player is a console-subsystem binary and must not
+    // flash a black console next to its game window. The editor never waits —
+    // the game window and the editor are independent from here on, which is
+    // the point: closing the game window is the Stop, and editing continues
+    // meanwhile.
+    const BOOL started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                                        DETACHED_PROCESS | CREATE_DEFAULT_ERROR_MODE, nullptr,
+                                        cwd.c_str(), &si, &pi);
+    if (started == 0) {
+        out_err = "Could not start the game player (error " + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    m_console.push(LogMessage{LogLevel::Info, LogCategory::Editor,
+                              "Game launched from " + session_logical +
+                                  " — close the game window to stop",
+                              std::chrono::system_clock::now(), __FILE__, __LINE__});
+    return true;
 }
 
 ecs::Entity EditorApp::pick(const ViewCamera& cam, float ndc_x, float ndc_y) {
@@ -2011,6 +2135,7 @@ void EditorApp::tick(float dt) {
             m_dt_accum = 0.0;
             m_dt_count = 0;
         }
+        m_browser_cache_age += static_cast<double>(dt);
     }
 }
 
@@ -2048,8 +2173,42 @@ std::vector<AssetEntry> EditorApp::browser_entries() {
     // browser answers "what is in my game" rather than "what shipped with the
     // engine". content:// remains the fallback when no project is mounted, which
     // is the engine-tree mode the editor still supports.
-    auto all = has_project() ? list_project_assets(m_vfs) : list_content_assets(m_vfs, m_registry);
-    return filter_assets(all, m_browser.filter_text, m_browser.filter_type);
+    if (m_browser_cache_dirty || m_browser_cache_age > 0.5) {
+        auto all =
+            has_project() ? list_project_assets(m_vfs) : list_content_assets(m_vfs, m_registry);
+        if (has_project()) {
+            // The project scan lists files, not registry records, so mesh entries
+            // arrive without an AssetId — and a drop without an ID is refused.
+            // Resolve project://Content/... against the registry's content://...
+            // records so drag-and-drop works in projects exactly as it does in the
+            // engine tree.
+            static const std::string kPrefix = "project://Content/";
+            for (auto& e : all) {
+                if (e.type != assets::AssetType::Mesh || e.has_id) {
+                    continue;
+                }
+                if (e.logical_path.rfind(kPrefix, 0) != 0) {
+                    continue;
+                }
+                const std::string content_path = "content://" + e.logical_path.substr(kPrefix.size());
+                if (const assets::AssetMetadata* meta = m_registry.find_by_path(content_path)) {
+                    if (meta->id.valid()) {
+                        e.id = meta->id;
+                        e.has_id = true;
+                        e.cooked_path = meta->cooked_path;
+                        if (!meta->cooked_path.empty()) {
+                            auto ex = m_vfs.exists(meta->cooked_path);
+                            e.has_cooked = ex.ok && ex.value;
+                        }
+                    }
+                }
+            }
+        }
+        m_browser_cache = std::move(all);
+        m_browser_cache_age = 0.0;
+        m_browser_cache_dirty = false;
+    }
+    return filter_assets(m_browser_cache, m_browser.filter_text, m_browser.filter_type);
 }
 
 } // namespace nf::editor

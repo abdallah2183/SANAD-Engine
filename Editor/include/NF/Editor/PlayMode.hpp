@@ -16,9 +16,16 @@
 
 namespace nf::editor {
 
-// Deep-copies name/metadata and all v0.1 components (Transform with parent
-// remap, Name, Mesh, Camera, Light).
+// Deep-copies name/metadata and all scene components (Transform with parent
+// remap, Name, Mesh, Camera, Light, Sky, PrefabLink, RigidBody [handle reset],
+// Collider, Destructible, Animation, Audio, GameplayModule).
 std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src);
+
+// Restores `dst` from a snapshot produced by clone_scene(): clears the world
+// and recreates every entity/component, remapping hierarchy. Used by Stop to
+// discard play-time simulation mutations (fallen boxes, moved transforms)
+// so the edit world comes back exactly as it was when Play was pressed.
+void restore_scene(scene::Scene& dst, const scene::Scene& src);
 
 // Structural comparison ignoring entity ids (matches by Name, falling back to
 // component-set signature). Used by tests and the stop() integrity check.

@@ -476,7 +476,12 @@ void game_menu_contents(EditorApp& app) {
     if (!app.playing()) {
         if (ImGui::MenuItem(AV("play").c_str())) {
             std::string err;
-            if (!app.play(err)) {
+            // Play = the real game in its own window (NFGamePlayer spawned
+            // beside the editor). The in-viewport play session remains an
+            // engine API for tests and automation, not a menu entry: a
+            // viewport that "plays" while the editor keeps rendering it reads
+            // as nothing happening — the exact complaint this replaces.
+            if (!app.launch_game(err)) {
                 push_error_console(app, "Play failed", err);
             }
         }
@@ -941,7 +946,10 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             if (!app.playing()) {
                 if (icon_button("##tb_play", Icon::Play, AV("play"), false)) {
                     std::string err;
-                    if (!app.play(err)) {
+                    // Play launches the game in its own window: a real
+                    // Runtime loop with real keyboard input, independent of
+                    // the editor (which stays editable meanwhile).
+                    if (!app.launch_game(err)) {
                         push_error_console(app, "Play failed", err);
                     }
                 }

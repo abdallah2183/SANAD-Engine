@@ -101,6 +101,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     auto ffs = load_spirv_file(sdir / "forward_frag.spv");
     auto tvs = load_spirv_file(sdir / "tonemap_vert.spv");
     auto tfs = load_spirv_file(sdir / "tonemap_frag.spv");
+    // Present passthrough is optional: an older shader directory only loses
+    // present_texture(), never the scene path.
+    auto prvs = load_spirv_file(sdir / "present_vert.spv");
+    auto prfs = load_spirv_file(sdir / "present_frag.spv");
     if (dvs.empty() || gvs.empty() || lvs.empty() || tvs.empty()) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to load shaders from '{}'", sdir.string());
         return false;
@@ -116,6 +120,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     m_forward_fs = device.create_shader_module({ffs, rhi::ShaderStage::Fragment});
     m_tonemap_vs = device.create_shader_module({tvs, rhi::ShaderStage::Vertex});
     m_tonemap_fs = device.create_shader_module({tfs, rhi::ShaderStage::Fragment});
+    if (!prvs.empty() && !prfs.empty()) {
+        m_present_vs = device.create_shader_module({prvs, rhi::ShaderStage::Vertex});
+        m_present_fs = device.create_shader_module({prfs, rhi::ShaderStage::Fragment});
+    }
     if (!m_depth_vs || !m_gbuffer_vs || !m_lighting_vs || !m_forward_vs || !m_tonemap_vs) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shader modules");
         return false;
@@ -367,6 +375,23 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         tpd.push_constant_stages = rhi::ShaderStage::Fragment;
         m_tonemap_pipeline_off = m_pipeline_cache->get_or_create(tpd);
 
+        // Present passthrough (optional): same fullscreen shape, layout and
+        // push-block as tonemap, but the fragment is a straight copy. Lives on
+        // the same render passes tonemap uses, so only the fragment differs.
+        if (m_present_vs && m_present_fs) {
+            rhi::PipelineDesc ppd{};
+            ppd.vs = m_present_vs.get();
+            ppd.fs = m_present_fs.get();
+            ppd.render_pass = m_tonemap_rp_off.get();
+            ppd.descriptor_set_layout = m_tonemap_layout.get();
+            ppd.rasterizer.cull_mode = rhi::CullMode::None;
+            ppd.depth.test_enabled = false;
+            ppd.depth.write_enabled = false;
+            ppd.push_constant_size = 16; // kept for layout parity with tonemap
+            ppd.push_constant_stages = rhi::ShaderStage::Fragment;
+            m_present_pipeline_off = m_pipeline_cache->get_or_create(ppd);
+        }
+
     }
     if (!m_depth_pipeline || !m_gbuffer_material || !m_gbuffer_material->valid() ||
         !m_lighting_pipeline || !m_forward_pipeline || !m_tonemap_pipeline_off) {
@@ -376,16 +401,23 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
 
     // --- per-frame helpers ---
     m_material_library = std::make_unique<MaterialLibrary>(device);
-    m_descriptor_allocator = device.create_descriptor_allocator(32);
+    // One allocator per in-flight slot (see the member comment for why two
+    // domains exist); each grows its pools on demand and recycles on reset().
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        m_descriptor_allocators[slot] = device.create_descriptor_allocator(32);
+        m_present_allocators[slot] = device.create_descriptor_allocator(8);
+    }
 
-    rhi::BufferDesc frame_ubo_desc{};
-    frame_ubo_desc.size = sizeof(FrameUniforms);
-    frame_ubo_desc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::TransferDst;
-    frame_ubo_desc.memory = rhi::MemoryUsage::CPUToGPU;
-    m_frame_uniforms = device.create_buffer(frame_ubo_desc);
-    if (!m_frame_uniforms) {
-        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create frame uniform buffer");
-        return false;
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        rhi::BufferDesc frame_ubo_desc{};
+        frame_ubo_desc.size = sizeof(FrameUniforms);
+        frame_ubo_desc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::TransferDst;
+        frame_ubo_desc.memory = rhi::MemoryUsage::CPUToGPU;
+        m_frame_uniforms[slot] = device.create_buffer(frame_ubo_desc);
+        if (!m_frame_uniforms[slot]) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create frame uniform buffer");
+            return false;
+        }
     }
 
     // White fallback texture for scalar-only materials
@@ -599,9 +631,15 @@ void Renderer3D::shutdown() {
     if (!m_device) return;
     m_device->wait_idle();
     destroy_resolution_dependent();
-    m_frame_uniforms.reset();
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        m_frame_uniforms[slot].reset();
+        m_descriptor_allocators[slot].reset();
+        m_present_allocators[slot].reset();
+    }
+    m_prepared.clear();
+    m_transparent.clear();
+    m_forward_sets.clear();
     m_splat_palette.reset();
-    m_descriptor_allocator.reset();
     m_material_library.reset();
     m_gbuffer_material.reset();
     if (m_pipeline_cache) {
@@ -778,8 +816,11 @@ bool Renderer3D::ensure_local_shadow_atlas(u32 tile_size) {
 
 bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world,
                         const Camera& camera, rhi::Texture& out_target,
-                        bool out_is_present_source) {
+                        bool out_is_present_source, u32 frame_slot) {
     if (!m_device || !m_graph) return false;
+    // Defensive clamp: a caller passing a nonsense slot must not index out of
+    // the per-slot arrays. Every shipped caller passes frame % kFramesInFlight.
+    if (frame_slot >= kFramesInFlight) frame_slot = 0;
 
     // Applies a set_shadow_tile_size() issued since the last frame. A no-op in
     // steady state; the atlas is deliberately not rebuilt on resize(), because
@@ -973,17 +1014,19 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     fu.fog_params[1] = m_fog.start;
     fu.fog_params[2] = m_fog.end;
     fu.fog_params[3] = 0.0f;
-    m_frame_uniforms->update(&fu, 0, sizeof(fu));
+    m_frame_uniforms[frame_slot]->update(&fu, 0, sizeof(fu));
 
     // --- Per-frame descriptor sets ---
-    // Contract: previous frame's GPU work has completed (fence waited), so
-    // recycling the allocator here cannot touch in-flight descriptor sets.
-    m_descriptor_allocator->reset();
+    // Contract: the GPU work previously recorded through THIS slot has
+    // completed (the caller waited the slot's fence), so recycling the slot's
+    // allocator here cannot touch in-flight descriptor sets. The OTHER slot
+    // may still be executing — that is the whole point of two slots.
+    m_descriptor_allocators[frame_slot]->reset();
 
     // Material sets are allocated lazily per visible object below; allocate
     // lighting/tonemap sets once.
-    auto lighting_set = m_descriptor_allocator->allocate(*m_lighting_layout);
-    auto tonemap_set = m_descriptor_allocator->allocate(*m_tonemap_layout);
+    auto lighting_set = m_descriptor_allocators[frame_slot]->allocate(*m_lighting_layout);
+    auto tonemap_set = m_descriptor_allocators[frame_slot]->allocate(*m_tonemap_layout);
     if (!lighting_set || !tonemap_set) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: descriptor allocation failed");
         return false;
@@ -994,7 +1037,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer1_view.get(), m_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer2_view.get(), m_sampler.get()},
             {3, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer_depth_view.get(), m_sampler.get()},
-            {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms.get(), 0, sizeof(FrameUniforms), nullptr, nullptr},
+            {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0, sizeof(FrameUniforms), nullptr, nullptr},
             {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_shadow_view.get(), m_sampler.get()},
             {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_sampler.get()},
         }};
@@ -1009,31 +1052,20 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // material descriptor sets. Changing material parameters never lands here
     // as pipeline work — parameters live in the instances' UBOs.
     nf::Clock prep_clock;
-    struct PreparedDraw {
-        const RenderObject* object;
-        const StaticMesh* mesh;
-        const rhi::DescriptorSet* material_set; // non-owning: cached on the entry
-        u32 lod = 0;                            // effective LOD for this frame
-    };
-    // The transparent queue. Separate from `prepared` because a transparent
-    // surface is excluded from BOTH the depth prepass and the gbuffer — writing
-    // its depth would occlude the opaque geometry behind it, and writing its
-    // material into the gbuffer would average it with that geometry's.
-    struct TransparentDraw {
-        const RenderObject* object;
-        const StaticMesh* mesh;
-        const rhi::DescriptorSet* forward_set; // non-owning: held by forward_sets
-        u32 lod = 0;
-        float distance = 0.0f;                 // camera -> surface, for the sort
-    };
-    std::vector<PreparedDraw> prepared;
+    // Scratch vectors are members (see Renderer3D.hpp): the capacity survives
+    // frames, so a 5000-object scene stops reallocating 5000 entries per frame.
+    std::vector<PreparedDraw>& prepared = m_prepared;
+    prepared.clear();
     prepared.reserve(m_visible.size());
-    std::vector<TransparentDraw> transparent;
+    std::vector<TransparentDraw>& transparent = m_transparent;
+    transparent.clear();
     // Owns this frame's forward descriptor sets. The transparency pass is
     // recorded below as a graph lambda that only keeps raw pointers, so the
     // sets have to live here until m_graph->execute() returns; the allocator
-    // that handed them out is not reset until next frame, after the fence.
-    std::vector<std::unique_ptr<rhi::DescriptorSet>> forward_sets;
+    // that handed them out is not reset until this slot runs again, after the
+    // slot's fence.
+    std::vector<std::unique_ptr<rhi::DescriptorSet>>& forward_sets = m_forward_sets;
+    forward_sets.clear();
     forward_sets.reserve(m_visible.size());
     for (u32 idx : m_visible) {
         const RenderObject& ro = render_world.objects[idx];
@@ -1071,7 +1103,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 // the opaque path caches: a transparent object carries its own
                 // alpha, so two objects sharing one material instance still
                 // differ, and the expected count here is a handful of panes.
-                auto fwd_set = m_descriptor_allocator->allocate(*m_forward_layout);
+                auto fwd_set = m_descriptor_allocators[frame_slot]->allocate(*m_forward_layout);
                 if (!fwd_set) {
                     NF_LOG_ERROR(LogCategory::RHI,
                                  "Renderer3D: forward descriptor allocation failed");
@@ -1080,7 +1112,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 const rhi::TextureView* albedo =
                     entry->albedo_view ? entry->albedo_view : m_white_view.get();
                 const std::array<rhi::DescriptorWrite, 5> forward_writes{{
-                    {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms.get(), 0,
+                    {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0,
                      sizeof(FrameUniforms), nullptr, nullptr},
                     {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
                      m_shadow_view.get(), m_sampler.get()},
@@ -1140,6 +1172,26 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
               [](const TransparentDraw& a, const TransparentDraw& b) {
                   return a.distance > b.distance;
               });
+    // Opaque draw order: state sort by (mesh, lod, material set). Kit scenes —
+    // the whole reason this renderer exists — draw the same mesh hundreds of
+    // times and share a handful of material instances, so grouping by state
+    // turns "bind VB/IB + descriptor set per object" into "bind per group".
+    // The sort is stable on nothing else by design: depth order is provided by
+    // the depth prepass, and the gbuffer pass writes no blend, so any
+    // permutation produces the same pixels.
+    // The sort is stable on nothing else by design: depth order is provided by
+    // the depth prepass, and the gbuffer pass writes no blend, so any
+    // permutation produces the same pixels for non-coplanar surfaces.
+    // Coplanar surfaces compare EQUAL in depth; the gbuffer's LessEqual test
+    // passes both and the last-drawn fragment wins — that is inherent to
+    // z-fighting and is the scene author's problem, not the sort's (see the
+    // pane z in test_3d_renderer.cpp for the fix on the test side).
+    std::sort(prepared.begin(), prepared.end(),
+              [](const PreparedDraw& a, const PreparedDraw& b) {
+                  if (a.mesh != b.mesh) return a.mesh < b.mesh;
+                  if (a.lod != b.lod) return a.lod < b.lod;
+                  return a.material_set < b.material_set;
+              });
     m_stats.draw_prep_us = prep_clock.elapsed_us();
     // --- Build the frame graph ---
     m_graph->reset(true);
@@ -1171,6 +1223,11 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         Push push{};
         static_assert(sizeof(fu.light_view_proj[0]) == sizeof(push.view_proj));
         const u32 tile = m_shadow_tile_size;
+        // Bind state survives the per-cascade viewport changes (only the
+        // scissor/viewport and push constants differ), so the mesh binds are
+        // reused across the whole pass while the sorted draw order repeats it.
+        const StaticMesh* bound_mesh = nullptr;
+        u32 bound_lod = u32_max;
         for (u32 cascade = 0; cascade < cascade_count; ++cascade) {
             const u32 col = cascade % kShadowTileGrid;
             const u32 row = cascade / kShadowTileGrid;
@@ -1178,14 +1235,31 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             gcmd.set_viewport(col * tile, row * tile, tile, tile);
             gcmd.set_scissor(col * tile, row * tile, tile, tile);
             for (auto& pd : prepared) {
+                // A cascade only pays for casters its own ortho box can receive
+                // depth from: parallel light rays map light-space (x, y) 1:1 to
+                // where a shadow lands, so a caster outside the window casts
+                // outside the window, and one beyond the far plane casts past
+                // the map. Skipping both is pixel-identical to drawing them and
+                // letting the GPU clip — without this the pass is one FULL
+                // scene render per cascade (four per frame with the default
+                // count), which is what made many-mesh scenes crawl.
+                if (!cascade_keeps_caster(fits[cascade], pd.object->sphere.cx,
+                                          pd.object->sphere.cy, pd.object->sphere.cz,
+                                          pd.object->sphere.radius)) {
+                    continue;
+                }
                 std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
                 gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
                 const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
                 const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
                 if (!vb || !ib) continue;
-                const std::array<const rhi::Buffer*, 1> vbs{vb};
-                gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
-                gcmd.bind_index_buffer(*ib, 0);
+                if (bound_mesh != pd.mesh || bound_lod != pd.lod) {
+                    const std::array<const rhi::Buffer*, 1> vbs{vb};
+                    gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+                    gcmd.bind_index_buffer(*ib, 0);
+                    bound_mesh = pd.mesh;
+                    bound_lod = pd.lod;
+                }
                 const MeshLOD& lod = pd.mesh->lods()[pd.lod];
                 for (const SubMesh& sm : lod.submeshes) {
                     gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
@@ -1218,6 +1292,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         Push push{};
         static_assert(sizeof(fu.local_shadow_view_proj[0]) == sizeof(push.view_proj));
         const u32 tile = m_local_shadow_tile_size;
+        const StaticMesh* bound_mesh = nullptr;
+        u32 bound_lod = u32_max;
         for (u32 t = 0; t < kLocalShadowTileCount; ++t) {
             if (fu.local_shadow_params[t][0] <= 0.5f) continue; // nobody's tile
             const u32 col = t % kLocalShadowTileGrid;
@@ -1236,9 +1312,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
                 const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
                 if (!vb || !ib) continue;
-                const std::array<const rhi::Buffer*, 1> vbs{vb};
-                gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
-                gcmd.bind_index_buffer(*ib, 0);
+                if (bound_mesh != pd.mesh || bound_lod != pd.lod) {
+                    const std::array<const rhi::Buffer*, 1> vbs{vb};
+                    gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+                    gcmd.bind_index_buffer(*ib, 0);
+                    bound_mesh = pd.mesh;
+                    bound_lod = pd.lod;
+                }
                 const MeshLOD& lod = pd.mesh->lods()[pd.lod];
                 for (const SubMesh& sm : lod.submeshes) {
                     gcmd.draw_indexed(sm.index_count, 1, sm.index_offset,
@@ -1263,15 +1343,21 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
         gcmd.set_viewport(0, 0, m_width, m_height);
         gcmd.set_scissor(0, 0, m_width, m_height);
+        const StaticMesh* bound_mesh = nullptr;
+        u32 bound_lod = u32_max;
         for (auto& pd : prepared) {
             std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
             const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
             const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
             if (!vb || !ib) continue;
-            const std::array<const rhi::Buffer*, 1> vbs{vb};
-            gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
-            gcmd.bind_index_buffer(*ib, 0);
+            if (bound_mesh != pd.mesh || bound_lod != pd.lod) {
+                const std::array<const rhi::Buffer*, 1> vbs{vb};
+                gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+                gcmd.bind_index_buffer(*ib, 0);
+                bound_mesh = pd.mesh;
+                bound_lod = pd.lod;
+            }
             const MeshLOD& lod = pd.mesh->lods()[pd.lod];
             for (const SubMesh& sm : lod.submeshes) {
                 gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
@@ -1300,18 +1386,31 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
         gcmd.set_viewport(0, 0, m_width, m_height);
         gcmd.set_scissor(0, 0, m_width, m_height);
+        const StaticMesh* bound_mesh = nullptr;
+        u32 bound_lod = u32_max;
+        const rhi::DescriptorSet* bound_set = nullptr;
         for (auto& pd : prepared) {
             if (!pd.material_set) continue;
             std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
-            const std::array<const rhi::DescriptorSet*, 1> sets{pd.material_set};
-            gcmd.bind_descriptor_sets(*m_material_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
+            // The state sort groups objects by (mesh, lod, material set), so a
+            // kit scene's hundreds of same-mesh same-material pieces collapse
+            // to one bind per group instead of one bind per object.
+            if (bound_set != pd.material_set) {
+                const std::array<const rhi::DescriptorSet*, 1> sets{pd.material_set};
+                gcmd.bind_descriptor_sets(*m_material_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
+                bound_set = pd.material_set;
+            }
             const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
             const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
             if (!vb || !ib) continue;
-            const std::array<const rhi::Buffer*, 1> vbs{vb};
-            gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
-            gcmd.bind_index_buffer(*ib, 0);
+            if (bound_mesh != pd.mesh || bound_lod != pd.lod) {
+                const std::array<const rhi::Buffer*, 1> vbs{vb};
+                gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+                gcmd.bind_index_buffer(*ib, 0);
+                bound_mesh = pd.mesh;
+                bound_lod = pd.lod;
+            }
             const MeshLOD& lod = pd.mesh->lods()[pd.lod];
             for (const SubMesh& sm : lod.submeshes) {
                 gcmd.draw_indexed(sm.index_count, 1, sm.index_offset, static_cast<i32>(sm.vertex_offset), 0);
@@ -1408,34 +1507,12 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     rhi::RenderPass* tonemap_rp = m_tonemap_rp_off.get();
     rhi::Pipeline* tonemap_pipe = m_tonemap_pipeline_off;
     if (out_is_present_source) {
-        if (!m_tonemap_present_ready) {
-            rhi::ColorAttachment back_present{};
-            const std::array<rhi::ColorAttachment, 1> present_atts{back_present};
-            rhi::RenderPassDesc tonemap_present_rpd{};
-            tonemap_present_rpd.color_attachments = std::span<const rhi::ColorAttachment>(present_atts);
-            tonemap_present_rpd.present_source = true;
-            m_tonemap_rp_present = m_device->create_render_pass(tonemap_present_rpd);
-            if (!m_tonemap_rp_present) {
-                NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create present render pass "
-                                               "(device has no swapchain extension?)");
-                return false;
-            }
-            rhi::PipelineDesc tppd{};
-            tppd.vs = m_tonemap_vs.get();
-            tppd.fs = m_tonemap_fs.get();
-            tppd.render_pass = m_tonemap_rp_present.get();
-            tppd.descriptor_set_layout = m_tonemap_layout.get();
-            tppd.rasterizer.cull_mode = rhi::CullMode::None;
-            tppd.depth.test_enabled = false;
-            tppd.depth.write_enabled = false;
-            tppd.push_constant_size = 16; // exposure + vignette + saturation + pad
-            tppd.push_constant_stages = rhi::ShaderStage::Fragment;
-            m_tonemap_pipeline_present = m_pipeline_cache->get_or_create(tppd);
-            if (!m_tonemap_pipeline_present) {
-                NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create present tonemap pipeline");
-                return false;
-            }
-            m_tonemap_present_ready = true;
+        // The present variant needs the swapchain extension, which a
+        // headless/CI device does not have — created lazily on first use.
+        if (!ensure_present_variants()) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create present render pass "
+                                           "(device has no swapchain extension?)");
+            return false;
         }
         tonemap_rp = m_tonemap_rp_present.get();
         tonemap_pipe = m_tonemap_pipeline_present;
@@ -1487,6 +1564,148 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         NF_LOG_TRACE(LogCategory::RHI, "Renderer3D pass {}: {}", pi, m_graph->pass_name(pi));
     }
     NF_LOG_TRACE(LogCategory::RHI, "Renderer3D prepared meshes: {}", prepared.size());
+    m_graph->execute(cmd);
+    return true;
+}
+
+bool Renderer3D::ensure_present_variants() {
+    if (m_tonemap_present_ready) return true;
+    rhi::ColorAttachment back_present{};
+    const std::array<rhi::ColorAttachment, 1> present_atts{back_present};
+    rhi::RenderPassDesc tonemap_present_rpd{};
+    tonemap_present_rpd.color_attachments = std::span<const rhi::ColorAttachment>(present_atts);
+    tonemap_present_rpd.present_source = true;
+    m_tonemap_rp_present = m_device->create_render_pass(tonemap_present_rpd);
+    if (!m_tonemap_rp_present) {
+        return false;
+    }
+    rhi::PipelineDesc tppd{};
+    tppd.vs = m_tonemap_vs.get();
+    tppd.fs = m_tonemap_fs.get();
+    tppd.render_pass = m_tonemap_rp_present.get();
+    tppd.descriptor_set_layout = m_tonemap_layout.get();
+    tppd.rasterizer.cull_mode = rhi::CullMode::None;
+    tppd.depth.test_enabled = false;
+    tppd.depth.write_enabled = false;
+    tppd.push_constant_size = 16; // exposure + vignette + saturation + pad
+    tppd.push_constant_stages = rhi::ShaderStage::Fragment;
+    m_tonemap_pipeline_present = m_pipeline_cache->get_or_create(tppd);
+    if (!m_tonemap_pipeline_present) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create present tonemap pipeline");
+        return false;
+    }
+    // The passthrough twin (present_texture), only when its shaders loaded.
+    if (m_present_vs && m_present_fs) {
+        rhi::PipelineDesc pppd{};
+        pppd.vs = m_present_vs.get();
+        pppd.fs = m_present_fs.get();
+        pppd.render_pass = m_tonemap_rp_present.get();
+        pppd.descriptor_set_layout = m_tonemap_layout.get();
+        pppd.rasterizer.cull_mode = rhi::CullMode::None;
+        pppd.depth.test_enabled = false;
+        pppd.depth.write_enabled = false;
+        pppd.push_constant_size = 16;
+        pppd.push_constant_stages = rhi::ShaderStage::Fragment;
+        m_present_pipeline_present = m_pipeline_cache->get_or_create(pppd);
+        if (!m_present_pipeline_present) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create present passthrough pipeline");
+            return false;
+        }
+    }
+    m_tonemap_present_ready = true;
+    return true;
+}
+
+bool Renderer3D::present_texture(rhi::CommandBuffer& cmd, rhi::Texture& src,
+                                 rhi::TextureView* src_view, rhi::Texture& out_target,
+                                 bool out_is_present_source, u32 frame_slot) {
+    if (!m_device || !m_graph) return false;
+    if (frame_slot >= kFramesInFlight) frame_slot = 0;
+    if (src_view == nullptr) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D::present_texture: null source view");
+        return false;
+    }
+    if (!m_present_pipeline_off) {
+        NF_LOG_ERROR(LogCategory::RHI,
+                     "Renderer3D::present_texture: present shaders unavailable "
+                     "(shader directory has no present_*.spv)");
+        return false;
+    }
+    if (out_is_present_source && !ensure_present_variants()) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D::present_texture: present pass unavailable");
+        return false;
+    }
+
+    rhi::RenderPass* rp = out_is_present_source ? m_tonemap_rp_present.get()
+                                                : m_tonemap_rp_off.get();
+    rhi::Pipeline* pipe = out_is_present_source ? m_present_pipeline_present
+                                                : m_present_pipeline_off;
+    if (!rp || !pipe) return false;
+
+    // Same slot contract as render(): this slot's previous GPU work has been
+    // waited, so the present allocator may recycle. Separate from the scene
+    // allocator — a caller (the editor) runs a scene render and a present in
+    // the same frame through different command buffers.
+    m_present_allocators[frame_slot]->reset();
+    auto set = m_present_allocators[frame_slot]->allocate(*m_tonemap_layout);
+    if (!set) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: present descriptor allocation failed");
+        return false;
+    }
+    const std::array<rhi::DescriptorWrite, 1> writes{{
+        {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, src_view, m_sampler.get()},
+    }};
+    m_device->update_descriptor_set(*set, std::span<const rhi::DescriptorWrite>(writes));
+
+    // The graph exists purely for state transitions here: src (written by an
+    // earlier submission) becomes shader-readable, and the output lands in its
+    // final (presentation-ready when requested) layout — the same machinery
+    // the tonemap pass inside render() runs through.
+    m_graph->reset(true);
+    auto rg_out = m_graph->import_texture("Output", &out_target);
+    auto rg_src = m_graph->import_texture("PresentSrc", &src);
+
+    RGPassDesc pass{};
+    pass.name = "Present";
+    pass.reads = {rg_src};
+    pass.color_attachments = {rg_out};
+    pass.execute = [&](rhi::CommandBuffer& gcmd) {
+        const TonemapFBKey key{out_target.creation_serial(), &out_target, out_is_present_source};
+        auto it = m_tonemap_fbs.find(key);
+        if (it == m_tonemap_fbs.end()) {
+            if (m_tonemap_fbs.size() >= kMaxTonemapFramebuffers) {
+                m_tonemap_fbs.clear();
+            }
+            const std::array<rhi::Texture*, 1> colors{&out_target};
+            auto fb = m_device->create_framebuffer(*rp, std::span<rhi::Texture* const>(colors), nullptr);
+            if (!fb) {
+                NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: present framebuffer creation failed");
+                return;
+            }
+            it = m_tonemap_fbs.emplace(key, std::move(fb)).first;
+        }
+        const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{0.0f, 0.0f, 0.0f, 1.0f}};
+        gcmd.begin_render_pass(*rp, *it->second, std::span<const rhi::ClearValue>(clears));
+        gcmd.bind_pipeline(*pipe);
+        const std::array<const rhi::DescriptorSet*, 1> sets{set.get()};
+        gcmd.bind_descriptor_sets(*m_tonemap_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
+        // Unused by present.frag; the push block keeps the pipeline layout
+        // identical to tonemap's.
+        const float passthrough_push[4] = {1.0f, 0.0f, 1.0f, 0.0f};
+        gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(passthrough_push), &passthrough_push);
+        // The OUTPUT's size, not the renderer's: the caller's renderer may be
+        // sized for an offscreen target (the editor's viewport panel) while
+        // this pass fills the whole swapchain image.
+        gcmd.set_viewport(0, 0, out_target.width(), out_target.height());
+        gcmd.set_scissor(0, 0, out_target.width(), out_target.height());
+        gcmd.draw(3);
+        gcmd.end_render_pass();
+    };
+    m_graph->add_pass(pass);
+    if (!m_graph->compile()) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: present graph compile failed");
+        return false;
+    }
     m_graph->execute(cmd);
     return true;
 }

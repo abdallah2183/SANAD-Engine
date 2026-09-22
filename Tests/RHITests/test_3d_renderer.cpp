@@ -2481,7 +2481,15 @@ bool render_transparency_frame(rhi::IGraphicsDevice& dev, u32 W, u32 H,
             if (pane_present) {
                 Entity pane = world.create_entity();
                 scene::Transform pt{};
-                pt.local_z = 0.5f; // between the wall and the camera
+                // Strictly in front of the wall cube's +Z face: a 3.0 cube
+                // centered at z=-1 puts that face at z=+0.5, and a coplanar
+                // pane makes the opaque frame a z-fight whose winner is
+                // whatever drew last — the assertion below would then hold by
+                // draw-order luck alone (it did, until the opaque draw order
+                // became a state sort). 0.6 keeps the pane between the wall
+                // face and the camera (z=+5), so the depth test decides
+                // deterministically.
+                pt.local_z = 0.6f;
                 world.add<scene::Transform>(pane, pt);
                 // Not a shadow caster: a pane that threw a shadow would make the
                 // comparisons below about the shadow instead of the blend.

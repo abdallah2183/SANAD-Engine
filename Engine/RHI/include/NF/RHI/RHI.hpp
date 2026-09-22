@@ -436,6 +436,12 @@ class UploadContext;
 struct DeviceDesc {
     void* window_handle = nullptr;
     bool enable_validation = false;
+    /// Explicit opt-out of validation, honoured even in Debug builds (where
+    /// validation is otherwise forced on for the test suites). The editor sets
+    /// this for interactive sessions: per-call layer overhead on hundreds of
+    /// draws is what turns a 60 fps scene into a slideshow, and interactive
+    /// editing does not need it — CI/proof runs pass --validation explicitly.
+    bool disable_validation = false;
 };
 
 // --- Buffer ---

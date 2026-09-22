@@ -369,9 +369,17 @@ int run(const SampleConfig& cfg) {
     spot.shadows_enabled = true;
     renderer.add_spot_light(spot);
 
-    auto image_available = device->create_semaphore();
-    auto frame_fence = device->create_fence(true);
-    auto cmd = device->create_command_buffer();
+    // Two frames in flight: slot N's fence gates only slot N's command buffer,
+    // so the GPU executes frame N while the CPU records frame N+1.
+    static constexpr u32 kFramesInFlight = 2;
+    std::array<std::unique_ptr<rhi::Semaphore>, kFramesInFlight> image_available;
+    std::array<std::unique_ptr<rhi::Fence>, kFramesInFlight> frame_fence;
+    std::array<std::unique_ptr<rhi::CommandBuffer>, kFramesInFlight> cmd;
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        image_available[slot] = device->create_semaphore();
+        frame_fence[slot] = device->create_fence(true);
+        cmd[slot] = device->create_command_buffer();
+    }
     std::vector<std::unique_ptr<rhi::Semaphore>> render_finished(swapchain->image_count());
     for (auto& s : render_finished) s = device->create_semaphore();
 
@@ -384,8 +392,9 @@ int run(const SampleConfig& cfg) {
         window.poll_events();
         if (window.should_close()) break;
 
-        frame_fence->wait();
-        frame_fence->reset();
+        const u32 slot = frame_count % kFramesInFlight;
+        frame_fence[slot]->wait();
+        frame_fence[slot]->reset();
 
         const float now_seconds = static_cast<float>(clock.elapsed_seconds());
         if (tod) {
@@ -434,29 +443,29 @@ int run(const SampleConfig& cfg) {
         rendering::RenderWorld render_world;
         nf::runtime::extract_render_objects(game_world, meshes, render_world);
 
-        u32 image_index = swapchain->acquire_next_image(*image_available);
+        u32 image_index = swapchain->acquire_next_image(*image_available[slot]);
         if (image_index == u32_max) break;
 
         rhi::Texture* backbuffer = swapchain->get_texture(image_index);
         if (!backbuffer) break;
 
-        cmd->reset();
-        cmd->begin();
-        if (!renderer.render(*cmd, render_world, cam, *backbuffer, true)) {
+        cmd[slot]->reset();
+        cmd[slot]->begin();
+        if (!renderer.render(*cmd[slot], render_world, cam, *backbuffer, true, slot)) {
             NF_LOG_ERROR(LogCategory::RHI, "Renderer3D::render failed");
             break;
         }
-        cmd->end();
+        cmd[slot]->end();
 
-        const std::array<const rhi::Semaphore*, 1> wait_sems{image_available.get()};
+        const std::array<const rhi::Semaphore*, 1> wait_sems{image_available[slot].get()};
         const std::array<rhi::PipelineStage, 1> wait_stages{rhi::PipelineStage::ColorAttachmentOutput};
         const std::array<const rhi::Semaphore*, 1> signal_sems{render_finished[image_index].get()};
         rhi::SubmitInfo submit_info{};
         submit_info.wait_semaphores = std::span<const rhi::Semaphore* const>(wait_sems);
         submit_info.wait_stages = std::span<const rhi::PipelineStage>(wait_stages);
         submit_info.signal_semaphores = std::span<const rhi::Semaphore* const>(signal_sems);
-        submit_info.signal_fence = frame_fence.get();
-        device->submit(*cmd, submit_info);
+        submit_info.signal_fence = frame_fence[slot].get();
+        device->submit(*cmd[slot], submit_info);
 
         swapchain->present(image_index, std::span<const rhi::Semaphore* const>(signal_sems));
 

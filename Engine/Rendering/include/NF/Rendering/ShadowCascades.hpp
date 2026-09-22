@@ -81,6 +81,11 @@ struct CascadeFit {
     /// hull rounding — divide by the tile resolution for the texel's world size.
     /// Exposed for tests and for anyone reasoning about texel density.
     float world_extent = 1.0f;
+    /// False when fit_cascade bailed (zero-length light direction or a
+    /// degenerate extent) and light_view_proj is left as identity. Consumers
+    /// that cull against the fit MUST keep everything in that case — testing
+    /// world positions against an identity projection would reject at random.
+    bool valid = false;
 };
 
 /// A tile's rect in atlas UV, [0,1]^2, half-texel inset applied by the caller.
@@ -134,6 +139,28 @@ u32 select_cascade(float view_depth, const float* splits, u32 count);
 /// deliberately finite stand-in for "steep enough to matter" rather than a
 /// derived constant. 2.0 covers surfaces up to ~63 degrees off the light.
 inline constexpr float kShadowBiasSlope = 2.0f;
+
+/// Whether a bounding sphere can still cast depth into one cascade's map.
+///
+/// The cascade shadow pass used to re-draw EVERY visible object into EVERY
+/// cascade — four full passes over the scene per frame — although an ortho
+/// light can only receive depth from casters whose light-space footprint lands
+/// inside the cascade's own box: light-space (x, y) maps 1:1 to where a shadow
+/// lands (the light's rays are parallel, so a caster outside the window casts
+/// outside the window), and a caster farther from the light than the box's far
+/// plane casts beyond the map. Skipping those is pixel-identical to drawing
+/// them and letting the GPU clip, because that is exactly the geometry the GPU
+/// would clip.
+///
+/// The margins convert the sphere's world radius into the NDC units each axis
+/// is compared in: x/y over `world_extent` (NDC [-1,1]), z over `depth_range`
+/// (NDC [0,1]). A degenerate fit (zero-length light direction returns an
+/// identity projection) keeps everything — culling against an identity matrix
+/// would reject arbitrarily.
+///
+/// Pure function; unit-tested on the CPU with the rest of this module.
+bool cascade_keeps_caster(const CascadeFit& fit, float cx, float cy, float cz,
+                          float radius);
 
 /// Smallest NDC depth bias that keeps this cascade from self-shadowing.
 ///

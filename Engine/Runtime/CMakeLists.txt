@@ -9,6 +9,10 @@ set(NFRUNTIME_SOURCES
     src/WorldStreamer.cpp
     src/SaveSystem.cpp
     src/InputLog.cpp
+    src/BuiltinModules.cpp
+    src/PlayerControllerModule.cpp
+    src/OrbitCameraModule.cpp
+    src/KeyboardInput.cpp
 )
 
 nf_engine_library(NFRuntime

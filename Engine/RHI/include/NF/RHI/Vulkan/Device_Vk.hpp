@@ -141,6 +141,7 @@ private:
 
     VulkanContext m_ctx;
     bool m_requested_validation = false;
+    bool m_validation_disabled = false;
     std::atomic<u32> m_alive_objects{0};
 };
 

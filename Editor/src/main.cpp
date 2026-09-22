@@ -35,7 +35,10 @@
 #include <NF/Rendering/MeshUpload.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/BuiltinModules.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Gameplay/GameplayModule.hpp>
+#include <NF/Gameplay/GameplayModuleRegistry.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/Physics/Components.hpp>
@@ -113,7 +116,9 @@ EditorConfig parse_args(int argc, char** argv) {
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
                         "  --scene <logical>   Scene to open (default content://Scenes/Example.nfscene)\n"
                         "  --frames N          Run N frames then exit (0 = interactive until close)\n"
-                        "  --validation        Enable Vulkan validation\n"
+                        "  --validation        Enable Vulkan validation (default off:\n"
+                        "                      validation layers stay on for tests but cost\n"
+                        "                      most of the frame on large scenes)\n"
                         "  --arabic            Start with the Arabic localised UI\n"
                         "  --headless          No window (logic + offscreen viewport only)\n");
             std::exit(0);
@@ -189,6 +194,102 @@ nf::Vec3 world_to_pointer_ndc(const nf::editor::ViewCamera& vc, const nf::Vec3& 
     const nf::Vec3 ndc = (view * proj).transform_point(world);
     return nf::Vec3{ndc.x, -ndc.y, ndc.z};
 }
+
+// --- Play-mode input (arrows/WASD/Space/Shift -> gameplay) --------------------
+// While playing, gameplay modules (PlayerController, OrbitCamera, user code)
+// read through GameplayContext::input. In edit mode there is deliberately NO
+// source (null): modules must stay out and the editor owns the keyboard for
+// gizmo shortcuts. The source is polling-based over GetAsyncKeyState so it
+// works without an ImGui focus contract — the viewport may or may not have
+// focus when Play is pressed, and movement must work either way.
+class EditorPlayInput final : public nf::gameplay::IInputSource {
+public:
+    [[nodiscard]] bool action_pressed(std::string_view action) const override {
+#ifdef _WIN32
+        auto down = [](int vk) -> bool { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+        if (action == "move_forward" || action == "forward" || action == "up") {
+            return down(VK_UP) || down('W');
+        }
+        if (action == "move_back" || action == "back" || action == "down") {
+            return down(VK_DOWN) || down('S');
+        }
+        if (action == "move_left" || action == "left") {
+            return down(VK_LEFT) || down('A');
+        }
+        if (action == "move_right" || action == "right") {
+            return down(VK_RIGHT) || down('D');
+        }
+        if (action == "jump") {
+            return down(VK_SPACE);
+        }
+        if (action == "sprint") {
+            return down(VK_SHIFT);
+        }
+        if (action == "interact") {
+            return down('E');
+        }
+        // OrbitCamera legacy axes (keyboard fallback).
+        if (action == "look") {
+            return down(VK_LEFT) || down(VK_RIGHT);
+        }
+        if (action == "zoom") {
+            return down(VK_UP) || down(VK_DOWN);
+        }
+#else
+        (void)action;
+#endif
+        return false;
+    }
+
+    [[nodiscard]] float action_axis(std::string_view action) const override {
+#ifdef _WIN32
+        auto down = [](int vk) -> bool { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+        if (action == "move_x") {
+            float v = 0.0f;
+            if (down(VK_LEFT) || down('A')) {
+                v -= 1.0f;
+            }
+            if (down(VK_RIGHT) || down('D')) {
+                v += 1.0f;
+            }
+            return v;
+        }
+        if (action == "move_z") {
+            float v = 0.0f;
+            if (down(VK_UP) || down('W')) {
+                v -= 1.0f;
+            }
+            if (down(VK_DOWN) || down('S')) {
+                v += 1.0f;
+            }
+            return v;
+        }
+        if (action == "look") {
+            float v = 0.0f;
+            if (down(VK_LEFT)) {
+                v -= 1.0f;
+            }
+            if (down(VK_RIGHT)) {
+                v += 1.0f;
+            }
+            return v;
+        }
+        if (action == "zoom") {
+            float v = 0.0f;
+            if (down(VK_UP)) {
+                v -= 1.0f;
+            }
+            if (down(VK_DOWN)) {
+                v += 1.0f;
+            }
+            return v;
+        }
+#else
+        (void)action;
+#endif
+        return 0.0f;
+    }
+};
 
 // --- Editor viewport navigation (orbit around the scene origin) --------------
 // The Runtime renders through the scene's active camera and always looks at
@@ -498,6 +599,21 @@ int main(int argc, char** argv) {
         NF_LOG_INFO(nf::LogCategory::Editor, "AssetRegistry: {} entries", registry.size());
     }
 
+    // Startup proof that the shipped gameplay modules are really in this
+    // binary. They register through static initialisers, which a static
+    // library is free to drop when nothing references them — "Play moved
+    // nothing" was exactly that failure. Naming them here (and in Runtime::
+    // init_gameplay) pins the objects into the link and the observable into
+    // the log, so a future regression is one log line away from obvious.
+    nf::gameplay::register_builtin_modules();
+    {
+        std::string mods;
+        for (const std::string& n : nf::gameplay::GameplayModuleRegistry::instance().names()) {
+            mods += (mods.empty() ? "" : ", ") + n;
+        }
+        NF_LOG_INFO(nf::LogCategory::Editor, "Gameplay modules: {}", mods);
+    }
+
     nf::Window window;
     if (!cfg.headless) {
         nf::WindowDesc wdesc{};
@@ -524,6 +640,10 @@ int main(int argc, char** argv) {
     nf::rhi::DeviceDesc ddesc{};
     ddesc.window_handle = cfg.headless ? nullptr : window.native_handle();
     ddesc.enable_validation = cfg.validation;
+    // Interactive editing does not need per-call layer checks: on a
+    // several-hundred-draw scene they dominate the frame. Explicit
+    // --validation (CI/proof runs) still enables them.
+    ddesc.disable_validation = !cfg.validation;
     if (!device->init(ddesc)) {
         NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to init device");
         return 1;
@@ -683,7 +803,17 @@ int main(int argc, char** argv) {
         app.viewport() = vp_state;
 
         auto image_available = cfg.headless ? nullptr : device->create_semaphore();
-        auto frame_fence = device->create_fence(true);
+        // Two domains, two fences: the viewport command buffer (scene render
+        // into the offscreen target) and the main command buffer (present +
+        // UI overlay). They used to share one fence AND wait it immediately
+        // after each submit, which serialized the whole frame — the GPU sat
+        // idle while the CPU built UI, the CPU sat idle while the GPU drew.
+        // Each fence now only gates the reuse of its own command buffer one
+        // frame later; submissions to the same queue keep their execution
+        // order, so the main pass can depend on the viewport's output without
+        // any extra semaphore.
+        auto viewport_fence = device->create_fence(true);
+        auto frame_fence = device->create_fence(true); // main pass
         auto cmd_view = device->create_command_buffer();
         auto cmd_main = cfg.headless ? nullptr : device->create_command_buffer();
         std::vector<std::unique_ptr<nf::rhi::Semaphore>> render_finished;
@@ -814,6 +944,13 @@ int main(int argc, char** argv) {
                 }
                 if (swapchain &&
                     (window.width() != swapchain->width() || window.height() != swapchain->height())) {
+                    if (window.width() == 0 || window.height() == 0) {
+                        // Minimized: there is no valid surface, so a recreate
+                        // would only log "extent is zero" every frame. Idle
+                        // until the window is back instead.
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        continue;
+                    }
                     device->wait_idle();
                     nf::rhi::SwapchainDesc sc{};
                     sc.width = window.width();
@@ -878,62 +1015,96 @@ int main(int argc, char** argv) {
             }
 
             // Interactive shortcuts (windowed interactive runs).
+            // While playing, the game owns the keyboard (arrows/WASD/Space go
+            // to gameplay through EditorPlayInput). Editor shortcuts that
+            // would fight the game — gizmo modes, delete — stay disabled; Esc
+            // stops play so the user can always get back to editing.
             if (!cfg.headless && !automation) {
-                if (key_edge('W')) {
-                    app.set_gizmo_mode(nf::editor::GizmoMode::Translate);
-                }
-                if (key_edge('E')) {
-                    app.set_gizmo_mode(nf::editor::GizmoMode::Rotate);
-                }
-                if (key_edge('R')) {
-                    app.set_gizmo_mode(nf::editor::GizmoMode::Scale);
-                }
-                if (key_down(VK_CONTROL) && key_edge('Z')) {
-                    std::string e;
-                    if (!app.undo(e)) {
-                        NF_LOG_WARN(nf::LogCategory::Editor, "Undo: {}", e);
+                if (app.playing()) {
+                    if (key_edge(VK_ESCAPE)) {
+                        std::string e;
+                        if (!app.stop(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Stop: {}", e);
+                        } else {
+                            NF_LOG_INFO(nf::LogCategory::Editor, "Stop: back to editing");
+                        }
                     }
-                }
-                if (key_down(VK_CONTROL) && key_edge('Y')) {
-                    std::string e;
-                    if (!app.redo(e)) {
-                        NF_LOG_WARN(nf::LogCategory::Editor, "Redo: {}", e);
+                } else {
+                    if (key_edge('W')) {
+                        app.set_gizmo_mode(nf::editor::GizmoMode::Translate);
                     }
-                }
-                if (key_down(VK_CONTROL) && key_edge('S')) {
-                    std::string e;
-                    if (!app.save(e)) {
-                        NF_LOG_ERROR(nf::LogCategory::Editor, "Save failed: {}", e);
-                    } else {
-                        NF_LOG_INFO(nf::LogCategory::Editor, "Save: OK {}", app.scene_path());
+                    if (key_edge('E')) {
+                        app.set_gizmo_mode(nf::editor::GizmoMode::Rotate);
                     }
-                }
-                if (key_edge(VK_DELETE) && app.selection().has_selection()) {
-                    // Immediate, undoable delete (A4). This used to only ARM a
-                    // pending delete that then waited on an inline Confirm
-                    // button tucked under the outliner toolbar — easy to miss
-                    // entirely, so the lead's report was "added a mesh, cannot
-                    // delete it". Ctrl+Z is the safety net instead, which is the
-                    // gesture users already reach for.
-                    std::string e;
-                    if (!app.delete_entity(app.selection().primary(), e)) {
-                        NF_LOG_WARN(nf::LogCategory::Editor, "Delete: {}", e);
+                    if (key_edge('R')) {
+                        app.set_gizmo_mode(nf::editor::GizmoMode::Scale);
                     }
-                }
-                if (key_edge(VK_ESCAPE) && app.viewport_dragging()) {
-                    std::string e;
-                    app.viewport_abort_drag(e);
+                    if (key_down(VK_CONTROL) && key_edge('Z')) {
+                        std::string e;
+                        if (!app.undo(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Undo: {}", e);
+                        }
+                    }
+                    if (key_down(VK_CONTROL) && key_edge('Y')) {
+                        std::string e;
+                        if (!app.redo(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Redo: {}", e);
+                        }
+                    }
+                    if (key_down(VK_CONTROL) && key_edge('S')) {
+                        std::string e;
+                        if (!app.save(e)) {
+                            NF_LOG_ERROR(nf::LogCategory::Editor, "Save failed: {}", e);
+                        } else {
+                            NF_LOG_INFO(nf::LogCategory::Editor, "Save: OK {}", app.scene_path());
+                        }
+                    }
+                    if (key_edge(VK_DELETE) && app.selection().has_selection()) {
+                        // Immediate, undoable delete (A4). This used to only ARM a
+                        // pending delete that then waited on an inline Confirm
+                        // button tucked under the outliner toolbar — easy to miss
+                        // entirely, so the lead's report was "added a mesh, cannot
+                        // delete it". Ctrl+Z is the safety net instead, which is the
+                        // gesture users already reach for.
+                        std::string e;
+                        if (!app.delete_entity(app.selection().primary(), e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Delete: {}", e);
+                        }
+                    }
+                    if (key_edge(VK_ESCAPE) && app.viewport_dragging()) {
+                        std::string e;
+                        app.viewport_abort_drag(e);
+                    }
                 }
             }
 
-            // Gameplay modules observe the editor's mode through the context:
-            // while editing, camera-owning modules (OrbitCamera) must not
-            // overwrite the viewport navigation's camera writes each step.
-            runtime.set_playing(app.playing());
-            runtime.update(dt);
+            // Play vs Edit simulation (the core of the Play-button fix):
+            // - Editing: dt = 0 -> Runtime::update freezes physics/animation/
+            //   gameplay/audio/destruction (viewport shows a still authoring
+            //   world), no input source so modules stay out.
+            // - Playing: real dt + keyboard input source -> the game runs and
+            //   arrows/WASD/Space drive PlayerController (or user modules).
+            // Gameplay modules observe the mode through the context: while
+            // editing, camera-owning modules (OrbitCamera) must not overwrite
+            // the viewport navigation's camera writes each step.
+            static EditorPlayInput s_play_input;
+            if (app.playing()) {
+                runtime.set_input_source(&s_play_input);
+                runtime.set_playing(true);
+                runtime.update(dt);
+            } else {
+                runtime.set_input_source(nullptr);
+                runtime.set_playing(false);
+                runtime.update(0.0f);
+            }
 
             // Viewport: offscreen Runtime render (never swapchain-direct).
-            device->wait_idle();
+            // The previous frame's viewport submission has been waited via
+            // viewport_fence below (before recording), which is the only
+            // guarantee the renderer's slot-0 resources need. A full
+            // device->wait_idle() used to run here EVERY frame, draining the
+            // GPU before recording even started — a large part of why a big
+            // scene turned the editor into a slideshow.
             // The panel reports its displayed size every frame (windowed), so
             // the target follows it 1:1 and the image never stretches.
             // Headless has no panels: the fixed startup size survives here
@@ -949,6 +1120,16 @@ int main(int argc, char** argv) {
                 exit_code = 1;
                 break;
             }
+            // Gate cmd_view reuse on the PREVIOUS viewport submission — the
+            // same contract the main pass keeps below with frame_fence. The
+            // fence must be waited before the command buffer it signalled is
+            // reset or re-recorded: a pending cmd_view handed to
+            // vkResetCommandBuffer/vkBeginCommandBuffer is invalid, and the
+            // validation layer is right to scream. The async overlap the
+            // separate fence buys is intact — the wait simply happens one
+            // frame late, after the CPU has already done everything else.
+            viewport_fence->wait();
+            viewport_fence->reset();
             cmd_view->reset();
             cmd_view->begin();
             // Periodic readback proof that the viewport holds a real scene
@@ -987,27 +1168,24 @@ int main(int argc, char** argv) {
             }
             {
                 nf::rhi::SubmitInfo si{};
-                si.signal_fence = frame_fence.get();
-                frame_fence->reset();
-                // Time the GPU work, not the recording: this spans submit to
-                // the fence signalling, so it measures what the GPU actually
-                // did for this viewport frame. The RHI has no timestamp
-                // queries in v0.1, which makes the fence the only honest
-                // instrument available.
-                const auto gpu_start = std::chrono::steady_clock::now();
+                si.signal_fence = viewport_fence.get();
+                // No reset here: the fence was reset at the top of the frame
+                // right after the wait proved the previous submission done.
                 device->submit(*cmd_view, si);
-                frame_fence->wait();
-                const auto gpu_end = std::chrono::steady_clock::now();
-                gpu_us = static_cast<uint64_t>(std::chrono::duration_cast<
-                                                  std::chrono::microseconds>(gpu_end - gpu_start)
-                                                  .count());
-                // Exponential moving average: converges on the typical frame
-                // instead of following spikes, which is what a profiler row
-                // should read.
-                gpu_avg_us = (gpu_avg_us == 0.0) ? static_cast<double>(gpu_us)
-                                                 : gpu_avg_us * 0.9 + static_cast<double>(gpu_us) * 0.1;
+                // Deliberately NO fence wait here. The GPU now renders the
+                // viewport while the CPU builds the UI — that overlap is the
+                // point of the separate fence. Same-queue submission order
+                // guarantees the main pass (which samples the viewport target)
+                // starts only after this submission completes, so no extra
+                // semaphore is needed; only a CPU-side readback below has to
+                // wait explicitly.
             }
             if (measure && readback) {
+                // The readback maps host memory the GPU writes through: the
+                // viewport submission must have finished before map(). On
+                // non-measure frames nothing maps, so nothing waits — this is
+                // the only place the CPU still blocks on the viewport.
+                viewport_fence->wait();
                 if (const auto* px = static_cast<const uint8_t*>(readback->map())) {
                     uint32_t lit = 0;
                     uint32_t red = 0;
@@ -1075,11 +1253,28 @@ int main(int argc, char** argv) {
                                                  preview_bindings.size());
             }
 
-            // Present the windowed scene render (same scene, swapchain path),
-            // then the UI overlay Load pass (scene preserved, UI drawn over).
+            // Present the windowed scene: the ALREADY-RENDERED viewport target
+            // goes onto the swapchain through a passthrough present pass, then
+            // the UI overlay Load pass draws over it. The second FULL scene
+            // render that used to run here (Runtime::render into the swapchain)
+            // paid the entire shadow+cascade+gbuffer pipeline twice per frame.
             bool ui_draw_failed = false;
             if (!cfg.headless && swapchain && cmd_main) {
+                // Gate cmd_main reuse on the previous main submission; the wait
+                // duration doubles as the GPU frame measurement (submit of the
+                // previous frame -> this wait), which is what the profiler's
+                // gpu_us row shows.
+                const auto gpu_start = std::chrono::steady_clock::now();
                 frame_fence->wait();
+                const auto gpu_end = std::chrono::steady_clock::now();
+                gpu_us = static_cast<uint64_t>(std::chrono::duration_cast<
+                                                  std::chrono::microseconds>(gpu_end - gpu_start)
+                                                  .count());
+                // Exponential moving average: converges on the typical frame
+                // instead of following spikes, which is what a profiler row
+                // should read.
+                gpu_avg_us = (gpu_avg_us == 0.0) ? static_cast<double>(gpu_us)
+                                                 : gpu_avg_us * 0.9 + static_cast<double>(gpu_us) * 0.1;
                 frame_fence->reset();
                 const uint32_t image_index = swapchain->acquire_next_image(*image_available);
                 if (image_index != 0xFFFFFFFF && image_index < swapchain->image_count()) {
@@ -1088,12 +1283,21 @@ int main(int argc, char** argv) {
                     cmd_main->begin();
                     // The viewport target was written (or read back) on the
                     // viewport command buffer; transition from whatever layout
-                    // it is actually in so the UI pass samples valid data.
-                    // None = use the tracked layout (covers both the plain
+                    // it is actually in so the present + UI passes sample valid
+                    // data. None = use the tracked layout (covers both the plain
                     // and the readback-measured frames).
                     cmd_main->barrier_texture(*vp_res.target, nf::rhi::ImageUsage::None,
                                               nf::rhi::ImageUsage::Sampled);
-                    runtime.render(image_index, *cmd_main);
+                    // Passthrough the finished viewport frame onto the
+                    // swapchain. Falls back to a fallback clear when the
+                    // renderer has no scene / no present shaders.
+                    const bool scene_ok = vp_res.target && vp_res.view &&
+                                          runtime.present_viewport(image_index, *cmd_main,
+                                                                   *vp_res.target, *vp_res.view);
+                    // The passthrough records its own fallback clear on
+                    // failure, so there is nothing actionable here — but the
+                    // result is a real diagnostic and must not read as dead.
+                    (void)scene_ok;
                     bool ui_ok = true;
                     if (target != nullptr && ui_pass && image_index < ui_fbs.size() && ui_fbs[image_index] &&
                         ui_draw != nullptr) {
@@ -1124,7 +1328,10 @@ int main(int argc, char** argv) {
                     si.signal_semaphores = std::span<const nf::rhi::Semaphore* const>(sig_sems);
                     si.signal_fence = frame_fence.get();
                     device->submit(*cmd_main, si);
-                    frame_fence->wait();
+                    // No wait here: the fence gates cmd_main reuse at the top
+                    // of NEXT frame's main pass, and present() synchronizes on
+                    // the signal semaphores. Waiting immediately after submit
+                    // used to drain the GPU inside every frame.
                     if (ui_draw_failed) {
                         auto_failed = true;
                     }
@@ -1305,8 +1512,14 @@ int main(int argc, char** argv) {
                 // Viewport navigation runs before press/drag so this frame's
                 // gestures already see the moved camera (pick, gizmo and the
                 // next render all read the same camera entity).
-                apply_viewport_navigation(runtime, ui_in, dt, key_down(VK_SHIFT));
-                if (ui_in.viewport_press || ui_in.viewport_drag) {
+                // While playing, the GAME owns the camera (OrbitCamera /
+                // gameplay): editor navigation is disabled so it cannot fight
+                // the game view, and gizmo drags are ignored (structural edits
+                // are already locked by require_editable).
+                if (!app.playing()) {
+                    apply_viewport_navigation(runtime, ui_in, dt, key_down(VK_SHIFT));
+                }
+                if ((ui_in.viewport_press || ui_in.viewport_drag) && !app.playing()) {
                     const float aspect = (vp_state.height != 0)
                                               ? (static_cast<float>(vp_state.width) /
                                                  static_cast<float>(vp_state.height))
@@ -1335,9 +1548,12 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Dirty flag in the window title.
+            // Dirty flag + play state in the window title.
             if (!cfg.headless) {
-                const std::string title = "NOVAForge Editor — " + app.status().scene_label;
+                std::string title = "NOVAForge Editor — " + app.status().scene_label;
+                if (app.playing()) {
+                    title += "  ● PLAYING (Esc = Stop)";
+                }
                 if (title != last_title) {
                     window.set_title(title);
                     last_title = title;
@@ -2075,6 +2291,11 @@ int main(int argc, char** argv) {
         NF_LOG_INFO(nf::LogCategory::Editor, "Editor ran {} frames (entities={}, dirty={}, automation={})",
                     frame_count, app.status().entity_count, app.dirty() ? "yes" : "no",
                     automation ? (auto_failed ? "FAILED" : "OK") : "off");
+        // Last-frame stage costs (renderer CPU timers + fence-measured GPU):
+        // the honest answer to "why is the viewport slow" without a profiler.
+        NF_LOG_INFO(nf::LogCategory::Editor,
+                    "Editor frame cost (last frame): cull={}us draw_prep={}us gpu={}us draws={} visible={}",
+                    cull_us, draw_prep_us, gpu_us, draw_calls, visible_objects);
         NF_LOG_INFO(nf::LogCategory::RHI, "Validation errors: {}", nf::rhi::validation_error_count());
         if (automation && auto_failed) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Automation proof failed");

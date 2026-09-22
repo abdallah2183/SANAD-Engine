@@ -259,6 +259,12 @@ public:
     bool play(std::string& out_err);
     bool stop(std::string& out_err);
     bool playing() const { return m_play.playing(); }
+    // Launches the current scene in a standalone game window (NFGamePlayer,
+    // spawned next to the editor). The live edit scene is written to a
+    // play-session file first, so Play plays exactly what is on screen,
+    // saved or not. The editor stays fully editable while the game runs —
+    // closing the game window is the Stop.
+    bool launch_game(std::string& out_err);
 
     // --- Picking (viewport NDC -> selection) ---
     ecs::Entity pick(const ViewCamera& cam, float ndc_x, float ndc_y);
@@ -288,6 +294,10 @@ public:
     OutlinerState& outliner() { return m_outliner; }
     CommandStack& stack() { return m_stack; }
     AssetBrowserState& browser() { return m_browser; }
+    /// The asset panel rescans the project tree through this cache (500 ms
+    /// TTL): a full recursive walk plus per-mesh registry lookups every frame
+    /// costs real milliseconds on large projects and shows nothing new.
+    void invalidate_browser() { m_browser_cache_dirty = true; }
     PlaySession& play_session() { return m_play; }
     ViewportState& viewport() { return m_viewport; }
     GizmoMode gizmo_mode() const { return m_gizmo_mode; }
@@ -349,6 +359,9 @@ private:
     ImportQueue m_imports;
     HotReload m_hot;
     AssetBrowserState m_browser;
+    std::vector<AssetEntry> m_browser_cache;
+    double m_browser_cache_age = 1e9;
+    bool m_browser_cache_dirty = true;
     PlaySession m_play;
     ProfilerSession m_profiler_session;
     ViewportState m_viewport;

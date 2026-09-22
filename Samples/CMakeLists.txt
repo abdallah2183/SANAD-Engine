@@ -66,6 +66,23 @@ if(NF_GLSLC_EXECUTABLE)
     add_dependencies(NFSampleRuntimeScene NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders)
 endif()
 
+# --- GamePlayer — NOVAForgePlayer: the standalone game window the editor's
+# Play button launches. Same VFS mounts (same --project or engine-tree
+# fallback), full Runtime::update loop, real keyboard input for gameplay.
+add_executable(NFGamePlayer
+    GamePlayer/main.cpp
+)
+target_link_libraries(NFGamePlayer PRIVATE NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFRuntime NFGameplay)
+nf_target_set_warnings(NFGamePlayer)
+
+target_compile_definitions(NFGamePlayer PRIVATE
+    "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
+)
+
+if(NF_GLSLC_EXECUTABLE)
+    add_dependencies(NFGamePlayer NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders)
+endif()
+
 # --- SimpleGame — playable demo: Cube Collector (WASD, coins, enemy) ---
 add_executable(NFSampleSimpleGame
     SimpleGame/main.cpp
@@ -196,6 +213,8 @@ if(MSVC)
     set_property(TARGET NFSampleBasic3D
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET NFSampleRuntimeScene
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set_property(TARGET NFGamePlayer
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET NFSampleSimpleGame
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

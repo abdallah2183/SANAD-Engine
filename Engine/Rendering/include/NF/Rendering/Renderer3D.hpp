@@ -20,8 +20,12 @@
 // the per-frame pass list on every render() call.
 //
 // Contract:
-//   - render() must only be called when the previous frame's GPU work has
-//     completed (fence wait) — it resets its per-frame descriptor allocator.
+//   - render(cmd, ..., frame_slot) must only be called when THAT slot's
+//     previous GPU work has completed (the caller waits the slot's fence) —
+//     it resets the slot's per-frame descriptor allocator and rewrites the
+//     slot's frame-uniform buffer. Two slots exist so the GPU can still be
+//     executing the previous frame while the CPU records the next one; a
+//     caller that serialises (tests, tools) can keep using slot 0 forever.
 //   - After render() the command buffer is ended but NOT submitted; the
 //     caller submits (and presents, when rendering to a swapchain image).
 //   - Lights/exposure are renderer state; meshes/materials come from the
@@ -302,14 +306,35 @@ public:
     CascadeConfig shadow_config() const { return sanitize_cascade_config(m_cascades); }
 
     /// Records one full frame into `cmd` (which must be in recording state):
-    ///   Frustum Culling → DepthPrepass → GBuffer → Lighting → Transparency
-    ///     → Tonemap.
+    ///   Frustum Culling → Shadow atlases → DepthPrepass → GBuffer → Lighting
+    ///     → Transparency → Tonemap.
     /// The tonemapped result lands in `out_target`. When the target is a
     /// swapchain image, pass out_is_present_source=true so the final layout
     /// is presentation-ready.
+    ///
+    /// `frame_slot` selects which per-slot frame resources (frame-uniform
+    /// buffer, descriptor allocator) this call uses. The caller must have
+    /// waited the GPU work previously recorded through the SAME slot — two
+    /// slots let one frame execute on the GPU while the next is recorded.
+    /// Callers that serialise every frame may always pass 0 (the default).
     bool render(rhi::CommandBuffer& cmd, const RenderWorld& render_world,
                 const Camera& camera, rhi::Texture& out_target,
-                bool out_is_present_source = false);
+                bool out_is_present_source = false, u32 frame_slot = 0);
+
+    /// Records ONLY the final tonemap pass, sampling `src` (an already-rendered
+    /// LDR target, e.g. the editor's offscreen viewport) into `out_target`. No
+    /// scene, no shadows: this exists so a caller that already holds a finished
+    /// frame image can present it without re-running the whole pipeline — the
+    /// editor used to render its full scene a SECOND time per frame purely to
+    /// fill the swapchain behind the UI.
+    ///
+    /// `src_view` is the sampled view of `src` (required — the RHI texture
+    /// interface has no implicit view). Same slot contract as render(); the
+    /// slot's PRESENT allocator is used, separate from the scene allocator so
+    /// a caller may run a scene render and a present in the same frame.
+    bool present_texture(rhi::CommandBuffer& cmd, rhi::Texture& src,
+                         rhi::TextureView* src_view, rhi::Texture& out_target,
+                         bool out_is_present_source = false, u32 frame_slot = 0);
 
     const Stats& last_stats() const { return m_stats; }
 
@@ -440,6 +465,10 @@ private:
     std::unique_ptr<rhi::ShaderModule> m_lighting_vs, m_lighting_fs;
     std::unique_ptr<rhi::ShaderModule> m_forward_vs, m_forward_fs;
     std::unique_ptr<rhi::ShaderModule> m_tonemap_vs, m_tonemap_fs;
+    // Present passthrough (see present_texture). Optional at init: an older
+    // shader directory without present_*.spv only disables present_texture(),
+    // never the scene path.
+    std::unique_ptr<rhi::ShaderModule> m_present_vs, m_present_fs;
     PipelineCache* m_pipeline_cache = nullptr;
     std::unique_ptr<Material> m_gbuffer_material;
     rhi::Pipeline* m_depth_pipeline = nullptr;    // owned by m_pipeline_cache
@@ -447,6 +476,13 @@ private:
     rhi::Pipeline* m_forward_pipeline = nullptr;  // owned by m_pipeline_cache
     rhi::Pipeline* m_tonemap_pipeline_off = nullptr;
     rhi::Pipeline* m_tonemap_pipeline_present = nullptr;
+    rhi::Pipeline* m_present_pipeline_off = nullptr;   // owned by m_pipeline_cache
+    rhi::Pipeline* m_present_pipeline_present = nullptr;
+
+    /// Lazily creates the swapchain-variant tonemap/present render pass and
+    /// pipelines (they need the swapchain extension, which headless/CI devices
+    /// do not have). Idempotent; returns false only if the device refused.
+    bool ensure_present_variants();
 
     // --- descriptor layouts ---
     std::unique_ptr<rhi::DescriptorSetLayout> m_material_layout;   // set 0: UBO + albedo
@@ -530,11 +566,42 @@ private:
     static constexpr usize kMaxTonemapFramebuffers = 8;
     std::unordered_map<TonemapFBKey, std::unique_ptr<rhi::Framebuffer>, TonemapFBKeyHash> m_tonemap_fbs;
 
-    // Per-frame data
-    std::unique_ptr<rhi::DescriptorAllocator> m_descriptor_allocator;
+    // Per-frame data, one set of each per IN-FLIGHT frame slot. While the GPU
+    // executes frame N the CPU records frame N+1 into the other slot: frame
+    // uniforms are rewritten every frame (they would corrupt an in-flight
+    // read), and a descriptor allocator reset recycles the sets its own slot
+    // handed out (an in-flight command buffer may still reference them).
+    // present_texture() gets its own allocators because the editor runs a
+    // scene render (viewport, cmd A) and a present (cmd B) in the SAME frame —
+    // sharing one allocator would recycle sets cmd A is still executing with.
+    static constexpr u32 kFramesInFlight = 2;
+    std::unique_ptr<rhi::DescriptorAllocator> m_descriptor_allocators[kFramesInFlight];
+    std::unique_ptr<rhi::DescriptorAllocator> m_present_allocators[kFramesInFlight];
     std::unique_ptr<MaterialLibrary> m_material_library; // created in init()
-    std::unique_ptr<rhi::Buffer> m_frame_uniforms; // persistent, updated per frame
+    std::unique_ptr<rhi::Buffer> m_frame_uniforms[kFramesInFlight]; // persistent, updated per frame
     std::vector<u32> m_visible;                    // culled indices into the render world
+
+    // CPU scratch for draw submission — written and consumed during recording
+    // only (push constants copy their bytes at record time), so a single
+    // instance is safe to reuse once the previous frame's recording finished.
+    // They live here so the capacity survives frames instead of churning
+    // thousands of entries through the allocator on every scene.
+    struct PreparedDraw {
+        const RenderObject* object;
+        const StaticMesh* mesh;
+        const rhi::DescriptorSet* material_set; // non-owning: cached on the entry
+        u32 lod = 0;                            // effective LOD for this frame
+    };
+    struct TransparentDraw {
+        const RenderObject* object;
+        const StaticMesh* mesh;
+        const rhi::DescriptorSet* forward_set; // non-owning: held by forward_sets
+        u32 lod = 0;
+        float distance = 0.0f;                 // camera -> surface, for the sort
+    };
+    std::vector<PreparedDraw> m_prepared;
+    std::vector<TransparentDraw> m_transparent;
+    std::vector<std::unique_ptr<rhi::DescriptorSet>> m_forward_sets;
 
     // State
     MeshLibrary* m_mesh_library = nullptr;

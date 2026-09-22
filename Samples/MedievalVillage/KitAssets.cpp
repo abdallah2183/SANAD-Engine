@@ -134,13 +134,9 @@ bool upload_texture(rhi::IGraphicsDevice& device, const std::filesystem::path& p
 
 } // namespace
 
-bool Kit::load(const std::filesystem::path& content_dir, rhi::IGraphicsDevice& device,
-               rendering::Renderer3D& renderer, rendering::MeshLibrary& meshes,
-               std::string& out_error) {
+bool Kit::parse_manifest_file(const std::filesystem::path& content_dir, std::string& out_error) {
     m_pieces.clear();
     m_index.clear();
-    m_textures.clear();
-    m_report = LoadReport{};
 
     const std::filesystem::path manifest = content_dir / "MedievalKit.manifest";
     std::ifstream in(manifest);
@@ -198,6 +194,37 @@ bool Kit::load(const std::filesystem::path& content_dir, rhi::IGraphicsDevice& d
         out_error = "kit manifest contained no pieces: " + manifest.string();
         return false;
     }
+    return true;
+}
+
+/// Manifest only: bounds + texture names, no GPU. Enough for build_village()
+/// (which places by measured bounds) and for headless exporters that never
+/// create a window or a device.
+bool Kit::load_manifest(const std::filesystem::path& content_dir, std::string& out_error) {
+    m_pieces.clear();
+    m_index.clear();
+    m_textures.clear();
+    m_report = LoadReport{};
+    if (!parse_manifest_file(content_dir, out_error)) {
+        return false;
+    }
+    m_report.pieces = m_pieces.size();
+    return true;
+}
+
+bool Kit::load(const std::filesystem::path& content_dir, rhi::IGraphicsDevice& device,
+               rendering::Renderer3D& renderer, rendering::MeshLibrary& meshes,
+               std::string& out_error) {
+    m_pieces.clear();
+    m_index.clear();
+    m_textures.clear();
+    m_report = LoadReport{};
+
+    std::string parse_err;
+    if (!parse_manifest_file(content_dir, parse_err)) {
+        out_error = parse_err;
+        return false;
+    }
 
     // --- 2. Textures + one material per texture ------------------------------
     // Done before the meshes so a material handle exists the moment a piece does.
@@ -222,7 +249,24 @@ bool Kit::load(const std::filesystem::path& content_dir, rhi::IGraphicsDevice& d
         params.base_color[2] = 1.0f;
         params.base_color[3] = 1.0f;
         params.metallic = 0.0f;
-        params.roughness = 0.75f;
+        // Per-surface response instead of one flat 0.75: glazed roof tiles
+        // catch the sun, plaster/brick stay matte, wood sits in the middle.
+        // The kit bakes no roughness maps, so this is the whole specular
+        // story — a single value is what made everything look like clay.
+        if (stem == "T_RoundTiles_BaseColor") {
+            params.roughness = 0.55f;
+        } else if (stem == "T_WoodTrim_BaseColor") {
+            params.roughness = 0.62f;
+        } else if (stem == "T_RockTrim_BaseColor") {
+            params.roughness = 0.78f;
+        } else if (stem == "T_Brick_BaseColor" || stem == "T_RedBrick_BaseColor" ||
+                   stem == "T_UnevenBrick_BaseColor") {
+            params.roughness = 0.88f;
+        } else if (stem == "T_Plaster_BaseColor") {
+            params.roughness = 0.94f;
+        } else { // T_VineLeaf, T_WindowGradient, ...
+            params.roughness = 0.9f;
+        }
         params.ao = 1.0f;
         params.use_base_color_texture = 1.0f;
         const rendering::MaterialHandle handle =
@@ -232,6 +276,35 @@ bool Kit::load(const std::filesystem::path& content_dir, rhi::IGraphicsDevice& d
         for (KitPiece& p : m_pieces) {
             if (p.texture == stem) {
                 p.material = handle;
+            }
+        }
+    }
+
+    // Ironwork reads as stone when it shares the RockTrim instance: the kit
+    // ships no metal BaseColor map, so the fences get their own instance with
+    // the same albedo but a real metal response. Stone corners keep theirs.
+    {
+        const auto it = m_textures.find("T_RockTrim_BaseColor");
+        if (it != m_textures.end()) {
+            rendering::PBRMaterialParams metal{};
+            metal.base_color[0] = 0.55f;
+            metal.base_color[1] = 0.56f;
+            metal.base_color[2] = 0.60f;
+            metal.base_color[3] = 1.0f;
+            metal.metallic = 0.85f;
+            metal.roughness = 0.42f;
+            metal.ao = 1.0f;
+            metal.use_base_color_texture = 1.0f;
+            const rendering::MaterialHandle handle = renderer.materials().create_instance(
+                *renderer.gbuffer_material(), metal, "ironwork");
+            renderer.materials().set_albedo_texture(handle, *it->second.view,
+                                                    *it->second.sampler);
+            ++m_report.materials_created;
+            for (KitPiece& p : m_pieces) {
+                if (p.name == "Prop_MetalFence_Simple" ||
+                    p.name == "Prop_MetalFence_Ornament") {
+                    p.material = handle;
+                }
             }
         }
     }

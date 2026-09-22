@@ -449,3 +449,80 @@ NF_TEST(shadow_cascade_config_defaults_are_sane) {
     // replaces: a 2x2 grid of 1024 squares is the same 2048x2048.
     NF_CHECK_EQ(kShadowTileGrid * kShadowTileGrid, kMaxShadowCascades);
 }
+
+// ---------------------------------------------------------------------------
+// Per-cascade caster culling
+// ---------------------------------------------------------------------------
+
+NF_TEST(shadow_cascade_caster_cull_keeps_the_fit_itself) {
+    // A sphere centred inside the fitted slice's caster volume must survive:
+    // the camera's own near-field geometry is the shadow map's subject.
+    const Camera cam = make_cam(0.0f, 6.0f, 14.0f);
+    const Vec3 light_dir{0.4f, -1.0f, 0.25f};
+    const CascadeFit fit = fit_cascade(cam, light_dir, 0.1f, 30.0f, 1024);
+    NF_CHECK(fit.valid);
+    NF_CHECK(cascade_keeps_caster(fit, 0.0f, 0.0f, 0.0f, 1.0f));
+}
+
+NF_TEST(shadow_cascade_caster_cull_rejects_only_outside_casters) {
+    // Derive the outside point FROM the fit: take the light-space position of
+    // the slice centre (world origin), walk three full extents along
+    // light-space +x (guaranteed past the window), and map back to world. A
+    // caster there can neither be seen by the box nor cast into it (parallel
+    // rays), so it must be rejected. Deriving the point through the fit matrix
+    // keeps the test honest about the light's basis instead of assuming one.
+    const Camera cam = make_cam(0.0f, 6.0f, 14.0f);
+    const Vec3 light_dir{0.4f, -1.0f, 0.25f};
+    const CascadeFit fit = fit_cascade(cam, light_dir, 0.1f, 30.0f, 1024);
+    NF_CHECK(fit.valid);
+
+    const Vec3 centre_ls = fit.light_view_proj.transform_point(Vec3{0.0f, 0.0f, 0.0f});
+    // light_view_proj maps world -> clip, so centre_ls is CLIP space: x/y in
+    // NDC, z in [0,1]. Walking three clip units along +x is far past the
+    // window regardless of the extent, and the inverse maps the point back to
+    // a finite world position.
+    const Vec3 outside_ls = centre_ls + Vec3{3.0f, 0.0f, 0.0f};
+    const Vec3 outside_ws = fit.light_view_proj.inverse().transform_point(outside_ls);
+    NF_CHECK(!cascade_keeps_caster(fit, outside_ws.x, outside_ws.y, outside_ws.z, 0.01f));
+
+    // Same walk along clip +z: past the far plane, the caster's shadow lands
+    // beyond the map.
+    const Vec3 beyond_ls = centre_ls + Vec3{0.0f, 0.0f, 3.0f};
+    const Vec3 beyond_ws = fit.light_view_proj.inverse().transform_point(beyond_ls);
+    NF_CHECK(!cascade_keeps_caster(fit, beyond_ws.x, beyond_ws.y, beyond_ws.z, 0.01f));
+}
+
+NF_TEST(shadow_cascade_caster_cull_margin_covers_the_radius) {
+    // A huge sphere that merely reaches toward the window from outside must be
+    // kept: only a sphere wholly outside (radius margins included) may be
+    // rejected. Built in clip space so the light's basis orientation cannot
+    // skew the placement: NDC x = 1.5 is outside the [-1,1] window, inside
+    // reach of a sphere whose NDC margin is >= 0.5, beyond reach of a tiny one.
+    const Camera cam = make_cam(0.0f, 6.0f, 14.0f);
+    const Vec3 light_dir{0.4f, -1.0f, 0.25f};
+    const CascadeFit fit = fit_cascade(cam, light_dir, 0.1f, 30.0f, 1024);
+    NF_CHECK(fit.valid);
+
+    const Vec3 centre_ls = fit.light_view_proj.transform_point(Vec3{0.0f, 0.0f, 0.0f});
+    const Vec3 nudge_ls = centre_ls + Vec3{1.5f - centre_ls.x, 0.0f, 0.0f};
+    const Vec3 outside_ws = fit.light_view_proj.inverse().transform_point(nudge_ls);
+
+    // radius = world_extent/2 -> NDC margin_xy = 1.0, so nx 1.5 stays within
+    // the sphere's reach and the caster must be kept...
+    const float big = fit.world_extent * 0.5f;
+    NF_CHECK(cascade_keeps_caster(fit, outside_ws.x, outside_ws.y, outside_ws.z, big));
+    // ...while a speck at the same centre is wholly outside the window.
+    NF_CHECK(!cascade_keeps_caster(fit, outside_ws.x, outside_ws.y, outside_ws.z, 0.001f));
+}
+
+NF_TEST(shadow_cascade_caster_cull_degenerate_fit_keeps_everything) {
+    // Zero-length light direction: fit_cascade bails with an identity
+    // projection and valid=false. Culling against identity would reject
+    // arbitrarily, so the contract is "keep everything".
+    const Camera cam = make_cam(0.0f, 6.0f, 14.0f);
+    const CascadeFit fit = fit_cascade(cam, Vec3{0.0f, 0.0f, 0.0f}, 0.1f, 30.0f, 1024);
+    NF_CHECK(!fit.valid);
+    NF_CHECK(cascade_keeps_caster(fit, 1e9f, 1e9f, 1e9f, 1.0f));
+    // And a default-constructed fit (the filler case) is also a keep-all.
+    NF_CHECK(cascade_keeps_caster(CascadeFit{}, 1e9f, 1e9f, 1e9f, 1.0f));
+}

@@ -1,6 +1,6 @@
-// NF/Editor/OrbitCameraModule.cpp — a worked example of the gameplay API (Phase 10)
+// NF/Runtime/OrbitCameraModule.cpp — a worked example of the gameplay API.
 
-#include <NF/Editor/OrbitCameraModule.hpp>
+#include <NF/Runtime/OrbitCameraModule.hpp>
 
 #include <NF/ECS/ECS.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
@@ -11,7 +11,7 @@
 #include <cmath>
 #include <vector>
 
-namespace nf::editor {
+namespace nf::gameplay {
 
 namespace {
 
@@ -47,7 +47,7 @@ Vec3 world_position_of(const ecs::World& world, ecs::Entity e) {
 
 } // namespace
 
-void OrbitCameraModule::on_update(gameplay::GameplayContext& ctx) {
+void OrbitCameraModule::on_update(GameplayContext& ctx) {
     // Edit mode owns the camera: the editor's viewport navigation writes this
     // same Transform every frame, so placing here would snap each drag straight
     // back and the viewport would read as frozen. Gameplay drives only when
@@ -123,4 +123,4 @@ void OrbitCameraModule::on_update(gameplay::GameplayContext& ctx) {
 // dropdown offers it, with no engine code naming this type.
 NF_GAMEPLAY_MODULE(OrbitCameraModule, "OrbitCamera")
 
-} // namespace nf::editor
+} // namespace nf::gameplay

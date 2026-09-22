@@ -110,6 +110,11 @@ if(NF_GLSLC_EXECUTABLE)
     # picking is only correct if the id image lines up with the rendered one.
     nf_compile_shaders(NFBasic3DPickShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "pick")
+    # Present passthrough (texture -> target, no tonemap). Renderer3D's
+    # present_texture() uses it to put an already-finished frame image (the
+    # editor viewport) on a swapchain without a second full scene render.
+    nf_compile_shaders(NFBasic3DPresentShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "present")
 
     set(NF_TRIANGLE_SHADER_DIR "${NF_TRIANGLE_SHADER_OUT_DIR}")
     set(NF_QUAD_SHADER_DIR     "${NF_QUAD_SHADER_OUT_DIR}")

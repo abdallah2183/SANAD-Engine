@@ -119,6 +119,7 @@ NF_TEST(editor_project_listing_shows_only_the_projects_assets) {
     std::filesystem::create_directories(tmp / "Meshes", ec);
     std::filesystem::create_directories(tmp / "Prefabs", ec);
     std::filesystem::create_directories(tmp / "Notes", ec);
+    std::filesystem::create_directories(tmp / "Cache" / "Meshes", ec);
     vfs.mount("project://", tmp);
 
     const auto touch = [](const std::filesystem::path& p) { std::ofstream(p) << "x"; };
@@ -127,6 +128,7 @@ NF_TEST(editor_project_listing_shows_only_the_projects_assets) {
     touch(tmp / "Prefabs" / "Tower.nfscene");
     touch(tmp / "Notes" / "readme.txt"); // not a project asset
     touch(tmp / "Scenes" / "notes.md");  // not a project asset
+    touch(tmp / "Cache" / "Meshes" / "cube.nfmesh"); // cooked copy: never listed
 
     const std::vector<editor::AssetEntry> got = editor::list_project_assets(vfs);
 
@@ -136,6 +138,7 @@ NF_TEST(editor_project_listing_shows_only_the_projects_assets) {
         NF_CHECK(e.logical_path.rfind("project://", 0) == 0);
         NF_CHECK(e.logical_path.find("readme.txt") == std::string::npos);
         NF_CHECK(e.logical_path.find("notes.md") == std::string::npos);
+        NF_CHECK(e.logical_path.find("Cache") == std::string::npos);
     }
     // Sorted, so the panel order does not depend on directory iteration order.
     for (std::size_t i = 1; i < got.size(); ++i) {

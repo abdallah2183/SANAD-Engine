@@ -556,9 +556,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::Spacing();
             ImGui::TextWrapped("%s", AV("empty_scene_hint").c_str());
         }
-        int row_idx = 0;
-        for (const OutlinerRow& row : rows) {
-            ImGui::PushID(row_idx++);
+        // Clipped: a 600-row village must not pay 600 shaped tree nodes per
+        // frame. Open state is keyed by stable entity id (###e<id>), never by
+        // row index, so clipping never collapses the tree.
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(rows.size()));
+        while (clipper.Step()) {
+            for (int clip_i = clipper.DisplayStart; clip_i < clipper.DisplayEnd; ++clip_i) {
+                const OutlinerRow& row = rows[static_cast<size_t>(clip_i)];
+                ImGui::PushID(static_cast<int>(row.entity.id));
             const bool selected = app.selection().contains(row.entity);
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
             if (selected) {
@@ -612,7 +618,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::TreePop();
             }
             ImGui::PopID();
+            }
         }
+        clipper.End();
         // Drop on empty outliner space = unparent to root.
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("NF_ENTITY")) {
@@ -630,6 +638,27 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
     // --- Center: Viewport ------------------------------------------------------
     if (ImGui::Begin((AV("viewport") + "###Viewport").c_str())) {
+        // Game view banner: while playing the viewport IS the game — same
+        // offscreen target, but driven by the game camera and game input, not
+        // by editor navigation/gizmos. The banner + Stop button is the way
+        // back to editing (Esc works too), so Play never looks like a dead
+        // button that changed nothing.
+        if (app.playing()) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.2f, 0.2f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.1f, 0.1f, 1.0f));
+            if (ImGui::Button("■ STOP (Esc)")) {
+                std::string stop_err;
+                if (!app.stop(stop_err)) {
+                    push_error(app.console(), "Stop failed", stop_err);
+                }
+            }
+            ImGui::PopStyleColor(3);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                               "● GAME RUNNING — Arrows/WASD move, Space jumps, Shift sprints");
+            ImGui::Separator();
+        }
         const float avail_w = ImGui::GetContentRegionAvail().x;
         const float avail_h = ImGui::GetContentRegionAvail().y;
         // --- Gizmo toolbar (P2): mode / space / grid snapping ---
@@ -799,7 +828,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             static bool press_armed = false;
             static float last_ndc_x = 0.0f;
             static float last_ndc_y = 0.0f;
-            if (!press_armed && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            // While playing, the game owns the left button too (no gizmo
+            // drags, no selection changes): structural edits are locked and
+            // a drag would only fight the simulation.
+            if (!app.playing() && !press_armed && ImGui::IsItemHovered() &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 if (w > 1.0f && h > 1.0f) {
                     press_armed = true;
                     intents.viewport_press = true;
@@ -830,6 +863,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // Viewport navigation (right button held on the image): orbit look
             // + WASD/QE fly + wheel zoom. Separate from the left-button gizmo
             // gesture above — right never selects, left never navigates.
+            // Disabled while playing: the game camera is gameplay-owned and
+            // editor orbiting would snap it every frame.
+            if (!app.playing()) {
             {
                 const ImGuiIO& nav_io = ImGui::GetIO();
                 const bool over_view = ImGui::IsItemHovered();
@@ -861,6 +897,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     intents.nav_u = ImGui::IsKeyDown(ImGuiKey_E);
                     intents.nav_d = ImGui::IsKeyDown(ImGuiKey_Q);
                 }
+            }
             }
         }
         if (ImGui::BeginDragDropTarget()) {
@@ -1834,9 +1871,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         const std::vector<AssetEntry> entries = app.browser_entries();
         rt_text_str(AVF("assets_count_fmt", entries.size()));
         if (ImGui::BeginChild("##assetlist", ImVec2(0, 0), true)) {
-            int idx = 0;
-            for (const AssetEntry& e : entries) {
-                ImGui::PushID(idx++);
+            // Clipped: thumbnails and selectables only for visible rows.
+            // PushID uses the stable entry index so selection and drag
+            // payloads survive scrolling.
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(entries.size()));
+            while (clipper.Step()) {
+                for (int ei = clipper.DisplayStart; ei < clipper.DisplayEnd; ++ei) {
+                    const AssetEntry& e = entries[static_cast<size_t>(ei)];
+                    ImGui::PushID(ei);
                 const char* badge = "?";
                 switch (e.type) {
                     case assets::AssetType::Mesh: badge = "[MESH]"; break;
@@ -1906,7 +1949,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ImGui::EndDragDropSource();
                 }
                 ImGui::PopID();
+                }
             }
+            clipper.End();
         }
         ImGui::EndChild();
     }
@@ -1976,15 +2021,23 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             std::string(search)};
         const std::vector<LogMessage> lines = app.console().filtered(filter);
         if (ImGui::BeginChild("##consolelines", ImVec2(0, 0), true)) {
-            for (const LogMessage& m : lines) {
-                // Message text is arbitrary (asset paths, engine errors, an
-                // Arabic entity name in a rename failure), so shape it for
-                // display and avoid the %s format path entirely.
-                const std::string line = "[" + std::string(level_name(m.level)) + "][" +
-                                         std::string(category_name(m.category)) + "] " +
-                                         ui::shape_arabic(m.text);
-                ImGui::TextColored(level_color(m.level), "%s", line.c_str());
+            // Clipped like the outliner: shaping runs only for visible rows,
+            // not for the whole backlog every frame.
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(lines.size()));
+            while (clipper.Step()) {
+                for (int li = clipper.DisplayStart; li < clipper.DisplayEnd; ++li) {
+                    const LogMessage& m = lines[static_cast<size_t>(li)];
+                    // Message text is arbitrary (asset paths, engine errors, an
+                    // Arabic entity name in a rename failure), so shape it for
+                    // display and avoid the %s format path entirely.
+                    const std::string line = "[" + std::string(level_name(m.level)) + "][" +
+                                             std::string(category_name(m.category)) + "] " +
+                                             ui::shape_arabic(m.text);
+                    ImGui::TextColored(level_color(m.level), "%s", line.c_str());
+                }
             }
+            clipper.End();
             if (!lines.empty()) {
                 ImGui::SetScrollHereY(1.0f);
             }

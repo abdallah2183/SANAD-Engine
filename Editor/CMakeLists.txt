@@ -30,7 +30,6 @@ set(NFEDITOR_CORE_SOURCES
     src/Console.cpp
     src/ProfilerSession.cpp
     src/ReflectedInspector.cpp
-    src/OrbitCameraModule.cpp
     src/EditorApp.cpp
     src/PreviewPixels.cpp
     src/AudioPreview.cpp

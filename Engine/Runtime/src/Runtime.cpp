@@ -1,4 +1,5 @@
 #include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/BuiltinModules.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 #include <NF/Rendering/ImageDecode.hpp>
@@ -479,6 +480,19 @@ void Runtime::update(float dt) {
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return;
     }
+    // Edit-mode freeze: the editor drives the Runtime with dt = 0 while it is
+    // NOT playing, so the viewport shows a frozen authoring world. Without
+    // this, physics / animation / gameplay / audio / destruction all advance
+    // every editor frame and the scene "plays itself" before Play is pressed —
+    // the exact "models move while not playing, Play button does nothing"
+    // report. dt <= 0 still propagates transforms (editor moves stay visible)
+    // but steps no simulation. Packaged games and tests always pass dt > 0,
+    // so they are unaffected.
+    if (!(dt > 0.0f)) {
+        auto& world = m_scene_data_ptr->scene->world();
+        scene::propagate_transforms(world);
+        return;
+    }
     // Physics runs on its own fixed clock, so the scene's motion is the same
     // whether the frame took 5 ms or 50. The render path then only reads the
     // transforms physics produced.
@@ -791,6 +805,14 @@ void Runtime::sort_gameplay_modules() {
 }
 
 void Runtime::init_gameplay() {
+    // Engine-shipped modules (PlayerController, OrbitCamera) must be registered
+    // before the registry walk: registration through static initialisers alone
+    // is at the linker's mercy (an unreferenced object in a static library is
+    // dropped, and the module silently vanishes from the binary). Naming the
+    // modules in BuiltinModules.cpp both registers them and pins their objects
+    // into every binary that links NFRuntime.
+    gameplay::register_builtin_modules();
+
     auto& registry = gameplay::GameplayModuleRegistry::instance();
     for (const std::string& name : registry.names()) {
         if (auto module = registry.create(name)) {
@@ -2056,6 +2078,17 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
         // World-space bounds for frustum culling (translation only).
         ro.bounds = rendering::transform_aabb(mesh->bounds(), tr->world_x, tr->world_y, tr->world_z);
         ro.sphere = rendering::transform_sphere(mesh->bounding_sphere(), tr->world_x, tr->world_y, tr->world_z);
+        // transform_sphere only translates. A scaled entity's geometry reaches
+        // farther from its origin than the authored radius claims, and every
+        // rejection test downstream (camera frustum AND shadow cascades) works
+        // on this sphere — an undersized radius would cull geometry the GPU
+        // would have drawn. Scaling the radius by the largest axis is exact for
+        // uniform scale and conservative (never under-covers) otherwise.
+        {
+            const float max_scale = std::max({std::abs(tr->scale_x), std::abs(tr->scale_y),
+                                              std::abs(tr->scale_z)});
+            ro.sphere.radius *= max_scale;
+        }
         out.objects.push_back(std::move(ro));
     }
     build_debris_render_world(out);
@@ -2093,7 +2126,7 @@ void Runtime::fallback_clear(rhi::Texture& target, rhi::CommandBuffer& cmd, bool
     m_fallback_fbs.push_back(std::move(fb));
 }
 
-void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
+void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd, u32 frame_slot) {
     NF_PROFILE_SCOPE("Runtime::render");
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime::render: no scene loaded, using fallback clear");
@@ -2128,8 +2161,9 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
     extract_camera(w, h, cam);
     extract_light();
     extract_sky();
-    rendering::RenderWorld render_world{};
-    build_render_world(render_world);
+    // Reused scratch: build_render_world clears it, so the per-object storage
+    // survives frames instead of churning the heap each frame.
+    build_render_world(m_render_world);
     // Frustum culling happens inside Renderer3D::render (RenderWorld → Visible).
     rhi::Texture* target = m_swapchain->get_texture(image_index);
     if (target == nullptr) {
@@ -2137,7 +2171,7 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
         return;
     }
     // Scene → AssetManager → Renderer3D: Depth → GBuffer → Lighting → Tonemap.
-    if (!m_renderer->render(cmd, render_world, cam, *target, true)) {
+    if (!m_renderer->render(cmd, m_render_world, cam, *target, true, frame_slot)) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime::render: Renderer3D failed, using fallback clear");
         fallback_clear(*target, cmd, true);
         return;
@@ -2147,13 +2181,42 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
                  stats.visible, stats.draw_calls);
 }
 
+bool Runtime::present_viewport(uint32_t image_index, rhi::CommandBuffer& cmd,
+                               rhi::Texture& offscreen, rhi::TextureView& offscreen_view,
+                               u32 frame_slot) {
+    if (m_swapchain == nullptr) {
+        NF_LOG_ERROR(LogCategory::Core, "Runtime::present_viewport: no swapchain bound");
+        return false;
+    }
+    rhi::Texture* target = m_swapchain->get_texture(image_index);
+    if (target == nullptr) {
+        NF_LOG_ERROR(LogCategory::Core, "Runtime::present_viewport: null swapchain texture {}", image_index);
+        return false;
+    }
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        // No scene: same visible contract as render() — a magenta fallback.
+        fallback_clear(*target, cmd, true);
+        return false;
+    }
+    if (!m_renderer || !m_renderer_initialized) {
+        fallback_clear(*target, cmd, true);
+        return false;
+    }
+    if (!m_renderer->present_texture(cmd, offscreen, &offscreen_view, *target, true, frame_slot)) {
+        NF_LOG_ERROR(LogCategory::Core, "Runtime::present_viewport: present_texture failed");
+        fallback_clear(*target, cmd, true);
+        return false;
+    }
+    return true;
+}
+
 rendering::RenderWorld Runtime::render_world_snapshot() {
     rendering::RenderWorld out;
     build_render_world(out);
     return out;
 }
 
-void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd) {
+void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd, u32 frame_slot) {
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime::render_offscreen: no scene loaded, using fallback clear");
         fallback_clear(target, cmd, false);
@@ -2177,9 +2240,8 @@ void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd) {
     extract_camera(w, h, cam);
     extract_light();
     extract_sky();
-    rendering::RenderWorld render_world{};
-    build_render_world(render_world);
-    if (!m_renderer->render(cmd, render_world, cam, target, false)) {
+    build_render_world(m_render_world);
+    if (!m_renderer->render(cmd, m_render_world, cam, target, false, frame_slot)) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime::render_offscreen: Renderer3D failed");
         fallback_clear(target, cmd, false);
         return;

@@ -3,6 +3,10 @@
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Animation/Components.hpp>
+#include <NF/Audio/Components.hpp>
+#include <NF/Gameplay/Components.hpp>
 
 #include <unordered_map>
 #include <vector>
@@ -15,6 +19,11 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
     const ecs::World& sw = src.world();
     ecs::World& dw = dst->world();
     // Pass 1: create one entity per source entity, copy components.
+    // v0.1 used to copy only Transform/Name/Mesh/Camera/Light, so a play
+    // session silently dropped physics, animation, audio, gameplay, sky and
+    // destruction — Play simulated "the scene as it was on disk minus
+    // everything that moves". Every scene component is copied now; the live
+    // physics body handle is reset (per-session, rebuilt by the runtime).
     std::unordered_map<uint32_t, ecs::Entity> remap;
     for (ecs::Entity se : sw.all_entities()) {
         ecs::Entity de = dw.create_entity();
@@ -36,8 +45,31 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* l = sw.get<runtime::DirectionalLight>(se)) {
             dw.add<runtime::DirectionalLight>(de, *l);
         }
+        if (const auto* s = sw.get<runtime::SkyComponent>(se)) {
+            dw.add<runtime::SkyComponent>(de, *s);
+        }
         if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
             dw.add<scene::PrefabLinkComponent>(de, *p);
+        }
+        if (const auto* rb = sw.get<physics::RigidBodyComponent>(se)) {
+            physics::RigidBodyComponent fresh = *rb;
+            fresh.body = physics::BodyHandle{};
+            dw.add<physics::RigidBodyComponent>(de, fresh);
+        }
+        if (const auto* col = sw.get<physics::ColliderComponent>(se)) {
+            dw.add<physics::ColliderComponent>(de, *col);
+        }
+        if (const auto* d = sw.get<runtime::DestructibleComponent>(se)) {
+            dw.add<runtime::DestructibleComponent>(de, *d);
+        }
+        if (const auto* a = sw.get<animation::AnimationComponent>(se)) {
+            dw.add<animation::AnimationComponent>(de, *a);
+        }
+        if (const auto* au = sw.get<audio::AudioComponent>(se)) {
+            dw.add<audio::AudioComponent>(de, *au);
+        }
+        if (const auto* g = sw.get<gameplay::GameplayModuleComponent>(se)) {
+            dw.add<gameplay::GameplayModuleComponent>(de, *g);
         }
     }
     // Pass 2: remap parents.
@@ -71,6 +103,13 @@ std::string signature_of(const ecs::World& w, ecs::Entity e) {
     s += w.has<runtime::CameraComponent>(e) ? "C" : "-";
     s += w.has<runtime::DirectionalLight>(e) ? "L" : "-";
     s += w.has<scene::PrefabLinkComponent>(e) ? "P" : "-";
+    s += w.has<runtime::SkyComponent>(e) ? "S" : "-";
+    s += w.has<physics::RigidBodyComponent>(e) ? "R" : "-";
+    s += w.has<physics::ColliderComponent>(e) ? "K" : "-";
+    s += w.has<runtime::DestructibleComponent>(e) ? "D" : "-";
+    s += w.has<animation::AnimationComponent>(e) ? "A" : "-";
+    s += w.has<audio::AudioComponent>(e) ? "U" : "-";
+    s += w.has<gameplay::GameplayModuleComponent>(e) ? "G" : "-";
     return s;
 }
 
@@ -149,6 +188,87 @@ std::optional<ecs::Entity> find_by_name(const scene::Scene& scene, const std::st
         }
     }
     return std::nullopt;
+}
+
+namespace {
+
+void copy_entity_all(const ecs::World& sw, ecs::Entity se, ecs::World& dw, ecs::Entity de) {
+    if (const auto* t = sw.get<scene::Transform>(se)) {
+        dw.add<scene::Transform>(de, *t);
+    }
+    if (const auto* n = sw.get<scene::NameComponent>(se)) {
+        dw.add<scene::NameComponent>(de, *n);
+    }
+    if (const auto* m = sw.get<runtime::MeshComponent>(se)) {
+        dw.add<runtime::MeshComponent>(de, *m);
+    }
+    if (const auto* c = sw.get<runtime::CameraComponent>(se)) {
+        dw.add<runtime::CameraComponent>(de, *c);
+    }
+    if (const auto* l = sw.get<runtime::DirectionalLight>(se)) {
+        dw.add<runtime::DirectionalLight>(de, *l);
+    }
+    if (const auto* s = sw.get<runtime::SkyComponent>(se)) {
+        dw.add<runtime::SkyComponent>(de, *s);
+    }
+    if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
+        dw.add<scene::PrefabLinkComponent>(de, *p);
+    }
+    if (const auto* rb = sw.get<physics::RigidBodyComponent>(se)) {
+        physics::RigidBodyComponent fresh = *rb;
+        fresh.body = physics::BodyHandle{};
+        dw.add<physics::RigidBodyComponent>(de, fresh);
+    }
+    if (const auto* col = sw.get<physics::ColliderComponent>(se)) {
+        dw.add<physics::ColliderComponent>(de, *col);
+    }
+    if (const auto* d = sw.get<runtime::DestructibleComponent>(se)) {
+        dw.add<runtime::DestructibleComponent>(de, *d);
+    }
+    if (const auto* a = sw.get<animation::AnimationComponent>(se)) {
+        dw.add<animation::AnimationComponent>(de, *a);
+    }
+    if (const auto* au = sw.get<audio::AudioComponent>(se)) {
+        dw.add<audio::AudioComponent>(de, *au);
+    }
+    if (const auto* g = sw.get<gameplay::GameplayModuleComponent>(se)) {
+        dw.add<gameplay::GameplayModuleComponent>(de, *g);
+    }
+}
+
+} // namespace
+
+void restore_scene(scene::Scene& dst, const scene::Scene& src) {
+    dst.world().clear();
+    dst.set_name(src.name());
+    dst.metadata() = src.metadata();
+    const ecs::World& sw = src.world();
+    ecs::World& dw = dst.world();
+    std::unordered_map<uint32_t, ecs::Entity> remap;
+    for (ecs::Entity se : sw.all_entities()) {
+        ecs::Entity de = dw.create_entity();
+        remap[se.id] = de;
+        copy_entity_all(sw, se, dw, de);
+        if (auto* t = dw.get<scene::Transform>(de)) {
+            t->parent = ecs::kInvalidEntity;
+        }
+    }
+    for (ecs::Entity se : sw.all_entities()) {
+        const auto* st = sw.get<scene::Transform>(se);
+        if (st == nullptr || !st->parent.valid()) {
+            continue;
+        }
+        auto dit = remap.find(se.id);
+        auto pit = remap.find(st->parent.id);
+        if (dit == remap.end() || pit == remap.end()) {
+            continue;
+        }
+        if (!sw.is_alive(st->parent)) {
+            continue;
+        }
+        scene::set_parent(dw, dit->second, pit->second);
+    }
+    scene::propagate_transforms(dw);
 }
 
 bool PlaySession::play(const scene::Scene& edit, std::string& out_err) {

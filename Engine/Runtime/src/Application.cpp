@@ -1,5 +1,7 @@
 #include <NF/Runtime/Application.hpp>
 #include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/BuiltinModules.hpp>
+#include <NF/Runtime/KeyboardInput.hpp>
 #include <NF/Runtime/RunConfigResolver.hpp>
 #include <NF/Platform/Platform.hpp>
 #include <NF/Platform/Window.hpp>
@@ -120,6 +122,9 @@ int Application::run() {
     rhi::DeviceDesc ddesc{};
     ddesc.window_handle = m_config.headless ? nullptr : window.native_handle();
     ddesc.enable_validation = m_config.validation;
+    // Shipped/play sessions don't need per-call layer checks (same rationale
+    // as the editor default); explicit --validation still enables them.
+    ddesc.disable_validation = !m_config.validation;
     if (!device->init(ddesc)) {
         NF_LOG_ERROR(LogCategory::RHI, "Failed to init device");
         if (!m_config.headless) {
@@ -188,6 +193,19 @@ int Application::run() {
         assets::AssetManager asset_manager(vfs, registry);
         Runtime runtime(vfs, registry, asset_manager, *device, swapchain.get());
 
+        // A windowed run IS a played run: gameplay modules own the camera and
+        // the player entity, so they must be allowed to write (set_playing),
+        // and something real must answer their input polls. Headless keeps
+        // the editor-safe defaults — playing=false, no input source — which
+        // is what every headless harness asserts on.
+        KeyboardInputSource keyboard_input;
+        if (!m_config.headless) {
+            runtime.set_playing(true);
+            if (m_config.enable_input) {
+                runtime.set_input_source(&keyboard_input);
+            }
+        }
+
         std::string scene_err;
         bool scene_ok = true;
         if (!resolved_scene.empty()) {
@@ -208,11 +226,32 @@ int Application::run() {
                 platform_shutdown();
                 return 1;
             }
+            // The one log line that separates "the scene played" from "the
+            // scene rendered": gameplay modules registered in this binary and
+            // stepped by the loop below. Zero here means a PlayerController
+            // in the scene has nothing to run it.
+            NF_LOG_INFO(LogCategory::Core, "Gameplay modules registered: {} (input: {})",
+                        runtime.gameplay_module_count(),
+                        runtime.input_source() != nullptr ? "keyboard" : "none");
         }
 
-        auto image_available = device->create_semaphore();
-        auto frame_fence = device->create_fence(true);
-        auto cmd = device->create_command_buffer();
+        // Two frames in flight: while the GPU executes frame N the CPU records
+        // frame N+1. A single cmd/fence pair forced every frame into
+        // "wait GPU → record → draw → wait GPU" — with a heavy scene the CPU
+        // and GPU each idled for the other's entire frame, which is the
+        // stutter users see with many-mesh scenes. Per-SLOT frame resources
+        // (fence, cmd, acquire semaphore) are what makes the overlap legal:
+        // slot resources are only touched after that slot's fence says its
+        // previous submission finished.
+        static constexpr uint32_t kFramesInFlight = 2;
+        std::array<std::unique_ptr<rhi::Semaphore>, kFramesInFlight> image_available;
+        std::array<std::unique_ptr<rhi::Fence>, kFramesInFlight> frame_fence;
+        std::array<std::unique_ptr<rhi::CommandBuffer>, kFramesInFlight> cmd;
+        for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+            image_available[slot] = device->create_semaphore();
+            frame_fence[slot] = device->create_fence(true);
+            cmd[slot] = device->create_command_buffer();
+        }
         std::vector<std::unique_ptr<rhi::Semaphore>> render_finished;
         if (!m_config.headless && swapchain) {
             render_finished.reserve(swapchain->image_count());
@@ -220,17 +259,23 @@ int Application::run() {
                 render_finished.push_back(device->create_semaphore());
             }
         }
-        if (!m_config.headless && (!image_available || !frame_fence || !cmd)) {
-            NF_LOG_ERROR(LogCategory::RHI, "Failed to create per-frame sync objects");
-            device->wait_idle();
-            runtime.shutdown();
-            asset_manager.clear();
-            swapchain.reset();
-            device->shutdown();
-            window.destroy();
-            JobSystem::instance().shutdown();
-            platform_shutdown();
-            return 1;
+        if (!m_config.headless) {
+            bool sync_ok = true;
+            for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+                if (!image_available[slot] || !frame_fence[slot] || !cmd[slot]) sync_ok = false;
+            }
+            if (!sync_ok) {
+                NF_LOG_ERROR(LogCategory::RHI, "Failed to create per-frame sync objects");
+                device->wait_idle();
+                runtime.shutdown();
+                asset_manager.clear();
+                swapchain.reset();
+                device->shutdown();
+                window.destroy();
+                JobSystem::instance().shutdown();
+                platform_shutdown();
+                return 1;
+            }
         }
 
         auto recreate_swapchain = [&]() -> bool {
@@ -320,10 +365,11 @@ int Application::run() {
             }
 
             if (!m_config.headless && swapchain) {
-                frame_fence->wait();
-                frame_fence->reset();
+                const uint32_t slot = frame_count % kFramesInFlight;
+                frame_fence[slot]->wait();
+                frame_fence[slot]->reset();
 
-                const uint32_t image_index = swapchain->acquire_next_image(*image_available);
+                const uint32_t image_index = swapchain->acquire_next_image(*image_available[slot]);
                 if (image_index == 0xFFFFFFFF) {
                     NF_LOG_WARN(LogCategory::RHI, "Swapchain out of date; recreating");
                     if (!recreate_swapchain()) {
@@ -337,22 +383,22 @@ int Application::run() {
                 }
 
                 // Windowed Runtime: Scene → AssetManager → Renderer3D
-                // (Depth → GBuffer → Lighting → Tonemap), submit, present.
-                cmd->reset();
-                cmd->begin();
-                runtime.render(image_index, *cmd);
-                cmd->end();
+                // (Shadow → Depth → GBuffer → Lighting → Tonemap), submit, present.
+                cmd[slot]->reset();
+                cmd[slot]->begin();
+                runtime.render(image_index, *cmd[slot], slot);
+                cmd[slot]->end();
 
                 rhi::SubmitInfo submit_info{};
-                const std::array<const rhi::Semaphore*, 1> wait_sems{image_available.get()};
+                const std::array<const rhi::Semaphore*, 1> wait_sems{image_available[slot].get()};
                 const std::array<rhi::PipelineStage, 1> wait_stages{rhi::PipelineStage::ColorAttachmentOutput};
                 const std::array<const rhi::Semaphore*, 1> signal_sems{
                     render_finished[image_index].get()};
                 submit_info.wait_semaphores = std::span<const rhi::Semaphore* const>(wait_sems);
                 submit_info.wait_stages = std::span<const rhi::PipelineStage>(wait_stages);
                 submit_info.signal_semaphores = std::span<const rhi::Semaphore* const>(signal_sems);
-                submit_info.signal_fence = frame_fence.get();
-                device->submit(*cmd, submit_info);
+                submit_info.signal_fence = frame_fence[slot].get();
+                device->submit(*cmd[slot], submit_info);
                 swapchain->present(image_index, std::span<const rhi::Semaphore* const>(signal_sems));
             } else {
                 // Headless: no swapchain, no PRESENT. Update only.
