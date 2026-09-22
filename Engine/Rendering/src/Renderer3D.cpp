@@ -657,6 +657,7 @@ void Renderer3D::shutdown() {
     m_lighting_vs.reset(); m_lighting_fs.reset();
     m_forward_vs.reset(); m_forward_fs.reset();
     m_tonemap_vs.reset(); m_tonemap_fs.reset();
+    m_present_vs.reset(); m_present_fs.reset();
     m_material_layout.reset();
     m_lighting_layout.reset();
     m_forward_layout.reset();

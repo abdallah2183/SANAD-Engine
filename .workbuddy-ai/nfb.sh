@@ -12,7 +12,9 @@
 # This driver sets the same INCLUDE/LIB/PATH that vcvars64 would, from paths
 # resolved on disk, without invoking reg.exe or reading the registry at all.
 #
-# Usage:  bash .workbuddy-ai/nfb.sh [--target <Target>]     (no args = all)
+# Usage:  bash .workbuddy-ai/nfb.sh [--release] [--target <Target>]  (no args = all)
+#         --release builds build/release (optimised). Default: build/DebugNinja.
+#         Play/Edit the optimised editor:  build/release/bin/NOVAForgeEditor.exe
 set -uo pipefail
 
 VS='/c/Program Files/Microsoft Visual Studio/18/Community'
@@ -37,6 +39,13 @@ cd "C:/Users/abdal/OneDrive/Desktop/NOVAForge Engine" || exit 1
 # Note: `ProgramFiles(x86)` is not a legal bash identifier, hence `env`.
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
+
+BUILD_DIR="build/DebugNinja"
+if [ "${1:-}" = "--release" ]; then
+    shift
+    BUILD_DIR="build/release"
+fi
+
 env \
   "APPDATA=C:\Users\abdal\AppData\Roaming" \
   "ProgramData=C:\ProgramData" \
@@ -45,4 +54,4 @@ env \
   "ProgramFiles(x86)=C:\Program Files (x86)" \
   "CommonProgramFiles=C:\Program Files\Common Files" \
   "CommonProgramFiles(x86)=C:\Program Files (x86)\Common Files" \
-  cmake --build build/DebugNinja "$@"
+  cmake --build "$BUILD_DIR" "$@"

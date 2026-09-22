@@ -78,6 +78,11 @@ struct EditorConfig {
     bool validation = false;
     bool headless = false;
     bool arabic_ui = false; // start with the Arabic localised UI
+    // FIFO (default) caps frames at the display's refresh and is tear-free;
+    // --novsync runs the swapchain in Immediate mode so the FPS counter shows
+    // the engine's true rate (uncapped, may tear). Benchmarking and 120 Hz+
+    // displays want this; normal editing wants the default.
+    bool vsync = true;
     // Empty means "open the engine tree", which is how the editor has always
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
@@ -107,6 +112,8 @@ EditorConfig parse_args(int argc, char** argv) {
             c.project_path = value_of("--project=");
         } else if (arg == "--validation") {
             c.validation = true;
+        } else if (arg == "--novsync") {
+            c.vsync = false;
         } else if (arg == "--arabic") {
             c.arabic_ui = true;
         } else if (arg == "--headless") {
@@ -119,6 +126,8 @@ EditorConfig parse_args(int argc, char** argv) {
                         "  --validation        Enable Vulkan validation (default off:\n"
                         "                      validation layers stay on for tests but cost\n"
                         "                      most of the frame on large scenes)\n"
+                        "  --novsync           Uncapped present (Immediate): real FPS, may\n"
+                        "                      tear. Default is FIFO (tear-free, refresh-capped)\n"
                         "  --arabic            Start with the Arabic localised UI\n"
                         "  --headless          No window (logic + offscreen viewport only)\n");
             std::exit(0);
@@ -620,7 +629,7 @@ int main(int argc, char** argv) {
         wdesc.width = 1280;
         wdesc.height = 720;
         wdesc.title = "NOVAForge Editor";
-        wdesc.vsync = true;
+        wdesc.vsync = cfg.vsync;
         // A human session opens maximized; scripted runs (--frames) keep the
         // exact 1280x720 so automation pixel math stays deterministic.
         wdesc.maximized = (cfg.max_frames == 0);
@@ -657,8 +666,12 @@ int main(int argc, char** argv) {
         sc.width = window.width();
         sc.height = window.height();
         sc.format = nf::rhi::Format::B8G8R8A8_UNorm;
-        sc.present = nf::rhi::PresentMode::FIFO;
-        sc.image_count = 2;
+        sc.present = cfg.vsync ? nf::rhi::PresentMode::FIFO : nf::rhi::PresentMode::Immediate;
+        // Triple-buffer under FIFO: with two images the CPU can stall in
+        // acquire on a frame whose deadline was already missed, which reads
+        // as erratic frame times even when the GPU is comfortably inside
+        // budget. A third image absorbs one late frame without throttling.
+        sc.image_count = cfg.vsync ? 3 : 2;
         swapchain = device->create_swapchain(sc);
         if (!swapchain) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to create swapchain");
@@ -956,8 +969,8 @@ int main(int argc, char** argv) {
                     sc.width = window.width();
                     sc.height = window.height();
                     sc.format = nf::rhi::Format::B8G8R8A8_UNorm;
-                    sc.present = nf::rhi::PresentMode::FIFO;
-                    sc.image_count = 2;
+                    sc.present = cfg.vsync ? nf::rhi::PresentMode::FIFO : nf::rhi::PresentMode::Immediate;
+                    sc.image_count = cfg.vsync ? 3 : 2;
                     auto fresh = device->create_swapchain(sc);
                     if (fresh) {
                         swapchain = std::move(fresh);

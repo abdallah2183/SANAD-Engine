@@ -355,6 +355,15 @@ private:
     bool m_dirty = false;
     Selection m_selection;
     OutlinerState m_outliner;
+    // Outliner rows rebuilt on mutation, not per frame: building 2000 rows of
+    // std::string labels every frame to display a clipped few dozen is the
+    // kind of cost that hides until a big scene opens. after_mutation() is
+    // the invalidation point; the world pointer + alive count guard against
+    // paths that bypass it (scene swap, play-mode entity churn).
+    mutable std::vector<OutlinerRow> m_outliner_cache;
+    mutable bool m_outliner_cache_valid = false;
+    mutable const ecs::World* m_outliner_cache_world = nullptr;
+    mutable std::size_t m_outliner_cache_count = 0;
     CommandStack m_stack;
     ImportQueue m_imports;
     HotReload m_hot;

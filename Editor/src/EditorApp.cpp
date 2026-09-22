@@ -216,6 +216,7 @@ bool EditorApp::require_editable(std::string& out_err) const {
 }
 
 void EditorApp::after_mutation(ecs::Entity touched) {
+    m_outliner_cache_valid = false; // rows may show new/renamed/reparented entities
     if (m_runtime != nullptr) {
         m_runtime->mark_scene_edited();
     }
@@ -2163,7 +2164,18 @@ EditorStatus EditorApp::status() const {
 
 std::vector<OutlinerRow> EditorApp::outliner_rows() const {
     if (const ecs::World* w = world()) {
-        return build_outliner_rows(*w, m_outliner);
+        // Rebuild only when something changed: after_mutation() is the normal
+        // invalidation path; the world pointer / alive-count guards also catch
+        // scene swaps and play-mode churn that bypass commands.
+        const bool world_swapped = (w != m_outliner_cache_world);
+        const bool churned = (w->alive_entity_count() != m_outliner_cache_count);
+        if (!m_outliner_cache_valid || world_swapped || churned) {
+            m_outliner_cache = build_outliner_rows(*w, m_outliner);
+            m_outliner_cache_valid = true;
+            m_outliner_cache_world = w;
+            m_outliner_cache_count = w->alive_entity_count();
+        }
+        return m_outliner_cache;
     }
     return {};
 }
