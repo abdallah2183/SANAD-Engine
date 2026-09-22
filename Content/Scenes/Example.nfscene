@@ -1,16 +1,24 @@
 # NOVAForge Scene v1
 version: 1
 name: Example
-entity_count: 3
+entity_count: 4
 ---
 entity: 1:0
-  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
+  Transform: local(0,2,5) world(0,2,5) rot(-21.801407,0,0) scale(1,1,1) parent(4294967295:0)
   Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
 ---
 entity: 2:0
-  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Light: type=Directional dir(-0.5,-1,-0.3) color(1,1,1) intensity=1
 ---
 entity: 3:0
-  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
+  Transform: local(0,0.5,0) world(0,0.5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Dynamic mass=1 friction=0.500000 restitution=0.300000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(0.5,0.5,0.5)
+---
+entity: 4:0
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(60,0.1,60) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(30,0.05,30)

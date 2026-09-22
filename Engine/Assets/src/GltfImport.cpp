@@ -91,8 +91,12 @@ void compute_smooth_normals(std::vector<AssetVertex>& verts, const std::vector<u
 
 // Converts one glTF mesh (all triangle primitives merged, one submesh each).
 // Returns false when nothing convertible was found (caller counts the skip).
+// Skinned primitives fill `skin_out` (parallel to the mesh in the result);
+// malformed JOINTS_0/WEIGHTS_0 pairs count in `skin_rejected` and leave the
+// mesh static — never half-skinned.
 bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_index,
-                  const std::string& logical_path, MeshAsset& out, u32& skipped) {
+                  const std::string& logical_path, MeshAsset& out, GltfMeshSkin& skin_out,
+                  u32& skipped, u32& skin_rejected) {
     out.logical_path = logical_path + "#mesh" + std::to_string(mesh_index);
     out.format_version = 1;
 
@@ -106,6 +110,8 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
         const cgltf_accessor* nrm = nullptr;
         const cgltf_accessor* uv = nullptr;
         const cgltf_accessor* tan = nullptr;
+        const cgltf_accessor* joints = nullptr;
+        const cgltf_accessor* weights = nullptr;
         for (usize ai = 0; ai < prim.attributes_count; ++ai) {
             const cgltf_attribute& attr = prim.attributes[ai];
             if (!attr.data) continue;
@@ -116,6 +122,12 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
                     if (attr.index == 0) uv = attr.data;
                     break;
                 case cgltf_attribute_type_tangent: tan = attr.data; break;
+                case cgltf_attribute_type_joints:
+                    if (attr.index == 0) joints = attr.data;
+                    break;
+                case cgltf_attribute_type_weights:
+                    if (attr.index == 0) weights = attr.data;
+                    break;
                 default: break;
             }
         }
@@ -149,6 +161,57 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
                 read_attrib_floats(tan, vi, v.tangent, 4);
             }
             out.vertices.push_back(v);
+        }
+
+        // Per-vertex skin binding: JOINTS_0 (raw u8/u16 joint indices) plus
+        // WEIGHTS_0 (normalized u8/u16 or float — cgltf resolves both to
+        // [0, 1] floats). Both must be VEC4 covering every vertex; anything
+        // else rejects the binding loudly instead of mis-binding.
+        if (joints || weights) {
+            const bool shape_ok = joints && weights &&
+                                  joints->type == cgltf_type_vec4 &&
+                                  weights->type == cgltf_type_vec4 &&
+                                  joints->count == pos->count &&
+                                  weights->count == pos->count;
+            if (!shape_ok || (skin_out.vertex_count != 0 &&
+                              skin_out.vertex_count != base_vertex)) {
+                ++skin_rejected;
+            } else {
+                bool bind_ok = true;
+                std::vector<u16> j(static_cast<usize>(pos->count) * 4);
+                std::vector<float> w(static_cast<usize>(pos->count) * 4);
+                for (usize vi = 0; vi < pos->count && bind_ok; ++vi) {
+                    float jr[4] = {0, 0, 0, 0};
+                    float wr[4] = {0, 0, 0, 0};
+                    if (!read_attrib_floats(joints, vi, jr, 4) ||
+                        !read_attrib_floats(weights, vi, wr, 4)) {
+                        bind_ok = false;
+                        break;
+                    }
+                    float sum = 0.0f;
+                    for (int c = 0; c < 4; ++c) {
+                        if (jr[c] < 0.0f || jr[c] > 65535.0f ||
+                            jr[c] != std::floor(jr[c])) {
+                            bind_ok = false;
+                            break;
+                        }
+                        sum += wr[c] > 0.0f ? wr[c] : 0.0f;
+                    }
+                    if (!bind_ok) break;
+                    const float inv = sum > 1e-8f ? 1.0f / sum : 0.0f;
+                    for (int c = 0; c < 4; ++c) {
+                        j[vi * 4 + c] = static_cast<u16>(jr[c]);
+                        w[vi * 4 + c] = (wr[c] > 0.0f ? wr[c] : 0.0f) * inv;
+                    }
+                }
+                if (!bind_ok) {
+                    ++skin_rejected;
+                } else {
+                    skin_out.vertex_count = static_cast<u32>(base_vertex + pos->count);
+                    skin_out.joints.insert(skin_out.joints.end(), j.begin(), j.end());
+                    skin_out.weights.insert(skin_out.weights.end(), w.begin(), w.end());
+                }
+            }
         }
 
         usize prim_index_count = 0;
@@ -212,6 +275,28 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
     return true;
 }
 
+// Reads one animation sampler channel's input (times) and output (values).
+// Returns false when the accessors are missing or empty.
+bool read_channel_data(const cgltf_animation_sampler& sampler, GltfAnimationPath path,
+                       std::vector<float>& out_times, std::vector<float>& out_values) {
+    const usize comps = path == GltfAnimationPath::Rotation ? 4 : 3;
+    const cgltf_accessor* in = sampler.input;
+    const cgltf_accessor* out = sampler.output;
+    if (!in || !out || in->count == 0 || out->count < in->count) return false;
+    if (in->count > 100000000) return false;
+    out_times.resize(in->count);
+    out_values.resize(in->count * comps);
+    for (usize i = 0; i < in->count; ++i) {
+        float t = 0.0f;
+        if (!cgltf_accessor_read_float(in, i, &t, 1)) return false;
+        out_times[i] = t;
+        float v[4] = {0, 0, 0, 0};
+        if (!cgltf_accessor_read_float(out, i, v, comps)) return false;
+        for (usize c = 0; c < comps; ++c) out_values[i * comps + c] = v[c];
+    }
+    return true;
+}
+
 GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_path) {
     GltfImportResult result;
     u32 skipped = 0;
@@ -232,8 +317,11 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
 
     for (usize mi = 0; mi < data->meshes_count; ++mi) {
         auto mesh = std::make_unique<MeshAsset>();
-        if (convert_mesh(data, data->meshes[mi], mi, logical_path, *mesh, skipped)) {
+        GltfMeshSkin skin;
+        if (convert_mesh(data, data->meshes[mi], mi, logical_path, *mesh, skin,
+                         skipped, result.skin_bindings_rejected)) {
             result.meshes.push_back(std::move(mesh));
+            result.mesh_skins.push_back(std::move(skin));
         }
     }
     result.primitives_skipped = skipped;
@@ -261,16 +349,115 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
         if (n.mesh) {
             info.mesh_index = static_cast<int>(n.mesh - data->meshes);
         }
+        if (n.skin) {
+            info.skin_index = static_cast<int>(n.skin - data->skins);
+        }
         if (n.parent) {
             info.parent_index = static_cast<int>(n.parent - data->nodes);
         }
         result.nodes.push_back(info);
     }
 
+    // Skins: joints in glTF order, inverse bind matrices, and the root node —
+    // from the file's `skeleton` when named, else the first joint whose parent
+    // is outside the joint set, else -1 (reported, not guessed further).
+    for (usize si = 0; si < data->skins_count; ++si) {
+        const cgltf_skin& s = data->skins[si];
+        GltfSkinInfo info;
+        if (s.name) info.name = s.name;
+        for (usize ji = 0; ji < s.joints_count; ++ji) {
+            info.joint_nodes.push_back(static_cast<int>(s.joints[ji] - data->nodes));
+        }
+        if (s.skeleton) {
+            info.root_node = static_cast<int>(s.skeleton - data->nodes);
+        } else {
+            for (int joint : info.joint_nodes) {
+                if (joint < 0 || static_cast<usize>(joint) >= result.nodes.size()) continue;
+                const int parent = result.nodes[static_cast<usize>(joint)].parent_index;
+                bool parent_is_joint = false;
+                for (int other : info.joint_nodes) {
+                    if (other == parent) {
+                        parent_is_joint = true;
+                        break;
+                    }
+                }
+                if (!parent_is_joint) {
+                    info.root_node = joint;
+                    break;
+                }
+            }
+        }
+        if (s.inverse_bind_matrices) {
+            const cgltf_accessor* ibm = s.inverse_bind_matrices;
+            if (ibm->count == s.joints_count && ibm->type == cgltf_type_mat4) {
+                info.inverse_bind_matrices.resize(s.joints_count * 16);
+                for (usize ji = 0; ji < s.joints_count; ++ji) {
+                    cgltf_accessor_read_float(ibm, ji,
+                                              info.inverse_bind_matrices.data() + ji * 16, 16);
+                }
+            }
+        }
+        result.skins.push_back(std::move(info));
+    }
+
+    // A mesh is skinned when the first node that references it binds a skin.
+    // Static meshes keep skin_index == -1 — an explicit fact, never a
+    // substituted default rig.
+    for (usize mi = 0; mi < result.meshes.size(); ++mi) {
+        for (const GltfNodeInfo& n : result.nodes) {
+            if (n.mesh_index == static_cast<int>(mi) && n.skin_index >= 0) {
+                result.mesh_skins[mi].skin_index = n.skin_index;
+                break;
+            }
+        }
+    }
+
+    // Animations: LINEAR/STEP channels for translation/rotation/scale.
+    // CUBICSPLINE and morph-weight channels are counted in
+    // anim_channels_skipped — visible, never silently dropped.
+    for (usize ai = 0; ai < data->animations_count; ++ai) {
+        const cgltf_animation& a = data->animations[ai];
+        GltfAnimationInfo info;
+        if (a.name) info.name = a.name;
+        for (usize ci = 0; ci < a.channels_count; ++ci) {
+            const cgltf_animation_channel& ch = a.channels[ci];
+            if (!ch.target_node || !ch.sampler || ch.target_path == cgltf_animation_path_type_weights) {
+                ++result.anim_channels_skipped;
+                continue;
+            }
+            if (ch.sampler->interpolation == cgltf_interpolation_type_cubic_spline) {
+                ++result.anim_channels_skipped;
+                continue;
+            }
+            GltfAnimationPath path;
+            switch (ch.target_path) {
+                case cgltf_animation_path_type_translation: path = GltfAnimationPath::Translation; break;
+                case cgltf_animation_path_type_rotation: path = GltfAnimationPath::Rotation; break;
+                case cgltf_animation_path_type_scale: path = GltfAnimationPath::Scale; break;
+                default: ++result.anim_channels_skipped; continue;
+            }
+            GltfAnimationChannel channel;
+            channel.node = static_cast<int>(ch.target_node - data->nodes);
+            channel.path = path;
+            if (!read_channel_data(*ch.sampler, path, channel.times, channel.values)) {
+                ++result.anim_channels_skipped;
+                continue;
+            }
+            for (float t : channel.times) {
+                if (t > info.duration) info.duration = t;
+            }
+            info.channels.push_back(std::move(channel));
+        }
+        result.animations.push_back(std::move(info));
+    }
+
     result.ok = true;
-    NF_LOG_INFO(LogCategory::Asset, "GltfImport: '{}' -> {} mesh(es), {} material(s), {} node(s), {} skipped",
+    NF_LOG_INFO(LogCategory::Asset,
+                "GltfImport: '{}' -> {} mesh(es), {} material(s), {} node(s), {} skin(s), "
+                "{} animation(s), {} skipped, {} anim channel(s) skipped",
                 logical_path, result.meshes.size(), result.materials.size(),
-                result.nodes.size(), skipped);
+                result.nodes.size(), result.skins.size(), result.animations.size(),
+                skipped, result.anim_channels_skipped);
     return result;
 }
 

@@ -9,9 +9,12 @@
 // other tested renderer in the tree. No raw Vulkan leaks out of this class.
 //
 // Texture model: ImGui most often samples the font atlas; the editor viewport
-// panel additionally samples the offscreen viewport target. Both are plain
-// ImTextureID constants (below), resolved to pre-made descriptor sets —
-// ImGui never sees RHI pointers.
+// panel additionally samples the offscreen viewport target, and the P3 asset
+// previews sample small per-path thumbnails. All three are plain ImTextureID
+// constants resolved to descriptor sets built per frame — ImGui never sees RHI
+// pointers. Only the ids actually referenced by the recorded draw data
+// allocate a set, so a content tree with hundreds of textures costs nothing
+// until a panel shows one.
 //
 // Contracts (mirroring Renderer3D):
 //   - render() may only be called when the previous frame's GPU work has
@@ -30,6 +33,7 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 struct ImDrawData;
 
@@ -53,6 +57,17 @@ public:
     bool valid() const;
 
     void set_viewport_texture(const rhi::TextureView* view, const rhi::Sampler* sampler);
+
+    // Content textures (asset previews) for the frame about to be recorded.
+    // `id` must be a TexturePreviewCache id (above kFirstId) and the view/
+    // sampler must outlive the following render(). Replaces the previous
+    // frame's table; pass nullptr/0 to clear.
+    struct TextureBinding {
+        uintptr_t id = 0;
+        const rhi::TextureView* view = nullptr;
+        const rhi::Sampler* sampler = nullptr;
+    };
+    void set_content_textures(const TextureBinding* bindings, size_t count);
 
     // Records draw_data into cmd (inside an active render pass built for a
     // pipeline from pipeline_for()). Returns false on descriptor/pipeline
@@ -82,6 +97,8 @@ private:
 
     const rhi::TextureView* m_viewport_view = nullptr;
     const rhi::Sampler* m_viewport_sampler = nullptr;
+
+    std::vector<TextureBinding> m_content_bindings;
 };
 
 } // namespace nf::editor

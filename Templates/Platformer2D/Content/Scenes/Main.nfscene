@@ -1,0 +1,99 @@
+# NOVAForge Scene v1
+version: 1
+name: Main
+entity_count: 16
+---
+entity: 1:0
+  Name: SideCamera
+  Transform: local(0,3,14) world(0,3,14) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+---
+entity: 2:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.5,-1,-0.3) color(1,1,1) intensity=1.2
+---
+entity: 3:0
+  Name: Sky
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Sky: zenith(0.25,0.5,0.85) horizon(0.7,0.8,0.9) ground(0.1,0.1,0.12) clear(0.03,0.04,0.08) sun_disk=1 sun_glow=1 enabled=true
+---
+entity: 4:0
+  Name: Ground
+  Transform: local(0,-0.5,0) world(0,-0.5,0) rot(0,0,0) scale(26,1,4) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.900000 restitution=0.050000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(13,0.5,2)
+---
+entity: 5:0
+  Name: Player
+  Transform: local(-8,1.5,0) world(-8,1.5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Dynamic mass=1 friction=0.500000 restitution=0.200000 linear_damping=0.050000 angular_damping=0.300000 allow_sleep=true
+  Collider: shape=Box half(0.5,0.5,0.5)
+---
+entity: 6:0
+  Name: Platform1
+  Transform: local(-4,2,0) world(-4,2,0) rot(0,0,0) scale(4,0.5,2) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.900000 restitution=0.050000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(2,0.25,1)
+---
+entity: 7:0
+  Name: Platform2
+  Transform: local(1,3.5,0) world(1,3.5,0) rot(0,0,0) scale(4,0.5,2) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.900000 restitution=0.050000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(2,0.25,1)
+---
+entity: 8:0
+  Name: Platform3
+  Transform: local(6,2.5,0) world(6,2.5,0) rot(0,0,0) scale(4,0.5,2) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.900000 restitution=0.050000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(2,0.25,1)
+---
+entity: 9:0
+  Name: Coin1
+  Transform: local(-4,3.2,0) world(-4,3.2,0) rot(0,0,0) scale(0.45,0.45,0.45) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0 duration=1.5
+---
+entity: 10:0
+  Name: Coin2
+  Transform: local(1,4.7,0) world(1,4.7,0) rot(0,0,0) scale(0.45,0.45,0.45) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0 duration=1.5
+---
+entity: 11:0
+  Name: Coin3
+  Transform: local(6,3.7,0) world(6,3.7,0) rot(0,0,0) scale(0.45,0.45,0.45) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0 duration=1.5
+---
+entity: 12:0
+  Name: Slime
+  Transform: local(10,0.9,0) world(10,0.9,0) rot(0,0,0) scale(1,0.8,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Animation: clip=hop speed=1 loop=loop paused=false state_machine=false procedural=bob axis=y turns=1 amplitude=0.3 duration=1.2
+---
+entity: 13:0
+  Name: GoalPole
+  Transform: local(11.5,1.25,0) world(11.5,1.25,0) rot(0,0,0) scale(0.3,2.5,0.3) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+---
+entity: 14:0
+  Name: GoalOrb
+  Transform: local(11.5,2.9,0) world(11.5,2.9,0) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0 duration=3
+---
+entity: 15:0
+  Name: StartChime
+  Transform: local(0,1,2) world(0,1,2) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Audio: buffer=start_chime volume=0.5 pitch=1 looping=false spatial=false autoplay=true tone=659.25 tone_duration=0.5
+---
+entity: 16:0
+  Name: AmbientHum
+  Transform: local(0,2,4) world(0,2,4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Audio: buffer=ambience volume=0.1 pitch=1 looping=true spatial=false autoplay=true tone=261.63 tone_duration=2

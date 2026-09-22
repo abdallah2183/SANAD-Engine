@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace nf::scripting {
 
@@ -40,6 +41,47 @@ struct HostApi {
 };
 
 static_assert(sizeof(HostApi) == sizeof(void*), "HostApi must be one pointer");
+
+// UI host API table handed to managed code (Game-Ready G3) so a C# game script
+// can drive the runtime game UI through the same nf::ui::GameFlow the C++ and
+// Lua paths use. `user` is opaque to managed code and echoed back verbatim on
+// every call (the bound ui::GameFlow). All function pointers are Cdecl.
+//
+// String arguments travel as (UTF-8 bytes, length) spans — NOT null-terminated,
+// exactly like HostApi's log callback. `action` is a nf::ui::Action value and
+// `screen` a nf::ui::Screen value (both fit in int). Every entry point may be
+// null; managed callers must null-check before calling (the sandbox does).
+//
+// Built by nf::scripting::make_ui_host_api (UiBindings.hpp) so the table's
+// layout lives next to its only producer; mirrored by NFSandbox's UiHostApi
+// struct in the managed sandbox.
+struct UiHostApi {
+    void* user = nullptr; // opaque owner (ui::GameFlow*)
+
+    using HandleFn = void (*)(void* user, int action);       // ui::GameFlow::handle
+    using ScreenFn = int (*)(void* user);                    // ui::GameFlow::screen
+    using SetHealthFn = void (*)(void* user, float current, float max);
+    using SetAmmoFn = void (*)(void* user, int magazine, int reserve);
+    using MessageFn = void (*)(void* user, const u8* text, int len, float seconds);
+    using GameOverFn = void (*)(void* user);                 // notify_game_over
+    using UpdateFn = void (*)(void* user, float dt);         // Hud message timer
+    using SetVolumeFn = int (*)(void* user, const u8* bus, int len, float value); // 1/0
+    using VolumeFn = float (*)(void* user, const u8* bus, int len);               // -1 unknown
+
+    HandleFn handle = nullptr;
+    ScreenFn screen = nullptr;
+    SetHealthFn set_health = nullptr;
+    SetAmmoFn set_ammo = nullptr;
+    MessageFn show_message = nullptr;
+    GameOverFn notify_game_over = nullptr;
+    UpdateFn update = nullptr;
+    SetVolumeFn set_volume = nullptr;
+    VolumeFn volume = nullptr;
+};
+
+static_assert(std::is_standard_layout_v<UiHostApi>,
+              "UiHostApi crosses to managed code as a plain sequential struct");
+static_assert(offsetof(UiHostApi, user) == 0, "UiHostApi.user must be first");
 
 // Entity ids cross as signed 64-bit (C# long). Negative ids are rejected by
 // convention: the engine never issues them, so one is corruption.

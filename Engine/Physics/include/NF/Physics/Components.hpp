@@ -49,6 +49,10 @@ struct VehicleComponent {
     f32 throttle = 0.0f;
     f32 steer = 0.0f;
     f32 brake = 0.0f;
+    /// Rear-wheel-only clamp at the hand-brake torque: breaks traction into a
+    /// slide rather than stopping the car, so it is a separate channel from
+    /// brake even though both live in [0, 1].
+    f32 handbrake = 0.0f;
     /// Runtime-only: the physics vehicle, created when the body spawns. Not
     /// serialized (a handle from a previous session is meaningless).
     JoltVehicle* vehicle = nullptr;

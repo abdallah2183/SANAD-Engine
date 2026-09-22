@@ -177,8 +177,14 @@ f32 InputAction::process_axis(GamepadAxis axis, f32 raw_x, f32 raw_y,
         const f32 deadzone = clamp(pad.stick_deadzone, 0.0f, 0.95f);
         const f32 mag = std::sqrt(raw_x * raw_x + raw_y * raw_y);
         if (mag <= deadzone) return 0.0f;
-        // mag > deadzone holds here, so the scale is always well defined.
-        const f32 scale = (mag - deadzone) / mag;
+        // mag > deadzone > 0 and deadzone <= 0.95, so both divisors below are
+        // strictly positive.
+        // Rescale the surviving magnitude from [deadzone, 1] onto [0, 1] —
+        // the same "full deflection reaches 1.0" contract the trigger path
+        // above honours. Dividing by `mag` alone would instead map 1.0 to
+        // (1 - deadzone), capping every stick at 0.85 of its range with the
+        // default deadzone: a full-lock stick could never command full steer.
+        const f32 scale = (mag - deadzone) / (mag * (1.0f - deadzone));
         return clamp(raw_x * scale, -1.0f, 1.0f);
     }
     case GamepadAxis::Count:

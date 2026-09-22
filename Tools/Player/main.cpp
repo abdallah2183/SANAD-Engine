@@ -8,6 +8,7 @@
 
 #include <NF/Runtime/Application.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
+#include <NF/Core/CrashHandler.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -15,7 +16,21 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
+
+// Stamped into every crash report the player writes, so a dump that arrives
+// from a player can be tied back to the exact build that produced it.
+constexpr const char* kPlayerVersion = "NFPlayer 0.1 (NOVAForge Phase 7)";
 
 void print_help() {
     std::cout << "NFPlayer — NOVAForge standalone runtime\n"
@@ -28,7 +43,15 @@ void print_help() {
               << "  --headless          No window (offscreen only)\n"
               << "  --help\n"
               << "\n"
-              << "Without --project, a single .nfproj beside the executable is used.\n";
+              << "Without --project, a single .nfproj beside the executable is used.\n"
+              << "\n"
+              << "Crash dumps and human-readable reports are written to Crashes/ next\n"
+              << "to this executable — inside the game folder, so uninstalling the\n"
+              << "game removes them too.\n"
+              << "\n"
+              << "Test hook: --crash-test [dir] arms the crash handler, raises a fatal\n"
+              << "exception, and exits — used to verify the dump + report path. With\n"
+              << "no dir, it writes to Crashes/ beside the executable.\n";
 }
 
 // Look for exactly one .nfproj next to the executable. A package contains one,
@@ -56,6 +79,15 @@ int main(int argc, char** argv) {
     nf::runtime::ApplicationConfig config;
 
     std::string project_path;
+    // Test-only escape hatch: arms the real crash handler, raises a real fatal
+    // exception, and lets the SEH filter do its job. This is how the shipping
+    // pipeline proves the minidump + crash-report path end to end — the same
+    // binary a customer runs, not a special test harness.
+    // `--crash-test` with no directory uses the default Crashes/ beside the
+    // executable, which is what proves a shipped package keeps its artifacts
+    // inside its own folder (see UNINSTALL.txt).
+    bool crash_test = false;
+    std::string crash_test_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> std::string { return (i + 1 < argc) ? argv[++i] : std::string(); };
@@ -68,12 +100,52 @@ int main(int argc, char** argv) {
         else if (arg.rfind("--frames=", 0) == 0) config.max_frames = static_cast<uint32_t>(std::atoi(arg.substr(9).c_str()));
         else if (arg == "--validation") config.validation = true;
         else if (arg == "--headless") config.headless = true;
+        else if (arg == "--crash-test") crash_test = true;
+        else if (arg.rfind("--crash-test=", 0) == 0) {
+            crash_test = true;
+            crash_test_dir = arg.substr(13);
+        }
         else if (arg == "--help" || arg == "-h") { print_help(); return 0; }
         else {
             std::cerr << "NFPlayer: unknown argument '" << arg << "'\n";
             print_help();
             return 1;
         }
+    }
+
+    // The crash handler is armed before anything else so even a failure during
+    // startup leaves a readable artifact behind. Dumps land beside the
+    // executable (never %APPDATA%, never the registry): the package folder is
+    // the whole install, and deleting it is the whole uninstall.
+    std::error_code exe_ec;
+    const auto exe_dir = std::filesystem::absolute(argv[0], exe_ec).parent_path();
+    {
+        nf::CrashHandlerConfig crash_cfg;
+        crash_cfg.dump_directory = (exe_dir / "Crashes").string();
+        crash_cfg.dump_prefix = "NFPlayer";
+        crash_cfg.app_version = kPlayerVersion;
+        nf::install_crash_handler(crash_cfg);
+    }
+
+    if (crash_test) {
+#ifdef _WIN32
+        // Re-arm with the requested directory, then raise an unhandled
+        // exception. The filter writes the minidump + .txt report and the
+        // process terminates — nothing after this line runs.
+        nf::CrashHandlerConfig cfg;
+        cfg.dump_directory =
+            crash_test_dir.empty() ? (exe_dir / "Crashes").string() : crash_test_dir;
+        cfg.dump_prefix = "NFPlayer";
+        cfg.app_version = kPlayerVersion;
+        nf::install_crash_handler(cfg);
+        RaiseException(0xE0000046, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+        std::cerr << "NFPlayer: --crash-test did not crash (filter not armed?)\n";
+        return 1;
+#else
+        (void)crash_test_dir;
+        std::cerr << "NFPlayer: --crash-test is Windows-only\n";
+        return 1;
+#endif
     }
 
     // Environment overrides, so CI can drive the player the same way it drives

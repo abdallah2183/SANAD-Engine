@@ -24,6 +24,12 @@ struct SceneLoadResult {
 SceneLoadResult load_scene_from_vfs(assets::VirtualFileSystem& vfs, const std::string& logical_path);
 SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_path);
 
+/// Parses scene text that is already in memory. `load_scene_from_physical` is
+/// this plus a file read, split out so a caller that has to rewrite the bytes
+/// first — the save system, whose migrations transform an old slot before the
+/// reader ever sees it — does not have to round-trip them through disk.
+SceneLoadResult load_scene_from_text(std::string_view text);
+
 /// Binds every AudioComponent carrying a `buffer=` logical path through the
 /// VFS audio import pipeline (decode to owned_buffer at the mix rate).
 /// Called by load_scene_from_vfs; also usable after merge/physical loads

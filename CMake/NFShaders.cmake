@@ -23,11 +23,21 @@ find_program(NF_GLSLC_EXECUTABLE
 # <output-dir>/<base-name>_<stage>.spv and creates a custom target named
 # <target-name> that depends on both.
 #
+# Every *.glsl file in the source directory is added as a dependency of both
+# outputs. A #included shader (brdf.glsl, the shared lighting body) is part of
+# every includer's real input, and glslc resolves the include relative to the
+# including file — but ninja only knows the DEPENDS list, so without this a
+# brdf.glsl edit leaves the .spv stale and every consumer silently rebuilds
+# nothing while believing it rebuilt the light. GLOBbed once at configure
+# time: a NEW shared include needs a reconfigure to be picked up, which is the
+# acceptable trade against a per-build depfile scan.
+#
 # Consumers add_dependencies() on that target so their shaders exist before
 # they run. The output directory is where the compiled SPIR-V lands; the
 # caller passes it to the executable as a compile definition.
 function(nf_compile_shaders target_name src_dir out_dir base_name)
     set(_spv_files "")
+    file(GLOB _glsl_includes "${src_dir}/*.glsl")
 
     foreach(_stage vert frag)
         set(_src "${src_dir}/${base_name}.${_stage}")
@@ -37,7 +47,7 @@ function(nf_compile_shaders target_name src_dir out_dir base_name)
             OUTPUT  "${_spv}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${out_dir}"
             COMMAND "${NF_GLSLC_EXECUTABLE}" -fshader-stage=${_stage} "${_src}" -o "${_spv}"
-            DEPENDS "${_src}"
+            DEPENDS "${_src}" ${_glsl_includes}
             COMMENT "Compiling ${_src} -> ${_spv}"
             VERBATIM
         )
@@ -87,6 +97,12 @@ if(NF_GLSLC_EXECUTABLE)
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "gbuffer")
     nf_compile_shaders(NFBasic3DLightingShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "lighting")
+    # The transparency pass. brdf.glsl is not compiled on its own — it is
+    # #included by lighting.frag and forward.frag, and glslc resolves the
+    # include relative to the including file, so it only has to sit in this
+    # directory. One copy of the BRDF for both paths is the reason it exists.
+    nf_compile_shaders(NFBasic3DForwardShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "forward")
     nf_compile_shaders(NFBasic3DTonemapShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "tonemap")
     # GPU picking id pass (GpuPicker). Deliberately lives beside the other

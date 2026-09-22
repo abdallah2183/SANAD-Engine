@@ -26,9 +26,9 @@ bool JoltVehicle::valid() const {
     return m_world && m_ok;
 }
 
-void JoltVehicle::drive(float forward, float steer, float brake) {
+void JoltVehicle::drive(float forward, float steer, float brake, float handbrake) {
     if (!m_world || !m_ok) return;
-    m_world->vehicle_drive(m_handle, forward, steer, brake);
+    m_world->vehicle_drive(m_handle, forward, steer, brake, handbrake);
 }
 
 JoltBodyState JoltVehicle::chassis_state() const {

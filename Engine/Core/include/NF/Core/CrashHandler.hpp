@@ -24,6 +24,10 @@ struct CrashHandlerConfig {
     std::string dump_directory;
     /// Prefix for dump file names ("NOVAForge_20260916_221500.dmp").
     std::string dump_prefix = "NOVAForge";
+    /// Version string stamped into the crash report ("MyGame 1.2.0 nf 0.1").
+    /// A crash dump without a version is untriageable, so shipped builds set
+    /// this; empty means the report omits the line.
+    std::string app_version;
 };
 
 /// Arms the handler. Safe to call twice (re-arms with the new config).
@@ -34,5 +38,16 @@ bool install_crash_handler(const CrashHandlerConfig& config);
 void uninstall_crash_handler();
 
 bool crash_handler_installed();
+
+/// Writes a human-readable .txt crash report beside a minidump. Called by the
+/// crash filter itself (so every dump ships with its readable twin) and exposed
+/// so tools that recover a dump out-of-band can regenerate the report.
+/// Never throws; on failure returns false and leaves out_error set.
+bool write_crash_report(const std::string& report_path,
+                        unsigned long exception_code,
+                        unsigned long thread_id,
+                        const std::string& minidump_path,
+                        bool minidump_written,
+                        const std::string& app_version);
 
 } // namespace nf

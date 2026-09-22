@@ -32,12 +32,17 @@ namespace nf::editor {
 namespace {
 
 // Latin + Arabic blocks + presentation forms (the shaper emits FE70-FEFF).
+// General Punctuation rides along: mixed EN/AR lines the editor draws (console
+// messages, entity names, the About box) use dashes and curly quotes, and
+// shaper pass-through keeps them as-is — without the range they rasterise as
+// tofu inside an otherwise-Arabic line.
 const ImWchar* arabic_glyph_ranges() {
     static const ImWchar kRanges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin-1
         0x0600, 0x06FF, // Arabic
         0x0750, 0x077F, // Arabic Supplement
         0x08A0, 0x08FF, // Arabic Extended-A
+        0x2010, 0x202F, // General Punctuation (dashes, quotes, ellipsis)
         0xFB50, 0xFDFF, // Arabic Presentation Forms-A
         0xFE70, 0xFEFF, // Arabic Presentation Forms-B
         0,

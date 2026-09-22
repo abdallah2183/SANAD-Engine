@@ -178,6 +178,10 @@ NF_TEST(save_writes_the_three_documented_files) {
     SaveHarness harness("files");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "hello", 5.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -277,6 +281,10 @@ NF_TEST(save_rejects_an_invalid_slot_name) {
     SaveHarness harness("badname");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -324,6 +332,10 @@ NF_TEST(list_saves_reports_every_slot_in_order) {
     SaveHarness harness("list");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -346,6 +358,10 @@ NF_TEST(list_saves_reports_every_slot_in_order) {
 NF_TEST(delete_save_removes_the_slot_and_reports_a_missing_one) {
     SaveHarness harness("delete");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
 
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
@@ -412,6 +428,10 @@ NF_TEST(async_save_refuses_a_second_concurrent_save) {
     SaveHarness harness("concurrent");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     JobSystem& jobs = JobSystem::instance();
     if (!jobs.is_initialized()) jobs.init(2);
 
@@ -442,6 +462,10 @@ NF_TEST(async_save_refuses_a_second_concurrent_save) {
 NF_TEST(autosave_fires_on_the_interval_and_names_its_slots) {
     SaveHarness harness("autosave");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
 
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
@@ -477,6 +501,10 @@ NF_TEST(autosave_ignores_a_non_positive_or_non_finite_interval) {
     SaveHarness harness("autosave-off");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -506,6 +534,10 @@ NF_TEST(schema_newer_than_the_engine_is_refused) {
     SaveHarness harness("newer");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -528,6 +560,10 @@ NF_TEST(schema_mismatch_runs_the_registered_migration) {
     SaveHarness harness("migrate");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -544,7 +580,7 @@ NF_TEST(schema_mismatch_runs_the_registered_migration) {
     // A migration registered for 0 -> 1 must be what makes this load succeed.
     static u32 s_migration_runs = 0;
     s_migration_runs = 0;
-    SaveSystem::register_migration(0, [](std::string&) {
+    SaveSystem::register_migration(0, [](SaveSystem::SlotFiles&, std::string&) {
         ++s_migration_runs;
         return true;
     });
@@ -558,6 +594,10 @@ NF_TEST(a_load_that_needs_no_migration_reports_none) {
     SaveHarness harness("nomigrate");
     if (!harness.ready()) NF_SKIP("no Vulkan device available");
 
+    // The scene names the SaveProbe module, so it has to be registered
+    // before load or the runtime warns about a module this build has.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
     write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
     std::string err;
     NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
@@ -565,6 +605,199 @@ NF_TEST(a_load_that_needs_no_migration_reports_none) {
     NF_CHECK(harness.save().load_game("current", err));
 
     // The observable that separates "the migration path ran" from "the version
-    // happened to match".
+    // happened to match". kNoMigration is a sentinel rather than 0 because 0 is
+    // also a real schema version a save can have migrated *from*.
+    NF_CHECK_EQ(harness.save().last_migration_from(), SaveSystem::kNoMigration);
+}
+
+NF_TEST(migration_rewrites_the_slot_bytes_the_loader_then_reads) {
+    SaveHarness harness("migratebytes");
+    if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    Runtime& rt = harness.rt();
+    auto probe = std::make_unique<SaveProbeModule>();
+    SaveProbeModule* raw = probe.get();
+    rt.add_gameplay_module(std::move(probe));
+
+    write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "legacy_label", 1.0f);
+    std::string err;
+    NF_CHECK(rt.load_scene("content://Scenes/Main.nfscene", err));
+    NF_CHECK(harness.save().save_game("legacy", err));
+
+    // Forge a v0 slot. The migration has to turn `legacy_label` into `migrated`
+    // in the *scene bytes*, which is what proves the chain edits the file the
+    // loader reads rather than a copy that is discarded.
+    const std::filesystem::path meta = harness.slot_dir("legacy") / "meta.txt";
+    std::string text = read_file(meta);
+    const size_t pos = text.find("schema_version: 1");
+    NF_CHECK(pos != std::string::npos);
+    text.replace(pos, std::string("schema_version: 1").size(), "schema_version: 0");
+    write_file(meta, text);
+
+    SaveSystem::register_migration(
+        0, [](SaveSystem::SlotFiles& files, std::string& out_error) {
+            // A property rename lands in two files: the scene carries the
+            // component's properties and modules.txt carries the live module
+            // state. A link that fixed only one would leave the slot half v0,
+            // half v1 — and the runtime would load the un-migrated half.
+            const std::string old_prop = "label=legacy_label";
+            const std::string new_prop = "label=migrated";
+            std::string* const texts[] = {&files.scene, &files.modules};
+            for (std::string* text : texts) {
+                const size_t at = text->find(old_prop);
+                if (at == std::string::npos) {
+                    out_error = "v0 slot has no legacy label";
+                    return false;
+                }
+                text->replace(at, old_prop.size(), new_prop);
+            }
+            return true;
+        });
+
+    NF_CHECK(harness.save().load_game("legacy", err));
     NF_CHECK_EQ(harness.save().last_migration_from(), 0u);
+
+    // The stamp has to have advanced too, otherwise re-saving this slot would
+    // loop it through the migration forever.
+    const std::string after = read_file(harness.slot_dir("legacy") / "meta.txt");
+    NF_CHECK(after.find("schema_version: 1") != std::string::npos);
+
+    // And the value the runtime actually loaded is the migrated one: the proof
+    // that the chain's output is what the scene reader consumed.
+    NF_CHECK_EQ(raw->settings.label, std::string("migrated"));
+    const scene::Scene* loaded = rt.scene();
+    NF_CHECK(loaded != nullptr);
+    if (loaded == nullptr) return;
+    bool saw_migrated = false;
+    for (ecs::Entity e : loaded->world().query<GameplayModuleComponent>()) {
+        const auto* comp = loaded->world().get<GameplayModuleComponent>(e);
+        if (comp == nullptr) continue;
+        const auto it = comp->properties.find("label");
+        if (it != comp->properties.end()) {
+            NF_CHECK_EQ(it->second, std::string("migrated"));
+            saw_migrated = true;
+        }
+    }
+    NF_CHECK(saw_migrated);
+
+    // Loading the same slot again takes the no-migration path now that the
+    // write-back has done its job, and still arrives at the migrated value. A
+    // slot that persisted only its stamp would report no migration while loading
+    // the bytes it started with.
+    NF_CHECK(harness.save().load_game("legacy", err));
+    NF_CHECK_EQ(harness.save().last_migration_from(), SaveSystem::kNoMigration);
+    NF_CHECK_EQ(raw->settings.label, std::string("migrated"));
+}
+
+NF_TEST(autosave_rotates_a_fixed_ring_and_overwrites_the_oldest) {
+    SaveHarness harness("autosavering");
+    if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    Runtime& rt = harness.rt();
+    rt.add_gameplay_module(std::make_unique<SaveProbeModule>());
+
+    write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "first", 1.0f);
+    std::string err;
+    NF_CHECK(rt.load_scene("content://Scenes/Main.nfscene", err));
+
+    SaveSystem& save = harness.save();
+    save.set_autosave(1.0f, "ring_", 3);
+    NF_CHECK_EQ(save.autosave_max_slots(), 3u);
+
+    // Five writes into three slots. Each write relabels the scene so the slot's
+    // bytes say which autosave landed there.
+    const char* labels[5] = {"first", "second", "third", "fourth", "fifth"};
+    for (u32 i = 0; i < 5u; ++i) {
+        if (i > 0u) {
+            write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene",
+                                    labels[i], 1.0f);
+            NF_CHECK(rt.load_scene("content://Scenes/Main.nfscene", err));
+        }
+        save.tick(1.0f);
+    }
+    NF_CHECK_EQ(save.autosaves_performed(), 5u);
+
+    // Exactly the ring, no fourth directory: five writes into three slots never
+    // grow the directory count.
+    NF_CHECK(save.has_save("ring_1"));
+    NF_CHECK(save.has_save("ring_2"));
+    NF_CHECK(save.has_save("ring_3"));
+    NF_CHECK(!save.has_save("ring_4"));
+
+    // Autosave 4 lands on slot 1 and must have replaced autosave 1's bytes. An
+    // unrotated counter would have left "first" behind; a slot that merely grew
+    // would have kept both.
+    NF_CHECK(read_file(harness.slot_dir("ring_1") / "scene.nfscene").find("fourth")
+             != std::string::npos);
+    NF_CHECK(read_file(harness.slot_dir("ring_1") / "scene.nfscene").find("first")
+             == std::string::npos);
+    NF_CHECK(read_file(harness.slot_dir("ring_2") / "scene.nfscene").find("fifth")
+             != std::string::npos);
+    NF_CHECK(read_file(harness.slot_dir("ring_3") / "scene.nfscene").find("third")
+             != std::string::npos);
+}
+
+NF_TEST(autosave_ring_clamps_an_absent_limit_to_one) {
+    SaveHarness harness("autosaveclamp");
+    if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    // The scene names a module, so the module has to be registered — otherwise
+    // this is the one test whose scene is not well-formed, and the rotation it
+    // checks runs over a scene the runtime warned about on load.
+    harness.rt().add_gameplay_module(std::make_unique<SaveProbeModule>());
+
+    write_scene_with_module(harness.vfs(), "content://Scenes/Main.nfscene", "x", 1.0f);
+    std::string err;
+    NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
+
+    SaveSystem& save = harness.save();
+    // Zero slots is not a policy either — it would mean the timer fires and
+    // every write is discarded. One slot is the smallest meaningful ring.
+    save.set_autosave(1.0f, "clamp_", 0);
+    NF_CHECK_EQ(save.autosave_max_slots(), 1u);
+
+    for (u32 i = 0; i < 3u; ++i) save.tick(1.0f);
+    NF_CHECK_EQ(save.autosaves_performed(), 3u);
+    NF_CHECK(save.has_save("clamp_1"));
+    NF_CHECK(!save.has_save("clamp_2"));
+}
+
+NF_TEST(saved_transforms_survive_repeated_load_save_cycles_at_nine_digits) {
+    SaveHarness harness("precision");
+    if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    // A transform with more significant digits than the old six-digit writer
+    // could hold. This value is deliberately not representable in 6 digits.
+    scene::Scene s("PrecisionScene");
+    auto& w = s.world();
+    ecs::Entity e = w.create_entity();
+    scene::Transform t;
+    t.local_x = 4.1234567f;
+    t.world_x = 4.1234567f;
+    w.add<scene::Transform>(e, t);
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(harness.vfs(), "content://Scenes/Main.nfscene", s, err));
+    NF_CHECK(harness.rt().load_scene("content://Scenes/Main.nfscene", err));
+
+    // Round it through the save format three times. A six-digit writer drifts a
+    // little on every cycle and the drift compounds; nine digits round-trip
+    // exactly, so the third load is the same float as the first.
+    f32 expected = 0.0f;
+    for (u32 cycle = 0; cycle < 3u; ++cycle) {
+        NF_CHECK(harness.save().save_game("prec", err));
+        NF_CHECK(harness.save().load_game("prec", err));
+
+        const scene::Scene* loaded = harness.rt().scene();
+        NF_CHECK(loaded != nullptr);
+        if (loaded == nullptr) return;
+        const scene::Transform* tr = loaded->world().get<scene::Transform>(e);
+        NF_CHECK(tr != nullptr);
+        if (tr == nullptr) return;
+
+        if (cycle == 0u) expected = tr->local_x;
+        else NF_CHECK_EQ(tr->local_x, expected);
+    }
+    // Bit-exact against the value the scene started with, not merely close.
+    NF_CHECK_EQ(expected, 4.1234567f);
 }

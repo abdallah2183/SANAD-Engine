@@ -57,6 +57,11 @@ public:
 
     size_t watched_count() const;
 
+    // The results of the last poll: the shell uses them to drop now-stale
+    // editor-side caches (a reloaded texture source has an outdated thumbnail
+    // even after the scene is already sampling the new bytes).
+    const std::vector<ReloadResult>& last_results() const { return m_last; }
+
 private:
     struct MeshWatch {
         assets::AssetId id;
@@ -66,6 +71,7 @@ private:
     std::vector<MeshWatch> m_meshes;
     std::vector<std::string> m_textures;
     std::vector<std::string> m_materials;
+    std::vector<ReloadResult> m_last;
 
     static bool contains(const std::vector<std::string>& v, const std::string& s);
 };

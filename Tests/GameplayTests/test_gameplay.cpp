@@ -580,3 +580,49 @@ NF_TEST(runtime_gameplay_context_carries_the_scene_world) {
     NF_CHECK(probe->saw_scene);
     NF_CHECK_NEAR(probe->last_dt, 0.5f, 1e-6f);
 }
+
+NF_TEST(runtime_gameplay_context_reports_the_play_state) {
+    RuntimeHarness harness("playing");
+    if (!harness.ready()) NF_SKIP("no Vulkan device available");
+
+    Runtime& rt = harness.rt();
+
+    // Records the play flag it observed, so the editor's set_playing wiring
+    // is proven through the same context camera-owning modules read (this is
+    // what keeps viewport navigation alive while editing).
+    class PlayingProbe final : public GameplayModule {
+    public:
+        [[nodiscard]] const char* name() const override { return "RuntimePlayingProbe"; }
+        void on_update(GameplayContext& ctx) override {
+            ++updates;
+            last_playing = ctx.playing;
+        }
+        u32 updates = 0;
+        bool last_playing = true; // inverted default: the first step must flip it
+    };
+
+    auto owned = std::make_unique<PlayingProbe>();
+    PlayingProbe* probe = owned.get();
+    rt.add_gameplay_module(std::move(owned));
+
+    write_minimal_scene(harness.vfs(), "content://Scenes/Gameplay.nfscene");
+    std::string err;
+    NF_CHECK(rt.load_scene("content://Scenes/Gameplay.nfscene", err));
+
+    // Editing by default: a harness that never sets the flag gets edit mode.
+    NF_CHECK(!rt.playing());
+    rt.update(0.5f);
+    NF_CHECK_EQ(probe->updates, 1u);
+    NF_CHECK(!probe->last_playing);
+
+    rt.set_playing(true);
+    NF_CHECK(rt.playing());
+    rt.update(0.5f);
+    NF_CHECK_EQ(probe->updates, 2u);
+    NF_CHECK(probe->last_playing);
+
+    rt.set_playing(false);
+    rt.update(0.5f);
+    NF_CHECK_EQ(probe->updates, 3u);
+    NF_CHECK(!probe->last_playing);
+}

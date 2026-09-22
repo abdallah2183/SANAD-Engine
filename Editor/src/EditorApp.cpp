@@ -1,6 +1,8 @@
 #include <NF/Editor/EditorApp.hpp>
 #include <NF/Editor/Outliner.hpp>
 #include <NF/Editor/Prefabs.hpp>
+#include <NF/Rendering/MeshUpload.hpp>
+#include <NF/Rendering/StaticMesh.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
@@ -11,6 +13,161 @@
 #include <cmath>
 
 namespace nf::editor {
+
+namespace {
+
+// Side of the ground plane the Create menu and File > New lay down, in metres.
+// 60 m is a city block scaled down: big enough that a cube dropped anywhere in
+// the default view lands on it, small enough to stay inside the shadow
+// cascade range at the default camera distance.
+constexpr float kGroundSize = 60.0f;
+
+void normalize_direction(float v[3]) {
+    const float len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (len > 1e-20f) {
+        v[0] /= len;
+        v[1] /= len;
+        v[2] /= len;
+    }
+}
+
+void recompute_asset_bounds(assets::MeshAsset& mesh) {
+    assets::AssetAABB box;
+    assets::AssetSphere sphere;
+    if (mesh.vertices.empty()) {
+        mesh.bounds = box;
+        mesh.sphere = sphere;
+        return;
+    }
+    float big = std::numeric_limits<float>::max();
+    box.min_x = box.min_y = box.min_z = big;
+    box.max_x = box.max_y = box.max_z = -big;
+    for (const assets::AssetVertex& v : mesh.vertices) {
+        box.min_x = std::min(box.min_x, v.position[0]);
+        box.min_y = std::min(box.min_y, v.position[1]);
+        box.min_z = std::min(box.min_z, v.position[2]);
+        box.max_x = std::max(box.max_x, v.position[0]);
+        box.max_y = std::max(box.max_y, v.position[1]);
+        box.max_z = std::max(box.max_z, v.position[2]);
+    }
+    sphere.cx = (box.min_x + box.max_x) * 0.5f;
+    sphere.cy = (box.min_y + box.max_y) * 0.5f;
+    sphere.cz = (box.min_z + box.max_z) * 0.5f;
+    float r2 = 0.0f;
+    for (const assets::AssetVertex& v : mesh.vertices) {
+        const float dx = v.position[0] - sphere.cx;
+        const float dy = v.position[1] - sphere.cy;
+        const float dz = v.position[2] - sphere.cz;
+        r2 = std::max(r2, dx * dx + dy * dy + dz * dz);
+    }
+    sphere.radius = std::sqrt(r2);
+    mesh.bounds = box;
+    mesh.sphere = sphere;
+}
+
+// World-bakes a mesh: position' = R * S * p + T through the engine's own TRS
+// helper, so an exported model lands in another tool exactly where the viewport
+// drew it (rotated 90 degrees about X is a floor in both places). This glue
+// lives in the editor, not in NFAssets, because it needs the scene euler
+// convention and NFAssets deliberately does not depend on NFScene — the same
+// split as rendering::make_mesh_asset across the mesh boundary.
+assets::MeshAsset bake_mesh_world(const assets::MeshAsset& mesh, const scene::Transform& t) {
+    assets::MeshAsset out = mesh;
+    if (mesh.vertices.empty()) {
+        return out;
+    }
+    const Mat4 m = scene::compose_trs_mat4(t.world_x, t.world_y, t.world_z, t.rot_x, t.rot_y,
+                                          t.rot_z, t.scale_x, t.scale_y, t.scale_z);
+    const float sx = (t.scale_x != 0.0f) ? t.scale_x : 1.0f;
+    const float sy = (t.scale_y != 0.0f) ? t.scale_y : 1.0f;
+    const float sz = (t.scale_z != 0.0f) ? t.scale_z : 1.0f;
+    for (assets::AssetVertex& v : out.vertices) {
+        const Vec3 p = m.transform_point(Vec3{v.position[0], v.position[1], v.position[2]});
+        v.position[0] = p.x;
+        v.position[1] = p.y;
+        v.position[2] = p.z;
+        // Normals take the inverse-transpose of R * S, which is R * S^-1:
+        // divide by the scale, transform by the rotation only, then re-normalize
+        // (a scaled normal is no longer a direction).
+        float n[3] = {v.normal[0] / sx, v.normal[1] / sy, v.normal[2] / sz};
+        const Vec3 nd = m.transform_direction(Vec3{n[0], n[1], n[2]});
+        v.normal[0] = nd.x;
+        v.normal[1] = nd.y;
+        v.normal[2] = nd.z;
+        normalize_direction(v.normal);
+        const Vec3 td = m.transform_direction(Vec3{v.tangent[0], v.tangent[1], v.tangent[2]});
+        v.tangent[0] = td.x;
+        v.tangent[1] = td.y;
+        v.tangent[2] = td.z;
+        normalize_direction(v.tangent);
+    }
+    recompute_asset_bounds(out);
+    return out;
+}
+
+// Concatenates world-baked meshes into one asset, shifting every submesh's
+// vertex/index offsets by what came before it. "Export scene" is one file with
+// everything the scene draws, which is what a user uploading "the model"
+// expects to hand somebody.
+assets::MeshAsset merge_mesh_assets(const std::vector<assets::MeshAsset>& meshes) {
+    assets::MeshAsset out;
+    bool first = true;
+    for (const assets::MeshAsset& mesh : meshes) {
+        if (first) {
+            out.id = mesh.id;
+            out.logical_path = mesh.logical_path;
+            out.format_version = mesh.format_version;
+            first = false;
+        }
+        const uint32_t vertex_base = static_cast<uint32_t>(out.vertices.size());
+        const uint32_t index_base = static_cast<uint32_t>(out.indices.size());
+        out.vertices.insert(out.vertices.end(), mesh.vertices.begin(), mesh.vertices.end());
+        out.indices.insert(out.indices.end(), mesh.indices.begin(), mesh.indices.end());
+        if (mesh.submeshes.empty()) {
+            assets::AssetSubMesh whole;
+            whole.index_count = static_cast<uint32_t>(mesh.indices.size());
+            whole.vertex_count = static_cast<uint32_t>(mesh.vertices.size());
+            whole.vertex_offset = vertex_base;
+            whole.index_offset = index_base;
+            out.submeshes.push_back(whole);
+            continue;
+        }
+        for (const assets::AssetSubMesh& sub : mesh.submeshes) {
+            assets::AssetSubMesh shifted = sub;
+            shifted.vertex_offset += vertex_base;
+            shifted.index_offset += index_base;
+            out.submeshes.push_back(shifted);
+        }
+    }
+    recompute_asset_bounds(out);
+    return out;
+}
+
+} // namespace
+
+const char* primitive_name(PrimitiveKind kind) {
+    switch (kind) {
+        case PrimitiveKind::Ground: return "Ground";
+        case PrimitiveKind::Cube: return "Cube";
+        case PrimitiveKind::Sphere: return "Sphere";
+        case PrimitiveKind::Quad: return "Quad";
+    }
+    return "Primitive";
+}
+
+const char* primitive_asset_stem(PrimitiveKind kind) {
+    switch (kind) {
+        case PrimitiveKind::Ground: return "ground";
+        case PrimitiveKind::Cube: return "cube";
+        case PrimitiveKind::Sphere: return "sphere";
+        case PrimitiveKind::Quad: return "quad";
+    }
+    return "primitive";
+}
+
+std::string primitive_asset_path(PrimitiveKind kind) {
+    return std::string("content://Meshes/") + primitive_asset_stem(kind) + ".nfmesh";
+}
 
 EditorApp::EditorApp(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry,
                      assets::AssetManager& manager, ConsoleBuffer& console)
@@ -59,7 +216,111 @@ void EditorApp::after_mutation(ecs::Entity touched) {
             }
         }
     }
-    m_outliner.pending_delete = ecs::kInvalidEntity;
+}
+
+bool EditorApp::build_default_scene(scene::Scene& scene, std::string& out_err) {
+    // A new scene is a room you can work in: ground, something standing on it,
+    // a sun, a natural sky and a camera framing the origin. File > New used to
+    // produce an empty world, which is why the first question about this editor
+    // was always "why is there no floor?".
+    auto& w = scene.world();
+
+    assets::AssetId ground_id;
+    if (!ensure_primitive_asset(PrimitiveKind::Ground, ground_id, out_err)) {
+        return false;
+    }
+    assets::AssetId cube_id;
+    if (!ensure_primitive_asset(PrimitiveKind::Cube, cube_id, out_err)) {
+        return false;
+    }
+
+    // Light first, so the scene reads in the same order the outliner shows and
+    // the renderer finds it on the first pass.
+    {
+        ecs::Entity e = w.create_entity();
+        scene::Transform t{};
+        t.dirty = true;
+        w.add<scene::Transform>(e, t);
+        w.add<scene::NameComponent>(e, scene::NameComponent{"Sun"});
+        runtime::DirectionalLight light;
+        light.dir_x = -0.45f;
+        light.dir_y = -1.0f;
+        light.dir_z = -0.35f;
+        light.color_r = 1.0f;
+        light.color_g = 0.97f;
+        light.color_b = 0.92f;
+        light.intensity = 1.8f;
+        light.cast_shadows = true;
+        // Cascades sized for a 60 m ground: the whole floor receives shadows in
+        // one cascade band instead of falling out of range halfway across.
+        light.shadow_distance = 80.0f;
+        w.add<runtime::DirectionalLight>(e, light);
+    }
+    {
+        ecs::Entity e = w.create_entity();
+        scene::Transform t{};
+        t.dirty = true;
+        w.add<scene::Transform>(e, t);
+        w.add<scene::NameComponent>(e, scene::NameComponent{"Sky"});
+        w.add<runtime::SkyComponent>(e, runtime::SkyComponent{});
+    }
+    {
+        ecs::Entity e = w.create_entity();
+        scene::Transform t{};
+        t.local_y = -0.05f;
+        t.rot_x = -90.0f;
+        t.scale_x = kGroundSize;
+        t.scale_y = kGroundSize;
+        t.scale_z = 1.0f;
+        t.dirty = true;
+        w.add<scene::Transform>(e, t);
+        w.add<scene::NameComponent>(e, scene::NameComponent{"Ground"});
+        runtime::MeshComponent mc;
+        mc.mesh_id = ground_id;
+        mc.material = runtime::kDefaultMaterialPath;
+        w.add<runtime::MeshComponent>(e, mc);
+        physics::RigidBodyComponent rb;
+        rb.type = physics::BodyType::Static;
+        w.add<physics::RigidBodyComponent>(e, rb);
+        physics::ColliderComponent col;
+        col.shape = physics::Shape::make_box(Vec3(kGroundSize * 0.5f, 0.05f, kGroundSize * 0.5f));
+        w.add<physics::ColliderComponent>(e, col);
+    }
+    {
+        ecs::Entity e = w.create_entity();
+        scene::Transform t{};
+        t.local_y = 0.5f; // resting on the ground
+        t.dirty = true;
+        w.add<scene::Transform>(e, t);
+        w.add<scene::NameComponent>(e, scene::NameComponent{"Cube"});
+        runtime::MeshComponent mc;
+        mc.mesh_id = cube_id;
+        mc.material = runtime::kDefaultMaterialPath;
+        w.add<runtime::MeshComponent>(e, mc);
+        physics::RigidBodyComponent rb;
+        rb.type = physics::BodyType::Dynamic;
+        w.add<physics::RigidBodyComponent>(e, rb);
+        physics::ColliderComponent col;
+        col.shape = physics::Shape::make_box(Vec3(0.5f, 0.5f, 0.5f));
+        w.add<physics::ColliderComponent>(e, col);
+    }
+    {
+        ecs::Entity e = w.create_entity();
+        scene::Transform t{};
+        t.local_y = 3.0f;
+        t.local_z = 8.0f;
+        t.dirty = true;
+        w.add<scene::Transform>(e, t);
+        w.add<scene::NameComponent>(e, scene::NameComponent{"Camera"});
+        runtime::CameraComponent cam;
+        cam.fov_y = 60.0f;
+        cam.aspect = 16.0f / 9.0f;
+        cam.near_plane = 0.1f;
+        cam.far_plane = 1000.0f;
+        cam.is_active = true;
+        w.add<runtime::CameraComponent>(e, cam);
+    }
+    return true;
 }
 
 bool EditorApp::new_scene(std::string& out_err) {
@@ -77,12 +338,17 @@ bool EditorApp::new_scene(std::string& out_err) {
         std::string dummy;
         viewport_abort_drag(dummy);
     }
-    // Build an empty scene through the loader path: save an empty scene to a
-    // temp logical path, then load it so Runtime owns it like any other scene.
-    scene::Scene empty("Untitled");
+    // Build the default scene through the loader path: fill a scene, save it to
+    // a temp logical path, then load it so Runtime owns it like any other. The
+    // content is the authoring baseline — ground, cube, sun, natural sky and a
+    // camera — see build_default_scene.
+    scene::Scene fresh("Untitled");
+    if (!build_default_scene(fresh, out_err)) {
+        return false;
+    }
     std::string tmp_err;
-    if (!runtime::save_scene_to_vfs(m_vfs, "cache://EditorUntitled.nfscene", empty, tmp_err)) {
-        out_err = "Failed to stage empty scene: " + tmp_err;
+    if (!runtime::save_scene_to_vfs(m_vfs, "cache://EditorUntitled.nfscene", fresh, tmp_err)) {
+        out_err = "Failed to stage the default scene: " + tmp_err;
         return false;
     }
     if (!m_runtime->load_scene("cache://EditorUntitled.nfscene", out_err)) {
@@ -178,24 +444,6 @@ bool EditorApp::create_entity(const std::string& name, ecs::Entity parent, std::
     m_stack.push(std::move(cmd), *w);
     after_mutation(m_stack.last_target());
     return true;
-}
-
-void EditorApp::request_delete(ecs::Entity e) {
-    m_outliner.pending_delete = e;
-}
-
-void EditorApp::cancel_delete() {
-    m_outliner.pending_delete = ecs::kInvalidEntity;
-}
-
-bool EditorApp::confirm_delete(std::string& out_err) {
-    ecs::Entity e = m_outliner.pending_delete;
-    m_outliner.pending_delete = ecs::kInvalidEntity;
-    if (!e.valid()) {
-        out_err = "Nothing pending deletion";
-        return false;
-    }
-    return delete_entity(e, out_err);
 }
 
 bool EditorApp::delete_entity(ecs::Entity e, std::string& out_err) {
@@ -402,6 +650,336 @@ bool EditorApp::drop_mesh_asset(const AssetEntry& entry, std::string& out_err) {
     return true;
 }
 
+bool EditorApp::ensure_primitive_asset(PrimitiveKind kind, assets::AssetId& out_id, std::string& out_err) {
+    const std::string logical = primitive_asset_path(kind);
+    // Reuse: a scene saved last session already points at this mesh, and a
+    // second copy under a second id would fork the asset for no reason.
+    if (auto existing = m_registry.find_by_path(logical)) {
+        out_id = existing->id;
+        m_manager.load_mesh(out_id);
+        return true;
+    }
+
+    std::unique_ptr<rendering::StaticMesh> mesh;
+    switch (kind) {
+        case PrimitiveKind::Ground:
+        case PrimitiveKind::Quad:
+            mesh = rendering::StaticMesh::create_quad(1.0f);
+            break;
+        case PrimitiveKind::Cube:
+            mesh = rendering::StaticMesh::create_cube(1.0f);
+            break;
+        case PrimitiveKind::Sphere:
+            mesh = rendering::StaticMesh::create_sphere(0.5f, 24);
+            break;
+    }
+    if (!mesh) {
+        out_err = "Primitive mesh generation failed";
+        return false;
+    }
+
+    const assets::AssetId id = assets::AssetId::generate();
+    auto asset = rendering::make_mesh_asset(*mesh, id, logical);
+    if (!asset) {
+        out_err = "Primitive mesh cook failed";
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    if (!asset->save_to_bytes(bytes)) {
+        out_err = "Primitive mesh serialization failed";
+        return false;
+    }
+    // content:// holds the authored copy (what the asset browser lists and the
+    // packager ships); cache:// holds the cooked copy the loader reads.
+    if (!m_vfs.write_bytes(logical, std::span<const uint8_t>(bytes)).ok) {
+        out_err = "Failed to write '" + logical + "'";
+        return false;
+    }
+    const std::string rel = logical.substr(std::string("content://").size());
+    const std::string cooked = "cache://" + rel;
+    if (!m_vfs.write_bytes(cooked, std::span<const uint8_t>(bytes)).ok) {
+        out_err = "Failed to write cooked '" + cooked + "'";
+        return false;
+    }
+    assets::AssetMetadata meta;
+    meta.id = id;
+    meta.type = assets::AssetType::Mesh;
+    meta.logical_path = logical;
+    meta.cooked_path = cooked;
+    meta.format = "nfmesh-v1";
+    meta.version = 1;
+    std::string aerr;
+    if (!m_registry.add(meta, aerr)) {
+        out_err = "Registry rejected primitive mesh: " + aerr;
+        return false;
+    }
+    out_id = id;
+    m_manager.load_mesh(out_id);
+    return true;
+}
+
+bool EditorApp::create_primitive(PrimitiveKind kind, ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    assets::AssetId id;
+    if (!ensure_primitive_asset(kind, id, out_err)) {
+        return false;
+    }
+
+    runtime::MeshComponent mc;
+    mc.mesh_id = id;
+    mc.material = runtime::kDefaultMaterialPath;
+
+    // Placement per kind: everything lands ON the ground plane (top surface
+    // y = 0), which is what makes a freshly created scene navigable without a
+    // second edit.
+    scene::Transform seed{};
+    switch (kind) {
+        case PrimitiveKind::Ground:
+            // create_quad authors the quad in the XY plane, so -90 degrees about
+            // X lays it flat with its +Z normal pointing up (visible from above).
+            // The 5 cm drop matches the thin collider below: the surface you see
+            // and the surface objects rest on are the same plane.
+            seed.local_y = -0.05f;
+            seed.rot_x = -90.0f;
+            seed.scale_x = kGroundSize;
+            seed.scale_y = kGroundSize;
+            seed.scale_z = 1.0f;
+            break;
+        case PrimitiveKind::Sphere:
+            seed.local_y = 0.5f; // radius 0.5: touches the ground
+            break;
+        case PrimitiveKind::Quad:
+            seed.local_y = 1.0f; // standing upright, bottom edge on the ground
+            break;
+        case PrimitiveKind::Cube:
+            seed.local_y = 0.5f;
+            break;
+    }
+
+    // Suffix the name once it is taken, so three cubes read "Cube", "Cube 2",
+    // "Cube 3" in the outliner instead of three rows nobody can tell apart.
+    int same_kind = 0;
+    for (ecs::Entity other : w->query<runtime::MeshComponent>()) {
+        const auto* omc = w->get<runtime::MeshComponent>(other);
+        if (omc != nullptr && omc->mesh_id == id) {
+            ++same_kind;
+        }
+    }
+    std::string name = primitive_name(kind);
+    if (same_kind > 0) {
+        name += " " + std::to_string(same_kind + 1);
+    }
+
+    auto cmd = std::make_unique<CreateMeshEntityCommand>(name, parent, mc, seed);
+    m_stack.push(std::move(cmd), *w);
+    const ecs::Entity created = m_stack.last_target();
+
+    // The ground is the one primitive that must be solid or Play drops
+    // everything through it. Physics components are leaf data (see
+    // set_rigid_body): added directly, with no undo entry of their own.
+    if (kind == PrimitiveKind::Ground && created.valid() && w->is_alive(created)) {
+        physics::RigidBodyComponent rb;
+        rb.type = physics::BodyType::Static;
+        w->add<physics::RigidBodyComponent>(created, rb);
+        physics::ColliderComponent col;
+        // World-space half extents: a 60 x 60 plate 10 cm thick with its top
+        // surface exactly at y = 0.
+        col.shape = physics::Shape::make_box(Vec3(kGroundSize * 0.5f, 0.05f, kGroundSize * 0.5f));
+        w->add<physics::ColliderComponent>(created, col);
+        if (m_runtime != nullptr) {
+            m_runtime->rebuild_physics_from_scene();
+        }
+    }
+
+    m_manager.load_mesh(id);
+    after_mutation(created);
+    return true;
+}
+
+bool EditorApp::create_directional_light(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"Sun"});
+    runtime::DirectionalLight light;
+    // Late-morning sun: high enough to light a ground plane, angled enough that
+    // surfaces model instead of flattening out under a head-on light.
+    light.dir_x = -0.45f;
+    light.dir_y = -1.0f;
+    light.dir_z = -0.35f;
+    light.color_r = 1.0f;
+    light.color_g = 0.97f;
+    light.color_b = 0.92f;
+    light.intensity = 1.8f;
+    light.cast_shadows = true;
+    w->add<runtime::DirectionalLight>(e, light);
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_camera(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    scene::Transform t{};
+    // Three metres up, eight back: the framing every sample scene uses, and the
+    // one the runtime falls back to when a scene has no camera at all.
+    t.local_y = 3.0f;
+    t.local_z = 8.0f;
+    t.dirty = true;
+    w->add<scene::Transform>(e, t);
+    w->add<scene::NameComponent>(e, scene::NameComponent{"Camera"});
+    runtime::CameraComponent cam;
+    cam.fov_y = 60.0f;
+    cam.aspect = 16.0f / 9.0f;
+    cam.near_plane = 0.1f;
+    cam.far_plane = 1000.0f;
+    cam.is_active = true;
+    w->add<runtime::CameraComponent>(e, cam);
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_sky_entity(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"Sky"});
+    // The component's own defaults are the natural palette (see
+    // rendering::SkyParams), so "Add sky" means "the sky a real day has".
+    w->add<runtime::SkyComponent>(e, runtime::SkyComponent{});
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::apply_sky_edit(const SkyEdit& edit, std::string& out_err) {
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    // One sky per scene: the renderer takes the first, so an existing entity is
+    // updated in place instead of a second one being stacked on top of it.
+    const std::vector<ecs::Entity> skies = w->query<runtime::SkyComponent>();
+    ecs::Entity target = skies.empty() ? ecs::kInvalidEntity : skies.front();
+    if (!target.valid()) {
+        if (!create_sky_entity(ecs::kInvalidEntity, out_err)) {
+            return false;
+        }
+        // Re-query rather than trusting stack().last_target(): create_sky_entity
+        // creates the entity directly and pushes no command, so the last command
+        // target is whatever the caller did before — not this sky.
+        const std::vector<ecs::Entity> created = w->query<runtime::SkyComponent>();
+        if (created.empty()) {
+            out_err = "Sky entity was not created";
+            return false;
+        }
+        target = created.front();
+    }
+    return set_sky(target, edit, out_err);
+}
+
+size_t EditorApp::export_meshes_to_file(const std::string& physical_path, assets::MeshFormat format,
+                                        bool whole_scene, std::string& out_error) {
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_error = "No scene open";
+        return 0;
+    }
+    if (physical_path.empty()) {
+        out_error = "No output path";
+        return 0;
+    }
+
+    std::vector<ecs::Entity> targets;
+    if (whole_scene) {
+        for (ecs::Entity e : w->query<runtime::MeshComponent>()) {
+            targets.push_back(e);
+        }
+    } else {
+        targets = m_selection.all();
+    }
+    if (targets.empty()) {
+        out_error = whole_scene ? "The scene has no mesh entities" : "Nothing selected";
+        return 0;
+    }
+
+    // Baked copies own their pixels: the handle's MeshAsset is shared with the
+    // live asset cache, and merging must not walk a vector the loader can drop.
+    std::vector<assets::MeshAsset> baked;
+    baked.reserve(targets.size());
+    size_t exported = 0;
+    for (ecs::Entity e : targets) {
+        const auto* mc = w->get<runtime::MeshComponent>(e);
+        const auto* t = w->get<scene::Transform>(e);
+        if (mc == nullptr || t == nullptr || !mc->mesh_id.valid()) {
+            continue;
+        }
+        auto handle = m_manager.find(mc->mesh_id);
+        if (!handle || handle->state != assets::AssetState::Ready) {
+            // An entity that was just created has a handle but no pixels yet;
+            // exporting what the viewport already draws would silently skip it.
+            handle = m_manager.load_mesh_sync(mc->mesh_id);
+        }
+        if (!handle || !handle->asset || handle->state != assets::AssetState::Ready) {
+            continue;
+        }
+        baked.push_back(bake_mesh_world(*handle->asset, *t));
+        ++exported;
+    }
+    if (baked.empty()) {
+        out_error = "Nothing to export: the target entities have no loaded mesh";
+        return 0;
+    }
+
+    const assets::MeshAsset merged = merge_mesh_assets(baked);
+    std::string err;
+    // The dialog's format wins over the typed extension: the user picked the
+    // format in a combo, and a stale extension in the path field must not
+    // silently produce a different file than the one they chose.
+    if (!assets::export_mesh_to_file(merged, physical_path, err, true, format)) {
+        out_error = err;
+        return 0;
+    }
+    return exported;
+}
+
 bool EditorApp::set_rigid_body(ecs::Entity e, const physics::RigidBodyComponent& rb,
                                 std::string& out_err) {
     if (!require_editable(out_err)) {
@@ -439,6 +1017,52 @@ bool EditorApp::set_collider(ecs::Entity e, const physics::ColliderComponent& co
         *existing = col;
     } else {
         w->add<physics::ColliderComponent>(e, col);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_destructible(ecs::Entity e, const runtime::DestructibleComponent& d,
+                                 std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    // A spec the cooker cannot use is rejected here rather than written into the
+    // scene: the artist would save a level whose object silently never breaks,
+    // and the only symptom would be a warning in the load log.
+    if (d.chunks < 2u) {
+        out_err = "Chunks must be at least 2 (one chunk is an object that cannot come apart)";
+        return false;
+    }
+    if (d.chunks > 64u) {
+        // FractureParams::max_depth is the real ceiling: a deeper tree is not
+        // reachable, so a higher number would silently mean 64 anyway.
+        out_err = "Chunks must be at most 64 (the fracture tree's depth cap)";
+        return false;
+    }
+    if (!std::isfinite(d.strength) || d.strength <= 0.0f) {
+        out_err = "Strength must be a positive finite number";
+        return false;
+    }
+    if (!std::isfinite(d.damage_threshold) || d.damage_threshold < 0.0f) {
+        // 0 is legal: the object breaks on the slightest touch. A negative
+        // threshold is not.
+        out_err = "Damage threshold must be a non-negative finite number";
+        return false;
+    }
+    if (!std::isfinite(d.blast_radius) || d.blast_radius <= 0.0f) {
+        out_err = "Blast radius must be a positive finite number";
+        return false;
+    }
+    if (auto* existing = w->get<runtime::DestructibleComponent>(e)) {
+        *existing = d;
+    } else {
+        w->add<runtime::DestructibleComponent>(e, d);
     }
     after_mutation(e);
     return true;
@@ -623,7 +1247,12 @@ bool EditorApp::has_save(const std::string& slot) {
 
 void EditorApp::set_autosave(float interval_seconds, const std::string& slot_prefix) {
     if (runtime::SaveSystem* saves = save_system()) {
-        saves->set_autosave(interval_seconds, slot_prefix);
+        // Three explicit args, not two: SaveSystem declares a 2-arg and a
+        // 3-arg-with-default `set_autosave` side by side, which makes a 2-arg
+        // call ambiguous. Naming the default constant picks the 3-arg overload
+        // with the exact value its default would have supplied.
+        saves->set_autosave(interval_seconds, slot_prefix,
+                            runtime::SaveSystem::kDefaultAutosaveSlots);
     }
 }
 
@@ -954,7 +1583,6 @@ bool EditorApp::undo(std::string& out_err) {
     m_runtime->mark_scene_edited();
     m_dirty = true;
     m_selection.prune(*w);
-    m_outliner.pending_delete = ecs::kInvalidEntity;
     return true;
 }
 
@@ -975,7 +1603,6 @@ bool EditorApp::redo(std::string& out_err) {
     m_runtime->mark_scene_edited();
     m_dirty = true;
     m_selection.prune(*w);
-    m_outliner.pending_delete = ecs::kInvalidEntity;
     return true;
 }
 
@@ -1149,6 +1776,10 @@ bool EditorApp::play(std::string& out_err) {
     if (!m_play.play(*m_runtime->edit_scene(), out_err)) {
         return false;
     }
+    // A trace exported from now on is "this play session", not "everything
+    // since the editor started", which is what the Profiler panel's export
+    // button promises.
+    m_profiler_session.clear();
     return true;
 }
 
@@ -1241,7 +1872,8 @@ float drag_distance_to(const ViewCamera& vc, const scene::Transform& t) {
 
 } // namespace
 
-bool EditorApp::viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, std::string& out_err) {
+bool EditorApp::viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, bool additive,
+                               std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;
     }
@@ -1257,14 +1889,33 @@ bool EditorApp::viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, s
         m_drag.cancel();
         return true;
     }
-    m_selection.set_single(hit);
-    const auto* t = w->get<scene::Transform>(hit);
+    if (additive) {
+        // Shift-click toggles: a second click on an already-picked entity
+        // drops it back out, so a group can be trimmed without restarting.
+        if (m_selection.contains(hit)) {
+            m_selection.remove(hit);
+        } else {
+            m_selection.add(hit);
+        }
+    } else {
+        m_selection.set_single(hit);
+    }
+    if (!m_selection.has_selection()) {
+        m_drag.cancel();
+        return true;
+    }
+    // The drag arms on the whole selection (everything with a Transform);
+    // entities without one are named in out_err by begin(), not fatal.
+    if (!m_drag.begin(*w, m_selection.all(), m_gizmo_mode, m_gizmo_space, m_gizmo_snap,
+                      out_err)) {
+        return false;
+    }
+    // Perspective scaling uses the distance to the entity the pointer
+    // actually hit (the drag primary): v0.1 has no merged group bounds.
+    const auto* t = w->get<scene::Transform>(m_drag.entity());
     if (t == nullptr) {
         m_drag.cancel();
         out_err = "Selected entity has no Transform";
-        return false;
-    }
-    if (!m_drag.begin(*w, hit, m_gizmo_mode, m_gizmo_space, out_err)) {
         return false;
     }
     m_drag_vc = vc;
@@ -1393,7 +2044,11 @@ std::vector<OutlinerRow> EditorApp::outliner_rows() const {
 }
 
 std::vector<AssetEntry> EditorApp::browser_entries() {
-    auto all = list_content_assets(m_vfs, m_registry);
+    // E3: with a project open the bottom panel shows THAT project's files, so the
+    // browser answers "what is in my game" rather than "what shipped with the
+    // engine". content:// remains the fallback when no project is mounted, which
+    // is the engine-tree mode the editor still supports.
+    auto all = has_project() ? list_project_assets(m_vfs) : list_content_assets(m_vfs, m_registry);
     return filter_assets(all, m_browser.filter_text, m_browser.filter_type);
 }
 

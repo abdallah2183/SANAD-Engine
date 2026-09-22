@@ -48,6 +48,11 @@ Vec3 world_position_of(const ecs::World& world, ecs::Entity e) {
 } // namespace
 
 void OrbitCameraModule::on_update(gameplay::GameplayContext& ctx) {
+    // Edit mode owns the camera: the editor's viewport navigation writes this
+    // same Transform every frame, so placing here would snap each drag straight
+    // back and the viewport would read as frozen. Gameplay drives only when
+    // playing (Runtime mirrors the editor's play state into ctx.playing).
+    if (!ctx.playing) return;
     if (ctx.world == nullptr) return;
 
     const ecs::Entity camera = find_camera(*ctx.world);

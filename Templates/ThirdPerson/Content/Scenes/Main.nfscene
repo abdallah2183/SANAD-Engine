@@ -1,0 +1,78 @@
+# NOVAForge Scene v1
+version: 1
+name: Main
+entity_count: 12
+---
+entity: 1:0
+  Name: MainCamera
+  Transform: local(0,4,8) world(0,4,8) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+---
+entity: 2:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.4,-1,-0.25) color(1,1,1) intensity=1.1
+---
+entity: 3:0
+  Name: Sky
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Sky: zenith(0.2,0.42,0.85) horizon(0.62,0.72,0.82) ground(0.09,0.09,0.11) clear(0.03,0.03,0.07) sun_disk=1 sun_glow=1 enabled=true
+---
+entity: 4:0
+  Name: Ground
+  Transform: local(0,-0.5,0) world(0,-0.5,0) rot(0,0,0) scale(24,1,24) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(12,0.5,12)
+---
+entity: 5:0
+  Name: Player
+  Transform: local(0,1.2,0) world(0,1.2,0) rot(0,0,0) scale(1.2,1.2,1.2) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  RigidBody: type=Dynamic mass=1 friction=0.600000 restitution=0.350000 linear_damping=0.100000 angular_damping=0.300000 allow_sleep=true
+  Collider: shape=Sphere radius=0.6
+---
+entity: 6:0
+  Name: SpinnerA
+  Transform: local(3,1.4,-2) world(3,1.4,-2) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0.4 duration=3
+---
+entity: 7:0
+  Name: SpinnerB
+  Transform: local(-3,1.4,-2) world(-3,1.4,-2) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0.4 duration=3
+---
+entity: 8:0
+  Name: CrateA
+  Transform: local(2.5,0.75,2.5) world(2.5,0.75,2.5) rot(0,0,0) scale(1.5,1.5,1.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(0.75,0.75,0.75)
+  Destructible: chunks=8 seed=305419896 strength=20 damage_threshold=8 blast_radius=2.5 enabled=true
+---
+entity: 9:0
+  Name: CrateB
+  Transform: local(-2.5,0.75,3) world(-2.5,0.75,3) rot(0,0,0) scale(1.5,1.5,1.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Box half(0.75,0.75,0.75)
+  Destructible: chunks=8 seed=193595338 strength=20 damage_threshold=8 blast_radius=2.5 enabled=true
+---
+entity: 10:0
+  Name: DropBall
+  Transform: local(0,7,-4) world(0,7,-4) rot(0,0,0) scale(0.8,0.8,0.8) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  RigidBody: type=Dynamic mass=1.5 friction=0.500000 restitution=0.650000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  Collider: shape=Sphere radius=0.4
+---
+entity: 11:0
+  Name: StartChime
+  Transform: local(0,1,4) world(0,1,4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Audio: buffer=start_chime volume=0.5 pitch=1 looping=false spatial=false autoplay=true tone=523.25 tone_duration=0.6
+---
+entity: 12:0
+  Name: AmbientHum
+  Transform: local(0,2,-4) world(0,2,-4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Audio: buffer=ambience volume=0.15 pitch=1 looping=true spatial=false autoplay=true tone=220 tone_duration=2

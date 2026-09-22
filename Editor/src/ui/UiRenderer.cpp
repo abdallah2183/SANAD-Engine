@@ -8,6 +8,7 @@
 #include <array>
 #include <cstring>
 #include <fstream>
+#include <unordered_set>
 #include <vector>
 
 namespace nf::editor {
@@ -80,7 +81,10 @@ bool UiRenderer::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     samp.address_u = rhi::AddressMode::ClampToEdge;
     samp.address_v = rhi::AddressMode::ClampToEdge;
     m_sampler = device.create_sampler(samp);
-    m_allocator = device.create_descriptor_allocator(8);
+    // Font + viewport plus one set per live preview thumbnail. Sets are only
+    // allocated for ids the recorded draw data actually references, so a tree
+    // with hundreds of previews never comes close to this cap.
+    m_allocator = device.create_descriptor_allocator(256);
     if (!m_sampler || !m_allocator) {
         NF_LOG_ERROR(LogCategory::Editor, "UiRenderer: sampler/allocator failed");
         shutdown();
@@ -178,6 +182,13 @@ bool UiRenderer::valid() const {
 void UiRenderer::set_viewport_texture(const rhi::TextureView* view, const rhi::Sampler* sampler) {
     m_viewport_view = view;
     m_viewport_sampler = sampler;
+}
+
+void UiRenderer::set_content_textures(const TextureBinding* bindings, size_t count) {
+    m_content_bindings.clear();
+    if (bindings != nullptr && count > 0) {
+        m_content_bindings.assign(bindings, bindings + count);
+    }
 }
 
 rhi::Pipeline* UiRenderer::pipeline_for(const rhi::RenderPass& pass) {
@@ -303,26 +314,72 @@ bool UiRenderer::render(rhi::CommandBuffer& cmd, const rhi::RenderPass& pass,
 
     // Previous frame's GPU work is done by contract: recycle descriptors.
     m_allocator->reset();
-    auto font_set = m_allocator->allocate(*m_layout);
-    auto view_set = m_allocator->allocate(*m_layout);
-    if (!font_set || !view_set) {
-        NF_LOG_ERROR(LogCategory::Editor, "UiRenderer: descriptor allocation failed");
-        return false;
-    }
+
+    // Build exactly one descriptor set per texture id the recorded draw data
+    // references. Scanning the commands first (rather than binding every
+    // preview the cache holds) is what keeps a large content tree free: an id
+    // that no panel drew this frame allocates nothing.
+    std::vector<uintptr_t> used_ids;
     {
-        const std::array<rhi::DescriptorWrite, 1> fw{{
-            {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_font_view.get(),
-             m_sampler.get()},
-        }};
-        m_device->update_descriptor_set(*font_set, std::span<const rhi::DescriptorWrite>(fw));
-        const rhi::TextureView* vv =
-            (m_viewport_view != nullptr) ? m_viewport_view : m_font_view.get();
-        const rhi::Sampler* vs = (m_viewport_sampler != nullptr) ? m_viewport_sampler : m_sampler.get();
-        const std::array<rhi::DescriptorWrite, 1> vw{{
-            {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, vv, vs},
-        }};
-        m_device->update_descriptor_set(*view_set, std::span<const rhi::DescriptorWrite>(vw));
+        std::unordered_set<uintptr_t> seen;
+        seen.reserve(16);
+        for (int n = 0; n < draw_data->CmdListsCount; ++n) {
+            const ImDrawList* list = draw_data->CmdLists[n];
+            for (int ci = 0; ci < list->CmdBuffer.Size; ++ci) {
+                const uintptr_t id = static_cast<uintptr_t>(list->CmdBuffer[ci].GetTexID());
+                if (seen.insert(id).second) {
+                    used_ids.push_back(id);
+                }
+            }
+        }
     }
+    std::vector<std::unique_ptr<rhi::DescriptorSet>> id_sets;
+    id_sets.reserve(used_ids.size());
+    for (uintptr_t id : used_ids) {
+        const rhi::TextureView* view = nullptr;
+        const rhi::Sampler* samp = nullptr;
+        if (id == kFontTextureId) {
+            view = m_font_view.get();
+            samp = m_sampler.get();
+        } else if (id == kViewportTextureId) {
+            // The viewport target is optional: when the shell has none, the
+            // font atlas is a defined (if useless) sample rather than a crash.
+            view = (m_viewport_view != nullptr) ? m_viewport_view : m_font_view.get();
+            samp = (m_viewport_sampler != nullptr) ? m_viewport_sampler : m_sampler.get();
+        } else {
+            for (const TextureBinding& b : m_content_bindings) {
+                if (b.id == id && b.view != nullptr) {
+                    view = b.view;
+                    samp = (b.sampler != nullptr) ? b.sampler : m_sampler.get();
+                    break;
+                }
+            }
+        }
+        if (view == nullptr) {
+            NF_LOG_WARN(LogCategory::Editor, "UiRenderer: unresolvable texture id {}, skipping draw",
+                        id);
+            continue;
+        }
+        auto set = m_allocator->allocate(*m_layout);
+        if (!set) {
+            NF_LOG_ERROR(LogCategory::Editor, "UiRenderer: descriptor allocation failed");
+            return false;
+        }
+        const std::array<rhi::DescriptorWrite, 1> w{{
+            {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, view, samp},
+        }};
+        m_device->update_descriptor_set(*set, std::span<const rhi::DescriptorWrite>(w));
+        id_sets.push_back(std::move(set));
+    }
+    // id_sets[i] serves used_ids[i]; the draw loop looks up by id.
+    auto set_for = [used_ids, &id_sets](uintptr_t id) -> const rhi::DescriptorSet* {
+        for (size_t i = 0; i < used_ids.size(); ++i) {
+            if (used_ids[i] == id) {
+                return id_sets[i].get();
+            }
+        }
+        return nullptr;
+    };
 
     cmd.bind_pipeline(*pipe);
     const std::array<const rhi::Buffer*, 1> vbs{m_vb.get()};
@@ -379,14 +436,9 @@ bool UiRenderer::render(rhi::CommandBuffer& cmd, const rhi::RenderPass& pass,
                 continue;
             }
             const ImTextureID tex_id = pcmd->GetTexID();
-            const rhi::DescriptorSet* set = nullptr;
-            if (tex_id == static_cast<ImTextureID>(kFontTextureId)) {
-                set = font_set.get();
-            } else if (tex_id == static_cast<ImTextureID>(kViewportTextureId)) {
-                set = view_set.get();
-            } else {
-                NF_LOG_WARN(LogCategory::Editor, "UiRenderer: unknown texture id, skipping draw");
-                continue;
+            const rhi::DescriptorSet* set = set_for(static_cast<uintptr_t>(tex_id));
+            if (set == nullptr) {
+                continue; // unresolved above and already logged
             }
             const std::array<const rhi::DescriptorSet*, 1> sets{set};
             cmd.bind_descriptor_sets(*m_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);

@@ -1,0 +1,19 @@
+# NOVAForge Asset Registry
+version: 1
+count: 2
+---
+id: f04e488b-4dc8-414b-baee-e3c50e8829ad
+type: Mesh
+logical: content://Meshes/cube.nfmesh
+cooked: cache://Meshes/cube.nfmesh
+fingerprint: deef258cf95adca8
+format: nfmesh-v1
+version: 1
+---
+id: 3d8f8b09-3e06-448e-94d4-c4c5a1921bc6
+type: Mesh
+logical: content://Meshes/sphere.nfmesh
+cooked: cache://Meshes/sphere.nfmesh
+fingerprint: 1ee68225b2b70f2
+format: nfmesh-v1
+version: 1

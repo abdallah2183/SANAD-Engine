@@ -92,6 +92,21 @@ struct JoltVehicleConfig {
     float wheel_y = -0.35f; // attachment height, chassis-local
     float max_steer_deg = 30.0f;
     float engine_max_torque = 500.0f;
+
+    // --- Suspension + tire tune. Jolt's WheelSettingsWV defaults are a generic
+    // car; these are the knobs that keep a full-throttle run straight and a
+    // curb crossing rubber-side down. Defaults match Jolt's own so an unset
+    // config behaves bit-identically to the pre-tune vehicle.
+    float suspension_min_length = 0.30f; // compressed travel (m)
+    float suspension_max_length = 0.50f; // droop travel (m)
+    float suspension_frequency_hz = 1.5f; // spring stiffness; softer = less twitchy
+    float suspension_damping = 0.5f;      // 0 = undamped bounce, >=1 kills oscillation
+    float tire_peak_friction = 1.2f;      // grip at the slip peak (can exceed 1: tire profile)
+    float tire_limit_friction = 1.0f;     // grip once the tire is sliding
+    float wheel_inertia = 0.9f;           // kg m^2
+    float angular_damping = 0.2f;         // wheel spin decay
+    float max_brake_torque = 1500.0f;     // Nm per wheel
+    float max_handbrake_torque = 4000.0f; // Nm, usually rear wheels only
 };
 
 /// Jolt character setup (capsule + gameplay movement). Lives here (not in
@@ -164,6 +179,22 @@ public:
     /// radius, a negative half_height, an invalid world, or a failed creation.
     JoltBody add_capsule_body(const BodyDesc& base, float radius, float half_height);
 
+    /// Creates a body whose collider is a cylinder (Y-axis, like Jolt's own
+    /// cylinder): `half_height` is half the straight-walled length, `radius` the
+    /// wall radius, so the collider spans local y = -half_height .. +half_height.
+    /// Convex, so unlike a mesh or a height field it may be Dynamic: a barrel, a
+    /// pipe, a wheel without the vehicle system. `base` supplies type/position/
+    /// orientation/velocity/mass/friction/restitution/damping/sleep — its
+    /// `shape` field is ignored (the cylinder parameters replace it). Returns an
+    /// invalid handle for a non-positive radius, a non-positive half_height, an
+    /// invalid world, or a failed creation.
+    ///
+    /// A zero half_height is rejected on purpose even though Jolt would accept
+    /// it: the degenerate cylinder is a zero-thickness disc, a collider that
+    /// touches everything and holds nothing. The degenerate capsule has a
+    /// meaning (it becomes a sphere); the degenerate cylinder does not.
+    JoltBody add_cylinder_body(const BodyDesc& base, float radius, float half_height);
+
     /// Creates a body whose collider is the convex hull of `local_points`
     /// (body-local space). Fewer than 4 points, or a degenerate/coplanar cloud
     /// (Jolt builds a zero-volume hull from those instead of failing, which is
@@ -177,6 +208,96 @@ public:
     /// invalid handle.
     JoltBody add_mesh_body(const BodyDesc& base, const std::vector<Vec3>& vertices,
                            const std::vector<u32>& indices);
+
+    /// Creates a STATIC body whose collider is a height field: a regular
+    /// `sample_count`-by-`sample_count` grid of `heights`, sampled row-major so
+    /// that the column/row indices a terrain renderer uses address the same
+    /// vertex. Vertex (x, y) sits at
+    ///
+    ///     offset + scale * (x, heights[y * sample_count + x], y)
+    ///
+    /// which is the engine's terrain convention (grid in XZ, +Y up) one-to-one:
+    /// the grid's X and its row index Y map to world X and Z, the sample is the
+    /// height along world Y. A height field covers exactly the gap a mesh
+    /// collider leaves — the terrain renderer (`Rendering/Terrain`) builds the
+    /// same grid, and without this collider it renders ground bodies cannot
+    /// stand on.
+    ///
+    /// Height fields may not move in Jolt (`MustBeStatic`), so the body is
+    /// forced to Static regardless of `base.type`, as add_mesh_body does.
+    /// `sample_count` must be at least 4 (Jolt requires `sample_count /
+    /// block_size >= 2` with its default block size of 2), `heights` must hold
+    /// exactly `sample_count` squared finite values, and the X and Z scale
+    /// components must be non-zero — otherwise the grid collapses to a line and
+    /// there is no field to collide with. `scale.y` may be zero: that is a flat
+    /// field, which is a legal (if uninteresting) plane. Any violation yields an
+    /// invalid handle and adds no body.
+    JoltBody add_heightfield_body(const BodyDesc& base, const std::vector<float>& heights,
+                                  u32 sample_count, Vec3 offset, Vec3 scale);
+
+    /// The shape a compound part may take. Deliberately its own small
+    /// vocabulary rather than a reuse of the first-party `Shape`: `Shapes.hpp`
+    /// keeps that one closed at sphere/box/plane on purpose (the narrowphase
+    /// switches on it and the broadphase reads its extents), while a compound
+    /// part should also be free to be a cylinder or a capsule — the same complex
+    /// colliders the entry points above build. Widening `Shape` to carry them
+    /// would drag shapes the solver cannot solve through every part of the
+    /// engine; a part never reaches the solver, it only reaches Jolt.
+    struct CompoundShape {
+        enum class Type : u8 {
+            Sphere,
+            Box,
+            Cylinder, // Y axis, per add_cylinder_body
+            Capsule,  // Y axis, per add_capsule_body
+        };
+        Type type = Type::Box;
+        float radius = 0.5f;                 // sphere, cylinder, capsule
+        float half_height = 0.0f;            // cylinder: half the straight length;
+                                             // capsule: half the cylinder length
+        Vec3 half_extents{0.5f, 0.5f, 0.5f}; // box
+
+        static CompoundShape make_sphere(float radius);
+        static CompoundShape make_box(const Vec3& half_extents);
+        static CompoundShape make_cylinder(float radius, float half_height);
+        static CompoundShape make_capsule(float radius, float half_height);
+    };
+
+    /// One part of a compound collider: a `CompoundShape` placed at a local
+    /// `position` and `orientation` within the body. Parts may overlap; Jolt
+    /// only asks that the union be a sensible collider, and it is what the
+    /// caller makes it.
+    struct CompoundPart {
+        CompoundShape shape;
+        Vec3 position{0.0f, 0.0f, 0.0f};
+        Quat orientation = Quat::identity();
+    };
+
+    /// Creates a body whose collider is the union of `parts`, each placed in
+    /// body-local space. This is the shape the vocabulary above cannot express:
+    /// a box hull CANNOT be concave (its builder convexifies whatever points it
+    /// is given), and a static mesh may not move. A compound of boxes is both —
+    /// an L-bracket, a table with legs, a stair step all simulate as ONE dynamic
+    /// body instead of a constraint-welded cluster that costs solver iterations
+    /// and never quite stops jittering.
+    ///
+    /// `base` supplies type/position/orientation/friction/restitution/damping/
+    /// sleep; its `shape` field is ignored (the parts replace it). The body may
+    /// be Dynamic: unlike the mesh and height field, no part forces it static, so
+    /// a compound of spheres, boxes, cylinders and capsules is freely movable.
+    /// `state().position` round-trips the part-space origin — place a part at
+    /// (0, 1, 0) and it sits one metre above whatever `state()` reports, same
+    /// convention as every other collider here.
+    ///
+    /// Fewer than 2 parts, a non-positive sphere/cylinder/capsule radius or box
+    /// half-extent, a non-positive cylinder half_height (a zero-height cylinder
+    /// is a zero-thickness disc, a collider that touches everything and holds
+    /// nothing — the degenerate capsule is different, a zero half_height turns
+    /// it into a sphere, which is legal), or a failed creation yields an invalid
+    /// handle and adds no body. A part's degenerate geometry is REJECTED rather
+    /// than clamped: unlike the first-party `Shape` (whose factories clamp so the
+    /// solver may assume a positive radius) a part is consumed by Jolt alone, and
+    /// Jolt's cylinder and capsule builders do not normalise a negative radius.
+    JoltBody add_compound_body(const BodyDesc& base, const std::vector<CompoundPart>& parts);
 
     // --- Scene queries, sensors (triggers) and continuous collision -------
     //
@@ -267,6 +388,42 @@ public:
     /// Dead or invalid handles are a no-op.
     void set_angular_velocity(JoltBody handle, const Vec3& velocity);
 
+    /// Applies an impulse at the body's centre of mass: the linear velocity
+    /// changes by impulse / mass and the body does not spin. Units are N*s, so
+    /// `impulse = mass * desired_velocity` needs no frame rate — unlike a force,
+    /// an impulse is felt without a step. A sleeping body wakes up; a static or
+    /// kinematic body (and a sensor) is silently unaffected, because a push on a
+    /// body that cannot move is a no-op rather than an error. Dead or invalid
+    /// handles are a no-op too.
+    void apply_impulse(JoltBody handle, const Vec3& impulse);
+
+    /// Applies an impulse at a world-space `point`. The linear part is exactly
+    /// apply_impulse's; the off-centre arm `point - centre_of_mass` additionally
+    /// spins the body, so the same impulse at a wheel's rim makes it roll and at
+    /// its hub does not. This is the call a blast, a weapon's recoil or a jump
+    /// pad wants, and the one that set_angular_velocity forces the caller to
+    /// solve by hand — torque and inertia differ per shape, and the point is
+    /// measured against the body's *centre of mass*, which for a hull not
+    /// centred on its own origin is NOT state().position (see the state() note
+    /// above). A point inside the body is legal; the arm simply points the other
+    /// way and the spin reverses. No-op on static/kinematic bodies and dead
+    /// handles.
+    void apply_impulse_at_point(JoltBody handle, const Vec3& impulse, const Vec3& world_point);
+
+    /// Adds a force to the body's accumulator, which the next step() integrates
+    /// and then clears. Two calls before one step apply twice the force; a call
+    /// after the body's last step is never felt, so a body about to be removed
+    /// wants an impulse. The body must stay alive until the step. Wakes a
+    /// sleeping body, no-ops on static/kinematic bodies and dead handles.
+    void add_force(JoltBody handle, const Vec3& force);
+    /// As add_force, but applied off-centre — force at a point also torques the
+    /// body about `point - centre_of_mass`.
+    void add_force_at_point(JoltBody handle, const Vec3& force, const Vec3& world_point);
+    /// Adds a pure torque (N*m, world space) to the accumulator — for a spin with
+    /// no net push, e.g. a motor or a drag-free turn. Same accumulator lifetime
+    /// and the same no-op rules as add_force.
+    void add_torque(JoltBody handle, const Vec3& torque);
+
     /// One fixed step (dt <= 0 is a no-op).
     void step(float dt);
 
@@ -289,7 +446,8 @@ public:
     VehicleHandle vehicle_create(const JoltVehicleConfig& config, Vec3 spawn);
     void vehicle_destroy(VehicleHandle handle);
     JoltBodyState vehicle_chassis_state(VehicleHandle handle) const;
-    void vehicle_drive(VehicleHandle handle, float forward, float steer, float brake);
+    void vehicle_drive(VehicleHandle handle, float forward, float steer, float brake,
+                       float handbrake = 0.0f);
     /// Per-wheel state (position, contact, suspension, spin, steer), one entry
     /// per wheel in creation order: [FL, FR, RL, RR] for the default config.
     /// An invalid handle yields an empty vector.

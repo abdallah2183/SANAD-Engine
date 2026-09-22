@@ -30,10 +30,17 @@ namespace nf::destruction {
 /// One blast. `impulse` is the value at the centre; the amount actually
 /// delivered to a bond falls off linearly with the distance from the blast
 /// point to that bond's shared face, reaching zero at `radius`.
+///
+/// `inner_radius` models brisance: inside it a detonation delivers the *full*
+/// impulse regardless of how close to the centre the bond sits (a charge
+/// pulverises what it touches and merely stresses what surrounds it). The
+/// falloff is 1 out to `inner_radius`, then linear down to 0 at `radius`.
+/// `inner_radius == 0` is the plain single-radius blast.
 struct DamageEvent {
     Vec3 world_point{0.0f, 0.0f, 0.0f};
     f32  radius = 1.0f;
     f32  impulse = 0.0f;
+    f32  inner_radius = 0.0f;
 };
 
 /// The cost ceiling. Every field is data, so a difficulty setting or a console
@@ -97,12 +104,17 @@ private:
     struct LiveDebris {
         u32 sink_id = kInvalidDebris;
         f32 age = 0.0f;
+        f32 lifetime = 0.0f; // 0 = the budget's world-wide lifetime
     };
 
-    /// Linear falloff from 1 at the blast centre to 0 at the radius. Clamped at
-    /// both ends so a negative radius or a point beyond the blast cannot
-    /// deliver a negative or super-unity impulse.
-    static f32 damage_falloff(f32 distance, f32 radius);
+    /// Piecewise-linear falloff: 1 out to `inner_radius`, then linear to 0 at
+    /// `radius`. Clamped at both ends so a negative radius or a point beyond
+    /// the blast cannot deliver a negative or super-unity impulse.
+    static f32 damage_falloff(f32 distance, f32 inner_radius, f32 radius);
+
+    /// The deadline a shard retires at: its own lifetime when it has one, the
+    /// world budget's otherwise.
+    f32 shard_deadline(const LiveDebris& debris) const;
 
     void mark_subtree_detached(const FractureAsset& asset, u32 chunk_id,
                                DestructibleComponent& cmp) const;

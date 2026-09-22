@@ -1,6 +1,7 @@
 // NF/Platform/Windows/Window_Win.cpp — Win32 window implementation
 
 #include <NF/Platform/Window.hpp>
+#include <NF/Platform/InputSystem.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Assert.hpp>
 
@@ -199,6 +200,8 @@ void Window::poll_events() {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    // XInput after the pump: pad state lands in the same frame as key events.
+    InputSystem::instance().poll_gamepad();
 }
 
 void Window::swap_buffers() {

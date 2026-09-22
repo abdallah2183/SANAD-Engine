@@ -77,6 +77,9 @@ add_subdirectory(Engine/RHI)
 add_subdirectory(Engine/ECS)
 add_subdirectory(Engine/Scene)
 add_subdirectory(Engine/Rendering)
+# Water shares StaticMesh with the render path but is otherwise pure arithmetic,
+# so it follows Rendering in the link order and reaches no RHI type itself.
+add_subdirectory(Engine/Water)
 add_subdirectory(Engine/Assets)
 # Destruction must precede Physics: NFPhysics implements the destruction
 # IDebrisSink seam (JoltDebrisSink), so it links NFDestruction, and a module
@@ -91,6 +94,7 @@ add_subdirectory(Engine/Scripting)
 add_subdirectory(Engine/Networking)
 add_subdirectory(Engine/AI)
 add_subdirectory(Engine/VFX)
+add_subdirectory(Engine/Foliage)
 add_subdirectory(Engine/Scene2D)
 add_subdirectory(Engine/Runtime)
 

@@ -5,6 +5,7 @@
 #include <NF/Physics/PhysicsWorld.hpp>
 #include <NF/Test/TestFramework.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace nf;
@@ -19,8 +20,32 @@ BodyDesc static_plane() {
     return d;
 }
 
+BodyDesc static_box(Vec3 half, Vec3 pos) {
+    BodyDesc d;
+    d.type = BodyType::Static;
+    d.shape = Shape::make_box(half);
+    d.position = pos;
+    return d;
+}
+
 void step(JoltWorld& world, int n, float dt = 1.0f / 60.0f) {
     for (int i = 0; i < n; ++i) world.step(dt);
+}
+
+/// Full throttle, zero steer: returns the chassis state after `seconds` of
+/// driving. Shared by the straight-line stability tests so they cannot drift
+/// apart in their warm-up counts.
+JoltBodyState cruise_straight(JoltVehicle& car, JoltWorld& world, int steps) {
+    for (int i = 0; i < steps; ++i) {
+        car.drive(1.0f, 0.0f);
+        world.step(1.0f / 60.0f);
+    }
+    return car.chassis_state();
+}
+
+/// Chassis up-vector in world space: <0 means the car is upside down.
+Vec3 chassis_up(const JoltBodyState& st) {
+    return st.rotation.rotate(Vec3{0, 1, 0});
 }
 
 } // namespace
@@ -485,5 +510,162 @@ NF_TEST(jolt_vehicle_reset_and_clone_coexist_with_world) {
     }
     NF_CHECK(car.speed_ms() > 0.5f);
     NF_CHECK_NEAR((world.state(bd).position - world.state(bc).position).length(), 1.2f, 0.2f);
+}
+
+NF_TEST(jolt_vehicle_sustained_full_throttle_stays_straight_and_upright) {
+    // 30 s of full throttle, zero steer: the run must stay on +Z, near the
+    // X = 0 plane, and rubber-side down. This is the regression guard for the
+    // car "veering on its own" at top speed — a drift here is invisible in
+    // the short existing drive test but obvious in the demo.
+    JoltWorld world;
+    world.add_body(static_plane());
+    JoltVehicle car(world, JoltVehicleConfig{}, Vec3{0, 2, 0});
+    step(world, 120); // settle onto the wheels first
+    const JoltBodyState st = cruise_straight(car, world, 1800); // 30 s
+
+    NF_CHECK(st.position.z > 40.0f); // it covered ground
+    NF_CHECK(car.speed_ms() > 8.0f);
+    // Lateral drift stays a small fraction of the distance travelled.
+    NF_CHECK(std::fabs(st.position.x) < 0.05f * st.position.z);
+    const Vec3 fwd = st.rotation.rotate(Vec3{0, 0, 1});
+    NF_CHECK(fwd.z > 0.97f);
+    NF_CHECK(std::fabs(fwd.x) < 0.20f);
+    // Upright the whole way: an arcing roll shows up here long before the
+    // heading check catches it.
+    NF_CHECK(chassis_up(st).y > 0.90f);
+}
+
+NF_TEST(jolt_vehicle_crosses_a_curb_at_speed_without_rolling) {
+    // A low static curb across the path at full throttle: the suspension tune
+    // (travel + damping) has to absorb it without putting the car on its roof.
+    // The demo's obstacle field is the unscripted version of this.
+    JoltWorld world;
+    world.add_body(static_plane());
+    world.add_body(static_box(Vec3{3.0f, 0.12f, 0.5f}, Vec3{0, 0.12f, 8.0f}));
+    JoltVehicle car(world, JoltVehicleConfig{}, Vec3{0, 2, 0});
+    step(world, 120);
+    const JoltBodyState st = cruise_straight(car, world, 900); // 15 s, past the curb
+
+    NF_CHECK(st.position.z > 20.0f); // made it over and kept going
+    NF_CHECK(car.speed_ms() > 1.0f); // not stuck against the face
+    NF_CHECK(chassis_up(st).y > 0.70f); // still rubber-side down-ish
+}
+
+NF_TEST(jolt_vehicle_handbrake_slows_the_car_without_spinning_it) {
+    // Handbrake clamps only the rear pair at the hand-brake torque. It must
+    // shed speed without swapping the car's ends when the wheel is held
+    // straight — a 180 here reads as the handbrake being wired to all four
+    // wheels or to the front axle.
+    JoltWorld world;
+    world.add_body(static_plane());
+    JoltVehicle car(world, JoltVehicleConfig{}, Vec3{0, 2, 0});
+    step(world, 120);
+    const JoltBodyState fast = cruise_straight(car, world, 240);
+    NF_CHECK(fast.position.z > 5.0f);
+
+    for (int i = 0; i < 120; ++i) { // 2 s of handbrake, no steer, no throttle
+        car.drive(0.0f, 0.0f, 0.0f, 1.0f);
+        world.step(1.0f / 60.0f);
+    }
+    const JoltBodyState after = car.chassis_state();
+    NF_CHECK(car.speed_ms() < 20.0f); // it shed speed rather than accelerating
+    const Vec3 fwd = after.rotation.rotate(Vec3{0, 0, 1});
+    NF_CHECK(fwd.z > 0.70f); // still pointing the way it was going
+    NF_CHECK(chassis_up(after).y > 0.90f);
+}
+
+NF_TEST(jolt_vehicle_suspension_tune_sets_the_ride_height) {
+    // FrequencyAndDamping makes the spring k = m * omega^2 per wheel, so a
+    // softer car settles lower under the same chassis mass. This is the proof
+    // that the config's suspension fields reach Jolt at all — a wiring break
+    // (e.g. the spring being constructed from the wrong fields) leaves both
+    // configs at the identical default height.
+    auto rest_height = [](float hz) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltVehicleConfig cfg;
+        cfg.suspension_frequency_hz = hz;
+        JoltVehicle car(world, cfg, Vec3{0, 2, 0});
+        step(world, 240); // settle past the initial bounce
+        return car.chassis_state().position.y;
+    };
+    const float soft = rest_height(0.8f);
+    const float firm = rest_height(4.0f);
+    NF_CHECK(soft < firm);
+    NF_CHECK(soft > 0.2f); // the soft spring still holds the chassis off the floor
+    NF_CHECK(firm < 2.0f); // and the firm one is not rigid
+}
+
+NF_TEST(jolt_vehicle_tire_grip_tune_changes_cornering) {
+    // Guards the friction-curve wiring the same way the suspension test guards
+    // the spring: if the config never reached the tires, both runs come out
+    // bit-identical. Direction of the effect: scaling every tire's lateral
+    // grip down scales the *front* axle's ability to pull the chassis into the
+    // bend, so the slick car understeers — it corners less for the same input,
+    // not more. (Measured: peak 1.3 turns the heading 113 deg, peak 0.3 only
+    // 74 deg over the same 4 s of half-lock.)
+    auto turn_radians = [](float peak_grip) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltVehicleConfig cfg;
+        cfg.tire_peak_friction = peak_grip;
+        cfg.tire_limit_friction = peak_grip * 0.8f;
+        JoltVehicle car(world, cfg, Vec3{0, 2, 0});
+        step(world, 120);
+        for (int i = 0; i < 240; ++i) {
+            car.drive(1.0f, 0.5f);
+            world.step(1.0f / 60.0f);
+        }
+        const Vec3 fwd = car.chassis_state().rotation.rotate(Vec3{0, 0, 1});
+        // Rotation magnitude off +Z, in [0, pi]: both runs yaw the same way,
+        // so this is monotone in how far the corner carried them.
+        return std::acos(std::clamp(fwd.z, -1.0f, 1.0f));
+    };
+    const float grippy_turn = turn_radians(1.3f);
+    const float slick_turn = turn_radians(0.3f);
+    NF_CHECK(grippy_turn > 0.5f); // the grippy car actually corners
+    NF_CHECK(slick_turn < grippy_turn); // the slick one understeers
+}
+
+NF_TEST(jolt_vehicle_demo_tune_drives_straight_and_corner_upright) {
+    // The exact tune Samples/VehicleDemo ships: wider track, reduced steering
+    // lock, firmer damped suspension, tires just past 1.0 grip. This is the
+    // documented proof that the demo's car stays driveable — the demo itself
+    // needs a human at the keyboard, so the stability claim lives here.
+    JoltVehicleConfig cfg;
+    cfg.track_half_width = 1.0f;
+    cfg.max_steer_deg = 22.0f;
+    cfg.suspension_frequency_hz = 2.0f;
+    cfg.suspension_damping = 0.85f;
+    cfg.tire_peak_friction = 1.3f;
+    cfg.tire_limit_friction = 1.05f;
+
+    // Full throttle, no steer: straight and upright.
+    {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltVehicle car(world, cfg, Vec3{0, 2, 0});
+        step(world, 120);
+        const JoltBodyState st = cruise_straight(car, world, 900); // 15 s
+        NF_CHECK(st.position.z > 20.0f);
+        NF_CHECK(std::fabs(st.position.x) < 0.05f * st.position.z);
+        NF_CHECK(chassis_up(st).y > 0.90f);
+    }
+
+    // Full lock at full throttle: it turns and slides, but does not roll.
+    {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltVehicle car(world, cfg, Vec3{0, 2, 0});
+        step(world, 120);
+        for (int i = 0; i < 900; ++i) {
+            car.drive(1.0f, 1.0f);
+            world.step(1.0f / 60.0f);
+        }
+        const JoltBodyState st = car.chassis_state();
+        const Vec3 fwd = st.rotation.rotate(Vec3{0, 0, 1});
+        NF_CHECK(fwd.z < 0.90f); // the lock actually turned it
+        NF_CHECK(chassis_up(st).y > 0.55f); // rubber-side down through the slide
+    }
 }
 

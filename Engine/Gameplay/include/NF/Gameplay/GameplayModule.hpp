@@ -56,6 +56,13 @@ struct GameplayContext {
     f32                    dt            = 0.0f;
     u64                    frame         = 0;
     u32                    scene_version = 0;
+    /// True while the game is playing (vs. editing). Camera-owning modules
+    /// must only drive the view when playing: in edit mode the editor owns
+    /// the camera (viewport navigation writes the same Transform every
+    /// frame), and a module that also writes it snaps every drag straight
+    /// back, which reads as "the viewport is frozen". Mirrored from
+    /// Runtime::playing(), which the editor sets from its play state.
+    bool                   playing       = false;
 
     [[nodiscard]] bool has_world() const { return world != nullptr; }
 };

@@ -1,0 +1,18 @@
+# G8 performance contract — baseline for Tests/PerfTests/test_perf_scene.cpp
+#
+# Recorded by: bash Tests/PerfTests/perf_gate.sh --record
+# Machine tag: win11-x64-dev  (machine-dependent rows are enforced only on this tag)
+# Format: metric,machine,value,tolerance_pct
+# A row tagged 'any' is enforced on every machine; 'any' rows are the
+# deterministic counters and the scene-attributable memory delta.
+#
+# metric,machine,value,tolerance_pct
+draw_calls,any,3484,10
+extracted_objects,any,2050,10
+fixture_destructibles,any,24,10
+fixture_mesh_entities,any,2050,10
+frame_time_ms,win11-x64-dev,87.0389,10
+update_ms,win11-x64-dev,29.4457,10
+visible_objects,any,1742,10
+working_set_delta_mb,any,31.2148,10
+working_set_mb,win11-x64-dev,91.4883,10

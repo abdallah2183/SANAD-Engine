@@ -27,7 +27,11 @@
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -391,6 +395,21 @@ JoltBody JoltWorld::add_capsule_body(const BodyDesc& base, float radius, float h
                                   /*force_static=*/false);
 }
 
+JoltBody JoltWorld::add_cylinder_body(const BodyDesc& base, float radius, float half_height) {
+    JoltBody out;
+    if (!valid()) return out;
+    // `!(x > 0)` rather than `x <= 0`: a NaN radius or half_height is rejected
+    // here too. Jolt's CylinderShape only asserts non-negativity and never
+    // clamps the radius the way SphereShape does, so this is the only thing
+    // standing between a caller's -1 and a zero-volume collider.
+    if (!(radius > 0.0f) || !(half_height > 0.0f)) return out;
+    const JPH::CylinderShapeSettings settings(half_height, radius);
+    const JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError()) return out;
+    return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
+                                  /*force_static=*/false);
+}
+
 JoltBody JoltWorld::add_convex_hull_body(const BodyDesc& base,
                                          const std::vector<Vec3>& local_points) {
     JoltBody out;
@@ -450,6 +469,134 @@ JoltBody JoltWorld::add_mesh_body(const BodyDesc& base, const std::vector<Vec3>&
     // and neither is what a caller asking for a wall wants.
     return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
                                   /*force_static=*/true);
+}
+
+JoltBody JoltWorld::add_heightfield_body(const BodyDesc& base, const std::vector<float>& heights,
+                                         u32 sample_count, Vec3 offset, Vec3 scale) {
+    JoltBody out;
+    if (!valid()) return out;
+    // Validate up front for the same reason add_mesh_body does: Jolt's settings
+    // object indexes the sample buffer from its constructor, so a buffer that
+    // does not match the declared grid size is an out-of-bounds read over there
+    // rather than a reportable error here.
+    // `sample_count / block_size >= 2` with Jolt's default block size of 2, so
+    // 4 is the smallest field the builder accepts.
+    if (sample_count < 4) return out;
+    const usize expected = static_cast<usize>(sample_count) * static_cast<usize>(sample_count);
+    if (heights.size() != expected) return out;
+    for (const float h : heights) {
+        if (!std::isfinite(h)) return out;
+    }
+    // A zero X or Z scale collapses every row or column onto one line, leaving
+    // no surface to collide with. A zero Y scale is a flat field, which is a
+    // legal plane and is left alone.
+    if (scale.x == 0.0f || scale.z == 0.0f) return out;
+
+    JPH::HeightFieldShapeSettings settings(heights.data(), to_jph(offset), to_jph(scale),
+                                           sample_count);
+    const JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError()) return out; // e.g. every sample at the "no collision" sentinel
+
+    // Height fields may not move in Jolt (HeightFieldShape::MustBeStatic), same
+    // rule and same reasoning as the mesh collider above.
+    return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
+                                  /*force_static=*/true);
+}
+
+JoltWorld::CompoundShape JoltWorld::CompoundShape::make_sphere(float radius) {
+    CompoundShape out;
+    out.type = Type::Sphere;
+    out.radius = radius;
+    return out;
+}
+
+JoltWorld::CompoundShape JoltWorld::CompoundShape::make_box(const Vec3& half_extents) {
+    CompoundShape out;
+    out.type = Type::Box;
+    out.half_extents = half_extents;
+    return out;
+}
+
+JoltWorld::CompoundShape JoltWorld::CompoundShape::make_cylinder(float radius, float half_height) {
+    CompoundShape out;
+    out.type = Type::Cylinder;
+    out.radius = radius;
+    out.half_height = half_height;
+    return out;
+}
+
+JoltWorld::CompoundShape JoltWorld::CompoundShape::make_capsule(float radius, float half_height) {
+    CompoundShape out;
+    out.type = Type::Capsule;
+    out.radius = radius;
+    out.half_height = half_height;
+    return out;
+}
+
+JoltBody JoltWorld::add_compound_body(const BodyDesc& base, const std::vector<CompoundPart>& parts) {
+    JoltBody out;
+    if (!valid()) return out;
+    // Jolt requires at least 2 sub shapes: a single part is not a compound, and
+    // its builder returns an error rather than a RotatedTranslatedShape.
+    if (parts.size() < 2) return out;
+
+    JPH::StaticCompoundShapeSettings settings;
+    for (const CompoundPart& part : parts) {
+        // A degenerate part is rejected, not clamped: the first-party Shape
+        // factories clamp degenerate geometry so the solver can assume a
+        // positive radius, but a part reaches Jolt alone, and Jolt's cylinder
+        // and capsule builders pass a negative radius through unnormalised. The
+        // per-shape floors mirror the standalone entry points — see
+        // add_cylinder_body for why a zero-height cylinder is refused while a
+        // zero-height capsule is a sphere.
+        JPH::ShapeRefC sub;
+        switch (part.shape.type) {
+            case CompoundShape::Type::Sphere:
+                if (!(part.shape.radius > 0.0f)) return out;
+                sub = new JPH::SphereShape(part.shape.radius);
+                break;
+            case CompoundShape::Type::Box: {
+                const Vec3& h = part.shape.half_extents;
+                if (!(h.x > 0.0f) || !(h.y > 0.0f) || !(h.z > 0.0f)) return out;
+                sub = new JPH::BoxShape(JPH::Vec3(h.x, h.y, h.z));
+                break;
+            }
+            case CompoundShape::Type::Cylinder: {
+                if (!(part.shape.radius > 0.0f) || !(part.shape.half_height > 0.0f)) return out;
+                // A settings object is not a shape: it has to be cooked first,
+                // the same as the standalone add_cylinder_body entry point.
+                const JPH::CylinderShapeSettings cyl(part.shape.half_height, part.shape.radius);
+                const JPH::ShapeSettings::ShapeResult cooked = cyl.Create();
+                if (cooked.HasError()) return out;
+                sub = cooked.Get();
+                break;
+            }
+            case CompoundShape::Type::Capsule: {
+                if (!(part.shape.radius > 0.0f) || !(part.shape.half_height >= 0.0f)) return out;
+                const JPH::CapsuleShapeSettings cap(part.shape.half_height, part.shape.radius);
+                const JPH::ShapeSettings::ShapeResult cooked = cap.Create();
+                if (cooked.HasError()) return out;
+                sub = cooked.Get();
+                break;
+            }
+        }
+        // A shape type the switch does not build leaves `sub` unset; Jolt
+        // reports a null sub shape as a creation error, so the failure is still
+        // a clean invalid handle rather than a crash.
+        settings.AddShape(JPH::Vec3(part.position.x, part.position.y, part.position.z),
+                          JPH::Quat(part.orientation.x, part.orientation.y, part.orientation.z,
+                                    part.orientation.w),
+                          sub.GetPtr());
+    }
+
+    const JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError()) return out;
+
+    // No part forces this shape static (none of the four ever do), so a Dynamic
+    // request is honoured — this is the point of the compound, and the
+    // difference from the mesh and height field above.
+    return create_body_from_shape(m_impl->physics, result.Get(), base, /*sensor=*/false,
+                                  /*force_static=*/false);
 }
 
 void JoltWorld::remove_body(JoltBody handle) {
@@ -636,6 +783,47 @@ void JoltWorld::set_angular_velocity(JoltBody handle, const Vec3& velocity) {
         JPH::BodyID(handle.id), JPH::Vec3(velocity.x, velocity.y, velocity.z));
 }
 
+void JoltWorld::apply_impulse(JoltBody handle, const Vec3& impulse) {
+    if (!is_alive(handle)) return;
+    // BodyInterface::AddImpulse returns without a scratch for a static or
+    // kinematic body, so nothing here has to check the body type — a push on a
+    // body that cannot move is a no-op, and the caller is allowed not to know.
+    m_impl->physics.GetBodyInterface().AddImpulse(
+        JPH::BodyID(handle.id), JPH::Vec3(impulse.x, impulse.y, impulse.z));
+}
+
+void JoltWorld::apply_impulse_at_point(JoltBody handle, const Vec3& impulse,
+                                       const Vec3& world_point) {
+    if (!is_alive(handle)) return;
+    // The point is compared against the body's centre of mass, not its
+    // shape-local origin — Jolt's mPosition IS the COM (see state()). For a hull
+    // that is not centred on its own origin the two differ, and the torque arm
+    // is only physical about the COM.
+    m_impl->physics.GetBodyInterface().AddImpulse(
+        JPH::BodyID(handle.id), JPH::Vec3(impulse.x, impulse.y, impulse.z),
+        JPH::RVec3(world_point.x, world_point.y, world_point.z));
+}
+
+void JoltWorld::add_force(JoltBody handle, const Vec3& force) {
+    if (!is_alive(handle)) return;
+    m_impl->physics.GetBodyInterface().AddForce(
+        JPH::BodyID(handle.id), JPH::Vec3(force.x, force.y, force.z));
+}
+
+void JoltWorld::add_force_at_point(JoltBody handle, const Vec3& force,
+                                   const Vec3& world_point) {
+    if (!is_alive(handle)) return;
+    m_impl->physics.GetBodyInterface().AddForce(
+        JPH::BodyID(handle.id), JPH::Vec3(force.x, force.y, force.z),
+        JPH::RVec3(world_point.x, world_point.y, world_point.z));
+}
+
+void JoltWorld::add_torque(JoltBody handle, const Vec3& torque) {
+    if (!is_alive(handle)) return;
+    m_impl->physics.GetBodyInterface().AddTorque(
+        JPH::BodyID(handle.id), JPH::Vec3(torque.x, torque.y, torque.z));
+}
+
 void JoltWorld::step(float dt) {
     if (!valid() || !(dt > 0.0f)) return;
     Impl& impl = *m_impl;
@@ -780,6 +968,33 @@ JoltWorld::VehicleHandle JoltWorld::vehicle_create(const JoltVehicleConfig& conf
             wheel->mRadius = config.wheel_radius;
             wheel->mWidth = config.wheel_width;
             wheel->mMaxSteerAngle = (axle == 0) ? config.max_steer_deg * 0.0174533f : 0.0f;
+            // Suspension travel + spring. FrequencyAndDamping keeps the tune
+            // mass-independent, so the same Hz works for a 1500 kg car and a
+            // 300 kg kart without re-deriving k = m * omega^2.
+            wheel->mSuspensionMinLength = std::max(0.0f, config.suspension_min_length);
+            wheel->mSuspensionMaxLength = std::max(wheel->mSuspensionMinLength,
+                                                   config.suspension_max_length);
+            wheel->mSuspensionSpring = JPH::SpringSettings(
+                JPH::ESpringMode::FrequencyAndDamping,
+                std::max(0.01f, config.suspension_frequency_hz),
+                std::max(0.0f, config.suspension_damping));
+            wheel->mInertia = std::max(0.01f, config.wheel_inertia);
+            wheel->mAngularDamping = std::max(0.0f, config.angular_damping);
+            wheel->mMaxBrakeTorque = std::max(0.0f, config.max_brake_torque);
+            wheel->mMaxHandBrakeTorque = std::max(0.0f, config.max_handbrake_torque);
+            // Friction curves: Jolt's default shape (0 -> peak -> limit) with
+            // the peak/limit scaled by the config. Clamped to a positive floor
+            // so a mis-tuned config cannot make the wheels frictionless.
+            const float peak = std::max(0.05f, config.tire_peak_friction);
+            const float limit = std::max(0.05f, config.tire_limit_friction);
+            wheel->mLongitudinalFriction.Clear();
+            wheel->mLongitudinalFriction.AddPoint(0.0f, 0.0f);
+            wheel->mLongitudinalFriction.AddPoint(0.06f, peak);
+            wheel->mLongitudinalFriction.AddPoint(0.2f, limit);
+            wheel->mLateralFriction.Clear();
+            wheel->mLateralFriction.AddPoint(0.0f, 0.0f);
+            wheel->mLateralFriction.AddPoint(3.0f, peak);
+            wheel->mLateralFriction.AddPoint(20.0f, limit);
             settings.mWheels.push_back(wheel);
         }
     }
@@ -829,7 +1044,8 @@ JoltBodyState JoltWorld::vehicle_chassis_state(VehicleHandle handle) const {
     return state(handle.chassis);
 }
 
-void JoltWorld::vehicle_drive(VehicleHandle handle, float forward, float steer, float brake) {
+void JoltWorld::vehicle_drive(VehicleHandle handle, float forward, float steer, float brake,
+                              float handbrake) {
     if (!valid() || handle.constraint_id == 0) return;
     Impl& impl = *m_impl;
     auto it = impl.constraints.find(handle.constraint_id);
@@ -842,7 +1058,8 @@ void JoltWorld::vehicle_drive(VehicleHandle handle, float forward, float steer, 
     // car sleeps after ~2s (AllowSleep). SetDriverInput alone never wakes it.
     impl.physics.GetBodyInterface().ActivateBody(JPH::BodyID(handle.chassis.id));
     controller->SetDriverInput(std::clamp(forward, -1.0f, 1.0f), std::clamp(steer, -1.0f, 1.0f),
-                               std::clamp(brake, 0.0f, 1.0f), 0.0f);
+                               std::clamp(brake, 0.0f, 1.0f),
+                               std::clamp(handbrake, 0.0f, 1.0f));
 }
 
 std::vector<JoltWheelState> JoltWorld::vehicle_wheel_states(VehicleHandle handle) const {

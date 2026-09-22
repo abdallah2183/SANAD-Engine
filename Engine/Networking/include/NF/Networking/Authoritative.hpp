@@ -88,6 +88,9 @@ public:
     const Snapshot& last_snapshot() const { return m_last_snapshot; }
     u32 tick_index() const { return m_tick; }
     NetWorld& world() { return m_world; }
+    // Const overload: a read-only host (a dedicated server reporting state, or
+    // a test asserting on it) must not be forced to drop const to look.
+    const NetWorld& world() const { return m_world; }
 
 private:
     NetWorld m_world;

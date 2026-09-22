@@ -39,6 +39,10 @@ struct DebrisSpawn {
     Vec3  linear_velocity{0.0f, 0.0f, 0.0f};
     Vec3  angular_velocity{0.0f, 0.0f, 0.0f};
     f32   mass = 1.0f;
+    /// Seconds this shard may live. 0 means "use the world's budget lifetime";
+    /// a positive value retires this shard on its own clock, so dust can fade
+    /// while boulders linger in the same pile.
+    f32   lifetime = 0.0f;
     std::vector<Vec3> hull_points;
 };
 

@@ -11,6 +11,7 @@ nf_engine_library(NFDestruction
         src/FractureMath.cpp
         src/FractureAsset.cpp
         src/FractureBuilder.cpp
+        src/FractureMaterial.cpp
         src/DestructionWorld.cpp
     DEPENDS
         NFCore

@@ -284,6 +284,37 @@ std::string SetTransformCommand::label() const {
     return "Edit transform";
 }
 
+// --- SetTransformsCommand ---------------------------------------------------
+
+SetTransformsCommand::SetTransformsCommand(std::vector<Entry> entries, std::string verb)
+    : m_entries(std::move(entries)), m_label(std::move(verb)) {
+    // "Move 3 entities" for a group, "Move entity" for one — the undo menu
+    // reads this, so a lone selection must not read like a batch.
+    if (m_entries.size() == 1) {
+        m_label += " entity";
+    } else {
+        m_label += " " + std::to_string(m_entries.size()) + " entities";
+    }
+}
+
+void SetTransformsCommand::apply(ecs::World& world) {
+    for (const Entry& en : m_entries) {
+        if (!en.entity.valid() || !world.is_alive(en.entity)) {
+            continue;
+        }
+        SetTransformCommand::write_pos_rot_scale(world, en.entity, en.after);
+    }
+}
+
+void SetTransformsCommand::undo(ecs::World& world) {
+    for (const Entry& en : m_entries) {
+        if (!en.entity.valid() || !world.is_alive(en.entity)) {
+            continue;
+        }
+        SetTransformCommand::write_pos_rot_scale(world, en.entity, en.before);
+    }
+}
+
 // --- ReparentCommand --------------------------------------------------------
 
 ReparentCommand::ReparentCommand(ecs::Entity e, ecs::Entity old_parent, ecs::Entity new_parent)
@@ -341,15 +372,26 @@ CreateMeshEntityCommand::CreateMeshEntityCommand(std::string name, ecs::Entity p
                                                  const runtime::MeshComponent& mesh)
     : m_name(std::move(name)), m_parent(parent), m_mesh(mesh) {}
 
+CreateMeshEntityCommand::CreateMeshEntityCommand(std::string name, ecs::Entity parent,
+                                                 const runtime::MeshComponent& mesh,
+                                                 const scene::Transform& seed)
+    : m_name(std::move(name)), m_parent(parent), m_mesh(mesh), m_has_seed(true), m_seed(seed) {}
+
 void CreateMeshEntityCommand::apply(ecs::World& world) {
     ecs::Entity e = world.create_entity();
-    world.add<scene::Transform>(e, scene::Transform{});
+    world.add<scene::Transform>(e, m_has_seed ? m_seed : scene::Transform{});
     if (!m_name.empty()) {
         world.add<scene::NameComponent>(e, scene::NameComponent{m_name});
     }
     world.add<runtime::MeshComponent>(e, m_mesh);
     if (m_parent.valid() && world.is_alive(m_parent)) {
         scene::set_parent(world, e, m_parent);
+    }
+    // The seed is the entity's world placement; a reparent must not silently
+    // keep the child's old world position (PropagateFlags), so mark it dirty the
+    // same way an inspector edit does.
+    if (auto* t = world.get<scene::Transform>(e)) {
+        t->dirty = true;
     }
     m_created = e;
 }

@@ -9,6 +9,9 @@
 #include <NF/Editor/AssetBrowser.hpp>
 #include <NF/Editor/Console.hpp>
 #include <NF/Editor/EditorApp.hpp>
+#include <NF/Editor/ProfilerSession.hpp>
+#include <NF/Editor/ProjectLauncher.hpp>
+#include <NF/Editor/TexturePreviewCache.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Editor/UiShell.hpp>
 #include <NF/Jobs/JobSystem.hpp>
@@ -20,6 +23,7 @@
 #include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Math.hpp>
+#include <NF/Core/Profiler.hpp>
 #include <NF/Core/Time.hpp>
 
 #include <cmath>
@@ -33,6 +37,7 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
+#include <NF/Scene/Transform.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/UI/Localization.hpp>
 
@@ -167,6 +172,142 @@ nf::editor::ViewCamera view_camera_from_scene(const nf::scene::Scene* scene, flo
     return cam;
 }
 
+// A world point projected into the NDC the viewport gesture path consumes.
+// The pointer convention is y-UP: Panels.cpp maps the top of the panel to
+// ndc_y = +1, and pick_ray / viewport_ndc_to_pixel agree with that. But
+// Mat4::perspective negates Y for Vulkan (view-up lands at NDC y < 0), so the
+// raw projection hands viewport_press a vertically mirrored click — off-centre
+// picks read the wrong framebuffer row and the CPU ray points the wrong way,
+// while a centre click still hits, which is exactly why the error hides.
+// Negating the projected y is the whole correction; x is unaffected.
+nf::Vec3 world_to_pointer_ndc(const nf::editor::ViewCamera& vc, const nf::Vec3& world) {
+    const nf::Mat4 view = nf::Mat4::look_at(nf::Vec3{vc.px, vc.py, vc.pz},
+                                            nf::Vec3{vc.tx, vc.ty, vc.tz},
+                                            nf::Vec3{0.0f, 1.0f, 0.0f});
+    const nf::Mat4 proj = nf::Mat4::perspective(vc.fov_y_deg * 3.14159265359f / 180.0f,
+                                                vc.aspect, vc.near_plane, vc.far_plane);
+    const nf::Vec3 ndc = (view * proj).transform_point(world);
+    return nf::Vec3{ndc.x, -ndc.y, ndc.z};
+}
+
+// --- Editor viewport navigation (orbit around the scene origin) --------------
+// The Runtime renders through the scene's active camera and always looks at
+// the origin (extract_camera), and pick/gizmo rays use the same eye->origin
+// basis — so navigation moves that camera entity, and render, picking and
+// gizmos follow together with no second camera state to desync. Spherical
+// state is re-derived from the entity every frame, so gizmo drags of the
+// camera object (or scene loads) are absorbed instead of snapped back.
+// Navigation writes the Transform directly: no undo entry, no dirty flag —
+// flying the view is not a scene edit (the position itself does persist on
+// save, like any camera placement).
+// Controls: right-drag orbits, wheel zooms, right-hold + WASD/QE flies
+// (WASD stays gizmo shortcuts when right is not held).
+void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::UiIntents& in,
+                               float dt, bool fast) {
+    nf::scene::Scene* scene = runtime.edit_scene();
+    if (scene == nullptr) {
+        return;
+    }
+    nf::ecs::World& world = scene->world();
+    nf::ecs::Entity cam_e = nf::ecs::kInvalidEntity;
+    for (auto e : world.query<nf::runtime::CameraComponent>()) {
+        const auto* c = world.get<nf::runtime::CameraComponent>(e);
+        if (c != nullptr && c->is_active) {
+            cam_e = e;
+            break;
+        }
+    }
+    if (!cam_e.valid()) {
+        // No camera in the scene (empty Example default): create the view
+        // instead of leaving navigation dead on a null handle.
+        cam_e = world.create_entity();
+        nf::scene::Transform t;
+        t.local_x = 0.0f;
+        t.local_y = 2.0f;
+        t.local_z = 5.0f;
+        world.add<nf::scene::Transform>(cam_e, t);
+        nf::runtime::CameraComponent c;
+        c.is_active = true;
+        world.add<nf::runtime::CameraComponent>(cam_e, c);
+    }
+    auto* tr = world.get<nf::scene::Transform>(cam_e);
+    if (tr == nullptr) {
+        return;
+    }
+    constexpr float kDeg = 3.14159265359f / 180.0f;
+    // Eye -> spherical around the origin (the look-at point, by engine contract).
+    float dx = tr->world_x, dy = tr->world_y, dz = tr->world_z;
+    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(dist > 1e-3f)) {
+        dx = 0.0f;
+        dy = 2.0f;
+        dz = 5.0f;
+        dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    float yaw_deg = std::atan2(dx, dz) / kDeg;
+    float pitch_deg = std::asin(dy / dist) / kDeg;
+
+    bool moved = false;
+    if (in.nav_orbit && (in.nav_dx != 0.0f || in.nav_dy != 0.0f)) {
+        // Drag right turns the view right (eye swings left, yaw falls);
+        // drag down looks down (eye rises, pitch grows). Matches the
+        // right = +X basis of camera_basis at yaw 0 facing -Z.
+        yaw_deg -= in.nav_dx * 0.25f;
+        pitch_deg += in.nav_dy * 0.25f;
+        moved = true;
+    }
+    if (in.nav_wheel != 0.0f) {
+        dist *= std::exp(-in.nav_wheel * 0.15f);
+        moved = true;
+    }
+    const float speed = (fast ? 3.0f : 1.0f) * (dist > 2.0f ? dist : 2.0f);
+    if (dt > 0.0f) {
+        if (in.nav_f) {
+            dist -= speed * dt;
+            moved = true;
+        }
+        if (in.nav_b) {
+            dist += speed * dt;
+            moved = true;
+        }
+        if (in.nav_l) {
+            yaw_deg -= 70.0f * dt;
+            moved = true;
+        }
+        if (in.nav_r) {
+            yaw_deg += 70.0f * dt;
+            moved = true;
+        }
+        if (in.nav_u) {
+            pitch_deg += 50.0f * dt;
+            moved = true;
+        }
+        if (in.nav_d) {
+            pitch_deg -= 50.0f * dt;
+            moved = true;
+        }
+    }
+    if (!moved) {
+        return;
+    }
+    if (pitch_deg > 85.0f) {
+        pitch_deg = 85.0f;
+    } else if (pitch_deg < -85.0f) {
+        pitch_deg = -85.0f;
+    }
+    if (dist < 0.4f) {
+        dist = 0.4f;
+    } else if (dist > 300.0f) {
+        dist = 300.0f;
+    }
+    const float cp = std::cos(pitch_deg * kDeg);
+    tr->local_x = dist * cp * std::sin(yaw_deg * kDeg);
+    tr->local_y = dist * std::sin(pitch_deg * kDeg);
+    tr->local_z = dist * cp * std::cos(yaw_deg * kDeg);
+    tr->dirty = true;
+    nf::scene::propagate_transforms(world);
+}
+
 // Resolves the ImGui overlay shader directory (compiled define first,
 // then well-known build/source locations).
 std::filesystem::path resolve_imgui_shader_dir() {
@@ -262,15 +403,49 @@ int main(int argc, char** argv) {
     std::string active_project_path;
     std::string active_project_name;
     std::string resolved_scene = cfg.scene_path;
-    if (!cfg.project_path.empty()) {
+    // E2: a cold start with no --project opens the project launcher first.
+    //
+    // It runs HERE, before any mount, because the project decides the mounts and
+    // the mounts must exist before the Runtime — while the editor's own UI (ImGui)
+    // does not exist until ~90 lines after the Runtime. So the launcher has to be
+    // its own native window; see NF/Editor/ProjectLauncher.hpp. Its only output is
+    // a .nfproj path, and from there this is the ordinary --project path.
+    //
+    // Gated off for headless and for the automation harness (--frames), so CI and
+    // every existing --project invocation are untouched.
+    std::string project_path = cfg.project_path;
+    bool launcher_arabic = false; // set by the shell Settings page (see below)
+    if (project_path.empty() && !cfg.headless && cfg.max_frames == 0) {
+        std::vector<std::string> recent = nf::editor::load_recent_projects();
+        const nf::editor::LauncherResult picked = nf::editor::run_project_launcher(recent);
+        if (picked.project_path.empty()) {
+            // Closing the launcher is a normal way to quit, not an error: exit 0
+            // rather than booting an editor on engine-tree mounts the user did
+            // not ask for.
+            NF_LOG_INFO(nf::LogCategory::Editor, "No project chosen — exiting.");
+            nf::JobSystem::instance().shutdown();
+            nf::platform_shutdown();
+            return 0;
+        }
+        project_path = picked.project_path;
+        nf::editor::remember_project(recent, project_path);
+        nf::editor::save_recent_projects(recent);
+        NF_LOG_INFO(nf::LogCategory::Editor, "Project chosen: {}", project_path);
+        // Shell Settings page: start the editor localised exactly like --arabic
+        // (cfg itself is const, so this rides alongside it).
+        if (picked.arabic) {
+            launcher_arabic = true;
+        }
+    }
+    if (!project_path.empty()) {
         // A project declares its own mounts, so the engine-tree walk-up is not
         // consulted at all. Without this the editor could only ever open the
         // repository it was built in.
         std::string perr;
-        auto desc = nf::assets::ProjectDescriptor::load_from_file(cfg.project_path, perr);
+        auto desc = nf::assets::ProjectDescriptor::load_from_file(project_path, perr);
         if (!desc) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to load project '{}': {}",
-                         cfg.project_path, perr);
+                         project_path, perr);
             nf::JobSystem::instance().shutdown();
             nf::platform_shutdown();
             return 1;
@@ -282,7 +457,7 @@ int main(int argc, char** argv) {
             nf::platform_shutdown();
             return 1;
         }
-        active_project_path = cfg.project_path;
+        active_project_path = project_path;
         active_project_name = desc->name();
         NF_LOG_INFO(nf::LogCategory::Editor, "Project '{}' — {} mounts", desc->name(),
                     desc->mounts().size());
@@ -384,11 +559,50 @@ int main(int argc, char** argv) {
             NF_LOG_INFO(nf::LogCategory::Editor, "Editor opened in project '{}'", app.project_name());
         }
 
+        // P4 profiler figures. gpu_us is per-frame submit->fence; gpu_avg is a
+        // decaying average so one stall does not pin the panel's number. The
+        // renderer's own CPU timings ride along so the panel can show the
+        // CPU/GPU split without a second clock. scene_open_us is set at the
+        // load below (and again on any later open) because that is the dominant
+        // load cost in v0.1.
+        uint64_t gpu_us = 0;
+        double gpu_avg_us = 0.0;
+        double cull_us = 0.0;
+        double draw_prep_us = 0.0;
+        uint32_t draw_calls = 0;
+        uint32_t visible_objects = 0;
+        uint64_t scene_open_us = 0;
+
         std::string err;
+        // Timed for the Profiler panel's "last load" row: scene open is the
+        // dominant load cost in v0.1 (parse + mesh upload), and the panel's
+        // number should be a real measurement, not a placeholder.
+        const auto open_start = std::chrono::steady_clock::now();
         if (!app.open_scene(resolved_scene, err)) {
-            NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to open scene '{}': {}", resolved_scene, err);
-            return 1;
+            // A missing startup scene must not kill the editor: scaffold
+            // mistakes, a deleted Main.nfscene, and a bare project all land
+            // here. Fall back to a default scene and write it at the expected
+            // path so the next launch opens cleanly.
+            NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to open scene '{}': {}", resolved_scene,
+                         err);
+            std::string nerr;
+            if (!app.new_scene(nerr)) {
+                NF_LOG_ERROR(nf::LogCategory::Editor, "Fallback new scene failed: {}", nerr);
+                return 1;
+            }
+            if (app.save_as(resolved_scene, nerr)) {
+                NF_LOG_WARN(nf::LogCategory::Editor, "Created default scene at {}", resolved_scene);
+            } else {
+                NF_LOG_WARN(nf::LogCategory::Editor,
+                            "Using an unsaved default scene (could not write {}): {}",
+                            resolved_scene, nerr);
+            }
         }
+        scene_open_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                 std::chrono::steady_clock::now() - open_start)
+                                                 .count());
+        NF_LOG_INFO(nf::LogCategory::Editor, "Scene opened in {:.1f} ms",
+                    static_cast<double>(scene_open_us) / 1000.0);
         {
             const auto rows = app.outliner_rows();
             std::string labels;
@@ -419,8 +633,11 @@ int main(int argc, char** argv) {
         // ImGui context + docking + Win32 backend (windowed mode only).
         nf::editor::UiInitResult ui;
         nf::editor::UiRenderer ui_renderer;
+        nf::editor::TexturePreviewCache previews;
         if (!cfg.headless) {
-            if (cfg.arabic_ui) {
+            // Saved choice wins too: a restart without --arabic still opens in
+            // Arabic when the shell (or the editor toggle) persisted it.
+            if (cfg.arabic_ui || launcher_arabic || nf::editor::load_settings().arabic) {
                 nf::ui::set_language(nf::ui::Language::Arabic);
             }
             ui = nf::editor::ui_init(window.native_handle());
@@ -439,6 +656,19 @@ int main(int argc, char** argv) {
             NF_LOG_INFO(nf::LogCategory::Editor, "UiRenderer ready (shader dir '{}')",
                         ui_shaders.string());
         }
+        // The thumbnail cache is shell-owned for the same reason UiRenderer
+        // is: it uploads, and EditorApp must not. Unlike the ImGui shell it
+        // needs only the RHI device, so headless mode wires it too — the
+        // automation's P3 proof exercises the import -> preview path, and a
+        // skip is not a pass. Panels reach it through the hook and get 0
+        // (placeholder) when a path has no preview.
+        if (!previews.init(*device)) {
+            NF_LOG_WARN(nf::LogCategory::Editor,
+                        "TexturePreviewCache init failed — panels show placeholders");
+        }
+        app.preview_texture = [&previews, &vfs](const std::string& path) -> uintptr_t {
+            return previews.acquire(vfs, path);
+        };
 
         // Viewport offscreen target (never the swapchain directly).
         nf::editor::ViewportState vp_state{1280, 720};
@@ -512,13 +742,18 @@ int main(int argc, char** argv) {
         uint32_t viewport_blue = 0;
         uint32_t lit_single_cube = 0;
         bool force_measure = false;
+        // The material-undo proof snapshots the live params BEFORE the red
+        // edit: undo must restore whatever the command captured, not a
+        // hardcoded "gray" — the shipped Default.nfmat is authored red
+        // (1,0,0,1), so a hardcoded expectation fails on correct behaviour.
+        nf::rendering::PBRMaterialParams mat_pre_edit{};
+        bool mat_pre_edit_ok = false;
         // Highest draw_calls / visible-object count seen on any viewport frame.
         // The acceptance used to pass while the scene rendered nothing at all —
         // exit 0, zero validation errors, zero leaks, zero geometry — so the
         // "did it actually draw?" question needs an explicit answer.
         uint32_t max_draw_calls = 0;
         uint32_t max_visible = 0;
-
         const bool automation = (cfg.max_frames != 0);
         bool auto_failed = false;
         // `detail` is reported only on failure, so the OK line keeps its
@@ -616,7 +851,19 @@ int main(int argc, char** argv) {
             // file stats — microseconds — and it closes the blind window
             // between watching a fresh import and the next poll; scenes are
             // never watched).
-            app.poll_hot_reload();
+            if (const size_t reloaded = app.poll_hot_reload()) {
+                // A reloaded texture source must drop its stale thumbnail too,
+                // or the browser keeps showing the old image after the scene
+                // already samples the new one.
+                if (previews.valid()) {
+                    for (const nf::editor::ReloadResult& r : app.hot_reload().last_results()) {
+                        if (r.ok && r.kind == "texture") {
+                            previews.invalidate(r.path);
+                        }
+                    }
+                }
+                NF_LOG_INFO(nf::LogCategory::Editor, "Hot reload: {} file(s) changed", reloaded);
+            }
 
             // Import queue: one job per frame (see ImportQueue: synchronous,
             // deterministic, no worker threads in v0.1).
@@ -662,7 +909,16 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (key_edge(VK_DELETE) && app.selection().has_selection()) {
-                    app.request_delete(app.selection().primary());
+                    // Immediate, undoable delete (A4). This used to only ARM a
+                    // pending delete that then waited on an inline Confirm
+                    // button tucked under the outliner toolbar — easy to miss
+                    // entirely, so the lead's report was "added a mesh, cannot
+                    // delete it". Ctrl+Z is the safety net instead, which is the
+                    // gesture users already reach for.
+                    std::string e;
+                    if (!app.delete_entity(app.selection().primary(), e)) {
+                        NF_LOG_WARN(nf::LogCategory::Editor, "Delete: {}", e);
+                    }
                 }
                 if (key_edge(VK_ESCAPE) && app.viewport_dragging()) {
                     std::string e;
@@ -670,6 +926,10 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Gameplay modules observe the editor's mode through the context:
+            // while editing, camera-owning modules (OrbitCamera) must not
+            // overwrite the viewport navigation's camera writes each step.
+            runtime.set_playing(app.playing());
             runtime.update(dt);
 
             // Viewport: offscreen Runtime render (never swapchain-direct).
@@ -691,7 +951,26 @@ int main(int argc, char** argv) {
             }
             cmd_view->reset();
             cmd_view->begin();
-            runtime.render_offscreen(*vp_res.target, *cmd_view);
+            // Periodic readback proof that the viewport holds a real scene
+            // (plus on-demand automation measures via force_measure). Decided
+            // before recording so the copy lands in the same command buffer.
+            const bool measure = (frame_count == 10) || (automation && frame_count % 30 == 0) ||
+                                 force_measure;
+            force_measure = false;
+            // Editor-side zone so an exported trace shows the editor's own work
+            // alongside the engine's Runtime::render zone, not only that zone.
+            // Scoped to the recording itself: the submit->fence wait below is
+            // GPU time and is reported separately as gpu_us.
+            {
+                NF_PROFILE_SCOPE("Editor::record_viewport");
+                runtime.render_offscreen(*vp_res.target, *cmd_view);
+                if (measure && readback &&
+                    readback->size() >= static_cast<nf::usize>(vp_state.width) * vp_state.height * 4) {
+                    cmd_view->copy_texture_to_buffer(*vp_res.target, *readback, 0, 0, vp_state.width,
+                                                     vp_state.height, 0);
+                }
+            }
+            cmd_view->end();
             // Record the strongest viewport frame. Sampled every frame (not only
             // on the readback cadence) so the end-of-run check answers "did this
             // session ever draw geometry" rather than "what did the last
@@ -700,24 +979,33 @@ int main(int argc, char** argv) {
                 const auto& st = rend->last_stats();
                 if (st.draw_calls > max_draw_calls) max_draw_calls = st.draw_calls;
                 if (st.visible > max_visible) max_visible = st.visible;
+                // Mirror the renderer's own CPU timings for the profiler panel.
+                cull_us = st.cull_us;
+                draw_prep_us = st.draw_prep_us;
+                draw_calls = st.draw_calls;
+                visible_objects = st.visible;
             }
-            // Periodic readback proof that the viewport holds a real scene
-            // (plus on-demand automation measures via force_measure).
-            const bool measure = (frame_count == 10) || (automation && frame_count % 30 == 0) ||
-                                 force_measure;
-            force_measure = false;
-            if (measure && readback &&
-                readback->size() >= static_cast<nf::usize>(vp_state.width) * vp_state.height * 4) {
-                cmd_view->copy_texture_to_buffer(*vp_res.target, *readback, 0, 0, vp_state.width,
-                                                 vp_state.height, 0);
-            }
-            cmd_view->end();
             {
                 nf::rhi::SubmitInfo si{};
                 si.signal_fence = frame_fence.get();
                 frame_fence->reset();
+                // Time the GPU work, not the recording: this spans submit to
+                // the fence signalling, so it measures what the GPU actually
+                // did for this viewport frame. The RHI has no timestamp
+                // queries in v0.1, which makes the fence the only honest
+                // instrument available.
+                const auto gpu_start = std::chrono::steady_clock::now();
                 device->submit(*cmd_view, si);
                 frame_fence->wait();
+                const auto gpu_end = std::chrono::steady_clock::now();
+                gpu_us = static_cast<uint64_t>(std::chrono::duration_cast<
+                                                  std::chrono::microseconds>(gpu_end - gpu_start)
+                                                  .count());
+                // Exponential moving average: converges on the typical frame
+                // instead of following spikes, which is what a profiler row
+                // should read.
+                gpu_avg_us = (gpu_avg_us == 0.0) ? static_cast<double>(gpu_us)
+                                                 : gpu_avg_us * 0.9 + static_cast<double>(gpu_us) * 0.1;
             }
             if (measure && readback) {
                 if (const auto* px = static_cast<const uint8_t*>(readback->map())) {
@@ -762,10 +1050,29 @@ int main(int argc, char** argv) {
                 fst.alive_objects = device->alive_objects();
                 fst.viewport_lit = viewport_lit;
                 fst.dt_seconds = (dt > 0.0f) ? dt : (1.0f / 60.0f);
+                fst.gpu_us = gpu_us;
+                fst.gpu_avg_us = static_cast<uint64_t>(gpu_avg_us);
+                fst.cull_us = cull_us;
+                fst.draw_prep_us = draw_prep_us;
+                fst.draw_calls = draw_calls;
+                fst.visible_objects = visible_objects;
+                fst.scene_open_us = scene_open_us;
+                fst.assets_cached = app.asset_manager().cached_count();
                 ui_in = nf::editor::ui_frame(app, fst);
                 have_ui_intents = true;
                 nf::editor::ui_end_frame();
                 ui_draw = ImGui::GetDrawData();
+                // Hand the shell's preview views to the renderer after the panels
+                // have requested them this frame. Draining (not clearing) keeps
+                // entries alive; only ids the draw data references get a set.
+                std::vector<nf::editor::UiRenderer::TextureBinding> preview_bindings;
+                if (previews.valid()) {
+                    for (const auto& b : previews.drain_used()) {
+                        preview_bindings.push_back({b.id, b.view, b.sampler});
+                    }
+                }
+                ui_renderer.set_content_textures(preview_bindings.data(),
+                                                 preview_bindings.size());
             }
 
             // Present the windowed scene render (same scene, swapchain path),
@@ -967,7 +1274,13 @@ int main(int argc, char** argv) {
 
                 if (ui_in.open_scene_dialog_confirm && !ui_in.open_scene_path.empty()) {
                     std::string e;
-                    if (!app.open_scene(ui_in.open_scene_path, e)) {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    const bool opened = app.open_scene(ui_in.open_scene_path, e);
+                    scene_open_us = static_cast<uint64_t>(std::chrono::duration_cast<
+                                                          std::chrono::microseconds>(
+                                                          std::chrono::steady_clock::now() - t0)
+                                                          .count());
+                    if (!opened) {
                         NF_LOG_ERROR(nf::LogCategory::Editor, "Open scene failed: {}", e);
                     }
                 }
@@ -989,6 +1302,10 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                // Viewport navigation runs before press/drag so this frame's
+                // gestures already see the moved camera (pick, gizmo and the
+                // next render all read the same camera entity).
+                apply_viewport_navigation(runtime, ui_in, dt, key_down(VK_SHIFT));
                 if (ui_in.viewport_press || ui_in.viewport_drag) {
                     const float aspect = (vp_state.height != 0)
                                               ? (static_cast<float>(vp_state.width) /
@@ -998,7 +1315,8 @@ int main(int argc, char** argv) {
                         view_camera_from_scene(runtime.scene(), aspect);
                     if (ui_in.viewport_press) {
                         std::string e;
-                        if (!app.viewport_press(ui_in.press_ndc_x, ui_in.press_ndc_y, vc, e)) {
+                        if (!app.viewport_press(ui_in.press_ndc_x, ui_in.press_ndc_y, vc,
+                                                ui_in.viewport_press_additive, e)) {
                             NF_LOG_WARN(nf::LogCategory::Editor, "Viewport press: {}", e);
                         }
                     }
@@ -1030,6 +1348,11 @@ int main(int argc, char** argv) {
             if (automation) {
                 const uint32_t f = frame_count;
                 static float automation_drag_start_x = 0.0f;
+                // P2 automation: the dragged group and its start local_x,
+                // snapshotted at press time (see the f==118 block for why the
+                // selection cannot be re-read at release).
+                static std::vector<nf::ecs::Entity> p2_ents;
+                static std::vector<float> p2_starts;
                 if (f == 2) {
                     auto hit = find_first_mesh(app.world());
                     auto_check(hit.has_value(), "Inspector target (mesh entity)");
@@ -1082,16 +1405,10 @@ int main(int argc, char** argv) {
                                                   : 16.0f / 9.0f;
                         const nf::editor::ViewCamera vc =
                             view_camera_from_scene(runtime.scene(), aspect);
-                        const nf::Mat4 view = nf::Mat4::look_at(
-                            nf::Vec3{vc.px, vc.py, vc.pz}, nf::Vec3{vc.tx, vc.ty, vc.tz},
-                            nf::Vec3{0.0f, 1.0f, 0.0f});
-                        const nf::Mat4 proj = nf::Mat4::perspective(
-                            vc.fov_y_deg * 3.14159265359f / 180.0f, aspect, vc.near_plane,
-                            vc.far_plane);
-                        const nf::Vec3 ndc =
-                            (view * proj).transform_point(nf::Vec3{t->world_x, t->world_y, t->world_z});
+                        const nf::Vec3 ndc = world_to_pointer_ndc(
+                            vc, nf::Vec3{t->world_x, t->world_y, t->world_z});
                         automation_drag_start_x = t->local_x;
-                        ok = app.viewport_press(ndc.x, ndc.y, vc, e) &&
+                        ok = app.viewport_press(ndc.x, ndc.y, vc, false, e) &&
                              app.viewport_drag(ndc.x + 0.15f, ndc.y, vc, e) &&
                              app.viewport_dragging();
                     } else {
@@ -1168,6 +1485,8 @@ int main(int argc, char** argv) {
                     red.base_color[1] = 0.1f;
                     red.base_color[2] = 0.1f;
                     red.base_color[3] = 1.0f;
+                    runtime.material_params("content://Materials/Default", mat_pre_edit);
+                    mat_pre_edit_ok = true;
                     std::string e;
                     auto_check(app.set_material_params("content://Materials/Default", red, e),
                                "Material edit red");
@@ -1198,7 +1517,12 @@ int main(int argc, char** argv) {
                     auto_check(app.undo(e), "Material edit undo");
                     nf::rendering::PBRMaterialParams back{};
                     runtime.material_params("content://Materials/Default", back);
-                    auto_check(back.base_color[0] < 0.85f, "Material undo restores gray");
+                    const bool restored =
+                        mat_pre_edit_ok &&
+                        std::fabs(back.base_color[0] - mat_pre_edit.base_color[0]) < 0.02f &&
+                        std::fabs(back.base_color[1] - mat_pre_edit.base_color[1]) < 0.02f &&
+                        std::fabs(back.base_color[2] - mat_pre_edit.base_color[2]) < 0.02f;
+                    auto_check(restored, "Material undo restores pre-edit color");
                 }
                 // --- Phase 5: import + hot reload + prefab proofs ---------------
                 if (f == 70) {
@@ -1237,6 +1561,26 @@ int main(int argc, char** argv) {
                                                             "content://Textures/nf_auto_tex.bmp", e);
                     auto_check(ok, "Imported texture albedo assign",
                                imported ? e : std::string("import never registered the texture"));
+                    // P3: the shell's thumbnail cache must decode + upload the
+                    // freshly imported texture and hand back a usable id. This is
+                    // the only automation path that exercises the preview at all
+                    // — the shipped project ships no texture assets.
+                    if (ok) {
+                        const uintptr_t pid =
+                            app.preview_texture ? app.preview_texture("content://Textures/nf_auto_tex.bmp")
+                                                : 0;
+                        auto_check(pid != 0, "P3: preview uploaded for imported texture",
+                                   app.preview_texture ? "acquire returned 0"
+                                                        : "preview hook unset");
+                        if (pid != 0) {
+                            // A second request for the same path is the cached
+                            // path: the id must be stable (a panel holds it
+                            // across frames) and no re-decode should occur.
+                            const uintptr_t again =
+                                app.preview_texture("content://Textures/nf_auto_tex.bmp");
+                            auto_check(again == pid, "P3: preview id is stable across requests");
+                        }
+                    }
                 }
                 if (f == 74) {
                     force_measure = true;
@@ -1439,6 +1783,8 @@ int main(int argc, char** argv) {
                     // Play mode must step the physics simulation. The cube should
                     // have moved (fallen under gravity) by the time we stop.
                     std::string e;
+                    // EditorApp::play clears the profiler session, so the trace
+                    // exported below is this play session's.
                     bool ok = app.play(e);
                     auto_check(ok, "Physics: Play (start simulation)", e);
                     if (ok) {
@@ -1462,6 +1808,62 @@ int main(int argc, char** argv) {
                     }
                     auto_check(moved, "Physics: body moved under gravity",
                                "world_y = " + std::to_string(py));
+
+                    // P4 DoD: export a real Chrome trace captured during this
+                    // play session and prove it is a trace, not an empty file.
+                    // Until end_frame() was wired into the loop this wrote
+                    // {"traceEvents":[]} — the export path existed and reported
+                    // success while showing nothing.
+                    std::string trace_err;
+                    const auto trace_path =
+                        std::filesystem::temp_directory_path() / "nf_editor_auto_trace.json";
+                    const bool saved = app.profiler_session().save_chrome_trace(trace_path.string(), trace_err);
+                    bool trace_ok = saved;
+                    std::string trace_detail;
+                    if (trace_ok) {
+                        std::ifstream tf(trace_path, std::ios::binary);
+                        std::string json((std::istreambuf_iterator<char>(tf)),
+                                         std::istreambuf_iterator<char>());
+                        const bool has_array = json.find("\"traceEvents\":[") != std::string::npos;
+                        // Count complete duration events; an empty trace has
+                        // zero and a truncated one does not close the array.
+                        size_t events = 0;
+                        size_t pos = 0;
+                        while ((pos = json.find("\"ph\":\"X\"", pos)) != std::string::npos) {
+                            ++events;
+                            pos += 8;
+                        }
+                        const bool closed = json.size() > 2 && json.back() == '}';
+                        // At least one event must have a real duration: a trace
+                        // full of zero-length zones would mean the profiler's
+                        // clock is not actually timing anything.
+                        bool any_duration = false;
+                        size_t dpos = 0;
+                        while ((dpos = json.find("\"dur\":", dpos)) != std::string::npos) {
+                            dpos += 6; // past the field name
+                            bool nonzero = false;
+                            while (dpos < json.size() && json[dpos] >= '0' && json[dpos] <= '9') {
+                                if (json[dpos] != '0') {
+                                    nonzero = true;
+                                }
+                                ++dpos;
+                            }
+                            if (nonzero) {
+                                any_duration = true;
+                                break;
+                            }
+                        }
+                        trace_ok = has_array && events > 0 && closed && any_duration;
+                        trace_detail = std::to_string(events) + " events, " +
+                                       std::to_string(json.size()) + " bytes";
+                    } else {
+                        trace_detail = trace_err;
+                    }
+                    auto_check(trace_ok, "P4: Chrome trace exported from Play session", trace_detail);
+                    // Clean up: leave the temp dir as we found it.
+                    std::error_code tec;
+                    std::filesystem::remove(trace_path, tec);
+
                     std::string e;
                     app.stop(e);
                 }
@@ -1552,9 +1954,105 @@ int main(int argc, char** argv) {
                                leftover.empty() ? std::string{}
                                                 : "still present: " + leftover);
                 }
+                // --- Phase 15 P2: gizmo snap + multi-select transaction --------
+                if (f == 116) {
+                    // Selection starts holding only an off-mesh entity, then
+                    // an ADDITIVE press on the mesh toggles it in (rather than
+                    // replacing the selection), so the drag arms on BOTH.
+                    // Grid snapping is on at 0.5 units.
+                    std::string e;
+                    auto mesh = find_first_mesh(app.world());
+                    bool ok = mesh.has_value();
+                    if (ok) {
+                        nf::scene::Transform st{};
+                        st.local_x = -2.0f;
+                        const nf::ecs::Entity extra = app.world()->create_entity();
+                        app.world()->add<nf::scene::Transform>(extra, st);
+                        app.selection().set_single(extra);
+                        app.set_gizmo_mode(nf::editor::GizmoMode::Translate);
+                        nf::editor::GizmoSnap snap;
+                        snap.translate_step = 0.5f;
+                        app.gizmo_snap() = snap;
+                        const auto* t = app.world()->get<nf::scene::Transform>(*mesh);
+                        const float aspect =
+                            (vp_state.height != 0)
+                                ? (static_cast<float>(vp_state.width) /
+                                   static_cast<float>(vp_state.height))
+                                : 16.0f / 9.0f;
+                        const nf::editor::ViewCamera vc =
+                            view_camera_from_scene(runtime.scene(), aspect);
+                        const nf::Vec3 ndc = world_to_pointer_ndc(
+                            vc, nf::Vec3{t->world_x, t->world_y, t->world_z});
+                        ok = app.viewport_press(ndc.x, ndc.y, vc, true, e) &&
+                             app.selection().all().size() == 2;
+                        // Snapshot the group BETWEEN press and drag: the drag
+                        // arms on exactly the selection at press time, but the
+                        // first viewport_drag runs after_mutation, which
+                        // re-pins the selection to the drag primary. Reading it
+                        // later would recover one entity, not the group.
+                        p2_ents = app.selection().all();
+                        p2_starts.clear();
+                        for (const auto& pe : p2_ents) {
+                            const auto* pt = app.world()->get<nf::scene::Transform>(pe);
+                            p2_starts.push_back(pt ? pt->local_x : 0.0f);
+                        }
+                        ok = ok && app.viewport_drag(ndc.x + 0.15f, ndc.y, vc, e) &&
+                             app.viewport_dragging();
+                    } else {
+                        e = "no mesh entity";
+                    }
+                    auto_check(ok, "P2: additive press + snapped group drag", e);
+                }
+                if (f == 118) {
+                    // One gesture, two entities -> ONE undo step. Both moved by
+                    // the same amount, that amount is on the 0.5 grid, and undo
+                    // restores both starts.
+                    std::string e;
+                    const size_t before = app.stack().undo_size();
+                    bool ok = app.viewport_release(e);
+                    ok = ok && app.stack().undo_size() == before + 1;
+                    std::string detail;
+                    std::vector<float> deltas;
+                    for (size_t i = 0; ok && i < p2_ents.size(); ++i) {
+                        const auto* t = app.world()->get<nf::scene::Transform>(p2_ents[i]);
+                        if (t == nullptr) {
+                            ok = false;
+                            e = "dragged entity lost its Transform";
+                            break;
+                        }
+                        deltas.push_back(t->local_x - p2_starts[i]);
+                        detail += (i ? " " : "") + std::to_string(deltas.back());
+                    }
+                    // The group moved together...
+                    ok = ok && deltas.size() == 2 &&
+                         std::abs(deltas[0] - deltas[1]) < 1e-5f;
+                    // ...by an amount on the 0.5 grid (0.5 * k, k != 0)...
+                    if (ok) {
+                        const float grid = std::round(deltas[0] / 0.5f) * 0.5f;
+                        ok = std::abs(deltas[0] - grid) < 1e-5f && grid != 0.0f;
+                    }
+                    // ...and undo puts every member back where the gesture
+                    // found it.
+                    ok = ok && app.undo(e);
+                    for (size_t i = 0; ok && i < p2_ents.size(); ++i) {
+                        const auto* t = app.world()->get<nf::scene::Transform>(p2_ents[i]);
+                        ok = t != nullptr && std::abs(t->local_x - p2_starts[i]) < 1e-5f;
+                    }
+                    auto_check(ok, "P2: one undo step for the whole group",
+                               "deltas=[" + detail + "]");
+                }
             }
 
             ++frame_count;
+            // Close the profiler's frame. Without this the Profiler panel and
+            // the Chrome Trace export are dead code: the engine zones record
+            // into per-thread buffers but nothing ever merges them, so
+            // last_events() stays empty and save_chrome_trace writes "[]".
+            // Called at the frame's end so the whole frame's zones are in scope.
+            nf::Profiler::instance().end_frame();
+            // Then keep the editor's own copy: the engine's merge clears the
+            // events, and an export should span the session, not one frame.
+            app.profiler_session().capture_frame();
             if (cfg.max_frames != 0 && frame_count >= cfg.max_frames) {
                 break;
             }
@@ -1584,6 +2082,7 @@ int main(int argc, char** argv) {
         }
 
         device->wait_idle();
+        previews.shutdown(); // releases thumbnail views/textures
         ui_renderer.shutdown();
         ui_pass.reset();
         ui_fbs.clear();

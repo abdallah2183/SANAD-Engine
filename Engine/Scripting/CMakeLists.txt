@@ -20,13 +20,14 @@ set(NFSCRIPTING_SOURCES
     src/ScriptEngine.cpp
     src/EntityBindings.cpp
     src/ScriptSystem.cpp
+    src/UiBindings.cpp
     src/CSharpMarshal.cpp
     src/CSharpHost.cpp
 )
 
 nf_engine_library(NFScripting
     SOURCES ${NFSCRIPTING_SOURCES}
-    DEPENDS NFCore NFEcs NFScene
+    DEPENDS NFCore NFEcs NFScene NFUI
 )
 
 target_link_libraries(NFScripting PRIVATE lua)
@@ -68,14 +69,18 @@ if(NF_CSHARP_HOSTING)
     # with the SDK into the binary dir (source tree stays pristine).
     set(NF_CSHARP_OUT "${CMAKE_CURRENT_BINARY_DIR}/csharp")
     set(NF_CSHARP_DLL "${NF_CSHARP_OUT}/NFGameScript.dll")
+    # Every managed source is a dependency, not just the first one written: an
+    # edit to any other .cs (e.g. NFUiDriver.cs) must re-run this command, or the
+    # sandbox DLL silently goes stale and the C# tests exercise old code.
+    file(GLOB NF_CSHARP_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/CSharp/NFGameScript/*.cs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/CSharp/NFGameScript/*.csproj")
     add_custom_command(
         OUTPUT "${NF_CSHARP_DLL}" "${NF_CSHARP_OUT}/NFGameScript.runtimeconfig.json"
         COMMAND "${DOTNET_EXE}" build
             "${CMAKE_CURRENT_SOURCE_DIR}/CSharp/NFGameScript/NFGameScript.csproj"
             -c "$<CONFIG>" --nologo -v q -o "${NF_CSHARP_OUT}"
-        DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/CSharp/NFGameScript/NFGameScript.csproj"
-            "${CMAKE_CURRENT_SOURCE_DIR}/CSharp/NFGameScript/NFSandbox.cs"
+        DEPENDS ${NF_CSHARP_SOURCES}
         COMMENT "Building managed C# sandbox (NFGameScript)"
         VERBATIM
     )

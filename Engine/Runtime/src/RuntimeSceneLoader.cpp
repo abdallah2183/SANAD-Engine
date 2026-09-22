@@ -13,6 +13,7 @@
 #include <NF/Gameplay/GameplayState.hpp>
 #include <NF/Core/Logger.hpp>
 #include <fstream>
+#include <iomanip>
 #include <set>
 #include <sstream>
 #include <cstring>
@@ -78,6 +79,12 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
     std::ifstream in(physical_path, std::ios::binary);
     if (!in) { result.error = "Failed to open scene file: " + physical_path.string(); return result; }
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return load_scene_from_text(content);
+}
+
+SceneLoadResult load_scene_from_text(std::string_view text) {
+    SceneLoadResult result;
+    std::string content(text);
     std::istringstream iss(content);
     std::string line;
     if (!std::getline(iss, line) || line.rfind("# NOVAForge Scene",0)!=0) { result.error = "Invalid scene header"; return result; }
@@ -290,6 +297,27 @@ SceneLoadResult load_scene_from_physical(const std::filesystem::path& physical_p
                     col.shape = physics::Shape::make_sphere(r);
                 }
                 scene->world().add<physics::ColliderComponent>(e, col);
+            } else if (line.rfind("  Destructible:",0)==0) {
+                // Phase 19. The fracture asset is cooked from this spec at
+                // load, so every field here is a build knob rather than a
+                // reference to something on disk — there is no fracture-asset
+                // import pipeline, exactly as there is no animation or audio
+                // one. Missing keys keep the defaults, the same as every other
+                // component line.
+                DestructibleComponent d;
+                unsigned chunks = d.chunks;
+                unsigned seed = d.seed;
+                size_t cp = line.find("chunks=");
+                if (cp != std::string::npos) sscanf(line.c_str()+cp, "chunks=%u", &chunks);
+                size_t sp = line.find("seed=");
+                if (sp != std::string::npos) sscanf(line.c_str()+sp, "seed=%u", &seed);
+                d.chunks = chunks;
+                d.seed = seed;
+                (void)field_float(line, "strength=", d.strength);
+                (void)field_float(line, "damage_threshold=", d.damage_threshold);
+                (void)field_float(line, "blast_radius=", d.blast_radius);
+                d.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<DestructibleComponent>(e, d);
             } else if (line.rfind("  Animation:",0)==0) {
                 animation::AnimationComponent anim;
 
@@ -481,6 +509,13 @@ void resolve_scene_audio(assets::VirtualFileSystem& vfs, scene::Scene& scene_obj
 
 std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
     std::ostringstream out;
+    // f32 keeps ~7 significant decimal digits, but a default-formatted stream
+    // writes 6. A transform saved and loaded through this format therefore
+    // drifts a little on every cycle — the %.6g trap — and a save that was
+    // supposed to restore a position restores a nearby one. Nine digits is the
+    // shortest width that round-trips every f32, so the stream is set once and
+    // every float below inherits it.
+    out << std::setprecision(9);
     out << "# NOVAForge Scene v1\n";
     out << "version: 1\n";
     out << "name: " << scene_obj.name() << "\n";
@@ -564,6 +599,18 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             } else {
                 out << "  Collider: shape=Sphere radius=" << col->shape.sphere.radius << "\n";
             }
+        }
+        const auto* dst = scene_obj.world().get<DestructibleComponent>(e);
+        if (dst) {
+            // Every field is written, even at its default: the whole component
+            // is a build spec for an asset that is never stored, so a round trip
+            // must reproduce the exact same fracture rather than a default one.
+            out << "  Destructible: chunks=" << dst->chunks
+                << " seed=" << dst->seed
+                << " strength=" << dst->strength
+                << " damage_threshold=" << dst->damage_threshold
+                << " blast_radius=" << dst->blast_radius
+                << " enabled=" << (dst->enabled ? "true" : "false") << "\n";
         }
         const auto* anim = scene_obj.world().get<animation::AnimationComponent>(e);
         if (anim) {
@@ -680,6 +727,9 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* col = src.get<physics::ColliderComponent>(se)) {
         dst.add<physics::ColliderComponent>(de, *col);
+    }
+    if (const auto* d = src.get<DestructibleComponent>(se)) {
+        dst.add<DestructibleComponent>(de, *d);
     }
     if (const auto* a = src.get<animation::AnimationComponent>(se)) {
         dst.add<animation::AnimationComponent>(de, *a);

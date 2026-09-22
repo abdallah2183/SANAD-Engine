@@ -19,11 +19,14 @@
 #include <NF/Networking/ConstraintReplicator.hpp>
 #include <NF/Networking/PhysicsReplication.hpp>
 #include <NF/Networking/ReliableChannel.hpp>
+#include <NF/Networking/Socket.hpp>
 #include <NF/Test/TestFramework.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace nf;
@@ -568,6 +571,144 @@ NF_TEST(applier_survives_the_reliable_channel) {
     NF_CHECK(world.count(RecordedCall::Kind::AddHinge) == 1);
     NF_CHECK(applier.pending_count() == 0);
     NF_CHECK(applier.constraints().has(80));
+}
+
+NF_TEST(constraint_lifecycle_over_real_udp_loopback) {
+    // The whole joint lifecycle over REAL UDP, not just the channel: two bodies,
+    // a hinge, a third body, a clone of that hinge onto a new pair, then a body
+    // removal that tears its joint down and an explicit joint removal. The
+    // flights are transmitted newest-first at the socket level, so the wire
+    // genuinely hands the receiver seq 6 before seq 0 — and the reliable
+    // channel still lands every payload in send order, which is what makes
+    // "bodies before their joints" a property of the system rather than an
+    // accident of the test's send loop.
+    UdpSocket sender_sock, receiver_sock;
+    NF_CHECK(sender_sock.open(0, true, nullptr));
+    NF_CHECK(receiver_sock.open(0, true, nullptr));
+    const u16 sender_port = sender_sock.local_port();
+    const u16 receiver_port = receiver_sock.local_port();
+
+    ReliableChannel sender, receiver;
+    FakeWorld world;
+    ConstraintApplier applier(world);
+
+    std::vector<std::vector<u8>> payloads;
+    payloads.push_back(encode_body_event(make_body_spawn(1, 1, 0, 8, 0)));
+    payloads.push_back(encode_body_event(make_body_spawn(2, 1, 0, 5, 0)));
+    payloads.push_back(encode_constraint_event(make_joint_spawn(ConstraintKind::Hinge, 80, 1, 2)));
+    payloads.push_back(encode_body_event(make_body_spawn(3, 1, 2, 5, 0)));
+    ConstraintEvent clone;
+    clone.op = ConstraintOp::Clone;
+    clone.net_id = 81;
+    clone.source = 80;
+    clone.body_a = 3;
+    clone.body_b = 2;
+    payloads.push_back(encode_constraint_event(clone));
+    BodyEvent remove_body;
+    remove_body.op = BodyOp::Remove;
+    remove_body.net_id = 1;
+    payloads.push_back(encode_body_event(remove_body));
+    ConstraintEvent remove_joint;
+    remove_joint.op = ConstraintOp::Remove;
+    remove_joint.net_id = 81;
+    payloads.push_back(encode_constraint_event(remove_joint));
+
+    for (const auto& p : payloads) {
+        NF_CHECK(sender.send_reliable(p));
+    }
+    std::vector<NetPacket> flights = sender.poll_outgoing(0);
+    NF_CHECK(flights.size() == payloads.size());
+    for (usize i = flights.size(); i-- > 0;) { // newest first, on the wire
+        sender_sock.send_to(encode_packet(flights[i]), kIpv4Loopback, receiver_port);
+    }
+
+    ApplyResult r;
+    std::string err;
+    auto pump = [&](u64 now_ms) {
+        Datagram d;
+        while (receiver_sock.recv_from(d)) {
+            NetPacket pkt;
+            if (!decode_packet(d.payload.data(), d.payload.size(), pkt, err)) continue;
+            for (const auto& payload : receiver.receive(pkt)) {
+                if (payload.size() >= 4 && payload[0] == 'N' && payload[1] == 'F' &&
+                    payload[2] == 'B' && payload[3] == 'E') {
+                    applier.apply_body(payload, r, err);
+                } else {
+                    applier.apply_constraint(payload, r, err);
+                }
+            }
+            applier.flush_pending(r);
+            d = Datagram{};
+        }
+        // Acknowledge home so the sender frees its queue over the same socket.
+        for (const auto& pkt : receiver.poll_outgoing(now_ms)) {
+            receiver_sock.send_to(encode_packet(pkt), kIpv4Loopback, sender_port);
+        }
+        Datagram ack;
+        while (sender_sock.recv_from(ack)) {
+            NetPacket pkt;
+            if (decode_packet(ack.payload.data(), ack.payload.size(), pkt, err)) {
+                for (const auto& payload : sender.receive(pkt)) (void)payload;
+            }
+            ack = Datagram{};
+        }
+    };
+
+    // In-order delivery means the third body (seq 3) is the last to make the
+    // applier spawn, so this is a "everything has arrived and landed" gate.
+    for (int i = 0; i < 100 && world.count(RecordedCall::Kind::AddBody) < 3; ++i) {
+        pump(static_cast<u64>(i));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    // The two removals ride the same stream; drain them before asserting.
+    for (int i = 0; i < 100 && world.count(RecordedCall::Kind::RemoveConstraint) < 2; ++i) {
+        pump(1000 + static_cast<u64>(i));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // Send order was respected end to end: bodies, then their hinge, then the
+    // clone, then the teardowns.
+    NF_CHECK(world.count(RecordedCall::Kind::AddBody) == 3);
+    NF_CHECK(world.count(RecordedCall::Kind::AddHinge) == 1);
+    NF_CHECK(world.count(RecordedCall::Kind::Clone) == 1);
+    NF_CHECK(world.count(RecordedCall::Kind::RemoveBody) == 1);
+    NF_CHECK(world.count(RecordedCall::Kind::RemoveConstraint) == 2);
+    NF_CHECK(world.m_calls.size() == 8);
+
+    // The clone resolved its template through the net constraint registry and
+    // its endpoints through the net body registry: handles are FakeWorld's
+    // ascending ids (bodies 1,2; hinge 3; body 4; clone 5).
+    const RecordedCall* hinge_call = nullptr;
+    const RecordedCall* clone_call = nullptr;
+    for (const auto& c : world.m_calls) {
+        if (c.kind == RecordedCall::Kind::AddHinge) hinge_call = &c;
+        if (c.kind == RecordedCall::Kind::Clone) clone_call = &c;
+    }
+    NF_CHECK(hinge_call != nullptr && clone_call != nullptr);
+    NF_CHECK(hinge_call->a == 1 && hinge_call->b == 2);
+    NF_CHECK(clone_call->source == 3);
+    NF_CHECK(clone_call->a == 4 && clone_call->b == 2);
+
+    // The teardowns hit the exact handles, in the exact causes: removing body 1
+    // tore down its hinge (handle 3), the explicit remove took the clone
+    // (handle 5). Neither joint remains in the registry, and the body registry
+    // remembers exactly who is still live.
+    NF_CHECK(!applier.constraints().has(80));
+    NF_CHECK(!applier.constraints().has(81));
+    NF_CHECK(!applier.bodies().has(1));
+    NF_CHECK(applier.bodies().has(2));
+    NF_CHECK(applier.bodies().has(3));
+    NF_CHECK(applier.pending_count() == 0);
+
+    NF_CHECK(r.bodies_spawned == 3);
+    NF_CHECK(r.constraints_spawned == 1);
+    NF_CHECK(r.constraints_cloned == 1);
+    NF_CHECK(r.bodies_removed == 1);
+    NF_CHECK(r.constraints_removed == 2);
+    NF_CHECK(r.duplicate_events == 0);
+    NF_CHECK(r.deferred_events == 0);
+    NF_CHECK(r.failed_events == 0);
+    NF_CHECK(sender.unacked_count() == 0); // every flight acked over real UDP
 }
 
 NF_TEST(body_event_rejects_bad_physics_values) {

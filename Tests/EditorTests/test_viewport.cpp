@@ -159,3 +159,44 @@ NF_TEST(editor_viewport_resize_lifecycle) {
     std::filesystem::remove_all(tmp);
     rhi::reset_validation_error_count();
 }
+
+// --- E1: ground-grid thinning ------------------------------------------------
+//
+// The lead's report was "white grid lines hurt the eyes", so the grid is off by
+// default and, when switched on, both fainter (alpha 38 -> 18, a colour literal
+// in draw_ground_grid) and thinner in the far field. This pins the thinning
+// rule, which is the part that is pure enough to test without a GPU: near the
+// origin every line draws, beyond 20 m only every other one does, and the two
+// axes always draw so the origin keeps its cross.
+
+NF_TEST(editor_grid_thins_only_beyond_the_dense_radius) {
+    // The axes survive however far out the grid runs.
+    NF_CHECK(editor::grid_line_visible(0, 0.0f));
+    NF_CHECK(editor::grid_line_visible(0, 999.0f));
+    NF_CHECK(editor::grid_line_visible(0, -999.0f));
+
+    // Inside 20 m: every line, odd or even — the near field stays readable as a
+    // scale reference, which is the whole point of the grid.
+    for (int i = -20; i <= 20; ++i) {
+        NF_CHECK(editor::grid_line_visible(i, static_cast<float>(i)));
+    }
+
+    // Beyond 20 m: only even indices, so the lines converging on the horizon
+    // stop turning into moire.
+    NF_CHECK(editor::grid_line_visible(22, 22.0f));
+    NF_CHECK(!editor::grid_line_visible(21, 21.0f));
+    NF_CHECK(!editor::grid_line_visible(23, 23.0f));
+    NF_CHECK(editor::grid_line_visible(24, 24.0f));
+
+    // Negative offsets behave identically. This is the case a naive
+    // `(i % 2) == 1` test gets wrong, because C++ keeps the sign of the
+    // dividend: -21 % 2 is -1, not 1.
+    NF_CHECK(editor::grid_line_visible(-22, -22.0f));
+    NF_CHECK(!editor::grid_line_visible(-21, -21.0f));
+    NF_CHECK(!editor::grid_line_visible(-23, -23.0f));
+    NF_CHECK(editor::grid_line_visible(-24, -24.0f));
+
+    // The dense radius is inclusive on its own boundary.
+    NF_CHECK(editor::grid_line_visible(20, 20.0f));
+    NF_CHECK(!editor::grid_line_visible(21, 20.5f));
+}

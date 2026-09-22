@@ -50,6 +50,11 @@ struct OrbitCameraSettings {
 
 /// Positions the scene's camera on a sphere around a target and aims it inward.
 ///
+/// Drives only while playing (GameplayContext::playing): in edit mode the
+/// editor owns the camera for viewport navigation, and a module writing the
+/// same Transform every frame would freeze it. Attach the module for gameplay
+/// orbit behaviour; detach (or stop playing) returns control to the editor.
+///
 /// Input actions it reads, when a source is present and `use_input` is set:
 ///   "look"  — yaw, in [-1, 1]
 ///   "zoom"  — radius, in [-1, 1]

@@ -158,4 +158,96 @@ std::unique_ptr<ICommand> make_drop_mesh_command(const AssetEntry& entry, const 
     return std::make_unique<CreateMeshEntityCommand>(name, parent, mesh);
 }
 
+// --- UX2 item E3: the OPEN PROJECT's files -----------------------------------
+//
+// The browser used to list content:// unconditionally, so an author opening their
+// own game saw the engine's sample content and none of their work. With a project
+// open the panel is rooted at project:// instead. Kept beside
+// list_content_assets because it is the same scan with a different mount and a
+// different extension set — if the scan logic changes, both must change.
+
+assets::AssetType project_asset_type_for(const std::string& extension) {
+    std::string ext;
+    ext.reserve(extension.size());
+    for (char c : extension) {
+        ext.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (ext == ".nfmesh") {
+        return assets::AssetType::Mesh;
+    }
+    if (ext == ".nfmat") {
+        return assets::AssetType::Material;
+    }
+    if (ext == ".nfscene") {
+        return assets::AssetType::Scene;
+    }
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga") {
+        return assets::AssetType::Texture;
+    }
+    return assets::AssetType::Unknown;
+}
+
+bool is_prefab_path(const std::string& logical_path) {
+    // Prefabs are ordinary .nfscene files living under a Prefabs/ directory, so
+    // the path is the only thing that distinguishes them. Checked with both
+    // separators because a logical path can carry either.
+    return logical_path.find("Prefabs/") != std::string::npos ||
+           logical_path.find("Prefabs\\") != std::string::npos;
+}
+
+std::vector<AssetEntry> list_project_assets(assets::VirtualFileSystem& vfs) {
+    std::vector<AssetEntry> out;
+    auto resolved = vfs.resolve("project://");
+    if (!resolved.ok) {
+        return out; // no project mounted: an empty listing, not an error
+    }
+    const std::string base = resolved.value.generic_string();
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(resolved.value, ec);
+         it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) {
+            break;
+        }
+        if (!it->is_regular_file(ec) || ec) {
+            continue;
+        }
+        // Skip the build output and any VCS/tooling directory: a packaged game
+        // is not the author's source, and listing it buries the real assets.
+        const std::string dir = it->path().parent_path().generic_string();
+        if (dir.find("/dist") != std::string::npos || dir.find("/.git") != std::string::npos ||
+            dir.find("/build") != std::string::npos) {
+            continue;
+        }
+        const assets::AssetType type = project_asset_type_for(it->path().extension().string());
+        if (type == assets::AssetType::Unknown) {
+            continue;
+        }
+        // Same lexical strip as list_content_assets: never std::filesystem::
+        // relative(), whose canonicalization can disagree with the mount path on
+        // Windows and silently drop every file.
+        const std::string full = it->path().generic_string();
+        if (full.size() <= base.size() || full.compare(0, base.size(), base) != 0) {
+            continue;
+        }
+        std::string rel = full.substr(base.size());
+        while (!rel.empty() && (rel.front() == '/' || rel.front() == '\\')) {
+            rel.erase(rel.begin());
+        }
+        if (rel.empty()) {
+            continue;
+        }
+        AssetEntry e;
+        e.logical_path = "project://" + rel;
+        e.type = type;
+        e.is_scene_file = (type == assets::AssetType::Scene);
+        out.push_back(std::move(e));
+    }
+    // Deterministic order: directory iteration order is not stable across
+    // machines or runs, and the listing is user-visible.
+    std::sort(out.begin(), out.end(), [](const AssetEntry& a, const AssetEntry& b) {
+        return a.logical_path < b.logical_path;
+    });
+    return out;
+}
+
 } // namespace nf::editor

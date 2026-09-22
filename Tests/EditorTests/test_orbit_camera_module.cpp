@@ -69,6 +69,10 @@ struct OrbitFixture {
         ctx.scene = &scene;
         ctx.input = &input;
         ctx.dt = dt;
+        // The module drives only while playing (GameplayContext::playing):
+        // every placement test below asserts driven behaviour, so the
+        // fixture opts in. The not-playing case has its own test.
+        ctx.playing = true;
         return ctx;
     }
 
@@ -229,6 +233,37 @@ NF_TEST(orbit_camera_ignores_input_when_disabled_or_absent) {
 
     // A source with no input still leaves the camera placed.
     NF_CHECK_EQ(module.placements(), 2u);
+}
+
+NF_TEST(orbit_camera_stays_out_of_the_editor_camera_while_not_playing) {
+    // The reported defect: while editing (playing == false) the module must
+    // not touch the camera Transform at all. It used to place every frame,
+    // snapping each viewport drag straight back — which reads as a viewport
+    // that refuses to move. Default context, no component attached.
+    OrbitFixture f;
+    OrbitCameraModule module;
+    module.settings.radius = 5.0f;
+    module.settings.yaw_degrees = 0.0f;
+    module.settings.pitch_degrees = 0.0f;
+
+    gameplay::GameplayContext ctx{};
+    ctx.world = &f.scene.world();
+    ctx.scene = &f.scene;
+    ctx.dt = 1.0f;
+    ctx.playing = false; // editing
+    NF_CHECK(!ctx.playing);
+
+    module.on_update(ctx);
+
+    NF_CHECK_EQ(module.placements(), 0u);
+    const scene::Transform* t = f.camera_transform();
+    NF_CHECK(t != nullptr);
+    if (t != nullptr) {
+        // Untouched: the fixture builds the camera transform at the origin.
+        NF_CHECK_NEAR(t->local_x, 0.0f, 1e-5f);
+        NF_CHECK_NEAR(t->local_y, 0.0f, 1e-5f);
+        NF_CHECK_NEAR(t->local_z, 0.0f, 1e-5f);
+    }
 }
 
 NF_TEST(orbit_camera_does_nothing_without_a_camera_entity) {

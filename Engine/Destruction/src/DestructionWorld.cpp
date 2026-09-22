@@ -29,12 +29,25 @@ bool bond_intact(const DestructibleComponent& cmp, u32 bond_index) {
 DestructionWorld::DestructionWorld(IDebrisSink& sink, DestructionBudget budget)
     : sink_(sink), budget_(budget) {}
 
-f32 DestructionWorld::damage_falloff(f32 distance, f32 radius) {
+f32 DestructionWorld::damage_falloff(f32 distance, f32 inner_radius, f32 radius) {
     if (radius <= EPSILON) return 0.0f;
-    const f32 t = 1.0f - (distance / radius);
+    // A degenerate or inverted inner radius is the plain linear blast.
+    if (inner_radius <= EPSILON || inner_radius >= radius) {
+        const f32 t = 1.0f - (distance / radius);
+        if (t < 0.0f) return 0.0f;
+        if (t > 1.0f) return 1.0f;
+        return t;
+    }
+    if (distance <= inner_radius) return 1.0f; // brisance: full impulse inside
+    const f32 span = radius - inner_radius;
+    const f32 t = 1.0f - ((distance - inner_radius) / span);
     if (t < 0.0f) return 0.0f;
     if (t > 1.0f) return 1.0f;
     return t;
+}
+
+f32 DestructionWorld::shard_deadline(const LiveDebris& debris) const {
+    return debris.lifetime > 0.0f ? debris.lifetime : budget_.max_debris_lifetime;
 }
 
 u32 DestructionWorld::apply_damage(const FractureAsset& asset, DestructibleComponent& cmp,
@@ -57,7 +70,8 @@ u32 DestructionWorld::apply_damage(const FractureAsset& asset, DestructibleCompo
         const f32  distance = (face_world - event.world_point).length();
         if (distance > event.radius) continue;
 
-        const f32 delivered = event.impulse * damage_falloff(distance, event.radius);
+        const f32 delivered = event.impulse * damage_falloff(distance, event.inner_radius,
+                                                              event.radius);
         cmp.bond_stress[bond_index] += delivered;
 
         const f32 threshold = bond.strength * cmp.strength_scale;
@@ -127,7 +141,7 @@ void DestructionWorld::emit_body(u32 chunk_id, const FractureChunk& chunk,
                                  DestructibleComponent& cmp) {
     const Vec3 centroid_world = world.transform_point(chunk.centroid);
     const f32  delivered = event.impulse * damage_falloff((tear_world - event.world_point).length(),
-                                                          event.radius);
+                                                          event.inner_radius, event.radius);
 
     // Radial kick from the blast centre; a detonation directly beneath the
     // shard has no direction of its own, so the shard goes up instead.
@@ -137,9 +151,18 @@ void DestructionWorld::emit_body(u32 chunk_id, const FractureChunk& chunk,
 
     DebrisSpawn spawn;
     spawn.chunk_id = chunk_id;
-    spawn.position = centroid_world;
+    // The asset's own origin in world space, not the chunk's centroid. The hull
+    // points below are the chunk's vertices in *asset* space, and the sink
+    // places the hull's local origin at `position` — so this is the value that
+    // makes the shard's geometry land exactly where that piece of the object
+    // was. The centroid used to be handed out here instead, which offset every
+    // shard by its own local centroid: the piece flew and spun correctly but
+    // from the wrong place, and like the Jolt centre-of-mass trap it was a
+    // no-op for every centred shape, so no physics test could see it.
+    spawn.position = world.transform_point(Vec3{0.0f, 0.0f, 0.0f});
     spawn.rotation = Quat::from_matrix(world);
     spawn.mass = chunk.volume * cmp.density;
+    spawn.lifetime = cmp.shard_lifetime; // 0 falls back to the world budget
     spawn.linear_velocity = dir * (delivered / spawn.mass);
 
     // The tear force is applied at the shared face, offset from the centre of
@@ -165,7 +188,7 @@ void DestructionWorld::emit_body(u32 chunk_id, const FractureChunk& chunk,
     // is still eligible to be emitted later — the drop is a deferral, not a
     // permanent loss, and chunk_emitted stays the exact mirror of the sink.
     cmp.chunk_emitted[chunk_id] = 1u;
-    live_.push_back(LiveDebris{id, 0.0f});
+    live_.push_back(LiveDebris{id, 0.0f, spawn.lifetime});
 }
 
 void DestructionWorld::tick(f32 dt) {
@@ -176,11 +199,13 @@ void DestructionWorld::tick(f32 dt) {
     }
 
     // Lifetime first, by age: the oldest things go whether or not the cap is
-    // under pressure. Erasing is done after the sink has been told, so destroy
-    // is still called exactly once per id.
+    // under pressure. Each shard retires on its own deadline — an object may
+    // give its shards a shorter life than the world budget. Erasing is done
+    // after the sink has been told, so destroy is still called exactly once
+    // per id.
     std::vector<u32> expired;
     for (std::size_t i = 0u; i < live_.size(); ++i) {
-        if (live_[i].age >= budget_.max_debris_lifetime) {
+        if (live_[i].age >= shard_deadline(live_[i])) {
             expired.push_back(live_[i].sink_id);
         }
     }

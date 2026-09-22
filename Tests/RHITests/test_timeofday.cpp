@@ -83,7 +83,7 @@ NF_TEST(timeofday_sky_palettes_blend) {
     tod.set_time_hours(12.0f);
     const SkyParams noon = tod.make_sky();
     NF_CHECK(noon.enabled);
-    NF_CHECK_NEAR(noon.horizon.x, 0.62f, 1e-5f); // default day look
+    NF_CHECK_NEAR(noon.horizon.x, 0.550f, 1e-5f); // default day look (natural palette)
 
     tod.set_time_hours(0.0f);
     const SkyParams night = tod.make_sky();

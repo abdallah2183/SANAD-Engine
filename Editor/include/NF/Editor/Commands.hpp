@@ -136,12 +136,43 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    // Writes the 9 TRS fields + dirty. Shared with SetTransformsCommand: the
+    // multi-entity gizmo transaction applies the same write to every entry.
+    static void write_pos_rot_scale(ecs::World& world, ecs::Entity e, const scene::Transform& v);
 
 private:
-    static void write_pos_rot_scale(ecs::World& world, ecs::Entity e, const scene::Transform& v);
     ecs::Entity m_entity;
     scene::Transform m_before{};
     scene::Transform m_after{};
+};
+
+// Moves/rotates/scales several entities as ONE undo step — the multi-select
+// gizmo transaction. Each entry is a before/after Transform pair; an entry
+// whose entity died or lost its Transform is skipped at apply/undo time
+// (never fatal: the undo must survive the user deleting one of five objects
+// mid-gesture). Entries are independent local TRS overwrites, so order does
+// not matter — no hierarchy write-back happens in v0.1.
+class SetTransformsCommand : public ICommand {
+public:
+    struct Entry {
+        ecs::Entity entity;
+        scene::Transform before{};
+        scene::Transform after{};
+    };
+    // `verb` becomes the undo label ("Move"/"Rotate"/"Scale"); the count is
+    // appended here so callers stay free of string formatting.
+    explicit SetTransformsCommand(std::vector<Entry> entries, std::string verb);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override { return m_label; }
+    ecs::Entity target() const override {
+        return m_entries.empty() ? ecs::kInvalidEntity : m_entries.front().entity;
+    }
+    size_t size() const { return m_entries.size(); }
+
+private:
+    std::vector<Entry> m_entries;
+    std::string m_label;
 };
 
 // Changes hierarchy parent (cycle-safe via scene::set_parent).
@@ -180,6 +211,12 @@ private:
 class CreateMeshEntityCommand : public ICommand {
 public:
     CreateMeshEntityCommand(std::string name, ecs::Entity parent, const runtime::MeshComponent& mesh);
+    // Same command with a placement. The seed transform is written as part of
+    // apply(), so "create and place" is ONE undo step — what the Create menu
+    // needs (a ground plane belongs at the origin, not in a second edit a user
+    // has to undo separately).
+    CreateMeshEntityCommand(std::string name, ecs::Entity parent, const runtime::MeshComponent& mesh,
+                            const scene::Transform& seed);
     void apply(ecs::World& world) override;
     void undo(ecs::World& world) override;
     std::string label() const override;
@@ -189,6 +226,8 @@ private:
     std::string m_name;
     ecs::Entity m_parent;
     runtime::MeshComponent m_mesh{};
+    bool m_has_seed = false;
+    scene::Transform m_seed{};
     ecs::Entity m_created = ecs::kInvalidEntity;
 };
 

@@ -61,6 +61,102 @@ NF_TEST(postfx_setter_roundtrips) {
 }
 
 // ---------------------------------------------------------------------------
+// Tone mapping (the pre-gamma operator; the four modes of tonemap.frag)
+// ---------------------------------------------------------------------------
+
+NF_TEST(tonemap_default_mode_is_exponential) {
+    // Exponential is mode 0 and is what every golden pixel was authored
+    // against, so a renderer that never touches this renders as before.
+    Renderer3D renderer;
+    NF_CHECK(renderer.tonemap_mode() == TonemapMode::Exponential);
+    const Vec3 c{0.4f, 0.7f, 0.2f};
+    const Vec3 out = tonemap(c, 1.0f, renderer.tonemap_mode());
+    NF_CHECK_NEAR(out.x, 1.0f - std::exp(-0.4f), 1e-6f);
+    NF_CHECK_NEAR(out.y, 1.0f - std::exp(-0.7f), 1e-6f);
+    NF_CHECK_NEAR(out.z, 1.0f - std::exp(-0.2f), 1e-6f);
+}
+
+NF_TEST(tonemap_exponential_applies_exposure_then_the_operator) {
+    // 1 - exp(-x*e) for a range of exposures, per channel.
+    const float exposures[3] = {0.5f, 1.0f, 4.0f};
+    for (float e : exposures) {
+        const Vec3 out = tonemap(Vec3{0.3f, 1.0f, 2.5f}, e, TonemapMode::Exponential);
+        NF_CHECK_NEAR(out.x, 1.0f - std::exp(-0.3f * e), 1e-6f);
+        NF_CHECK_NEAR(out.y, 1.0f - std::exp(-1.0f * e), 1e-6f);
+        NF_CHECK_NEAR(out.z, 1.0f - std::exp(-2.5f * e), 1e-6f);
+    }
+}
+
+NF_TEST(tonemap_reinhard_and_aces_match_their_published_forms) {
+    // Reinhard: x/(1+x) — 1.0 is exactly the half-point, 3.0 exactly 0.75.
+    NF_CHECK_NEAR(tonemap(Vec3{1.0f, 0.0f, 0.0f}, 1.0f, TonemapMode::Reinhard).x, 0.5f, 1e-6f);
+    NF_CHECK_NEAR(tonemap(Vec3{3.0f, 0.0f, 0.0f}, 1.0f, TonemapMode::Reinhard).x, 0.75f, 1e-6f);
+    // ACES (Narkowicz): at x=1 the fit is (2.51 + 0.03) / (2.43 + 0.59 + 0.14).
+    // Pinned from the constants rather than copied as a decimal so a typo in
+    // either side of the mirror fails here, not just "looks filmic".
+    const float expected_aces = (1.0f * (2.51f * 1.0f + 0.03f)) / (1.0f * (2.43f * 1.0f + 0.59f) + 0.14f);
+    NF_CHECK_NEAR(tonemap(Vec3{1.0f, 0.0f, 0.0f}, 1.0f, TonemapMode::ACES).x, expected_aces, 1e-6f);
+}
+
+NF_TEST(tonemap_operators_are_monotone_and_bounded) {
+    // Exponential, ACES and Reinhard all map [0, inf) into [0, 1) and rise
+    // monotonically — that is what makes them display curves. Linear is
+    // deliberately excluded: it is a diagnostic mode and must stay unclamped,
+    // which is asserted separately below.
+    const TonemapMode bounded[3] = {TonemapMode::Exponential, TonemapMode::ACES, TonemapMode::Reinhard};
+    for (TonemapMode mode : bounded) {
+        float prev = 0.0f;
+        for (float x = 0.0f; x < 8.0f; x += 0.25f) {
+            const float v = tonemap(Vec3{x, 0.0f, 0.0f}, 1.0f, mode).x;
+            NF_CHECK(v >= 0.0f && v <= 1.0f);
+            NF_CHECK(v >= prev); // monotone (equal only at x = 0)
+            prev = v;
+        }
+        // Exponential and Reinhard approach 1 asymptotically and never reach it
+        // at a finite input — in the reals. In float32 the ULP at 1.0 is
+        // 1.19e-7, so 1 - exp(-x) rounds to exactly 1.0 once x passes ~17; the
+        // probe is at 10, the last decade where the difference still resolves.
+        // ACES is excluded from this clause: the Narkowicz fit is a polynomial
+        // that overshoots, so both the shader and the CPU mirror clamp it to
+        // [0, 1] and it saturates to exactly 1.0 by x = 1.
+        if (mode != TonemapMode::ACES) {
+            NF_CHECK(tonemap(Vec3{10.0f, 0.0f, 0.0f}, 1.0f, mode).x < 1.0f);
+        }
+    }
+}
+
+NF_TEST(tonemap_linear_is_exposure_only_and_unclamped) {
+    // Linear must NOT clamp in the operator: the UNorm target clamps on write,
+    // so clamping here would hide an over-bright scene from a diagnostic
+    // capture. Exposure multiplies straight through.
+    const Vec3 out = tonemap(Vec3{1.0f, 0.5f, 0.25f}, 3.0f, TonemapMode::Linear);
+    NF_CHECK_NEAR(out.x, 3.0f, 1e-6f);
+    NF_CHECK_NEAR(out.y, 1.5f, 1e-6f);
+    NF_CHECK_NEAR(out.z, 0.75f, 1e-6f);
+    NF_CHECK(tonemap(Vec3{10.0f, 0.0f, 0.0f}, 1.0f, TonemapMode::Linear).x > 1.0f);
+}
+
+NF_TEST(tonemap_modes_produce_distinct_results) {
+    // The mode switch is load-bearing: if a branch collapses, these four
+    // stops at a mid-grey input must not agree.
+    const float x = tonemap(Vec3{0.6f, 0.6f, 0.6f}, 1.0f, TonemapMode::Exponential).x;
+    float prev = x;
+    for (TonemapMode mode : {TonemapMode::ACES, TonemapMode::Reinhard, TonemapMode::Linear}) {
+        const float v = tonemap(Vec3{0.6f, 0.6f, 0.6f}, 1.0f, mode).x;
+        NF_CHECK(std::abs(v - prev) > 1e-3f);
+        prev = v;
+    }
+}
+
+NF_TEST(tonemap_mode_setter_roundtrips) {
+    Renderer3D renderer;
+    renderer.set_tonemap_mode(TonemapMode::Reinhard);
+    NF_CHECK(renderer.tonemap_mode() == TonemapMode::Reinhard);
+    renderer.set_tonemap_mode(TonemapMode::Linear);
+    NF_CHECK(renderer.tonemap_mode() == TonemapMode::Linear);
+}
+
+// ---------------------------------------------------------------------------
 // Camera shake
 // ---------------------------------------------------------------------------
 

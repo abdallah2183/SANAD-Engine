@@ -21,6 +21,7 @@ set(NFRENDERING_SOURCES
     src/MeshLibrary.cpp
     src/Renderer3D.cpp
     src/ShadowCascades.cpp
+    src/LocalShadows.cpp
     src/Sky.cpp
     src/TimeOfDay.cpp
     src/Terrain.cpp

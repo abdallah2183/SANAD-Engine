@@ -3,6 +3,7 @@
 #include <NF/Core/Time.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -20,6 +21,32 @@ std::vector<u8> load_spirv_file(const std::filesystem::path& path) {
     f.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
     if (static_cast<usize>(f.gcount()) != size) return {};
     return data;
+}
+
+/// Whether a sphere MIGHT fall inside one shadow projector's frustum — a
+/// conservative cull for the local shadow pass, where drawing every caster into
+/// every tile would mean 28 passes over the scene instead of one per light that
+/// can actually see it.
+///
+/// The perspective divide makes a sphere of radius r subtend r/w in clip units,
+/// so r/w is the exact screen-space margin and this never rejects a caster that
+/// overlaps the frustum. A sphere at or behind the near plane (w <= 0) is kept:
+/// straddling the plane is a "too close to call", not a miss. Returned depth is
+/// compared against [0, 1] with the same margin, which on a local projector
+/// means "beyond the light's reach" — nothing out there is lit, and anything it
+/// could shadow is even further out.
+bool projector_might_see(const Mat4& view_proj, const BoundingSphere& sphere) {
+    const Vec4 clip = view_proj * Vec4{Vec3{sphere.cx, sphere.cy, sphere.cz}, 1.0f};
+    if (clip.w <= 0.0f) return true;
+    const float inv_w = 1.0f / clip.w;
+    const float margin = sphere.radius * inv_w;
+    const float nx = clip.x * inv_w;
+    const float ny = clip.y * inv_w;
+    const float nz = clip.z * inv_w;
+    if (nx < -1.0f - margin || nx > 1.0f + margin) return false;
+    if (ny < -1.0f - margin || ny > 1.0f + margin) return false;
+    if (nz < -margin || nz > 1.0f + margin) return false;
+    return true;
 }
 
 } // namespace
@@ -70,6 +97,8 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     auto gfs = load_spirv_file(sdir / "gbuffer_frag.spv");
     auto lvs = load_spirv_file(sdir / "lighting_vert.spv");
     auto lfs = load_spirv_file(sdir / "lighting_frag.spv");
+    auto fvs = load_spirv_file(sdir / "forward_vert.spv");
+    auto ffs = load_spirv_file(sdir / "forward_frag.spv");
     auto tvs = load_spirv_file(sdir / "tonemap_vert.spv");
     auto tfs = load_spirv_file(sdir / "tonemap_frag.spv");
     if (dvs.empty() || gvs.empty() || lvs.empty() || tvs.empty()) {
@@ -83,37 +112,42 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     m_gbuffer_fs = device.create_shader_module({gfs, rhi::ShaderStage::Fragment});
     m_lighting_vs = device.create_shader_module({lvs, rhi::ShaderStage::Vertex});
     m_lighting_fs = device.create_shader_module({lfs, rhi::ShaderStage::Fragment});
+    m_forward_vs = device.create_shader_module({fvs, rhi::ShaderStage::Vertex});
+    m_forward_fs = device.create_shader_module({ffs, rhi::ShaderStage::Fragment});
     m_tonemap_vs = device.create_shader_module({tvs, rhi::ShaderStage::Vertex});
     m_tonemap_fs = device.create_shader_module({tfs, rhi::ShaderStage::Fragment});
-    if (!m_depth_vs || !m_gbuffer_vs || !m_lighting_vs || !m_tonemap_vs) {
+    if (!m_depth_vs || !m_gbuffer_vs || !m_lighting_vs || !m_forward_vs || !m_tonemap_vs) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shader modules");
         return false;
     }
 
     // Static vertex layout shared by every mesh (see Vertex in StaticMesh.hpp)
-    static const std::array<rhi::VertexAttrib, 3> kMeshAttribs{{
+    static const std::array<rhi::VertexAttrib, 4> kMeshAttribs{{
         {0, offsetof(Vertex, position), rhi::Format::R32G32B32_SFloat},
         {1, offsetof(Vertex, normal), rhi::Format::R32G32B32_SFloat},
         {2, offsetof(Vertex, uv0), rhi::Format::R32G32_SFloat},
+        {3, offsetof(Vertex, uv1), rhi::Format::R32G32_SFloat},
     }};
 
     // --- descriptor layouts ---
     {
-        const std::array<rhi::DescriptorBinding, 2> material_binds{{
+        const std::array<rhi::DescriptorBinding, 3> material_binds{{
             {0, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
             {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+            {2, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1}, // terrain splat palette
         }};
         rhi::DescriptorSetLayoutDesc ld{};
         ld.bindings = std::span<const rhi::DescriptorBinding>(material_binds);
         m_material_layout = device.create_descriptor_set_layout(ld);
 
-        const std::array<rhi::DescriptorBinding, 6> lighting_binds{{
+        const std::array<rhi::DescriptorBinding, 7> lighting_binds{{
             {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // base
             {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
             {2, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // surface
             {3, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // depth
             {4, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},// frame uniforms
-            {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // shadow map
+            {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // cascade shadow map
+            {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // point/spot shadow atlas
         }};
         rhi::DescriptorSetLayoutDesc lld{};
         lld.bindings = std::span<const rhi::DescriptorBinding>(lighting_binds);
@@ -125,8 +159,26 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         rhi::DescriptorSetLayoutDesc tld{};
         tld.bindings = std::span<const rhi::DescriptorBinding>(tonemap_binds);
         m_tonemap_layout = device.create_descriptor_set_layout(tld);
+
+        // The union of the lighting and material layouts in one set. Bindings
+        // 4-6 are the frame UBO and the two shadow atlases, at the same indices
+        // brdf.glsl declares them, so the shared include compiles unchanged in
+        // the forward shader; 7-8 are the material pair, at the indices
+        // forward.frag declares them — above the gbuffer textures 0-3 that the
+        // forward path does not have, since it reconstructs the surface from
+        // vertex attributes instead of reading it back out of a target.
+        const std::array<rhi::DescriptorBinding, 5> forward_binds{{
+            {4, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
+            {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+            {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+            {7, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
+            {8, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+        }};
+        rhi::DescriptorSetLayoutDesc fld{};
+        fld.bindings = std::span<const rhi::DescriptorBinding>(forward_binds);
+        m_forward_layout = device.create_descriptor_set_layout(fld);
     }
-    if (!m_material_layout || !m_lighting_layout || !m_tonemap_layout) {
+    if (!m_material_layout || !m_lighting_layout || !m_tonemap_layout || !m_forward_layout) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create descriptor layouts");
         return false;
     }
@@ -162,6 +214,25 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         lighting_rpd.present_source = false;
         m_lighting_rp = device.create_render_pass(lighting_rpd);
 
+        // Transparency: the same HDR attachment, but LOADED rather than cleared
+        // (Lighting already wrote it) and blended. blend_enabled lives on the
+        // attachment, which is where Pipeline_Vk reads it — the pipeline itself
+        // has no blend field — so this attachment description is the whole
+        // difference between "opaque HDR target" and "the target glass draws
+        // into". SrcAlpha/OneMinusSrcAlpha are the ColorAttachment defaults.
+        rhi::ColorAttachment trans_att{};
+        trans_att.format = rhi::Format::R16G16B16A16_SFloat;
+        trans_att.blend_enabled = true;
+        const std::array<rhi::ColorAttachment, 1> trans_atts{trans_att};
+        rhi::RenderPassDesc transparency_rpd{};
+        transparency_rpd.color_attachments = std::span<const rhi::ColorAttachment>(trans_atts);
+        transparency_rpd.color_load = rhi::RenderPassDesc::ColorLoad::Load;
+        transparency_rpd.has_depth = true;
+        transparency_rpd.depth_format = rhi::Format::D32_SFloat;
+        transparency_rpd.depth_load = rhi::RenderPassDesc::DepthLoad::Load;
+        transparency_rpd.present_source = false;
+        m_transparency_rp = device.create_render_pass(transparency_rpd);
+
         rhi::ColorAttachment back_off{};
         back_off.format = rhi::Format::R8G8B8A8_UNorm;
         const std::array<rhi::ColorAttachment, 1> off_atts{back_off};
@@ -174,7 +245,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         // format is fixed at init time by the caller's swapchain, typically
         // B8G8R8A8); a separate pipeline covers it.
     }
-    if (!m_depth_rp || !m_gbuffer_rp || !m_lighting_rp || !m_tonemap_rp_off) {
+    if (!m_depth_rp || !m_gbuffer_rp || !m_lighting_rp || !m_transparency_rp || !m_tonemap_rp_off) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create render passes");
         return false;
     }
@@ -249,6 +320,40 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         lpd.depth.write_enabled = false;
         m_lighting_pipeline = m_pipeline_cache->get_or_create(lpd);
 
+        // Transparency: forward PBR over the lit HDR image. Same vertex layout
+        // and same push constants as the gbuffer pipeline, so a surface lands on
+        // the same pixel either way. Depth is TESTED against what the prepass
+        // wrote but never written — a pane must not occlude the opaque geometry
+        // behind it, and leaving the depth alone is also what lets the back-to-
+        // front sort be authoritative rather than the depth buffer.
+        rhi::VertexLayout fvl{};
+        fvl.binding = 0;
+        fvl.stride = sizeof(Vertex);
+        // forward.vert reads position/normal/uv0 only, so the splat attribute
+        // stops here — declaring an attribute no stage consumes is a validation
+        // warning (and would make a transparency surface's uv1 count for
+        // nothing: the forward pass has no palette to blend).
+        const std::array<rhi::VertexAttrib, 3> forward_attribs{{
+            {0, offsetof(Vertex, position), rhi::Format::R32G32B32_SFloat},
+            {1, offsetof(Vertex, normal),   rhi::Format::R32G32B32_SFloat},
+            {2, offsetof(Vertex, uv0),      rhi::Format::R32G32_SFloat},
+        }};
+        fvl.attributes = std::span<const rhi::VertexAttrib>(forward_attribs);
+        rhi::PipelineDesc fpd{};
+        fpd.vs = m_forward_vs.get();
+        fpd.fs = m_forward_fs.get();
+        fpd.render_pass = m_transparency_rp.get();
+        fpd.descriptor_set_layout = m_forward_layout.get();
+        fpd.vertex_layout = fvl;
+        fpd.rasterizer.cull_mode = rhi::CullMode::Back;
+        fpd.rasterizer.front_face = rhi::FrontFace::CW; // pairs the Y-flip (see above)
+        fpd.depth.test_enabled = true;
+        fpd.depth.write_enabled = false;
+        fpd.depth.compare = rhi::CompareOp::LessEqual;
+        fpd.push_constant_size = 128;    // view_proj + model
+        fpd.push_constant_stages = rhi::ShaderStage::Vertex;
+        m_forward_pipeline = m_pipeline_cache->get_or_create(fpd);
+
         // Tonemap: one pipeline per render pass flavour
         rhi::PipelineDesc tpd{};
         tpd.vs = m_tonemap_vs.get();
@@ -264,7 +369,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
 
     }
     if (!m_depth_pipeline || !m_gbuffer_material || !m_gbuffer_material->valid() ||
-        !m_lighting_pipeline || !m_tonemap_pipeline_off) {
+        !m_lighting_pipeline || !m_forward_pipeline || !m_tonemap_pipeline_off) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create pipelines");
         return false;
     }
@@ -325,6 +430,27 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     m_sampler = device.create_sampler(samp_desc);
     if (!m_white_texture || !m_white_view || !m_sampler) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create fallback texture/sampler");
+        return false;
+    }
+
+    // Terrain splat palette (binding 2 of the material set). One std140 array
+    // of vec4 — no staging buffer, no sampler, no layout transition, just a
+    // CPU-side mirror plus an update, exactly like the frame uniforms above.
+    // Every layer defaults to white so an author who never classifies a
+    // surface sees no change at all.
+    for (u32 i = 0; i < kSplatPaletteLayers; ++i) {
+        m_splat_palette_cpu.layers[i] = {1.0f, 1.0f, 1.0f, 1.0f};
+    }
+    rhi::BufferDesc splat_desc{};
+    splat_desc.size = sizeof(SplatPaletteGPU);
+    splat_desc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::TransferDst;
+    splat_desc.memory = rhi::MemoryUsage::CPUToGPU;
+    m_splat_palette = device.create_buffer(splat_desc);
+    if (m_splat_palette) {
+        m_splat_palette->update(&m_splat_palette_cpu, 0, sizeof(m_splat_palette_cpu));
+    }
+    if (!m_splat_palette) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create splat palette buffer");
         return false;
     }
 
@@ -412,7 +538,13 @@ bool Renderer3D::create_resolution_dependent(u32 width, u32 height) {
     const std::array<rhi::Texture*, 1> hdr_colors{hdr};
     m_lighting_fb = m_device->create_framebuffer(*m_lighting_rp,
                                                  std::span<rhi::Texture* const>(hdr_colors), nullptr);
-    if (!m_depth_fb || !m_gbuffer_fb || !m_lighting_fb) {
+    // The transparency framebuffer sees the SAME HDR image as a colour
+    // attachment (the render pass Loads it) plus the prepass depth; the lighting
+    // framebuffer has no depth at all because a fullscreen quad does not test
+    // one.
+    m_transparency_fb = m_device->create_framebuffer(*m_transparency_rp,
+                                                     std::span<rhi::Texture* const>(hdr_colors), depth);
+    if (!m_depth_fb || !m_gbuffer_fb || !m_lighting_fb || !m_transparency_fb) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create framebuffers");
         return false;
     }
@@ -424,6 +556,7 @@ void Renderer3D::destroy_resolution_dependent() {
     m_depth_fb.reset();
     m_gbuffer_fb.reset();
     m_lighting_fb.reset();
+    m_transparency_fb.reset();
     m_tonemap_fbs.clear();
     m_gbuffer0_view.reset();
     m_gbuffer1_view.reset();
@@ -467,6 +600,7 @@ void Renderer3D::shutdown() {
     m_device->wait_idle();
     destroy_resolution_dependent();
     m_frame_uniforms.reset();
+    m_splat_palette.reset();
     m_descriptor_allocator.reset();
     m_material_library.reset();
     m_gbuffer_material.reset();
@@ -476,19 +610,23 @@ void Renderer3D::shutdown() {
     }
     m_depth_pipeline = nullptr;
     m_lighting_pipeline = nullptr;
+    m_forward_pipeline = nullptr;
     m_tonemap_pipeline_off = nullptr;
     m_tonemap_pipeline_present = nullptr;
     m_graph.reset();
     m_depth_vs.reset(); m_depth_fs.reset();
     m_gbuffer_vs.reset(); m_gbuffer_fs.reset();
     m_lighting_vs.reset(); m_lighting_fs.reset();
+    m_forward_vs.reset(); m_forward_fs.reset();
     m_tonemap_vs.reset(); m_tonemap_fs.reset();
     m_material_layout.reset();
     m_lighting_layout.reset();
+    m_forward_layout.reset();
     m_tonemap_layout.reset();
     m_depth_rp.reset();
     m_gbuffer_rp.reset();
     m_lighting_rp.reset();
+    m_transparency_rp.reset();
     m_tonemap_rp_off.reset();
     m_tonemap_rp_present.reset();
     m_tonemap_present_ready = false;
@@ -498,6 +636,10 @@ void Renderer3D::shutdown() {
     m_shadow_view.reset();
     m_shadow_map.reset();
     m_shadow_atlas_size = 0;
+    m_local_shadow_fb.reset();
+    m_local_shadow_view.reset();
+    m_local_shadow_map.reset();
+    m_local_shadow_atlas_size = 0;
     m_sampler.reset();
     m_device = nullptr;
 }
@@ -514,6 +656,33 @@ void Renderer3D::set_shadow_lambda(float lambda) {
 
 void Renderer3D::set_shadow_fade_range(float fade_range) {
     m_cascades.fade_range = std::clamp(fade_range, 0.0f, 1.0f);
+}
+
+void Renderer3D::set_local_shadow_tile_size(u32 tile) {
+    // Same contract as the directional tile size: zero would make a zero-sized
+    // atlas, and ensure_local_shadow_atlas() applied on the next render() is
+    // what actually rebuilds it.
+    m_local_shadow_tile_size = (tile == 0) ? 1u : tile;
+}
+
+void Renderer3D::set_splat_layer_color(u32 slot, const Vec3& color) {
+    // Slot 0 is the material itself, so the palette only answers for 1..N-1.
+    // Out-of-range is clamped onto the nearest real slot rather than ignored so
+    // a caller's off-by-one still lands somewhere defined.
+    const u32 s = std::min(slot, kSplatPaletteLayers - 1u);
+    m_splat_palette_cpu.layers[s] = {color.x, color.y, color.z, 1.0f};
+    if (m_device && m_splat_palette) {
+        // The renderer may be mid-frame when the scene is authored; the GPU
+        // side is only read inside the gbuffer pass of the next render().
+        m_device->wait_idle();
+        m_splat_palette->update(&m_splat_palette_cpu, 0, sizeof(m_splat_palette_cpu));
+    }
+}
+
+Vec3 Renderer3D::splat_layer_color(u32 slot) const {
+    const u32 s = std::min(slot, kSplatPaletteLayers - 1u);
+    const auto& l = m_splat_palette_cpu.layers[s];
+    return Vec3{l[0], l[1], l[2]};
 }
 
 bool Renderer3D::ensure_shadow_atlas(u32 tile_size) {
@@ -563,6 +732,50 @@ bool Renderer3D::ensure_shadow_atlas(u32 tile_size) {
     return true;
 }
 
+bool Renderer3D::ensure_local_shadow_atlas(u32 tile_size) {
+    // Same lifecycle and same "build the replacement first" rule as the cascade
+    // atlas; only the grid differs (7x7 for 28 tiles). Both atlases share the
+    // depth-only render pass and the depth pipeline.
+    if (!m_device || !m_depth_rp) return false;
+    if (tile_size == 0) tile_size = 1;
+    const u32 size = tile_size * kLocalShadowTileGrid;
+    if (m_local_shadow_map && m_local_shadow_view && m_local_shadow_fb) {
+        if (m_local_shadow_atlas_size == size) return true;
+    }
+
+    rhi::TextureDesc desc{};
+    desc.width = size;
+    desc.height = size;
+    desc.format = rhi::Format::D32_SFloat;
+    desc.usage = rhi::ImageUsage::DepthAtt | rhi::ImageUsage::Sampled;
+    auto texture = m_device->create_texture(desc);
+    if (!texture) return false;
+
+    rhi::TextureViewDesc svd{};
+    svd.dimension = rhi::ViewDimension::View2D;
+    svd.aspect = rhi::ImageAspect::Depth;
+    svd.base_mip = 0;
+    svd.mip_count = 1;
+    svd.base_layer = 0;
+    svd.layer_count = 1;
+    svd.texture = texture.get();
+    auto view = m_device->create_texture_view(svd);
+    if (!view) return false;
+
+    const std::array<rhi::Texture*, 0> no_colors{};
+    auto fb = m_device->create_framebuffer(
+        *m_depth_rp, std::span<rhi::Texture* const>(no_colors), texture.get());
+    if (!fb) return false;
+
+    m_device->wait_idle();
+    m_local_shadow_map = std::move(texture);
+    m_local_shadow_view = std::move(view);
+    m_local_shadow_fb = std::move(fb);
+    m_local_shadow_atlas_size = size;
+    m_local_shadow_tile_size = tile_size;
+    return true;
+}
+
 bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world,
                         const Camera& camera, rhi::Texture& out_target,
                         bool out_is_present_source) {
@@ -572,6 +785,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // steady state; the atlas is deliberately not rebuilt on resize(), because
     // it does not depend on the output resolution.
     if (!ensure_shadow_atlas(m_shadow_tile_size)) return false;
+    if (!ensure_local_shadow_atlas(m_local_shadow_tile_size)) return false;
 
     // --- Frustum culling: RenderWorld → Visible Objects ---
     nf::Clock cull_clock;
@@ -581,6 +795,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     m_stats.visible = static_cast<u32>(m_visible.size());
     m_stats.draw_calls = 0;
     m_stats.material_sets_built = 0;
+    m_stats.transparent_objects = 0;
 
     // --- Frame uniforms (camera + lights) ---
     FrameUniforms fu{};
@@ -707,8 +922,57 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         fu.spots[i].color_int[1] = l.color.y;
         fu.spots[i].color_int[2] = l.color.z;
         fu.spots[i].color_int[3] = l.intensity;
-        fu.spots[i].outer_pad[0] = std::cos(l.outer_angle_rad);
+        fu.spots[i].outer_range[0] = std::cos(l.outer_angle_rad);
+        // The falloff window the shader windows the cone by. Clamped away from
+        // zero on both sides: a negative or NaN reach would make the window
+        // comparison meaningless rather than simply "no light".
+        fu.spots[i].outer_range[1] = l.range > 0.0f ? l.range
+                                                    : kLocalShadowSpotDefaultFar;
     }
+
+    // Local (point/spot) shadow projectors, one per atlas tile. fu is
+    // value-initialised above, so every tile starts DISABLED with a zero
+    // matrix and only the tiles a light actually claims are written — the
+    // shader's enabled check is what makes an unshadowed light free.
+    //
+    // The assignment and the fits come from plan_local_shadows rather than
+    // being restated here: the tiles stay indexed by LIGHT index (point i owns
+    // [6i, 6i+6)) even when an earlier light opts out, and that rule has to be
+    // the same one the shader inverts, so it lives in the header where the
+    // shader's face-selection comment can point at it — and where a CPU test
+    // can exercise it. Restating it here would let the two drift apart the way
+    // an earlier inlined copy did (it capped tiles by a count of opt-ins, so
+    // one light opting out handed a later light tiles past the 28 that exist).
+    const LocalShadowPlan local_plan =
+        plan_local_shadows(m_point_lights, m_spot_lights, m_local_shadow_tile_size);
+    for (u32 t = 0; t < kLocalShadowTileCount; ++t) {
+        const LocalShadowTile& tile = local_plan.tiles[t];
+        std::memcpy(fu.local_shadow_view_proj[t], tile.view_proj.m,
+                    sizeof(fu.local_shadow_view_proj[t]));
+        fu.local_shadow_params[t][0] = tile.enabled;
+        fu.local_shadow_params[t][1] = tile.strength;
+        fu.local_shadow_params[t][2] = tile.auto_bias;
+        fu.local_shadow_params[t][3] = tile.artist_bias;
+    }
+    fu.counts[2] = static_cast<i32>(kLocalShadowTileGrid);
+    // The PCF tap stride and the half-texel clamp are expressed in atlas uv, so
+    // the shader needs the tile's pixel size alongside the grid: texel_uv =
+    // (1/grid) / tile_pixels.
+    fu.counts[3] = static_cast<i32>(m_local_shadow_tile_size);
+
+    // Fog. Appended at the end of the block, so this writes two trailing vec4s
+    // and touches nothing above. The enabled flag is uploaded as a float because
+    // the shader compares it against 0.5 — std140 has no bools, and a bool
+    // uniform read back as a float is driver-dependent in exactly the direction
+    // that turns "fog is off" into "fog is everywhere".
+    fu.fog_color[0] = m_fog.color.x;
+    fu.fog_color[1] = m_fog.color.y;
+    fu.fog_color[2] = m_fog.color.z;
+    fu.fog_color[3] = 1.0f;
+    fu.fog_params[0] = m_fog.enabled ? 1.0f : 0.0f;
+    fu.fog_params[1] = m_fog.start;
+    fu.fog_params[2] = m_fog.end;
+    fu.fog_params[3] = 0.0f;
     m_frame_uniforms->update(&fu, 0, sizeof(fu));
 
     // --- Per-frame descriptor sets ---
@@ -725,13 +989,14 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         return false;
     }
     {
-        const std::array<rhi::DescriptorWrite, 6> lighting_writes{{
+        const std::array<rhi::DescriptorWrite, 7> lighting_writes{{
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer0_view.get(), m_sampler.get()},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer1_view.get(), m_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer2_view.get(), m_sampler.get()},
             {3, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer_depth_view.get(), m_sampler.get()},
             {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms.get(), 0, sizeof(FrameUniforms), nullptr, nullptr},
             {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_shadow_view.get(), m_sampler.get()},
+            {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_sampler.get()},
         }};
         m_device->update_descriptor_set(*lighting_set, std::span<const rhi::DescriptorWrite>(lighting_writes));
         const std::array<rhi::DescriptorWrite, 1> tonemap_writes{{
@@ -750,8 +1015,26 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const rhi::DescriptorSet* material_set; // non-owning: cached on the entry
         u32 lod = 0;                            // effective LOD for this frame
     };
+    // The transparent queue. Separate from `prepared` because a transparent
+    // surface is excluded from BOTH the depth prepass and the gbuffer — writing
+    // its depth would occlude the opaque geometry behind it, and writing its
+    // material into the gbuffer would average it with that geometry's.
+    struct TransparentDraw {
+        const RenderObject* object;
+        const StaticMesh* mesh;
+        const rhi::DescriptorSet* forward_set; // non-owning: held by forward_sets
+        u32 lod = 0;
+        float distance = 0.0f;                 // camera -> surface, for the sort
+    };
     std::vector<PreparedDraw> prepared;
     prepared.reserve(m_visible.size());
+    std::vector<TransparentDraw> transparent;
+    // Owns this frame's forward descriptor sets. The transparency pass is
+    // recorded below as a graph lambda that only keeps raw pointers, so the
+    // sets have to live here until m_graph->execute() returns; the allocator
+    // that handed them out is not reset until next frame, after the fence.
+    std::vector<std::unique_ptr<rhi::DescriptorSet>> forward_sets;
+    forward_sets.reserve(m_visible.size());
     for (u32 idx : m_visible) {
         const RenderObject& ro = render_world.objects[idx];
         if (!ro.mesh_handle.valid() || !m_mesh_library) continue;
@@ -760,6 +1043,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         if (mesh->lods().empty()) continue;
 
         PreparedDraw pd{&ro, mesh, nullptr, 0};
+        float camera_distance = 0.0f;
         // Distance LOD, resolved once per frame (not per pass): the authored
         // lod is a floor, distance only coarsens, and the result is clamped
         // into range — a stale lod on a poorer mesh draws the coarsest LOD
@@ -768,8 +1052,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             const float dx = ro.sphere.cx - camera.position.x;
             const float dy = ro.sphere.cy - camera.position.y;
             const float dz = ro.sphere.cz - camera.position.z;
-            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-            const u32 distance_lod = select_lod(distance,
+            camera_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const u32 distance_lod = select_lod(camera_distance,
                                                 static_cast<u32>(mesh->lods().size()),
                                                 std::span<const float>(m_lod_max_distances));
             u32 effective = ro.lod > distance_lod ? ro.lod : distance_lod;
@@ -780,6 +1064,39 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         }
         MaterialEntry* entry = m_material_library->get(ro.material_handle);
         if (entry && entry->material && entry->material->valid()) {
+            if (entry->params.base_color[3] < 1.0f) {
+                // The transparent path. Its descriptor set is the union layout
+                // — material pair AND the frame/shadow bindings the shared BRDF
+                // reads — built per object per frame. That is deliberate where
+                // the opaque path caches: a transparent object carries its own
+                // alpha, so two objects sharing one material instance still
+                // differ, and the expected count here is a handful of panes.
+                auto fwd_set = m_descriptor_allocator->allocate(*m_forward_layout);
+                if (!fwd_set) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                                 "Renderer3D: forward descriptor allocation failed");
+                    continue;
+                }
+                const rhi::TextureView* albedo =
+                    entry->albedo_view ? entry->albedo_view : m_white_view.get();
+                const std::array<rhi::DescriptorWrite, 5> forward_writes{{
+                    {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms.get(), 0,
+                     sizeof(FrameUniforms), nullptr, nullptr},
+                    {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     m_shadow_view.get(), m_sampler.get()},
+                    {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     m_local_shadow_view.get(), m_sampler.get()},
+                    {7, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
+                     12 * sizeof(float), nullptr, nullptr},
+                    {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
+                }};
+                m_device->update_descriptor_set(*fwd_set,
+                                                std::span<const rhi::DescriptorWrite>(forward_writes));
+                transparent.push_back(TransparentDraw{&ro, mesh, fwd_set.get(), pd.lod,
+                                                      camera_distance});
+                forward_sets.push_back(std::move(fwd_set));
+                continue;
+            }
             // One set per material instance, reused every frame. Objects share
             // material instances, so building per object meant N allocations
             // and N vkUpdateDescriptorSets per frame for a handful of distinct
@@ -795,10 +1112,12 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 }
                 const rhi::TextureView* albedo =
                     entry->albedo_view ? entry->albedo_view : m_white_view.get();
-                const std::array<rhi::DescriptorWrite, 2> material_writes{{
+                const std::array<rhi::DescriptorWrite, 3> material_writes{{
                     {0, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
                      12 * sizeof(float), nullptr, nullptr},
                     {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
+                    {2, rhi::DescriptorType::UniformBuffer, m_splat_palette.get(), 0,
+                     sizeof(SplatPaletteGPU), nullptr, nullptr},
                 }};
                 m_device->update_descriptor_set(*entry->cached_set,
                                                 std::span<const rhi::DescriptorWrite>(material_writes));
@@ -809,8 +1128,19 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         }
         prepared.push_back(pd);
     }
+    m_stats.transparent_objects = static_cast<u32>(transparent.size());
+    // Farthest first: alpha blending is not commutative, and the depth test
+    // does not save us here because a transparent surface never WRITES depth,
+    // so a near pane drawn before a far one has nothing behind it yet. The sort
+    // is by the bounding sphere, which is a proxy for the surface — two
+    // interpenetrating panes are still wrong, and only per-fragment depth
+    // peeling would fix that; the engine does not do it, and neither does
+    // anything else shipping a single forward transparency pass.
+    std::sort(transparent.begin(), transparent.end(),
+              [](const TransparentDraw& a, const TransparentDraw& b) {
+                  return a.distance > b.distance;
+              });
     m_stats.draw_prep_us = prep_clock.elapsed_us();
-
     // --- Build the frame graph ---
     m_graph->reset(true);
     auto rg_out = m_graph->import_texture("Output", &out_target);
@@ -818,6 +1148,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // the graph transition it (depth write in the shadow pass, fragment read
     // in lighting) with the same barriers as owned targets.
     auto rg_shadow = m_graph->import_texture("ShadowAtlas", m_shadow_map.get());
+    auto rg_local_shadow =
+        m_graph->import_texture("LocalShadowAtlas", m_local_shadow_map.get());
 
     // Shadow atlas (depth from the light). All cascades are rendered inside ONE
     // pass: begin_render_pass clears the whole atlas once, then each cascade
@@ -863,6 +1195,60 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.end_render_pass();
     };
     m_graph->add_pass(shadow_pass);
+
+    // Local shadow atlas (point/spot). One pass over 28 tiles the same way the
+    // cascade pass is one pass over four: begin_render_pass clears the whole
+    // atlas once, then each ENABLED tile gets its own viewport/scissor and its
+    // own projector. Tiles with no shadowed light behind them are skipped and
+    // stay clear, so the pass costs one clear when nothing casts.
+    //
+    // The pass runs even with every tile disabled (rather than being omitted)
+    // because binding 6 samples this texture unconditionally: a never-written
+    // imported texture has no defined content to sample, and the shader's
+    // enabled flag is a per-tile judgement, not a guarantee the binding is safe.
+    RGPassDesc local_shadow_pass{};
+    local_shadow_pass.name = "LocalShadowAtlas";
+    local_shadow_pass.depth_attachment = rg_local_shadow;
+    local_shadow_pass.execute = [&](rhi::CommandBuffer& gcmd) {
+        const std::array<rhi::ClearValue, 0> no_clears{};
+        gcmd.begin_render_pass(*m_depth_rp, *m_local_shadow_fb,
+                               std::span<const rhi::ClearValue>(no_clears), 1.0f, 0);
+        gcmd.bind_pipeline(*m_depth_pipeline);
+        struct Push { float view_proj[16]; float model[16]; };
+        Push push{};
+        static_assert(sizeof(fu.local_shadow_view_proj[0]) == sizeof(push.view_proj));
+        const u32 tile = m_local_shadow_tile_size;
+        for (u32 t = 0; t < kLocalShadowTileCount; ++t) {
+            if (fu.local_shadow_params[t][0] <= 0.5f) continue; // nobody's tile
+            const u32 col = t % kLocalShadowTileGrid;
+            const u32 row = t / kLocalShadowTileGrid;
+            std::memcpy(push.view_proj, fu.local_shadow_view_proj[t], sizeof(push.view_proj));
+            gcmd.set_viewport(col * tile, row * tile, tile, tile);
+            gcmd.set_scissor(col * tile, row * tile, tile, tile);
+            for (auto& pd : prepared) {
+                // A tile only pays for casters its own projector can see: at
+                // 28 tiles the difference between "every caster" and "the ones
+                // in this frustum" is the pass's cost.
+                if (!projector_might_see(local_plan.tiles[t].view_proj,
+                                         pd.object->sphere)) continue;
+                std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
+                gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
+                const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
+                const rhi::Buffer* ib = pd.mesh->index_buffer(pd.lod);
+                if (!vb || !ib) continue;
+                const std::array<const rhi::Buffer*, 1> vbs{vb};
+                gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+                gcmd.bind_index_buffer(*ib, 0);
+                const MeshLOD& lod = pd.mesh->lods()[pd.lod];
+                for (const SubMesh& sm : lod.submeshes) {
+                    gcmd.draw_indexed(sm.index_count, 1, sm.index_offset,
+                                      static_cast<i32>(sm.vertex_offset), 0);
+                }
+            }
+        }
+        gcmd.end_render_pass();
+    };
+    m_graph->add_pass(local_shadow_pass);
 
     // Depth prepass
     RGPassDesc depth_pass{};
@@ -940,7 +1326,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     RGPassDesc lighting_pass{};
     lighting_pass.name = "Lighting";
     lighting_pass.reads = {m_gbuffer0_handle, m_gbuffer1_handle, m_gbuffer2_handle, m_depth_handle,
-                           rg_shadow};
+                           rg_shadow, rg_local_shadow};
     lighting_pass.color_attachments = {m_hdr_handle};
     lighting_pass.execute = [&](rhi::CommandBuffer& gcmd) {
         const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -954,6 +1340,64 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.end_render_pass();
     };
     m_graph->add_pass(lighting_pass);
+
+    // Transparency: forward PBR over the HDR image Lighting just wrote.
+    //
+    // The pass is added unconditionally even when nothing is transparent —
+    // otherwise a scene that grows a glass pane changes the set of barriers
+    // recorded, and a caller comparing frames with and without one would be
+    // comparing two different command streams. With the pass always present, a
+    // frame with zero transparent draws records a begin/end with no draws: the
+    // LOAD preserves the image and the tonemap reads it back unchanged.
+    //
+    // The depth attachment is declared here but NOT listed in reads: the graph
+    // would then transition it to ShaderRead while this pass needs it as a
+    // depth attachment. Declaring it as the depth attachment is what moves it
+    // into the right state, the same way the gbuffer pass does after the
+    // prepass.
+    RGPassDesc transparency_pass{};
+    transparency_pass.name = "Transparency";
+    transparency_pass.reads = {rg_shadow, rg_local_shadow};
+    transparency_pass.color_attachments = {m_hdr_handle};
+    transparency_pass.depth_attachment = m_depth_handle;
+    transparency_pass.execute = [&](rhi::CommandBuffer& gcmd) {
+        const std::array<rhi::ClearValue, 0> no_clears{};
+        // Both attachments Load: the colour holds the lit image, the depth
+        // holds the prepass. The clear values are ignored under Load.
+        gcmd.begin_render_pass(*m_transparency_rp, *m_transparency_fb,
+                               std::span<const rhi::ClearValue>(no_clears), 1.0f, 0);
+        if (transparent.empty()) {
+            gcmd.end_render_pass();
+            return;
+        }
+        gcmd.bind_pipeline(*m_forward_pipeline);
+        struct Push { float view_proj[16]; float model[16]; };
+        Push push{};
+        std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
+        gcmd.set_viewport(0, 0, m_width, m_height);
+        gcmd.set_scissor(0, 0, m_width, m_height);
+        for (auto& td : transparent) {
+            std::memcpy(push.model, td.object->world.m, sizeof(push.model));
+            gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
+            const std::array<const rhi::DescriptorSet*, 1> sets{td.forward_set};
+            gcmd.bind_descriptor_sets(*m_forward_layout,
+                                      std::span<const rhi::DescriptorSet* const>(sets), 0);
+            const rhi::Buffer* vb = td.mesh->vertex_buffer(td.lod);
+            const rhi::Buffer* ib = td.mesh->index_buffer(td.lod);
+            if (!vb || !ib) continue;
+            const std::array<const rhi::Buffer*, 1> vbs{vb};
+            gcmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
+            gcmd.bind_index_buffer(*ib, 0);
+            const MeshLOD& lod = td.mesh->lods()[td.lod];
+            for (const SubMesh& sm : lod.submeshes) {
+                gcmd.draw_indexed(sm.index_count, 1, sm.index_offset,
+                                  static_cast<i32>(sm.vertex_offset), 0);
+                ++m_stats.draw_calls;
+            }
+        }
+        gcmd.end_render_pass();
+    };
+    m_graph->add_pass(transparency_pass);
 
     // Tonemap: HDR → output target
     RGPassDesc tonemap_pass{};
@@ -1023,7 +1467,10 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const std::array<const rhi::DescriptorSet*, 1> sets{tonemap_set.get()};
         gcmd.bind_descriptor_sets(*m_tonemap_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
         // Must match tonemap.frag PushConstants (std140-adjacent packing).
-        const float tonemap_push[4] = {m_exposure, m_postfx.vignette, m_postfx.saturation, 0.0f};
+        const float tonemap_push[4] = {m_exposure,
+                                       m_postfx.vignette,
+                                       m_postfx.saturation,
+                                       static_cast<float>(static_cast<int>(m_tonemap_mode))};
         gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(tonemap_push), &tonemap_push);
         gcmd.set_viewport(0, 0, m_width, m_height);
         gcmd.set_scissor(0, 0, m_width, m_height);
@@ -1042,6 +1489,26 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     NF_LOG_TRACE(LogCategory::RHI, "Renderer3D prepared meshes: {}", prepared.size());
     m_graph->execute(cmd);
     return true;
+}
+
+Vec3 tonemap(Vec3 hdr, float exposure, TonemapMode mode) {
+    // Must match tonemap.frag exactly. The ACES constants are the published
+    // Narkowicz fit, not a hand-tuned approximation — the shader spells the
+    // same polynomial, and simplifying one side only desyncs the CPU mirror.
+    const auto op = [exposure, mode](f32 c) -> f32 {
+        const f32 x = c * exposure;
+        switch (mode) {
+            case TonemapMode::Exponential: return 1.0f - std::exp(-x);
+            case TonemapMode::ACES: {
+                const f32 kA = 2.51f, kB = 0.03f, kC = 2.43f, kD = 0.59f, kE = 0.14f;
+                return std::clamp((x * (kA * x + kB)) / (x * (kC * x + kD) + kE), 0.0f, 1.0f);
+            }
+            case TonemapMode::Reinhard: return x / (1.0f + x);
+            case TonemapMode::Linear:
+            default: return x; // unclamped: the UNorm target clamps on write
+        }
+    };
+    return {op(hdr.x), op(hdr.y), op(hdr.z)};
 }
 
 Vec3 apply_postfx(Vec3 color, Vec2 uv, const PostFxParams& params) {

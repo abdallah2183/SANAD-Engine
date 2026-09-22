@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sanad — Launcher UI prototype</title>
+<!--
+  Sanad launcher — visual prototype (shell + Help page).
+
+  This is the FIRST of the six screens in the reference set. It exists to pin the
+  shared shell before the remaining pages are built: window chrome, sidebar, nav,
+  status bar, card grid, icon style, type scale and spacing are all defined here
+  once. Every later page is a content swap inside .content.
+
+  Sizing note: the reference images are 1024x580. The stage below is fixed at
+  that size so a side-by-side comparison with the screenshots is 1:1.
+-->
+<style>
+  :root{
+    --bg-window:#202020;
+    --bg-chrome:#191919;
+    --bg-sidebar:#1a1a1a;
+    --bg-card:#2a2a2a;
+    --bg-card-hover:#323232;
+    --bg-inset:#242424;
+    --line:#3a3a3a;
+    --line-soft:#333333;
+    --text:#e9e9e9;
+    --text-dim:#9d9d9d;
+    --text-faint:#7a7a7a;
+    --accent-green:#3f7a52;
+    --accent-green-hover:#4a8b60;
+    --nav-active:#333333;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:#0d0d0d;
+    display:flex;align-items:center;justify-content:center;
+    font-family:"Segoe UI","Inter",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---------- window chrome ---------- */
+  .stage{
+    width:1024px;height:580px;
+    background:var(--bg-window);
+    border:1px solid #000;
+    display:flex;flex-direction:column;
+    overflow:hidden;
+    box-shadow:0 24px 60px rgba(0,0,0,.6);
+  }
+  .titlebar{
+    height:30px;flex:0 0 30px;
+    background:var(--bg-chrome);
+    display:flex;align-items:center;
+    padding:0 8px 0 10px;
+    border-bottom:1px solid #111;
+    user-select:none;
+  }
+  .titlebar .app{display:flex;align-items:center;gap:7px;color:var(--text);font-size:12px}
+  .titlebar .app svg{opacity:.85}
+  .titlebar .spacer{flex:1}
+  .titlebar .ctrls{display:flex;align-items:center;gap:2px}
+  .titlebar .ctrls span{
+    width:26px;height:22px;display:flex;align-items:center;justify-content:center;
+    color:var(--text-dim);font-size:11px;border-radius:3px;cursor:default;
+  }
+  .titlebar .ctrls span:hover{background:#2a2a2a;color:var(--text)}
+  .titlebar .ctrls span.close:hover{background:#c0392b;color:#fff}
+
+  /* ---------- body ---------- */
+  .body{flex:1;display:flex;min-height:0}
+
+  /* ---------- sidebar ---------- */
+  .sidebar{
+    width:200px;flex:0 0 200px;
+    background:var(--bg-sidebar);
+    border-right:1px solid #111;
+    display:flex;flex-direction:column;
+    padding:14px 10px 10px;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:0 6px 18px}
+  .brand .mark{flex:0 0 auto;color:#cfcfcf}
+  .brand .names{display:flex;flex-direction:column;align-items:flex-end;flex:1;line-height:1.15}
+  .brand .names .ar{color:var(--text);font-size:16px;font-weight:600;letter-spacing:.5px}
+  .brand .names .en{color:var(--text-faint);font-size:10px}
+
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .nav a{
+    display:flex;align-items:center;gap:10px;
+    height:32px;padding:0 10px;border-radius:6px;
+    color:var(--text-dim);font-size:12.5px;text-decoration:none;
+    cursor:default;
+  }
+  .nav a svg{flex:0 0 auto;opacity:.9}
+  .nav a:hover{background:#242424;color:var(--text)}
+  .nav a.active{background:var(--nav-active);color:var(--text)}
+
+  .sidebar .foot{margin-top:auto;padding:10px 6px 2px;font-size:10.5px;line-height:1.5}
+  .sidebar .foot .ver{color:var(--text-dim)}
+  .sidebar .foot .ver b{color:var(--text);font-weight:600}
+  .sidebar .foot .ctx{color:var(--text-faint)}
+  .sidebar .foot .os{color:var(--text-faint);margin-top:6px}
+
+  /* ---------- content ---------- */
+  .content{flex:1;min-width:0;overflow:hidden;padding:20px 22px 0}
+  .page-head{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+  .page-head h1{font-size:20px;font-weight:600;color:var(--text);flex:1}
+  .search{
+    width:230px;height:30px;border-radius:6px;
+    background:var(--bg-inset);border:1px solid var(--line-soft);
+    display:flex;align-items:center;padding:0 10px;gap:8px;
+    color:var(--text-faint);font-size:12px;
+  }
+  .search input{
+    flex:1;background:none;border:none;outline:none;color:var(--text);font-size:12px;
+    font-family:inherit;
+  }
+  .search input::placeholder{color:var(--text-faint)}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{
+    background:var(--bg-card);
+    border:1px solid var(--line-soft);
+    border-radius:var(--radius);
+    padding:16px 16px 14px;
+    min-height:168px;
+    display:flex;flex-direction:column;
+    cursor:default;
+  }
+  .card:hover{background:var(--bg-card-hover);border-color:#454545}
+  .card .icon{height:56px;display:flex;align-items:center;color:#d8d8d8;margin-bottom:12px}
+  .card h3{font-size:16.5px;font-weight:600;color:var(--text);margin-bottom:8px}
+  .card .cap{font-size:10.5px;letter-spacing:.4px;color:var(--text-dim);text-transform:uppercase}
+  .card .ar{font-size:11.5px;color:var(--text-dim);margin:2px 0 6px}
+  .card p{font-size:11.5px;line-height:1.45;color:var(--text-dim)}
+
+  .section-title{font-size:14px;font-weight:600;color:var(--text);margin:22px 0 10px}
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding-bottom:18px}
+  .btn{
+    height:38px;border-radius:7px;
+    background:var(--bg-card);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--text);font-size:12px;font-weight:600;letter-spacing:.6px;
+    text-transform:uppercase;cursor:default;
+  }
+  .btn:hover{background:var(--bg-card-hover)}
+  .btn.primary{background:var(--accent-green);border-color:#2f5f40}
+  .btn.primary:hover{background:var(--accent-green-hover)}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ================= title bar ================= -->
+  <div class="titlebar">
+    <div class="app">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="9"/>
+      </svg>
+      Sanad
+    </div>
+    <div class="spacer"></div>
+    <div class="ctrls">
+      <span title="Editor">E</span>
+      <span title="Help">?</span>
+      <span title="Minimize">&#8212;</span>
+      <span title="Maximize">&#9723;</span>
+      <span class="close" title="Close">&#10005;</span>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <!-- ================= sidebar ================= -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="mark">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="3.2"/>
+            <path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.4 5.4l1.9 1.9M16.7 16.7l1.9 1.9M18.6 5.4l-1.9 1.9M7.3 16.7l-1.9 1.9"/>
+          </svg>
+        </span>
+        <span class="names">
+          <span class="ar">سند</span>
+          <span class="en">Game engine</span>
+        </span>
+      </div>
+
+      <nav class="nav">
+        <a href="#" data-page="projects">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h5l2 2h11v10H3z"/></svg>
+          Projects
+        </a>
+        <a href="#" data-page="new">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5v14M5 12h14"/></svg>
+          New project
+        </a>
+        <a href="#" data-page="learn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4 2 9l10 5 10-5-10-5zM6 11.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5"/></svg>
+          Learn
+        </a>
+        <a href="#" data-page="store">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8l2-4h14l2 4M3 8h18v11H3zM9 8v3a3 3 0 0 0 6 0V8"/></svg>
+          Asset Store
+        </a>
+        <a href="#" data-page="settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 11 4.6a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 19.4 11a2 2 0 1 1 0 4z"/></svg>
+          Settings
+        </a>
+        <a href="#" data-page="help" class="active">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.8.7-.8 1.3v.3"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
+          Help
+        </a>
+      </nav>
+
+      <div class="foot">
+        <div class="ver">Sanad <b>0.9.2</b> <span class="ctx">|</span></div>
+        <div class="ctx">Viewing Help</div>
+        <div class="os">Windows: PC only</div>
+      </div>
+    </aside>
+
+    <!-- ================= content ================= -->
+    <main class="content">
+      <div class="page-head">
+        <h1>Sanad Help</h1>
+        <div class="search">
+          <input placeholder="Search help topics...">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="icon">
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1">
+              <path d="M12 6.5C10.4 5.2 8.2 4.6 4.5 4.6v13c3.7 0 5.9.6 7.5 1.9 1.6-1.3 3.8-1.9 7.5-1.9v-13c-3.7 0-5.9.6-7.5 1.9z"/>
+              <path d="M12 6.5v13"/>
+            </svg>
+          </div>
+          <h3>Documentation</h3>
+          <div class="cap">Offline documentation دليل استخدام (داخل التطبيق)</div>
+          <div class="ar">Complete reference for Sanad APIs, features, and workflow.</div>
+          <p>مرجع شامل لواجهات برمجة تطبيقات سند، وميزاته، وسير العمل.</p>
+        </div>
+
+        <div class="card">
+          <div class="icon">
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1">
+              <rect x="2.5" y="5" width="15" height="11" rx="1.2"/>
+              <path d="M17.5 9.5 21.5 7v10l-4-2.5z"/>
+              <path d="M8 5v2M12 5v2"/>
+            </svg>
+          </div>
+          <h3>Tutorials &amp; Guides</h3>
+          <div class="cap">Step-by-step guides ألة خطوة بخطوة</div>
+          <div class="ar">Learn from basic to advanced topics through interactive guides.</div>
+          <p>تعلم من المواضيع الأساسية إلى المتقدمة من خلال أدلة تفاعلية.</p>
+        </div>
+
+        <div class="card">
+          <div class="icon">
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1">
+              <path d="M3 5h11v8H6.5L3 15.5z"/>
+              <path d="M10 9h11v8h-3.5L14 19.5V17"/>
+              <circle cx="7.5" cy="17.5" r="1.6"/>
+              <circle cx="12" cy="17.5" r="1.6"/>
+              <circle cx="16.5" cy="17.5" r="1.6"/>
+            </svg>
+          </div>
+          <h3>Community Forum</h3>
+          <div class="cap">Ask questions &amp; share اسأل وشارك</div>
+          <div class="ar">Connect with other Sanad developers and get help from the community.</div>
+          <p>تواصل مع مطوري سند الآخرين واحصل على مساعدة من المجتمع.</p>
+        </div>
+
+        <div class="card">
+          <div class="icon">
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1">
+              <rect x="5" y="3.5" width="14" height="17" rx="1.5"/>
+              <path d="M9 3.5h6v2.5H9z"/>
+              <path d="M8.5 10.5l1.3 1.3 2.4-2.4M8.5 15.5l1.3 1.3 2.4-2.4"/>
+              <path d="M14.5 11h2M14.5 16h2"/>
+            </svg>
+          </div>
+          <h3>Release Notes</h3>
+          <div class="cap">What's new in v0.9.2 ما الجديد في v0.9.2</div>
+          <div class="ar">View the latest features, bug fixes, and changes in this version.</div>
+          <p>اطلع على أحدث الميزات وإصلاحات الأخطاء والتغييرات في هذا الإصدار.</p>
+        </div>
+
+        <div class="card">
+          <div class="icon">
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1">
+              <rect x="2.5" y="5.5" width="19" height="13" rx="1.5"/>
+              <path d="M2.5 6.5 12 13l9.5-6.5"/>
+              <text x="12" y="16.6" font-size="8" text-anchor="middle" fill="currentColor" stroke="none">?</text>
+            </svg>
+          </div>
+          <h3>Support Tickets</h3>
+          <div class="cap">Submit a ticket تقديم تذكرة دعم</div>
+          <div class="ar">Create a formal support request for critical issues and technical problems.</div>
+          <p>إنشاء طلب دعم رسمي للمسائل الحرجة والمشاكل التقنية.</p>
+        </div>
+
+        <div class="card">
+          <div class="icon">
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1">
+              <path d="M12 3.5 14.3 8.4l5.4.8-3.9 3.8.9 5.4-4.7-2.5-4.7 2.5.9-5.4L4.3 9.2l5.4-.8z"/>
+              <path d="M6.5 18.5h2M15.5 18.5h2"/>
+            </svg>
+          </div>
+          <h3>Feature Requests</h3>
+          <div class="cap">Suggest a feature اقتراح ميزة جديدة</div>
+          <div class="ar">Vote on and submit ideas for improving the Sanad engine.</div>
+          <p>صوّت وقدم أفكاراً لتحسين محرك سند.</p>
+        </div>
+      </div>
+
+      <div class="section-title">Additional Resources</div>
+      <div class="actions">
+        <div class="btn">View Documentation</div>
+        <div class="btn">Submit Bug Report</div>
+      </div>
+    </main>
+
+  </div>
+</div>
+</body>
+</html>

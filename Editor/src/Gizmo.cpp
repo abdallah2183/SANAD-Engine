@@ -1,6 +1,9 @@
 #include <NF/Editor/Gizmo.hpp>
 #include <NF/Editor/Commands.hpp>
 
+#include <NF/Core/Math.hpp>
+#include <NF/Scene/Transform.hpp>
+
 #include <algorithm>
 #include <cmath>
 
@@ -9,6 +12,16 @@ namespace nf::editor {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
+
+// Rounds `value` onto a grid of `step`, or returns it untouched when snapping
+// is off for this channel. Negative values round symmetrically about zero, so
+// a drag back through the origin lands on the origin, not on -step.
+float snap_to_grid(float value, float step) {
+    if (step <= 0.0f) {
+        return value;
+    }
+    return std::round(value / step) * step;
+}
 
 void normalize3(float& x, float& y, float& z) {
     const float l = std::sqrt(x * x + y * y + z * z);
@@ -126,19 +139,56 @@ GizmoDelta gizmo_delta_for_drag(GizmoMode mode, const ViewCamera& cam, float dis
 }
 
 scene::Transform apply_gizmo_delta(const scene::Transform& base, const GizmoDelta& d,
-                                   GizmoMode mode, GizmoSpace space) {
-    (void)space; // v0.1: rotation applies to local euler in both spaces (documented).
+                                   GizmoMode mode, GizmoSpace space, const GizmoSnap& snap) {
     scene::Transform out = base;
     if (mode == GizmoMode::Translate) {
-        out.local_x = base.local_x + d.dx;
-        out.local_y = base.local_y + d.dy;
-        out.local_z = base.local_z + d.dz;
+        const float dx = snap_to_grid(d.dx, snap.translate_step);
+        const float dy = snap_to_grid(d.dy, snap.translate_step);
+        const float dz = snap_to_grid(d.dz, snap.translate_step);
+        if (dx == 0.0f && dy == 0.0f && dz == 0.0f) {
+            return out; // no movement: leave the base exactly as it was
+        }
+        if (space == GizmoSpace::Local) {
+            // v0.1 propagates translation only (a child's world_xyz is
+            // parent_world + local, no parent rotation), so a world-space
+            // pointer delta becomes a local-axis delta by rotating back
+            // through the entity's own rotation: local = R^-1 * world.
+            // Parents that rotate do not drag their children in v0.1
+            // (documented Transform scope); Local uses the entity's own axes.
+            const Quat q =
+                scene::quat_from_euler_xyz_degrees(base.rot_x, base.rot_y, base.rot_z);
+            const Vec3 dl = q.conjugate().rotate(Vec3(dx, dy, dz));
+            out.local_x = base.local_x + dl.x;
+            out.local_y = base.local_y + dl.y;
+            out.local_z = base.local_z + dl.z;
+        } else {
+            out.local_x = base.local_x + dx;
+            out.local_y = base.local_y + dy;
+            out.local_z = base.local_z + dz;
+        }
     } else if (mode == GizmoMode::Rotate) {
-        out.rot_y = base.rot_y + d.yaw_deg;
-        out.rot_x = base.rot_x + d.pitch_deg;
+        const float yaw = snap_to_grid(d.yaw_deg, snap.rotate_step_deg);
+        const float pitch = snap_to_grid(d.pitch_deg, snap.rotate_step_deg);
+        if (yaw == 0.0f && pitch == 0.0f) {
+            return out;
+        }
+        // Euler angles do not compose (pitch then yaw is not yaw+pitch once
+        // either leaves the zero plane), so the delta composes as a
+        // quaternion and the result converts back to XYZ euler through the
+        // canonical pair in NF/Scene/Transform.hpp.
+        const Quat q_old =
+            scene::quat_from_euler_xyz_degrees(base.rot_x, base.rot_y, base.rot_z);
+        const Quat q_delta = scene::quat_from_euler_xyz_degrees(pitch, yaw, 0.0f);
+        // World: the delta applies in world axes, so it pre-multiplies;
+        // Local: it applies in the entity's own axes, so it post-multiplies.
+        const Quat q_new = (space == GizmoSpace::World) ? (q_delta * q_old) : (q_old * q_delta);
+        scene::euler_xyz_degrees_from_quat(q_new, out.rot_x, out.rot_y, out.rot_z);
     } else {
-        const float f = 1.0f + d.dscale;
-        const float nf = (f > 0.01f) ? f : 0.01f;
+        // Scale snaps on the FACTOR grid (0.25 step -> 0.25x, 0.5x, 0.75x,
+        // 1.0x...), not on the pointer delta: snapping the delta would make
+        // the grid depend on where the gesture started.
+        const float f = snap_to_grid(1.0f + d.dscale, snap.scale_step);
+        const float nf = (f > 0.01f) ? f : 0.01f; // never collapse to zero/negative
         out.scale_x = base.scale_x * nf;
         out.scale_y = base.scale_y * nf;
         out.scale_z = base.scale_z * nf;
@@ -146,25 +196,47 @@ scene::Transform apply_gizmo_delta(const scene::Transform& base, const GizmoDelt
     return out;
 }
 
-bool GizmoDrag::begin(ecs::World& world, ecs::Entity e, GizmoMode mode, GizmoSpace space,
-                      std::string& out_err) {
+bool GizmoDrag::begin(ecs::World& world, const std::vector<ecs::Entity>& entities, GizmoMode mode,
+                      GizmoSpace space, const GizmoSnap& snap, std::string& out_err) {
     cancel();
-    if (!e.valid() || !world.is_alive(e)) {
-        out_err = "No entity selected";
+    std::vector<ecs::Entity> skipped;
+    for (ecs::Entity e : entities) {
+        if (!e.valid() || !world.is_alive(e)) {
+            continue;
+        }
+        const auto* t = world.get<scene::Transform>(e);
+        if (t == nullptr) {
+            skipped.push_back(e);
+            continue;
+        }
+        m_entities.push_back(e);
+        m_starts.push_back(*t);
+    }
+    if (m_entities.empty()) {
+        out_err = skipped.empty() ? "No entity selected" : "Selected entities have no Transform";
         return false;
     }
-    const auto* t = world.get<scene::Transform>(e);
-    if (t == nullptr) {
-        out_err = "Selected entity has no Transform";
-        return false;
+    if (!skipped.empty()) {
+        // Reported, not fatal: a group selection may include non-transform
+        // holders, and the draggable part of it should still move.
+        out_err = "Skipped " + std::to_string(skipped.size()) +
+                  (skipped.size() == 1 ? " entity" : " entities") + " without a Transform";
     }
-    m_entity = e;
     m_mode = mode;
     m_space = space;
-    m_start = *t;
+    m_snap = snap;
     m_total = GizmoDelta{};
     m_active = true;
     return true;
+}
+
+bool GizmoDrag::begin(ecs::World& world, ecs::Entity e, GizmoMode mode, GizmoSpace space,
+                      std::string& out_err) {
+    std::vector<ecs::Entity> one;
+    if (e.valid()) {
+        one.push_back(e);
+    }
+    return begin(world, one, mode, space, GizmoSnap{}, out_err);
 }
 
 void GizmoDrag::accumulate(const GizmoDelta& d) {
@@ -188,57 +260,86 @@ std::unique_ptr<ICommand> GizmoDrag::commit(ecs::World& world) {
         return nullptr;
     }
     m_active = false;
-    if (!m_entity.valid() || !world.is_alive(m_entity)) {
-        m_entity = ecs::kInvalidEntity;
+    if (m_entities.empty()) {
+        cancel();
         return nullptr;
     }
-    const auto* cur = world.get<scene::Transform>(m_entity);
-    if (cur == nullptr) {
-        m_entity = ecs::kInvalidEntity;
-        return nullptr;
+    // Keep only entries that actually moved (the snapped grid can hold the
+    // accumulated delta at zero) and are still alive with a Transform. The
+    // command is one transaction for the survivors, never one per entity.
+    std::vector<SetTransformsCommand::Entry> moved;
+    moved.reserve(m_entities.size());
+    for (size_t i = 0; i < m_entities.size(); ++i) {
+        if (!world.is_alive(m_entities[i])) {
+            continue;
+        }
+        if (world.get<scene::Transform>(m_entities[i]) == nullptr) {
+            continue;
+        }
+        const scene::Transform after =
+            apply_gizmo_delta(m_starts[i], m_total, m_mode, m_space, m_snap);
+        if (after.local_x == m_starts[i].local_x && after.local_y == m_starts[i].local_y &&
+            after.local_z == m_starts[i].local_z && after.rot_x == m_starts[i].rot_x &&
+            after.rot_y == m_starts[i].rot_y && after.rot_z == m_starts[i].rot_z &&
+            after.scale_x == m_starts[i].scale_x && after.scale_y == m_starts[i].scale_y &&
+            after.scale_z == m_starts[i].scale_z) {
+            continue;
+        }
+        moved.push_back(SetTransformsCommand::Entry{m_entities[i], m_starts[i], after});
     }
-    const scene::Transform after = apply_gizmo_delta(m_start, m_total, m_mode, m_space);
-    ecs::Entity e = m_entity;
-    m_entity = ecs::kInvalidEntity;
-    // A no-op drag still yields no command (keeps the undo stack clean).
-    if (after.local_x == m_start.local_x && after.local_y == m_start.local_y &&
-        after.local_z == m_start.local_z && after.rot_x == m_start.rot_x &&
-        after.rot_y == m_start.rot_y && after.rot_z == m_start.rot_z &&
-        after.scale_x == m_start.scale_x && after.scale_y == m_start.scale_y &&
-        after.scale_z == m_start.scale_z) {
-        return nullptr;
+    const std::string verb = (m_mode == GizmoMode::Translate)
+                                 ? "Move"
+                                 : (m_mode == GizmoMode::Rotate ? "Rotate" : "Scale");
+    cancel();
+    if (moved.empty()) {
+        return nullptr; // a no-op drag never pollutes the undo stack
     }
-    return std::make_unique<SetTransformCommand>(e, m_start, after);
+    return std::make_unique<SetTransformsCommand>(std::move(moved), verb);
 }
 
 void GizmoDrag::cancel() {
     m_active = false;
-    m_entity = ecs::kInvalidEntity;
+    m_entities.clear();
+    m_starts.clear();
     m_total = GizmoDelta{};
 }
 
 bool GizmoDrag::live_apply(ecs::World& world) {
-    if (!m_active || !m_entity.valid() || !world.is_alive(m_entity)) {
+    if (!m_active || m_entities.empty()) {
         return false;
     }
-    auto* t = world.get<scene::Transform>(m_entity);
-    if (t == nullptr) {
-        return false;
+    bool applied = false;
+    for (size_t i = 0; i < m_entities.size(); ++i) {
+        if (!world.is_alive(m_entities[i])) {
+            continue;
+        }
+        auto* t = world.get<scene::Transform>(m_entities[i]);
+        if (t == nullptr) {
+            continue;
+        }
+        *t = apply_gizmo_delta(m_starts[i], m_total, m_mode, m_space, m_snap);
+        t->dirty = true;
+        applied = true;
     }
-    *t = apply_gizmo_delta(m_start, m_total, m_mode, m_space);
-    t->dirty = true;
-    return true;
+    return applied;
 }
 
 bool GizmoDrag::abort(ecs::World& world) {
     if (!m_active) {
         return false;
     }
-    const bool restored = m_entity.valid() && world.is_alive(m_entity) &&
-                          world.get<scene::Transform>(m_entity) != nullptr;
-    if (restored) {
-        *world.get<scene::Transform>(m_entity) = m_start;
-        world.get<scene::Transform>(m_entity)->dirty = true;
+    bool restored = false;
+    for (size_t i = 0; i < m_entities.size(); ++i) {
+        if (!world.is_alive(m_entities[i])) {
+            continue;
+        }
+        auto* t = world.get<scene::Transform>(m_entities[i]);
+        if (t == nullptr) {
+            continue;
+        }
+        *t = m_starts[i];
+        t->dirty = true;
+        restored = true;
     }
     cancel();
     return restored;

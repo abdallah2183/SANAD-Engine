@@ -10,6 +10,10 @@ set(NFNETWORKING_SOURCES
     src/PhysicsReplication.cpp
     src/BodyReplication.cpp
     src/ConstraintReplicator.cpp
+    # The headless host (design §81): owns the socket and one reliable channel
+    # per client around AuthoritativeServer. Deliberately the only entry point
+    # that touches Socket_* — the replication classes above stay socket-free.
+    src/DedicatedServer.cpp
 )
 
 if(WIN32)

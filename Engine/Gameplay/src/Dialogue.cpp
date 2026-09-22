@@ -167,10 +167,34 @@ bool DialogueTree::parse(const std::string& text) {
     return true;
 }
 
+// --- presentation hook (Game-Ready G3) ----------------------------------------
+
+void DialogueRunner::set_listener(DialogueListener listener) {
+    m_listener = std::move(listener);
+}
+
+void DialogueRunner::emit_node() {
+    if (!m_listener || !m_current) return;
+    DialogueEvent e;
+    e.type = DialogueEventType::NodeEntered;
+    e.node_id = m_current->id;
+    e.speaker = m_current->speaker;
+    e.text = m_current->text;
+    m_listener(e);
+}
+
+void DialogueRunner::emit_ended() {
+    if (!m_listener) return;
+    DialogueEvent e;
+    e.type = DialogueEventType::Ended;
+    m_listener(e);
+}
+
 bool DialogueRunner::start(const DialogueTree& tree, const std::string& start_node) {
     const DialogueNode* n = tree.find(start_node);
     m_tree = &tree;
     m_current = n;
+    if (n != nullptr) emit_node();
     return n != nullptr;
 }
 
@@ -191,7 +215,18 @@ bool DialogueRunner::choose(const std::string& choice_id, TagContainer& tags) {
         if (c.id != choice_id) continue;
         if (!c.requires_tag.empty() && !tags.has(c.requires_tag)) return false;
         if (!c.sets_tag.empty()) tags.add(c.sets_tag);
+        if (m_listener) {
+            DialogueEvent e;
+            e.type = DialogueEventType::ChoicePicked;
+            e.node_id = m_current->id;
+            e.speaker = m_current->speaker;
+            e.text = m_current->text;
+            e.choice_id = c.id;
+            m_listener(e);
+        }
         m_current = c.next_node.empty() ? nullptr : m_tree->find(c.next_node);
+        if (m_current != nullptr) emit_node();
+        else emit_ended();
         return true;
     }
     return false;
@@ -201,9 +236,12 @@ bool DialogueRunner::advance() {
     if (!m_current || !m_tree || !m_current->choices.empty()) return false;
     if (m_current->next.empty()) {
         m_current = nullptr; // terminal line: advancing ends the run
+        emit_ended();
         return true;
     }
     m_current = m_tree->find(m_current->next);
+    if (m_current != nullptr) emit_node();
+    else emit_ended();
     return m_current != nullptr;
 }
 

@@ -73,7 +73,7 @@ public:
             VehicleComponent* vc = world.get<VehicleComponent>(entity);
             if (vc == nullptr) continue;
             // 1. Drive: clamp happens inside, gameplay writes raw [-1,1].
-            vehicle->drive(vc->throttle, vc->steer, vc->brake);
+            vehicle->drive(vc->throttle, vc->steer, vc->brake, vc->handbrake);
             // 2. Write the chassis pose into the transform. The renderer reads
             //    transforms; making physics the single writer of vehicle motion
             //    is what keeps a replay and a live game visually identical.

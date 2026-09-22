@@ -1,5 +1,6 @@
 #pragma once
 
+#include <NF/Audio/Buses.hpp>
 #include <NF/Core/Math.hpp>
 #include <NF/Core/Types.hpp>
 #include <cstdint>
@@ -93,6 +94,10 @@ struct AudioSource {
     bool spatial = false;
     Vec3 position = {0, 0, 0};
     SpatialSettings spatial_settings;
+
+    // Routing: which mix bus this source sums into (BusMixer, Buses.hpp).
+    // The engine default is Sfx; UI/music systems set Music or Ambience.
+    BusId bus = BusId::Sfx;
 
     void play() { playing = true; }
     void pause() { playing = false; }

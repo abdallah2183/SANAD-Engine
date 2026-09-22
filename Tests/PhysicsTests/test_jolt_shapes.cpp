@@ -1,13 +1,13 @@
 // PhysicsTests — complex colliders on the Jolt backend (design §38): capsule,
-// convex hull and static triangle mesh.
+// cylinder, convex hull, static triangle mesh, height field, compound.
 //
-// These three shapes arrive through additive entry points (JoltWorld's
-// add_capsule_body / add_convex_hull_body / add_mesh_body) that keep the
-// closed first-party Shape vocabulary untouched. What each case verifies is
-// therefore two things at once: the collider is the shape that was asked for
-// (a capsule that silently becomes a sphere is a WRONG collider, not a
-// missing one) and it is an ordinary body to the rest of the wrapper —
-// queries, CCD, life cycle.
+// These shapes arrive through additive entry points (JoltWorld's
+// add_capsule_body / add_cylinder_body / add_convex_hull_body / add_mesh_body /
+// add_heightfield_body / add_compound_body) that keep the closed first-party
+// Shape vocabulary untouched. What each case verifies is therefore two things at
+// once: the collider is the shape that was asked for (a capsule that silently
+// becomes a sphere is a WRONG collider, not a missing one) and it is an ordinary
+// body to the rest of the wrapper — queries, CCD, life cycle.
 //
 // Every case is a tiny headless world with a fixed dt: no rendering, no
 // threads, deterministic.
@@ -379,8 +379,535 @@ NF_TEST(jolt_mesh_invalid_inputs_are_safe) {
     NF_CHECK(world.body_count() == base_count);
 }
 
-// --- Everything together: CCD and life cycle ------------------------------
+// --- Height field ---------------------------------------------------------
 
+namespace {
+
+/// The field used by every heightfield case: an 8x8 grid laid over [-4, 4]^2
+/// in XZ, flat at y = 0 except a raised central square. The engine's terrain
+/// convention (grid in XZ, +Y up) is Jolt's too, so `heights[y * n + x]` is
+/// both the sample a renderer would read and the one the collider gets.
+constexpr u32 kHfCount = 8;
+constexpr Vec3 kHfOffset{-4.0f, 0.0f, -4.0f};
+constexpr Vec3 kHfScale{8.0f / 7.0f, 1.0f, 8.0f / 7.0f};
+constexpr float kPlateauHeight = 2.0f;
+
+std::vector<float> plateau_field() {
+    std::vector<float> h(kHfCount * kHfCount, 0.0f);
+    // Samples x,y in {3, 4} are the raised square. Sample index x maps to world
+    // X = -4 + (8/7)x, so 3 and 4 are -0.571 and +0.571: the plateau is the
+    // square [-0.571, 0.571]^2 at y = 2, centred on the origin.
+    for (u32 y = 0; y < kHfCount; ++y) {
+        for (u32 x = 0; x < kHfCount; ++x) {
+            if ((x == 3 || x == 4) && (y == 3 || y == 4)) {
+                h[y * kHfCount + x] = kPlateauHeight;
+            }
+        }
+    }
+    return h;
+}
+
+} // namespace
+
+NF_TEST(jolt_heightfield_ball_rests_on_the_ridge_not_the_floor) {
+    JoltWorld world;
+    const JoltBody field =
+        world.add_heightfield_body(BodyDesc{}, plateau_field(), kHfCount, kHfOffset, kHfScale);
+    NF_CHECK(field.valid());
+    NF_CHECK(world.is_alive(field));
+
+    // Dropped over the raised square: it must come to rest 2 + 0.25 up, not on
+    // the flat base. This is the whole point of the collider — a height field
+    // that silently collapsed to a box or a plane parks the ball at 0.25.
+    const JoltBody on_ridge = world.add_body(dynamic_sphere(Vec3{0, 5, 0}, 0.25f));
+    // Control: same ball, same height, over the flat part of the same field.
+    const JoltBody on_flat = world.add_body(dynamic_sphere(Vec3{3.5f, 5, 3.5f}, 0.25f));
+    NF_CHECK(on_ridge.valid());
+    NF_CHECK(on_flat.valid());
+    NF_CHECK(world.body_count() == 3);
+
+    step(world, 240);
+    NF_CHECK_NEAR(world.state(on_flat).position.y, 0.25f, 0.05f);
+    NF_CHECK_NEAR(world.state(on_ridge).position.y, kPlateauHeight + 0.25f, 0.05f);
+    NF_CHECK(world.state(on_ridge).position.y > world.state(on_flat).position.y + 1.0f);
+    NF_CHECK(std::abs(world.state(on_ridge).linear_velocity.y) < 0.1f);
+
+    step(world, 120); // it stays parked, it does not slide off or sink
+    NF_CHECK_NEAR(world.state(on_ridge).position.y, kPlateauHeight + 0.25f, 0.05f);
+    NF_CHECK_NEAR(world.state(on_ridge).position.x, 0.0f, 0.15f);
+}
+
+NF_TEST(jolt_heightfield_body_is_forced_static) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+    const usize base_count = world.body_count();
+
+    // Asked for Dynamic, documented to get Static: a Jolt height field may not
+    // move, exactly like the mesh collider.
+    BodyDesc desc;
+    desc.type = BodyType::Dynamic;
+    desc.position = Vec3{0, 3, 0};
+    const JoltBody field =
+        world.add_heightfield_body(desc, plateau_field(), kHfCount, kHfOffset, kHfScale);
+    NF_CHECK(field.valid());
+    NF_CHECK(world.is_alive(field));
+
+    // Control: gravity is on, so a sphere let go at the same height falls.
+    // (Placed over the flat part, where the field is at y = 0, so it lands
+    // rather than resting on the plateau.)
+    const JoltBody ball = world.add_body(dynamic_sphere(Vec3{3.5f, 3, 3.5f}, 0.25f));
+    NF_CHECK(ball.valid());
+    step(world, 180);
+
+    NF_CHECK_NEAR(world.state(field).position.y, 3.0f, 1e-4f);
+    NF_CHECK(world.state(field).linear_velocity.y == 0.0f);
+    NF_CHECK(world.state(ball).position.y < 1.0f);
+    NF_CHECK(world.body_count() == base_count + 2);
+}
+
+NF_TEST(jolt_heightfield_is_queryable) {
+    JoltWorld world = shape_world();
+    const JoltBody field =
+        world.add_heightfield_body(BodyDesc{}, plateau_field(), kHfCount, kHfOffset, kHfScale);
+    NF_CHECK(field.valid());
+
+    // Straight down through the plateau's centre: the surface is at y = 2, so a
+    // ray from y = 10 travels 8. A collider that ignored the samples (a box at
+    // the field's bounds, or a plane) would not give this number.
+    const JoltWorld::QueryHit down = world.ray_cast(Vec3{0, 10, 0}, Vec3{0, -1, 0}, 20.0f);
+    NF_CHECK(down.hit);
+    NF_CHECK(down.body == field);
+    NF_CHECK_NEAR(down.distance, 8.0f, 0.05f);
+    NF_CHECK_NEAR(down.normal.y, 1.0f, 1e-2f);
+
+    // Over the flat part the same ray reaches the base instead.
+    const JoltWorld::QueryHit flat = world.ray_cast(Vec3{3.5f, 10, 3.5f}, Vec3{0, -1, 0}, 20.0f);
+    NF_CHECK(flat.hit);
+    NF_CHECK(flat.body == field);
+    NF_CHECK_NEAR(flat.distance, 10.0f, 0.05f);
+
+    const std::vector<JoltBody> overlaps = world.overlap_sphere(Vec3{0, 2.4f, 0}, 0.5f);
+    NF_CHECK(contains(overlaps, field));
+
+    // A 0.25 sphere swept down at the plateau stops one radius above the ridge.
+    const JoltWorld::QueryHit sweep =
+        world.sphere_cast(Vec3{0, 10, 0}, 0.25f, Vec3{0, -1, 0}, 20.0f);
+    NF_CHECK(sweep.hit);
+    NF_CHECK(sweep.body == field);
+    NF_CHECK_NEAR(sweep.distance, 8.0f - 0.25f, 0.05f);
+}
+
+NF_TEST(jolt_heightfield_invalid_inputs_are_safe) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+    const usize base_count = world.body_count();
+    BodyDesc desc;
+    const std::vector<float> ok = plateau_field();
+
+    // Sample count below Jolt's floor of 4 (sample_count / block_size >= 2 with
+    // the default block size of 2).
+    NF_CHECK(!world.add_heightfield_body(desc, {0.0f, 0.0f, 0.0f, 0.0f}, 2, kHfOffset, kHfScale)
+                  .valid());
+    // Buffer does not match the declared grid: Jolt's constructor copies
+    // sample_count^2 values sight unseen, so this is caught here rather than
+    // read out of bounds.
+    NF_CHECK(!world.add_heightfield_body(desc, ok, 16, kHfOffset, kHfScale).valid());
+    NF_CHECK(!world.add_heightfield_body(desc, std::vector<float>(63, 0.0f), 8, kHfOffset,
+                                         kHfScale)
+                  .valid());
+    // Non-finite samples: the builder would otherwise quantize a NaN.
+    std::vector<float> nan_field = ok;
+    nan_field[3 * kHfCount + 3] = std::nanf("");
+    NF_CHECK(!world.add_heightfield_body(desc, nan_field, kHfCount, kHfOffset, kHfScale).valid());
+    // A zero X or Z scale collapses the grid to a line: no field to hit.
+    NF_CHECK(!world.add_heightfield_body(desc, ok, kHfCount, kHfOffset,
+                                         Vec3{0.0f, 1.0f, 1.0f})
+                  .valid());
+    NF_CHECK(!world.add_heightfield_body(desc, ok, kHfCount, kHfOffset,
+                                         Vec3{1.0f, 1.0f, 0.0f})
+                  .valid());
+
+    NF_CHECK(world.body_count() == base_count); // none of them added a body
+
+    // A zero Y scale is a flat field, which is a legal plane and stays allowed.
+    const JoltBody flat =
+        world.add_heightfield_body(desc, std::vector<float>(16, 1.5f), 4, Vec3{0, 0, 0},
+                                   Vec3{1.0f, 0.0f, 1.0f});
+    NF_CHECK(flat.valid());
+    NF_CHECK(world.body_count() == base_count + 1);
+
+    // And it is an ordinary body: counted, alive, removable.
+    world.remove_body(flat);
+    NF_CHECK(!world.is_alive(flat));
+    NF_CHECK(world.body_count() == base_count);
+}
+
+// --- Compound -------------------------------------------------------------
+
+NF_TEST(jolt_compound_is_concave_where_a_hull_cannot_be) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+
+    // A U-bracket: a base bar with two arms, open at the top. A convex hull of
+    // its corners is the bounding BOX of the U, groove filled in — so a body
+    // dropped into the U's mouth lands on the base, while the same body dropped
+    // onto the hull lands an arm's height higher. That difference is the whole
+    // reason the compound exists: the hull cannot have a groove.
+    const Vec3 arm{0.25f, 1.0f, 0.5f};
+    const Vec3 base{1.5f, 0.25f, 0.5f};
+    std::vector<JoltWorld::CompoundPart> parts;
+    JoltWorld::CompoundPart base_part;
+    base_part.shape = JoltWorld::CompoundShape::make_box(base);
+    // The base is centred on y = 0.25 so it spans 0..0.5: the compound's LOWEST
+    // local point is then 0, same as the hull whose corners start at y = 0. Both
+    // origins sit at their shape's own bottom, which is what makes the two
+    // rest-height assertions below comparable. Centring the base on 0 instead
+    // puts its bottom half a part BELOW the origin, so the bracket rests 0.25
+    // above the floor while the hull rests at 0 — the two are no longer
+    // measuring the same thing and the ball-in-mouth height shifts with it.
+    base_part.position = Vec3{0, 0.25f, 0}; // base spans y = 0 .. 0.5
+    JoltWorld::CompoundPart left;
+    left.shape = JoltWorld::CompoundShape::make_box(arm);
+    left.position = Vec3{-1.0f, 1.25f, 0}; // arms run y = 0.25 .. 2.25
+    JoltWorld::CompoundPart right;
+    right.shape = JoltWorld::CompoundShape::make_box(arm);
+    right.position = Vec3{1.0f, 1.25f, 0};
+    parts.push_back(base_part);
+    parts.push_back(left);
+    parts.push_back(right);
+
+    BodyDesc u_desc;
+    u_desc.type = BodyType::Dynamic;
+    u_desc.position = Vec3{-3, 4, 0};
+    const JoltBody bracket = world.add_compound_body(u_desc, parts);
+    NF_CHECK(bracket.valid());
+    NF_CHECK(world.is_alive(bracket));
+
+    // Control: the convex hull of the U's own 12 corners — the bounding box,
+    // 3 wide and 2.25 tall, whose top is flat where the U has a mouth. The
+    // corners are exactly the U's extent in y (0 .. 2.25), so the hull bounds
+    // the same volume as the compound and both shapes put their lowest point at
+    // local 0 — which is what makes the two rest-height assertions below assert
+    // the same number rather than two numbers that happen to look alike.
+    std::vector<Vec3> corners;
+    for (const float sx : {-1.5f, 1.5f}) {
+        for (const float sy : {0.0f, 2.25f}) {
+            for (const float sz : {-0.5f, 0.5f}) {
+                corners.push_back(Vec3{sx, sy, sz});
+            }
+        }
+    }
+    BodyDesc hull_desc;
+    hull_desc.type = BodyType::Dynamic;
+    hull_desc.position = Vec3{3, 4, 0};
+    const JoltBody hull = world.add_convex_hull_body(hull_desc, corners);
+    NF_CHECK(hull.valid());
+    NF_CHECK(world.body_count() == 3); // the plane + the U + the hull
+
+    step(world, 400);
+    // Both rest on the floor and both have the SAME bounding box (the U's parts
+    // span y = -0.25 .. 2.25, and the hull was built from exactly those
+    // corners), so both report the same part-space origin height: the shapes
+    // agree about where they sit. The disagreement is only about the groove.
+    NF_CHECK_NEAR(world.state(bracket).position.y, 0.0f, 0.05f);
+    NF_CHECK_NEAR(world.state(hull).position.y, 0.0f, 0.05f);
+    NF_CHECK(std::abs(world.state(bracket).linear_velocity.y) < 0.05f);
+
+    // The discriminator: a ball dropped into the U's mouth falls to the base
+    // (top at 0.5) and parks at 0.5 + radius. The same ball dropped onto the
+    // hull lands on the flat top (2.25) and parks at 2.25 + radius. An arm's
+    // worth of difference, and only the concave collider can produce it.
+    const float r = 0.2f;
+    const JoltBody in_u = world.add_body(dynamic_sphere(Vec3{-3, 4, 0}, r));
+    const JoltBody on_hull = world.add_body(dynamic_sphere(Vec3{3, 4, 0}, r));
+    NF_CHECK(in_u.valid());
+    NF_CHECK(on_hull.valid());
+    step(world, 300);
+    NF_CHECK_NEAR(world.state(in_u).position.y, 0.5f + r, 0.05f);
+    NF_CHECK_NEAR(world.state(on_hull).position.y, 2.25f + r, 0.05f);
+    NF_CHECK(world.state(on_hull).position.y > world.state(in_u).position.y + 1.0f);
+}
+
+NF_TEST(jolt_compound_body_is_dynamic_and_moves_as_one_rigid_body) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+
+    // A table: one top and four legs, all one body. Dropped legs-down, it falls
+    // until the legs' feet reach the floor. Built as four loose boxes instead,
+    // the top would just drop to the ground beside them — nothing holds it up.
+    std::vector<JoltWorld::CompoundPart> parts;
+    JoltWorld::CompoundPart top;
+    top.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 0.1f, 1.0f});
+    top.position = Vec3{0, 1.0f, 0};
+    parts.push_back(top);
+    for (const float sx : {-0.9f, 0.9f}) {
+        for (const float sz : {-0.9f, 0.9f}) {
+            JoltWorld::CompoundPart leg;
+            leg.shape = JoltWorld::CompoundShape::make_box(Vec3{0.1f, 0.9f, 0.1f});
+            leg.position = Vec3{sx, 0.0f, sz};
+            parts.push_back(leg);
+        }
+    }
+
+    BodyDesc desc;
+    desc.type = BodyType::Dynamic;
+    desc.position = Vec3{0, 5, 0};
+    const JoltBody table = world.add_compound_body(desc, parts);
+    NF_CHECK(table.valid());
+    NF_CHECK(world.is_alive(table));
+
+    // Control: the top as a LOOSE body at the same world height. Nothing
+    // supports it, so it falls all the way to the floor on its own. It is offset
+    // in x on purpose: dropped at the table's own x it lands ON the tabletop
+    // (which is what "the legs hold it up" means) and parks at ~1.9 instead of
+    // 0.1, so the comparison would measure the tabletop, not the floor.
+    BodyDesc loose_top;
+    loose_top.type = BodyType::Dynamic;
+    loose_top.position = desc.position + top.position + Vec3{4.0f, 0.0f, 0.0f};
+    loose_top.shape = Shape::make_box(Vec3{1.0f, 0.1f, 1.0f});
+    const JoltBody free_top = world.add_body(loose_top);
+    NF_CHECK(free_top.valid());
+    NF_CHECK(world.body_count() == 3); // plane + table + loose top
+
+    step(world, 300);
+    const float table_y = world.state(table).position.y;
+    // The feet sit 0.9 below the origin, so the table rests at 0.9. It fell
+    // under gravity (from 5) and it stopped, rather than hovering or sinking.
+    NF_CHECK_NEAR(table_y, 0.9f, 0.05f);
+    NF_CHECK(std::abs(world.state(table).linear_velocity.y) < 0.05f);
+    // It did not topple: the top is still directly above the feet, not swung
+    // off to one side.
+    NF_CHECK_NEAR(world.state(table).position.x, 0.0f, 0.05f);
+
+    // The compound's top is still 1.0 above its origin — held up by the legs —
+    // while the loose top fell to 0.1. That gap is what "one rigid body" buys:
+    // the legs carried the top down with them instead of leaving it behind.
+    NF_CHECK_NEAR(world.state(table).position.y + 1.0f, 1.9f, 0.05f);
+    NF_CHECK_NEAR(world.state(free_top).position.y, 0.1f, 0.05f);
+    NF_CHECK(world.state(table).position.y > world.state(free_top).position.y + 0.5f);
+}
+
+NF_TEST(jolt_compound_is_queryable) {
+    JoltWorld world = shape_world();
+    std::vector<JoltWorld::CompoundPart> parts;
+    JoltWorld::CompoundPart low;
+    low.shape = JoltWorld::CompoundShape::make_box(Vec3{0.5f, 0.5f, 0.5f});
+    low.position = Vec3{0, 0, 0};
+    JoltWorld::CompoundPart high;
+    high.shape = JoltWorld::CompoundShape::make_box(Vec3{0.5f, 0.5f, 0.5f});
+    high.position = Vec3{0, 3, 0}; // a second storey, 2 m above the first
+    parts.push_back(low);
+    parts.push_back(high);
+
+    BodyDesc desc;
+    desc.type = BodyType::Static;
+    desc.position = Vec3{0, 0, -5};
+    const JoltBody compound = world.add_compound_body(desc, parts);
+    NF_CHECK(compound.valid());
+
+    // The upper box's near face is at z = -4.5, same as a single box would be —
+    // a ray through the upper storey must hit THAT box and not the lower one.
+    const JoltWorld::QueryHit ray = world.ray_cast(Vec3{0, 3, 0}, Vec3{0, 0, -1}, 10.0f);
+    NF_CHECK(ray.hit);
+    NF_CHECK(ray.body == compound);
+    NF_CHECK_NEAR(ray.distance, 4.5f, 0.05f);
+    NF_CHECK_NEAR(ray.normal.z, 1.0f, 1e-2f);
+
+    // An overlap at the upper storey finds the compound; one between the boxes
+    // (where there is nothing) does not.
+    NF_CHECK(contains(world.overlap_sphere(Vec3{0, 3, -5}, 0.3f), compound));
+    NF_CHECK(!contains(world.overlap_sphere(Vec3{0, 1.5f, -5}, 0.3f), compound));
+
+    // Sweeping a sphere at the upper storey stops one radius short of the face.
+    const JoltWorld::QueryHit sweep =
+        world.sphere_cast(Vec3{0, 3, 0}, 0.25f, Vec3{0, 0, -1}, 10.0f);
+    NF_CHECK(sweep.hit);
+    NF_CHECK(sweep.body == compound);
+    NF_CHECK_NEAR(sweep.distance, 4.25f, 0.05f);
+}
+
+NF_TEST(jolt_compound_invalid_inputs_are_safe) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+    const usize base_count = world.body_count();
+    BodyDesc desc;
+    const std::vector<JoltWorld::CompoundPart> pair = {
+        JoltWorld::CompoundPart{JoltWorld::CompoundShape::make_box(Vec3{0.5f, 0.5f, 0.5f}),
+                                Vec3{0, 0, 0}, Quat::identity()},
+        JoltWorld::CompoundPart{JoltWorld::CompoundShape::make_box(Vec3{0.5f, 0.5f, 0.5f}),
+                                Vec3{1, 0, 0}, Quat::identity()},
+    };
+
+    // Fewer than two parts: not a compound, and Jolt's builder would error.
+    NF_CHECK(!world.add_compound_body(desc, {}).valid());
+    NF_CHECK(!world.add_compound_body(desc, {pair[0]}).valid());
+
+    // One degenerate part refuses the WHOLE body. Part geometry is not clamped
+    // the way the first-party Shape factories clamp theirs: a part reaches Jolt
+    // alone, and Jolt's cylinder/capsule builders pass a negative radius through
+    // unnormalised, so refusing is the only safe answer. `!(x > 0)` catches NaN
+    // along with zero and the negatives.
+    std::vector<JoltWorld::CompoundPart> bad = pair;
+    const auto try_part = [&](const JoltWorld::CompoundShape& shape) {
+        bad[0].shape = shape;
+        return world.add_compound_body(desc, bad);
+    };
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_sphere(0.0f)).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_sphere(-1.0f)).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_sphere(NAN)).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_box(Vec3{0.5f, 0.0f, 0.5f})).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_box(Vec3{-1.0f, 0.5f, 0.5f})).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_cylinder(0.5f, 0.0f)).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_cylinder(0.5f, -1.0f)).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_cylinder(NAN, 1.0f)).valid());
+    NF_CHECK(!try_part(JoltWorld::CompoundShape::make_capsule(0.0f, 1.0f)).valid());
+    NF_CHECK(world.body_count() == base_count); // none of them added a body
+
+    // The one degenerate case that IS legal: a zero-height capsule is a sphere
+    // to Jolt, so the part is accepted where the cylinder's zero-height disc is
+    // not.
+    const JoltBody degenerate_capsule =
+        try_part(JoltWorld::CompoundShape::make_capsule(0.5f, 0.0f));
+    NF_CHECK(degenerate_capsule.valid());
+    NF_CHECK(world.body_count() == base_count + 1); // the only one that did
+    world.remove_body(degenerate_capsule);
+    NF_CHECK(world.body_count() == base_count);
+
+    // A valid compound is an ordinary body: counted, alive, removable.
+    const JoltBody ok = world.add_compound_body(desc, pair);
+    NF_CHECK(ok.valid());
+    NF_CHECK(world.is_alive(ok));
+    NF_CHECK(world.body_count() == base_count + 1);
+    world.remove_body(ok);
+    NF_CHECK(!world.is_alive(ok));
+    NF_CHECK(world.body_count() == base_count);
+}
+
+// A part keeps its own shape inside the compound. Both cases below give the
+// compound and its box control IDENTICAL bounding boxes — a cylinder of radius
+// r and half-height h, and a capsule of the same dimensions, each fit exactly
+// inside a box of half-extents (r, h + r, r) — so nothing that reads extents can
+// tell them apart. The difference is the curved part: both faces are circles
+// inscribed in the control's square, and a ray through the square's corner
+// passes the compound and hits the box. These are queries rather than drops
+// because a body settling on a curved face is exactly the case a drop test
+// cannot pin; that the compound still simulates as one body is the table test.
+NF_TEST(jolt_compound_cylinder_part_is_round_not_a_box) {
+    JoltWorld world = shape_world();
+
+    // The cylinder part, plus a second part (a compound needs two) placed clear
+    // of every ray path so only the cylinder is measured.
+    std::vector<JoltWorld::CompoundPart> parts;
+    JoltWorld::CompoundPart wheel;
+    wheel.shape = JoltWorld::CompoundShape::make_cylinder(1.0f, 1.0f);
+    wheel.position = Vec3{0, 0, 0};
+    JoltWorld::CompoundPart axle;
+    axle.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 1.0f, 1.0f});
+    axle.position = Vec3{6, 0, 0};
+    parts.push_back(wheel);
+    parts.push_back(axle);
+    BodyDesc desc;
+    desc.type = BodyType::Static;
+    const JoltBody compound = world.add_compound_body(desc, parts);
+    NF_CHECK(compound.valid());
+
+    // The control: the same two parts as boxes, offset in z out of the way.
+    std::vector<JoltWorld::CompoundPart> box_parts;
+    JoltWorld::CompoundPart box_a;
+    box_a.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 1.0f, 1.0f});
+    box_a.position = Vec3{0, 0, 0};
+    JoltWorld::CompoundPart box_b;
+    box_b.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 1.0f, 1.0f});
+    box_b.position = Vec3{6, 0, 0};
+    box_parts.push_back(box_a);
+    box_parts.push_back(box_b);
+    BodyDesc box_desc;
+    box_desc.type = BodyType::Static;
+    box_desc.position = Vec3{0, 0, -10};
+    const JoltBody boxes = world.add_compound_body(box_desc, box_parts);
+    NF_CHECK(boxes.valid());
+
+    const Vec3 down{0, -1, 0};
+    // (0.9, 0.9) is 1.272 from the axis: outside the unit circle the cylinder's
+    // face is, inside the [-1, 1] square the box's face is.
+    const float in_square_past_circle = 0.9f;
+
+    // Down the axis both answer the same — the face is at the same height either
+    // way, which is also what makes the two bounding boxes identical.
+    const JoltWorld::QueryHit cyl_centre = world.ray_cast(Vec3{0, 10, 0}, down, 100.0f);
+    const JoltWorld::QueryHit box_centre = world.ray_cast(Vec3{0, 10, -10}, down, 100.0f);
+    NF_CHECK(cyl_centre.hit);
+    NF_CHECK(box_centre.hit);
+    NF_CHECK_NEAR(cyl_centre.distance, box_centre.distance, 0.01f);
+    NF_CHECK_NEAR(cyl_centre.distance, 9.0f, 0.01f);
+
+    // Through the corner: the box control's square face is there, the cylinder
+    // part's circular face is not.
+    const JoltWorld::QueryHit cyl_corner =
+        world.ray_cast(Vec3{in_square_past_circle, 10.0f, in_square_past_circle}, down, 100.0f);
+    const JoltWorld::QueryHit box_corner =
+        world.ray_cast(Vec3{in_square_past_circle, 10.0f, -10.0f + in_square_past_circle},
+                       down, 100.0f);
+    NF_CHECK(!cyl_corner.hit);
+    NF_CHECK(box_corner.hit);
+    NF_CHECK_NEAR(box_corner.distance, 9.0f, 0.01f);
+}
+
+NF_TEST(jolt_compound_capsule_part_is_round_not_a_box) {
+    JoltWorld world = shape_world();
+
+    // A capsule of radius 1 and half-height 1 spans y = -2 .. 2, so its bounding
+    // box is exactly a box of half-extents (1, 2, 1) — the control beside it.
+    std::vector<JoltWorld::CompoundPart> parts;
+    JoltWorld::CompoundPart capsule;
+    capsule.shape = JoltWorld::CompoundShape::make_capsule(1.0f, 1.0f);
+    capsule.position = Vec3{0, 0, 0};
+    JoltWorld::CompoundPart other;
+    other.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 1.0f, 1.0f});
+    other.position = Vec3{6, 0, 0};
+    parts.push_back(capsule);
+    parts.push_back(other);
+    BodyDesc desc;
+    desc.type = BodyType::Static;
+    const JoltBody compound = world.add_compound_body(desc, parts);
+    NF_CHECK(compound.valid());
+
+    std::vector<JoltWorld::CompoundPart> box_parts;
+    JoltWorld::CompoundPart tall;
+    tall.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 2.0f, 1.0f});
+    tall.position = Vec3{0, 0, 0};
+    JoltWorld::CompoundPart wide;
+    wide.shape = JoltWorld::CompoundShape::make_box(Vec3{1.0f, 1.0f, 1.0f});
+    wide.position = Vec3{6, 0, 0};
+    box_parts.push_back(tall);
+    box_parts.push_back(wide);
+    BodyDesc box_desc;
+    box_desc.type = BodyType::Static;
+    box_desc.position = Vec3{0, 0, -10};
+    const JoltBody boxes = world.add_compound_body(box_desc, box_parts);
+    NF_CHECK(boxes.valid());
+
+    const Vec3 down{0, -1, 0};
+    const float in_square_past_circle = 0.9f;
+
+    // Down the axis: the capsule's dome peak and the box's flat top are both at
+    // y = 2 — the same bounding box, so the same distance.
+    const JoltWorld::QueryHit cap_top = world.ray_cast(Vec3{0, 10, 0}, down, 100.0f);
+    const JoltWorld::QueryHit box_top = world.ray_cast(Vec3{0, 10, -10}, down, 100.0f);
+    NF_CHECK(cap_top.hit);
+    NF_CHECK(box_top.hit);
+    NF_CHECK_NEAR(cap_top.distance, box_top.distance, 0.01f);
+    NF_CHECK_NEAR(cap_top.distance, 8.0f, 0.01f);
+
+    // Through the corner of the square: the box's flat face is there; the
+    // capsule's dome is a circle of radius 1, and 1.272 from the axis is past it.
+    NF_CHECK(!world.ray_cast(Vec3{in_square_past_circle, 10.0f, in_square_past_circle},
+                             down, 100.0f).hit);
+    NF_CHECK(world.ray_cast(Vec3{in_square_past_circle, 10.0f, -10.0f + in_square_past_circle},
+                            down, 100.0f).hit);
+}
+
+// --- Everything together: CCD and life cycle ------------------------------
 NF_TEST(jolt_complex_shapes_ccd_and_lifecycle) {
     // Zero gravity, one fast small ball per run: 120 m/s * (1/60) s = 2 m per
     // step, launched 5 m away from the wall, so discrete integration samples
@@ -445,3 +972,155 @@ NF_TEST(jolt_complex_shapes_ccd_and_lifecycle) {
     }
     NF_CHECK(world.body_count() == 1);
 }
+
+// --- Cylinder ---------------------------------------------------------------
+
+/// A static cylinder whose flat face is up, and a static box with the same
+/// half-extents beside it. The two shapes' axis-aligned bounding boxes are
+/// identical, so nothing that looks at extents alone can tell them apart — the
+/// difference is that the cylinder's face is a CIRCLE inscribed in the box's
+/// square. Anything dropped past the circle but inside the square falls through
+/// one and lands on the other, which is what the roundness tests below assert.
+namespace {
+
+constexpr float kCylRadius = 1.0f;
+constexpr float kCylHalfHeight = 1.0f;
+constexpr float kCylBallRadius = 0.2f;
+constexpr float kCylBoxX = 8.0f;
+
+/// (0.9, 0.9) is 1.272 from the axis: outside the unit circle the cylinder's
+/// face is, inside the [-1, 1] square the box's face is.
+constexpr float kInSquarePastCircle = 0.9f;
+
+void add_cylinder_and_box(JoltWorld& world) {
+    BodyDesc cylinder_desc;
+    cylinder_desc.type = BodyType::Static;
+    cylinder_desc.position = Vec3{0, 0, 0};
+    NF_CHECK(world.add_cylinder_body(cylinder_desc, kCylRadius, kCylHalfHeight).valid());
+    world.add_body(static_box(Vec3{kCylBoxX, 0, 0},
+                             Vec3{kCylRadius, kCylHalfHeight, kCylRadius}));
+}
+
+} // namespace
+
+NF_TEST(jolt_cylinder_body_rests_on_its_flat_end) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+
+    // A dynamic cylinder and a dynamic box with the same half-extents, dropped
+    // side by side. The cylinder's lowest local point is -half_height, exactly
+    // where the box's is, so both origins sit the same height off the floor —
+    // the two assertions below are the same number on purpose. A collider that
+    // silently rounded the wrong way (a sphere of this radius would rest at
+    // kCylRadius, a capsule at half_height + radius) would not.
+    BodyDesc cylinder_desc;
+    cylinder_desc.type = BodyType::Dynamic;
+    cylinder_desc.position = Vec3{-4, 5, 0};
+    const JoltBody cylinder =
+        world.add_cylinder_body(cylinder_desc, kCylRadius, kCylHalfHeight);
+    const JoltBody box = world.add_body(dynamic_box(Vec3{4, 5, 0},
+                                                   Vec3{kCylRadius, kCylHalfHeight, kCylRadius}));
+    NF_CHECK(cylinder.valid());
+    NF_CHECK(box.valid());
+    NF_CHECK(world.body_count() == 3); // the plane + the cylinder + the box
+
+    step(world, 400);
+    NF_CHECK_NEAR(world.state(cylinder).position.y, kCylHalfHeight, 0.05f);
+    NF_CHECK_NEAR(world.state(box).position.y, kCylHalfHeight, 0.05f);
+    NF_CHECK(std::abs(world.state(cylinder).linear_velocity.y) < 0.05f);
+}
+
+NF_TEST(jolt_cylinder_is_round_not_a_box) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+    add_cylinder_and_box(world);
+
+    // Dead centre of the flat face: the face is there for both shapes, so the
+    // ball lands on top of either one.
+    const JoltBody centre_on_cylinder =
+        world.add_body(dynamic_sphere(Vec3{0, 3, 0}, kCylBallRadius));
+    // The square's corner: the box has material there, the cylinder does not.
+    const JoltBody corner_on_cylinder =
+        world.add_body(dynamic_sphere(Vec3{kInSquarePastCircle, 3, kInSquarePastCircle},
+                                      kCylBallRadius));
+    const JoltBody corner_on_box =
+        world.add_body(dynamic_sphere(Vec3{kCylBoxX + kInSquarePastCircle, 3,
+                                           kInSquarePastCircle},
+                                      kCylBallRadius));
+    step(world, 500);
+
+    // The ball on the face parks at face height + radius for both shapes; the
+    // ball through the corner falls to the floor.
+    NF_CHECK_NEAR(world.state(centre_on_cylinder).position.y,
+                  kCylHalfHeight + kCylBallRadius, 0.05f);
+    NF_CHECK_NEAR(world.state(corner_on_box).position.y,
+                  kCylHalfHeight + kCylBallRadius, 0.05f);
+    NF_CHECK_NEAR(world.state(corner_on_cylinder).position.y, kCylBallRadius, 0.05f);
+    // The one ball sits a full half-height above the other: the cylinder's face
+    // is missing where the box's face is, and that is the whole difference
+    // between the two colliders.
+    NF_CHECK_NEAR(world.state(corner_on_box).position.y -
+                      world.state(corner_on_cylinder).position.y,
+                  kCylHalfHeight, 0.1f);
+}
+
+NF_TEST(jolt_cylinder_is_queryable) {
+    JoltWorld world;
+    add_cylinder_and_box(world);
+
+    const Vec3 down{0, -1, 0};
+
+    // Down the axis: both faces are at the same height, so both rays travel the
+    // same distance to reach them.
+    const JoltWorld::QueryHit cyl_centre =
+        world.ray_cast(Vec3{0, 10, 0}, down, 100.0f);
+    const JoltWorld::QueryHit box_centre =
+        world.ray_cast(Vec3{kCylBoxX, 10, 0}, down, 100.0f);
+    NF_CHECK(cyl_centre.hit);
+    NF_CHECK(box_centre.hit);
+    NF_CHECK_NEAR(cyl_centre.distance, box_centre.distance, 0.01f);
+    NF_CHECK_NEAR(cyl_centre.distance, 10.0f - kCylHalfHeight, 0.01f);
+    NF_CHECK(cyl_centre.body.valid());
+
+    // The same ray aimed through the square's corner hits the box and passes
+    // the cylinder clean through the gap its circle leaves.
+    const JoltWorld::QueryHit cyl_corner =
+        world.ray_cast(Vec3{kInSquarePastCircle, 10, kInSquarePastCircle}, down, 100.0f);
+    const JoltWorld::QueryHit box_corner =
+        world.ray_cast(Vec3{kCylBoxX + kInSquarePastCircle, 10, kInSquarePastCircle},
+                       down, 100.0f);
+    NF_CHECK(!cyl_corner.hit);
+    NF_CHECK(box_corner.hit);
+    NF_CHECK_NEAR(box_corner.distance, 10.0f - kCylHalfHeight, 0.01f);
+
+    // A swept sphere stops its centre one radius short of the face — a cast
+    // that reaches the cylinder down its axis and one aimed at the corner.
+    const JoltWorld::QueryHit cast_centre =
+        world.sphere_cast(Vec3{0, 10, 0}, kCylBallRadius, down, 100.0f);
+    NF_CHECK(cast_centre.hit);
+    NF_CHECK_NEAR(cast_centre.distance,
+                  10.0f - kCylHalfHeight - kCylBallRadius, 0.01f);
+    NF_CHECK(!world.sphere_cast(Vec3{kInSquarePastCircle, 10, kInSquarePastCircle},
+                                kCylBallRadius, down, 100.0f).hit);
+}
+
+NF_TEST(jolt_cylinder_invalid_inputs_are_safe) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+    const usize base_count = world.body_count();
+
+    BodyDesc desc;
+    desc.type = BodyType::Static;
+    // `!(x > 0)` catches NaN as well as zero and the negatives: a NaN radius
+    // would otherwise reach Jolt's assert-free constructor as-is.
+    NF_CHECK(!world.add_cylinder_body(desc, 0.0f, kCylHalfHeight).valid());
+    NF_CHECK(!world.add_cylinder_body(desc, -kCylRadius, kCylHalfHeight).valid());
+    NF_CHECK(!world.add_cylinder_body(desc, NAN, kCylHalfHeight).valid());
+    NF_CHECK(!world.add_cylinder_body(desc, kCylRadius, 0.0f).valid());
+    NF_CHECK(!world.add_cylinder_body(desc, kCylRadius, -kCylHalfHeight).valid());
+    NF_CHECK(!world.add_cylinder_body(desc, kCylRadius, NAN).valid());
+
+    // Nothing was added while rejecting all of the above.
+    NF_CHECK(world.body_count() == base_count);
+}
+

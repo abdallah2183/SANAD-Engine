@@ -76,6 +76,11 @@ add_executable(RHITests
     # math, so it runs without a GPU — the one suite that proves the committed
     # CSM work, which had been sitting unregistered and unrun.
     RHITests/test_shadow_cascades.cpp
+    # Point/spot projectors: six cube faces and one cone fit, plus the
+    # reconstruction rule the shader must agree with. CPU-only for the same
+    # reason — the failures here look like soft or misplaced shadows, not
+    # crashes, so they need pinning where a GPU can't.
+    RHITests/test_local_shadows.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -95,7 +100,7 @@ target_compile_definitions(RHITests PRIVATE
 
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(RHITests NFTriangleShaders NFQuadShaders NFRHIPushShaders
-        NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DTonemapShaders
+        NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders
         NFBasic3DPickShaders)
 endif()
 
@@ -107,6 +112,7 @@ add_executable(AssetTests
     AssetTests/test_project_descriptor.cpp
     AssetTests/test_project_cooker.cpp
     AssetTests/test_gltf_import.cpp
+    AssetTests/test_gltf_character_import.cpp
 )
 target_include_directories(AssetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AssetTests PRIVATE NFCore NFAssets NFRHI NFRendering NFProjectTool)
@@ -122,9 +128,25 @@ add_executable(RuntimeTests
     RuntimeTests/test_runtime_streaming.cpp
     RuntimeTests/test_runtime_sky.cpp
     RuntimeTests/test_runtime_audio_import.cpp
+    # The Rule 0 file: destruction's arithmetic world (DestructionTests) and its
+    # Jolt sink (PhysicsTests) are both unit-tested in isolation. This one proves
+    # a blast through the Runtime really spawns shards into a world update()
+    # steps — the integration neither of the other two can see.
+    RuntimeTests/test_runtime_destruction.cpp
+    # The reachability file: the seam above is driven by hand. This one proves a
+    # scene that merely declares a DestructibleComponent ends up cooked, bound,
+    # shattered by a real contact and drawn — with no game code calling
+    # enable_destruction or apply_damage. Before adopt_scene did this, the whole
+    # Phase 19 chain was reachable only from tests.
+    RuntimeTests/test_runtime_scene_destruction.cpp
     # VehicleSystem is header-only: this file is what makes the build
     # translate it at all (and pins the chassis pose it writes back).
     RuntimeTests/test_runtime_vehicle.cpp
+    # Phase 10, W4: the record/replay round trip. The log's internals are
+    # trivial; what has to be proved is that a captured session, replayed into a
+    # freshly loaded scene with no live input, lands the entity in the same
+    # place — which only Runtime::update() can show.
+    RuntimeTests/test_runtime_input_log.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
@@ -161,6 +183,9 @@ add_executable(AnimationTests
     TestFramework.cpp
     AnimationTests/test_animation.cpp
     AnimationTests/test_ik.cpp
+    AnimationTests/test_retarget.cpp
+    AnimationTests/test_root_motion.cpp
+    AnimationTests/test_skinning.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
@@ -171,7 +196,12 @@ add_executable(AudioTests
     TestFramework.cpp
     AudioTests/test_audio.cpp
     AudioTests/test_audio_backend.cpp
+    AudioTests/test_audio_buses.cpp
     AudioTests/test_audio_decode.cpp
+    AudioTests/test_audio_music.cpp
+    AudioTests/test_audio_occlusion.cpp
+    AudioTests/test_audio_reverb.cpp
+    AudioTests/test_audio_scene.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
@@ -197,9 +227,10 @@ add_executable(ScriptTests
     TestFramework.cpp
     ScriptTests/test_scripting.cpp
     ScriptTests/test_csharp.cpp
+    ScriptTests/test_ui_scripting.cpp
 )
 target_include_directories(ScriptTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(ScriptTests PRIVATE NFCore NFEcs NFScene NFScripting)
+target_link_libraries(ScriptTests PRIVATE NFCore NFEcs NFScene NFScripting NFUI)
 if(NF_CSHARP_HOSTING)
     # Managed sandbox must exist before the hosting tests run; its absolute
     # dir is baked in so tests find the DLL + runtimeconfig without CWD games.
@@ -211,11 +242,12 @@ else()
 endif()
 nf_target_set_warnings(ScriptTests)
 
-# --- UI tests (Arabic shaping/bidi, localisation) ---
+# --- UI tests (Arabic shaping/bidi, localisation, runtime game UI) ---
 add_executable(UITests
     TestFramework.cpp
     UITests/test_arabic.cpp
     UITests/test_localization.cpp
+    UITests/test_gameui.cpp
 )
 target_include_directories(UITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(UITests PRIVATE NFCore NFUI)
@@ -247,16 +279,29 @@ add_executable(NetworkTests
     NetworkTests/test_replication.cpp
     NetworkTests/test_vehicle_replication.cpp
     NetworkTests/test_constraint_replication.cpp
+    # The dedicated server (design 81): in-process provisioning/refusal rules,
+    # plus one test that spawns the real NOVAForgeServer binary and connects a
+    # client to it over real UDP — the only place the headless host is proven
+    # as a process, not just as a library.
+    NetworkTests/test_dedicated_server.cpp
 )
 target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)
 nf_target_set_warnings(NetworkTests)
+# The binary-spawn test needs the built server exe's absolute path (spaces in
+# the repo path are quoted by the test itself).
+target_compile_definitions(NetworkTests PRIVATE "NF_SERVER_EXE=\"$<TARGET_FILE:NOVAForgeServer>\"")
+add_dependencies(NetworkTests NOVAForgeServer)
 
-# --- AI tests (grid pathfinding, behavior trees) ---
+# --- AI tests (grid pathfinding, behavior trees, perception, state machines) ---
 add_executable(AITests
     TestFramework.cpp
     AITests/test_navgrid.cpp
     AITests/test_behavior_tree.cpp
+    AITests/test_perception.cpp
+    AITests/test_state_machine.cpp
+    AITests/test_utility_ai.cpp
+    AITests/test_ai_world.cpp
 )
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)
@@ -283,6 +328,43 @@ add_executable(DestructionTests
 target_include_directories(DestructionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(DestructionTests PRIVATE NFCore NFDestruction)
 nf_target_set_warnings(DestructionTests)
+
+# --- Perf tests (the G8 performance contract) ---
+# A realistic scene (~2k meshes + a shadowed sun + live destructibles) is loaded
+# through the real Runtime + Renderer3D path and frame time / draw calls /
+# memory are compared against Tests/PerfTests/perf_baseline.csv: any metric more
+# than its tolerance above baseline fails the suite (NF_PERF_GATE=1). The paths
+# are absolute so the gate cannot be silently disarmed by the working directory.
+add_executable(PerfTests
+    TestFramework.cpp
+    PerfTests/test_perf_scene.cpp
+)
+target_include_directories(PerfTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(PerfTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFDestruction)
+target_compile_definitions(PerfTests PRIVATE
+    "NF_PERF_SCENE_PATH=\"${CMAKE_SOURCE_DIR}/Content/Scenes/Perf.nfscene\""
+    "NF_PERF_BASELINE_PATH=\"${CMAKE_SOURCE_DIR}/Tests/PerfTests/perf_baseline.csv\""
+)
+nf_target_set_warnings(PerfTests)
+
+# --- Foliage tests (deterministic scatter: density, gates, masks, LOD, wind) ---
+add_executable(FoliageTests
+    TestFramework.cpp
+    FoliageTests/test_scatter.cpp
+)
+target_include_directories(FoliageTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(FoliageTests PRIVATE NFCore NFFoliage)
+nf_target_set_warnings(FoliageTests)
+
+# --- Water tests (the Gerstner field: height, displacement, normals, foam,
+# reflection, and the baked grid's agreement with the live CPU surface) ---
+add_executable(WaterTests
+    TestFramework.cpp
+    WaterTests/test_water.cpp
+)
+target_include_directories(WaterTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(WaterTests PRIVATE NFCore NFWater)
+nf_target_set_warnings(WaterTests)
 
 # --- VFX tests (deterministic particle simulation) ---
 add_executable(VFXTests
@@ -317,18 +399,44 @@ add_executable(ToolTests
     TestFramework.cpp
     ToolTests/test_project_scaffold.cpp
     ToolTests/test_project_packager.cpp
+    ToolTests/test_shipping.cpp
+    ToolTests/test_model_importer_cli.cpp
+    ToolTests/test_blender_preset.cpp
+    # G7: the three game templates must scaffold into a project that actually
+    # loads and plays, not just one that copies files.
+    ToolTests/test_templates.cpp
 )
 target_include_directories(ToolTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(ToolTests PRIVATE NFCore NFAssets NFProjectTool NFRendering)
+# NFRuntime is what owns load_scene_from_physical, so the template tests read the
+# scaffolded Main.nfscene through the same loader the player uses.
+target_link_libraries(ToolTests PRIVATE NFCore NFAssets NFProjectTool NFRendering NFRuntime)
 target_compile_definitions(ToolTests PRIVATE
     "NF_TEMPLATE_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Default\""
     "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
+    # test_blender_preset.cpp pins the shipped add-on's exporter option names.
+    "NF_BLENDER_PRESET=\"${CMAKE_SOURCE_DIR}/Templates/Blender/nf_gltf_export.py\""
+    # test_templates.cpp scaffolds each game template from its real directory.
+    "NF_TEMPLATE_THIRDPERSON_DIR=\"${CMAKE_SOURCE_DIR}/Templates/ThirdPerson\""
+    "NF_TEMPLATE_FPSSTARTER_DIR=\"${CMAKE_SOURCE_DIR}/Templates/FPSStarter\""
+    "NF_TEMPLATE_PLATFORMER2D_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Platformer2D\""
 )
 nf_target_set_warnings(ToolTests)
+if(NF_BUILD_TOOLS)
+    # test_shipping.cpp launches the packaged player. Tools/Player is added to
+    # the tree after Tests, so the path is a generator expression (resolved at
+    # generate time, when NFPlayer exists) and the build-order dependency is
+    # deferred to the end of the source tree.
+    target_compile_definitions(ToolTests PRIVATE "NF_PLAYER_EXE=\"$<TARGET_FILE:NFPlayer>\"")
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL add_dependencies ToolTests NFPlayer)
+    # test_model_importer_cli.cpp launches NFModelImporter, same pattern.
+    target_compile_definitions(ToolTests PRIVATE
+        "NF_MODEL_IMPORTER_EXE=\"$<TARGET_FILE:NFModelImporter>\"")
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL add_dependencies ToolTests NFModelImporter)
+endif()
 if(NF_GLSLC_EXECUTABLE)
     # The packager copies these, so they must exist before the tests run.
     add_dependencies(ToolTests NFBasic3DDepthShaders NFBasic3DGBufferShaders
-        NFBasic3DLightingShaders NFBasic3DTonemapShaders NFBasic3DPickShaders)
+        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DPickShaders)
 endif()
 
 # --- Editor tests (window-independent editor logic + headless GPU viewport) ---
@@ -354,9 +462,16 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_reflected_inspector.cpp
         EditorTests/test_gameplay_editor.cpp
         EditorTests/test_orbit_camera_module.cpp
+        EditorTests/test_arabic_editor.cpp
+        EditorTests/test_gizmo.cpp
+        EditorTests/test_preview_pixels.cpp
+        EditorTests/test_audio_preview.cpp
+        EditorTests/test_profiler_session.cpp
+        EditorTests/test_project_launcher.cpp
+        EditorTests/test_editor_finishing.cpp
     )
     target_include_directories(EditorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering NFGameplay)
+    target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering NFGameplay NFUI)
     target_compile_definitions(EditorTests PRIVATE
         "NF_EDITOR_IMGUI_SHADER_DIR=\"${NF_EDITOR_IMGUI_SHADER_DIR}\""
     )
@@ -378,7 +493,7 @@ target_compile_definitions(HeadlessProbe PRIVATE
 )
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(HeadlessProbe NFTriangleShaders NFBasic3DDepthShaders
-        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DTonemapShaders)
+        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders)
 endif()
 if(MSVC)
     set_property(TARGET HeadlessProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -386,7 +501,7 @@ endif()
 
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests Scene2DTests DestructionTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests Scene2DTests DestructionTests PerfTests FoliageTests WaterTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)
@@ -410,11 +525,15 @@ add_test(NAME ToolTests  COMMAND ToolTests)
 add_test(NAME ScriptTests COMMAND ScriptTests)
 add_test(NAME UITests COMMAND UITests)
 add_test(NAME PlatformTests COMMAND PlatformTests)
+add_test(NAME InputTests COMMAND InputTests)
 add_test(NAME NetworkTests COMMAND NetworkTests)
 add_test(NAME AITests COMMAND AITests)
 add_test(NAME VFXTests COMMAND VFXTests)
 add_test(NAME Scene2DTests COMMAND Scene2DTests)
 add_test(NAME DestructionTests COMMAND DestructionTests)
+add_test(NAME PerfTests COMMAND PerfTests)
+add_test(NAME FoliageTests COMMAND FoliageTests)
+add_test(NAME WaterTests COMMAND WaterTests)
 if(NF_BUILD_EDITOR)
     add_test(NAME EditorTests COMMAND EditorTests)
 endif()

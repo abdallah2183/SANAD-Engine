@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <vector>
 
 using namespace nf;
 using namespace nf::physics;
@@ -35,6 +37,40 @@ BodyDesc static_box(Vec3 position, Vec3 half_extents) {
     d.shape = Shape::make_box(half_extents);
     d.position = position;
     return d;
+}
+
+/// A 30-degree ramp whose top surface starts at the origin and climbs with +z.
+/// The centre is derived, not eyeballed: an L-long, h-thick slab rotated about
+/// +X by -angle is placed so its lower top edge lands exactly on y = 0 at
+/// z = 0. The angle is negative because from_axis_angle is right-handed about
+/// +X (at +90 degrees it maps +Y to +Z), so a positive angle tips the far end
+/// *down*.
+BodyDesc static_ramp(float angle_deg, float length = 8.0f, float thickness = 0.1f) {
+    BodyDesc d;
+    d.type = BodyType::Static;
+    d.shape = Shape::make_box(Vec3{4.0f, thickness, length});
+    const float a = to_radians(angle_deg);
+    d.position = Vec3{0.0f, length * std::sin(a) - thickness * std::cos(a),
+                      thickness * std::sin(a) + length * std::cos(a)};
+    d.orientation = Quat::from_axis_angle(Vec3{1.0f, 0.0f, 0.0f}, -a);
+    return d;
+}
+
+/// The highest point a jump starting from `rest_y` reaches, so the jump tests
+/// can compare arcs instead of trusting one absolute number. The window has to
+/// cover the whole flight or the measurement clips the apex instead of the
+/// physics setting it: 240 ticks is 4 s, i.e. an apex reachable only by a
+/// 19.6 m/s launch, well past anything these tests configure. Holding the
+/// request past landing does not re-trigger a jump (verified: a 1-tick hold and
+/// a 400-tick hold reach the same peak), so the window cannot inflate itself.
+float jump_peak(JoltWorld& world, JoltCharacter& ch, float rest_y) {
+    float best = rest_y;
+    for (int i = 0; i < 240; ++i) { // hold the request while leaving the ground
+        ch.move(Vec3{0, 0, 0}, true, kDt);
+        world.step(kDt);
+        best = std::max(best, ch.position().y);
+    }
+    return best;
 }
 
 void step(JoltWorld& world, int n, float dt = kDt) {
@@ -336,4 +372,251 @@ NF_TEST(jolt_character_destroy_mid_simulation) {
     drive(world, again, Vec3{0, 0, 0}, false, 120);
     NF_CHECK(again.is_grounded());
     NF_CHECK(world.body_count() == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Config wiring. Every knob in JoltCharacterConfig is plumbed through to Jolt
+// in character_create / character_move, and these cases are what breaks if any
+// one of them is dropped or clamped to a constant. The pattern is the one the
+// vehicle suite uses: change the value, assert the *behaviour* changes with it,
+// so a severed wire cannot hide behind a default that happens to work.
+// ---------------------------------------------------------------------------
+
+NF_TEST(jolt_character_step_offset_decides_what_is_walkable) {
+    // Same 0.3m slab as steps_over_low_obstacle. A step offset above it clears
+    // the slab; one far below treats it as a wall and stops at it.
+    auto run = [](float step_offset) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        world.add_body(static_box(Vec3{0, 0.15f, 3.0f}, Vec3{4.0f, 0.15f, 0.5f}));
+        JoltCharacterConfig cfg;
+        cfg.step_offset = step_offset;
+        JoltCharacter ch(world, cfg, Vec3{0, 0.1f, 0});
+        float max_y = 0.0f;
+        for (int i = 0; i < 150; ++i) {
+            ch.move(Vec3{0, 0, 1}, false, kDt);
+            world.step(kDt);
+            max_y = std::max(max_y, ch.position().y);
+        }
+        return std::pair{ch.position().z, max_y};
+    };
+    const auto clears = run(0.4f); // the default
+    const auto blocked = run(0.05f);
+    NF_CHECK(clears.first > 4.5f);          // over the slab and away
+    NF_CHECK(clears.second > 0.2f);         // stood on top of it
+    NF_CHECK(blocked.first < 2.9f);         // held at the front face
+    NF_CHECK(blocked.second < 0.1f);        // and never climbed it
+    NF_CHECK(clears.first > blocked.first + 2.0f);
+}
+
+NF_TEST(jolt_character_slope_limit_decides_what_is_ground) {
+    // A 30-degree ramp: walkable when the limit is above 30, a wall when it is
+    // below. The distinction is exactly the OnGround / OnSteepGround split that
+    // the jump and ground-velocity branches depend on.
+    auto run = [](float max_slope_deg) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        world.add_body(static_ramp(30.0f));
+        JoltCharacterConfig cfg;
+        cfg.max_slope_deg = max_slope_deg;
+        JoltCharacter ch(world, cfg, Vec3{0, 0.1f, -3.0f});
+        float max_y = 0.0f;
+        for (int i = 0; i < 240; ++i) {
+            ch.move(Vec3{0, 0, 1}, false, kDt);
+            world.step(kDt);
+            max_y = std::max(max_y, ch.position().y);
+        }
+        return std::pair{ch.position().z, max_y};
+    };
+    const auto climbs = run(60.0f);
+    const auto stops = run(10.0f);
+    NF_CHECK(climbs.first > 4.0f);   // went up the ramp
+    NF_CHECK(climbs.second > 2.0f);  // ...and gained real height
+    NF_CHECK(stops.first < 1.5f);    // the ramp was a wall to it
+    NF_CHECK(stops.second < 0.6f);
+    NF_CHECK(climbs.second > stops.second + 1.0f);
+}
+
+NF_TEST(jolt_character_jump_speed_sets_the_peak) {
+    // v^2 / (2g) is the ballistic ceiling, so a 3x jump speed is a 9x height —
+    // the bound is derived, not a magic number picked from a run.
+    auto height = [](float jump_speed) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltCharacterConfig cfg;
+        cfg.jump_speed = jump_speed;
+        JoltCharacter ch(world, cfg, Vec3{0, 0.1f, 0});
+        drive(world, ch, Vec3{0, 0, 0}, false, 60);
+        const float rest_y = ch.position().y;
+        return jump_peak(world, ch, rest_y) - rest_y;
+    };
+    const float small = height(5.0f);
+    const float big = height(15.0f);
+    NF_CHECK(small > 0.2f); // both actually left the ground
+    NF_CHECK(big > small + 1.0f);
+    // The ceiling is analytic; a 60 Hz discrete step overshoots it by up to
+    // one frame of launch velocity (v*dt), so the bound carries that slack.
+    // A re-boosting jump (rocket) would clear it by metres, not centimetres.
+    NF_CHECK(small < 5.0f * 5.0f / (2.0f * 9.81f) + 5.0f * kDt);
+    NF_CHECK(big < 15.0f * 15.0f / (2.0f * 9.81f) + 15.0f * kDt);
+    // The signature of a speed-proportional launch: height goes as v^2, so a
+    // 3x speed is a 9x height. A clamped or constant jump_speed collapses this
+    // ratio towards 1 no matter what the absolute heights happen to be.
+    NF_CHECK_NEAR(big / small, 9.0f, 0.5f);
+}
+
+NF_TEST(jolt_character_gravity_scale_shapes_the_arc) {
+    // Quarter gravity is a four-times-higher arc for the same jump: the
+    // multiplier is what makes this a wiring test rather than a second jump
+    // test, and the long tick count is because the slower arc takes ~4x longer
+    // to peak.
+    auto height = [](float gravity_scale) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltCharacterConfig cfg;
+        cfg.gravity_scale = gravity_scale;
+        JoltCharacter ch(world, cfg, Vec3{0, 0.1f, 0});
+        drive(world, ch, Vec3{0, 0, 0}, false, 60);
+        const float rest_y = ch.position().y;
+        float best = rest_y;
+        for (int i = 0; i < 600; ++i) {
+            ch.move(Vec3{0, 0, 0}, (i % 200) == 0, kDt);
+            world.step(kDt);
+            best = std::max(best, ch.position().y);
+        }
+        return best - rest_y;
+    };
+    const float earth = height(1.0f);
+    const float moon = height(0.25f);
+    NF_CHECK(earth > 0.2f);
+    NF_CHECK(moon > earth + 1.0f);
+    NF_CHECK_NEAR(moon, earth * 4.0f, 0.5f);
+}
+
+NF_TEST(jolt_character_air_control_steers_a_fall) {
+    // Spawned airborne with the wish held: the whole fall is the airborne
+    // phase, so air control is the only thing that can move it downrange. The
+    // sample is taken on the last airborne tick, because once it lands the
+    // grounded accelerator takes over and measures something else entirely.
+    auto drift = [](float air_control) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltCharacterConfig cfg;
+        cfg.air_control = air_control;
+        JoltCharacter ch(world, cfg, Vec3{0, 5.0f, 0});
+        float last_airborne_z = 0.0f;
+        for (int i = 0; i < 300; ++i) {
+            ch.move(Vec3{0, 0, 1}, false, kDt);
+            world.step(kDt);
+            if (ch.is_grounded()) break;
+            last_airborne_z = ch.position().z;
+        }
+        return last_airborne_z;
+    };
+    const float none = drift(0.0f);
+    const float full = drift(1.0f);
+    NF_CHECK(none < 0.2f);      // no air control: a dead drop, no downrange
+    NF_CHECK(full > 2.0f);      // full air control: it steered while falling
+    NF_CHECK(full > none + 1.0f);
+}
+
+NF_TEST(jolt_character_crouch_height_decides_what_fits_under) {
+    // The slab's underside is at y = 1.5. A capsule of 2*(half + 0.35) fits
+    // under it only while that total stays below 1.5, so the knob is what draws
+    // the line — including the degenerate case where crouching changes nothing.
+    auto pass = [](float crouch_half_height) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        world.add_body(static_box(Vec3{0, 1.75f, 4.0f}, Vec3{4.0f, 0.25f, 0.5f}));
+        JoltCharacterConfig cfg;
+        cfg.crouch_half_height = crouch_half_height;
+        JoltCharacter ch(world, cfg, Vec3{0, 0.1f, 0});
+        ch.set_crouch(true);
+        NF_CHECK(ch.is_crouched());
+        drive(world, ch, Vec3{0, 0, 1}, false, 180);
+        return ch.position().z;
+    };
+    const float low = pass(0.05f);  // 0.8m capsule: ducked well under
+    const float tall = pass(0.55f); // 1.8m capsule: crouching == standing
+    NF_CHECK(low > 5.0f);
+    NF_CHECK(tall < 4.0f);
+    NF_CHECK(low > tall + 1.0f);
+}
+
+NF_TEST(jolt_character_max_speed_sets_the_cruise) {
+    // 2 seconds of walking. Neither run may exceed its own speed-time product;
+    // the gap between them is what proves the knob was read.
+    auto distance = [](float max_speed) {
+        JoltWorld world;
+        world.add_body(static_plane());
+        JoltCharacterConfig cfg;
+        cfg.max_speed = max_speed;
+        JoltCharacter ch(world, cfg, Vec3{0, 0.1f, 0});
+        drive(world, ch, Vec3{0, 0, 1}, false, 120);
+        return ch.position().z;
+    };
+    const float walk = distance(3.0f);
+    const float sprint = distance(12.0f);
+    NF_CHECK(walk > 4.0f);                    // it got somewhere
+    NF_CHECK(walk < 3.0f * 2.0f + 0.1f);      // and not past its own ceiling
+    NF_CHECK(sprint > walk + 8.0f);
+    NF_CHECK(sprint < 12.0f * 2.0f + 0.1f);
+}
+
+// ---------------------------------------------------------------------------
+// Bit-identical replay (§39, DoD). The case above checks the endpoint with a
+// 1e-4 tolerance, which is what a replay needs to *look* smooth; the network
+// hook needs more. A client predicts and the server replays; the correction the
+// client applies on a mismatch is itself a discontinuity, so agreement has to be
+// exact per tick, not approximately correct at the end. Exact float equality is
+// the assertion here rather than a bug: identical inputs into identical worlds
+// must produce identical bits.
+// ---------------------------------------------------------------------------
+
+std::vector<Vec3> replay_trajectory() {
+    JoltWorld world;
+    world.add_body(static_plane());
+    world.add_body(static_box(Vec3{0, 0.15f, 3.0f}, Vec3{4.0f, 0.15f, 0.5f}));
+    // A rideable moving platform: the ground-relative velocity math in
+    // character_move is the branch most likely to diverge on replay, so the
+    // sequence puts the character on a moving surface, not just past one.
+    BodyDesc platform;
+    platform.type = BodyType::Dynamic;
+    platform.shape = Shape::make_box(Vec3{2.0f, 0.05f, 2.0f});
+    platform.position = Vec3{0, 0.05f, 20.0f};
+    platform.friction = 0.1f;
+    platform.mass = 500.0f;     // heavy: not punted out from under the rider
+    platform.allow_sleep = false;
+    const JoltBody plat = world.add_body(platform);
+
+    JoltCharacter ch(world, JoltCharacterConfig{}, Vec3{0, 0.1f, 0});
+    std::vector<Vec3> samples;
+    samples.reserve(480);
+    for (int i = 0; i < 480; ++i) { // 8 seconds
+        const float t = static_cast<float>(i);
+        ch.set_crouch((i / 60) % 2 == 0); // stance toggled every second
+        ch.move(Vec3{std::sin(t * 0.05f), 0.0f, 1.0f}, (i % 90) == 0, kDt);
+        world.step(kDt);
+        samples.push_back(ch.position());
+        // Started only once the character is aboard, so the trigger is a
+        // function of state the replay reaches identically, not of wall-clock.
+        if (ch.position().z > 18.5f) world.set_linear_velocity(plat, Vec3{0, 0, 2.0f});
+    }
+    return samples;
+}
+
+NF_TEST(jolt_character_replay_is_bit_identical_over_every_tick) {
+    const std::vector<Vec3> a = replay_trajectory();
+    const std::vector<Vec3> b = replay_trajectory();
+    NF_CHECK(!a.empty());
+    NF_CHECK_EQ(a.size(), b.size());
+
+    std::size_t first_diff = a.size();
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].x != b[i].x || a[i].y != b[i].y || a[i].z != b[i].z) {
+            first_diff = i;
+            break;
+        }
+    }
+    NF_CHECK_EQ(first_diff, a.size()); // a.size() == "no tick differed"
 }

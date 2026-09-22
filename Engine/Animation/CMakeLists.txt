@@ -12,6 +12,9 @@ set(NFANIMATION_SOURCES
     src/AnimationPlayer.cpp
     src/AnimationStateMachine.cpp
     src/IK.cpp
+    src/Retarget.cpp
+    src/RootMotion.cpp
+    src/Skinning.cpp
 )
 
 nf_engine_library(NFAnimation

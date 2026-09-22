@@ -197,6 +197,35 @@ bool is_digit(char32_t cp) {
            (cp >= 0x06F0 && cp <= 0x06F9);
 }
 
+// Punctuation that can sit INSIDE a number and must therefore not split it.
+//
+// This is the whole of R1: a digit run used to be "digit+", so the '.' in "1.0"
+// became its own cluster and the per-cluster reversal in shape_arabic() flipped
+// the two digit fragments either side of it — "الإصدار 1.0" rendered as
+// "الإصدار 0.1", "16:9" as "9:16", "-5" as "5-". Treating digits plus the
+// punctuation between them as ONE LTR-preserving cluster fixes the class.
+//
+// Deliberately narrow: only characters that genuinely occur inside numbers. A
+// blanket "any neutral joins a number" rule would swallow sentence punctuation
+// and glue unrelated words together.
+bool is_number_punct(char32_t cp) {
+    switch (cp) {
+        case U'.':
+        case U',':
+        case U':':
+        case U'-':
+        case U'/':
+        case U'%':
+        case U'+':
+            return true;
+        case 0x066B: // ARABIC DECIMAL SEPARATOR
+        case 0x066A: // ARABIC PERCENT SIGN
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool is_rtl_char(char32_t cp) {
     return is_arabic_letter(cp) || is_arabic_mark(cp) || is_digit(cp) ||
            // Arabic blocks that flow RTL but need no shaping.
@@ -235,9 +264,21 @@ std::string shape_arabic(const std::string& logical_utf8) {
                         ++j;
                         continue;
                     }
-                    // Neutral (space, punctuation): absorbed only when
-                    // sandwiched in RTL on both sides.
-                    if (j + 1 < n && is_rtl_char(cps[j - 1]) && is_rtl_char(cps[j + 1])) {
+                    // Neutral (space, punctuation): absorbed when the run is in
+                    // RTL context on both sides. `j > i` is that context test —
+                    // it says "this run already holds an RTL character", which
+                    // keeps a neutral chain (" -") absorbed instead of stopping
+                    // at the first one.
+                    //
+                    // The lookahead also treats a number punctuation that
+                    // INTRODUCES a number as RTL-ish. Without that, the '-' of
+                    // "السرعة -5" is not an RTL char, so the space and the sign
+                    // split off into their own LTR run and the number ends up on
+                    // the wrong side of the word entirely.
+                    const bool next_is_rtl = (j + 1 < n) && is_rtl_char(cps[j + 1]);
+                    const bool next_starts_number =
+                        (j + 2 < n) && is_number_punct(cps[j + 1]) && is_digit(cps[j + 2]);
+                    if (j > i && (next_is_rtl || next_starts_number)) {
                         ++j;
                         continue;
                     }
@@ -327,15 +368,32 @@ std::string shape_arabic(const std::string& logical_utf8) {
             shaped.push_back(out_cp != 0 ? out_cp : cp);
         }
         // Reverse the run by clusters so combining marks stay glued to their
-        // base and digit sub-runs keep their order: [base marks*] | [digit+].
+        // base and digit sub-runs keep their order: [base marks*] | [number].
+        //
+        // A "number" is digits plus the punctuation BETWEEN them (is_number_punct
+        // above). The scan starts at a digit, or at a number-punctuation that is
+        // immediately followed by a digit — that second case is what keeps the
+        // leading '-' of "-5" attached to its digits instead of becoming a
+        // separate cluster that the reversal would move to the other side.
         struct Cluster {
             size_t begin = 0, end = 0;
         };
         std::vector<Cluster> clusters;
         for (size_t i = 0; i < shaped.size();) {
-            if (is_digit(shaped[i])) {
-                size_t j = i + 1;
-                while (j < shaped.size() && is_digit(shaped[j])) ++j;
+            const bool starts_number =
+                is_digit(shaped[i]) ||
+                (is_number_punct(shaped[i]) && i + 1 < shaped.size() && is_digit(shaped[i + 1]));
+            if (starts_number) {
+                size_t j = i;
+                while (j < shaped.size() && (is_digit(shaped[j]) || is_number_punct(shaped[j]))) {
+                    ++j;
+                }
+                // A number must END on a digit: trailing punctuation ("1." or the
+                // ':' before a word) belongs to the surrounding text, so give it
+                // back rather than dragging it into the reversed unit.
+                while (j > i + 1 && !is_digit(shaped[j - 1])) {
+                    --j;
+                }
                 clusters.push_back({i, j});
                 i = j;
             } else if (is_arabic_mark(shaped[i])) {

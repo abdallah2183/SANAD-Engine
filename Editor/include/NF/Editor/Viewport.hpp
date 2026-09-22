@@ -47,4 +47,28 @@ struct ViewportResources {
 bool ensure_viewport_target(rhi::IGraphicsDevice& device, const ViewportState& state,
                             ViewportResources& res);
 
+// E1 — ground-grid line thinning.
+//
+// The grid is a scale reference, not a feature. Drawn at full density it is
+// both too loud up close and pure moire in the far field, where the projected
+// lines converge toward the horizon. So beyond `dense_radius` world units from
+// the origin only every OTHER line is kept. The two axes (cell index 0, drawn
+// in their own colours) always survive, so the origin never loses its cross.
+//
+// Pure and header-inline on purpose: the drawing loop in Panels.cpp is a thin
+// wrapper over this, so the rule is testable without an ImDrawList, a camera or
+// a GPU — which is the only way a headless suite can pin it.
+inline bool grid_line_visible(int cell_index, float world_offset,
+                              float dense_radius = 20.0f) {
+    if (cell_index == 0) {
+        return true; // an axis
+    }
+    if (world_offset <= dense_radius && world_offset >= -dense_radius) {
+        return true; // near field stays dense
+    }
+    // `%` keeps the sign for negative indices but is 0 for every even index
+    // either way, which is all this needs.
+    return (cell_index % 2) == 0;
+}
+
 } // namespace nf::editor

@@ -26,6 +26,17 @@ public:
 
     // Snapshot with minimum-level filter (Inspector-style pure read).
     std::vector<LogMessage> filtered(LogLevel min_level) const;
+
+    // The panel's full query: level floor, a category bitmask (a message in
+    // none of the selected categories is hidden), and a case-insensitive
+    // substring over the message text. An empty substring disables the text
+    // filter; LogCategory::All disables the category filter.
+    struct Filter {
+        LogLevel min_level = LogLevel::Info;
+        LogCategory categories = LogCategory::All;
+        std::string text;
+    };
+    std::vector<LogMessage> filtered(const Filter& filter) const;
     size_t size() const;
 
 private:

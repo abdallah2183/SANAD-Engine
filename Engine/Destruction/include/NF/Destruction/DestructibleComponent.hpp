@@ -29,6 +29,10 @@ struct DestructibleComponent {
 
     f32 density = 1.0f;          // shard mass = chunk volume * this
     f32 strength_scale = 1.0f;   // multiplies every bond strength
+    /// Seconds a shard of this object may live, 0 = the world's budget
+    /// lifetime. Per-object, not per-blast: glass dust retires long before a
+    /// stone chunk from the same explosion.
+    f32 shard_lifetime = 0.0f;
 
     /// Impulse taken on each bond, accumulated across hits (Section 41:
     /// "impulses"). A bond that survives a blast is not healed — the next blast

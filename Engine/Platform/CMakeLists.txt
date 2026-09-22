@@ -11,6 +11,7 @@ if(NF_PLATFORM_WINDOWS)
     list(APPEND NFPLATFORM_SOURCES
         src/Windows/Window_Win.cpp
         src/Windows/InputSystem_Win.cpp
+        src/Windows/GamepadWin.cpp
         src/Windows/Platform_Win.cpp
     )
 endif()

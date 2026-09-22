@@ -8,11 +8,12 @@ set(NFRUNTIME_SOURCES
     src/SceneExtraction.cpp
     src/WorldStreamer.cpp
     src/SaveSystem.cpp
+    src/InputLog.cpp
 )
 
 nf_engine_library(NFRuntime
     SOURCES ${NFRUNTIME_SOURCES}
-    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFAnimation NFAudio NFGameplay
+    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFDestruction NFAnimation NFAudio NFGameplay
 )
 
 target_include_directories(NFRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

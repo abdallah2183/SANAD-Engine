@@ -1,0 +1,140 @@
+name: Perf gate (G8)
+
+# The performance contract, enforced on every push and pull request.
+#
+# Why a separate workflow instead of another job in ci.yml: this needs only the
+# PerfTests target, so it builds in a fraction of the time the full CI build
+# takes, and it can fail on its own terms. Nothing here touches ci.yml.
+#
+# What is gated, and where:
+#   * Deterministic counters (draw calls, extracted/visible objects, the fixture
+#     counts) and the scene-attributable memory delta are tagged `any` in
+#     Tests/PerfTests/perf_baseline.csv and are enforced HERE, on this runner,
+#     at 10%. A regression in any of them turns this job red.
+#   * Absolute timings (frame time, update time, total working set) are tagged
+#     with the machine that recorded them, because an absolute millisecond
+#     measured on one box says nothing about another. On this runner they are
+#     REPORTED, not enforced — the log line says so. A runner that wants them
+#     enforced records its own rows once:
+#         NF_PERF_MACHINE=ci-lavapipe bash Tests/PerfTests/perf_gate.sh --record
+#     and commits the added rows.
+#   * The `--self-test` step is the negative control: it halves every baseline
+#     value and asserts the gate goes RED. That is what proves "a >10%
+#     regression fails loudly" on THIS machine, whatever hardware it has.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  perf-gate:
+    name: Perf gate (frame time, draw calls, memory)
+    runs-on: windows-latest
+
+    env:
+      BUILD_DIR: build/ci
+      NF_PERF_MACHINE: ci-lavapipe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Lavapipe is Mesa's software Vulkan implementation. Without a device the
+      # perf suite would SKIP its GPU metrics — and a skip is not a pass, so the
+      # gate would be measuring nothing.
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: true
+          cache: true
+          stripdown: true
+          install_lavapipe: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Configure exactly as ci.yml does, so this job cannot diverge from the
+      # build the rest of CI gates on. Only the build step below is narrowed.
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B $env:BUILD_DIR -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DNF_USE_VULKAN=ON
+          -DNF_BUILD_TESTS=ON
+          -DNF_BUILD_SAMPLES=ON
+          -DNF_BUILD_EDITOR=ON
+          -DNF_BUILD_TOOLS=ON
+
+      # Only the suite that carries the contract — that is the whole point of
+      # this being a separate workflow rather than a second job in ci.yml.
+      - name: Build PerfTests
+        shell: pwsh
+        run: cmake --build $env:BUILD_DIR --target PerfTests
+
+      - name: Select Lavapipe as the Vulkan device
+        shell: pwsh
+        run: |
+          $icd = Get-ChildItem -Path C:\lavapipe -Recurse -Filter 'lvp_icd*.json' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $icd) {
+            Write-Error "Lavapipe ICD not found — the perf gate would measure nothing."
+            exit 1
+          }
+          "VK_ICD_FILENAMES=$($icd.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Host "Using Vulkan ICD: $($icd.FullName)"
+
+      # The gate's own verdict first, then the "did it actually measure
+      # anything" checks — otherwise a real regression would be reported as
+      # "only 3 metrics were produced", which sends the reader the wrong way.
+      - name: Run the perf gate
+        shell: bash
+        run: |
+          set -o pipefail
+          bash Tests/PerfTests/perf_gate.sh --binary "$BUILD_DIR/bin/PerfTests.exe" \
+            | tee perf_gate.log
+          code=${PIPESTATUS[0]}
+
+          echo "--- metrics measured ---"
+          grep '^PERF_METRIC' perf_gate.log || true
+          n=$(grep -c '^PERF_METRIC' perf_gate.log || true)
+          echo "metrics measured: $n"
+
+          if [ "$code" -ne 0 ]; then
+            echo "PERF GATE FAILED (exit $code):"
+            grep 'PERF GATE FAILED' perf_gate.log || true
+            exit 1
+          fi
+          # A run where the GPU metrics skipped would otherwise look like a pass.
+          if [ "$n" -lt 9 ]; then
+            echo "Only $n perf metrics were produced — the suite skipped its GPU path."
+            exit 1
+          fi
+          if grep -q 'Skipped: [1-9]' perf_gate.log; then
+            echo "A perf test was SKIPPED — a skip is not a pass."
+            grep 'Skipped: [1-9]' perf_gate.log
+            exit 1
+          fi
+          echo "PERF GATE PASSED: $n metrics, all within 10% of their baseline."
+
+      # The negative control. Without it "the gate is live" is an assertion; with
+      # it, the rejection is demonstrated on every build.
+      - name: Negative control — a deliberate regression must fail the gate
+        shell: bash
+        run: |
+          bash Tests/PerfTests/perf_gate.sh --self-test \
+            --binary "$BUILD_DIR/bin/PerfTests.exe" | tee perf_gate_selftest.log
+
+      - name: Upload the perf log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate-log
+          path: |
+            perf_gate.log
+            perf_gate_selftest.log
+          if-no-files-found: warn

@@ -218,7 +218,13 @@ std::unique_ptr<StaticMesh> StaticMesh::create_quad(float size) {
     Vertex v3{}; v3.position[0]=-hs; v3.position[1]= hs; v3.position[2]=0; v3.normal[2]=1; v3.uv0[0]=0; v3.uv0[1]=1;
     for (auto* v : {&v0,&v1,&v2,&v3}) { v->tangent[0]=1; v->tangent[3]=1; }
     lod.vertices = {v0,v1,v2,v3};
-    lod.indices = {0,1,2, 2,3,0};
+    // Wound to match create_cube's +Z face (bottom-right, bottom-left, top-left,
+    // top-right, not the reverse): Mat4::perspective negates m[1][1], so with
+    // FrontFace::CW a face whose vertex order reads counterclockwise in world XY
+    // is the one visible from +Z. The natural (0,1,2) order has the opposite
+    // sense, and the quad was back-face culled from every camera on the +Z side
+    // — which is the only thing create_quad is ever used for.
+    lod.indices = {1,0,3, 3,2,1};
     mesh->compute_bounds(lod);
     return mesh;
 }

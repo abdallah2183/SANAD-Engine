@@ -7,8 +7,9 @@
 // to drive: throttle/steer/brake in [-1, 1]) + VehicleSystem (ECS bridge) —
 // so the demo plays exactly what the tests verify.
 //
-// Controls: W/Up = throttle, S/Down = brake/reverse, A/D/Arrows = steer,
-//           Space = handbrake, R = reset car to spawn, ESC = quit.
+// Controls: W/Up/RT = throttle, S/Down/LT = brake/reverse, A/D/Arrows/Left stick = steer,
+//           Space/A = handbrake (rear wheels only), R/Y/Start = reset car to spawn,
+//           ESC/Back = quit. Keyboard and Xbox pad share one InputMapper.
 
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Math.hpp>
@@ -16,6 +17,9 @@
 #include <NF/Platform/Platform.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/Platform/InputSystem.hpp>
+#include <NF/Input/InputAction.hpp>
+#include <NF/Input/InputContext.hpp>
+#include <NF/Input/InputMapper.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
 #include <NF/Rendering/MeshLibrary.hpp>
@@ -67,6 +71,52 @@ float rand_range(std::mt19937& rng, float lo, float hi) {
     return d(rng);
 }
 
+// Gameplay-facing drive bindings: one context serves keyboard and gamepad.
+// Axis1D throttle/brake/steer compose digital keys with analog triggers/stick;
+// Bool actions take any held source (§50 actions, not keys).
+input::InputMapper make_drive_mapper() {
+    input::InputMapper mapper;
+    input::InputContext& drive = mapper.create_context("driving", 0);
+
+    input::InputAction throttle("Throttle", input::ActionType::Axis1D);
+    throttle.add_key(KeyCode::W);
+    throttle.add_key(KeyCode::Up);
+    throttle.add_gamepad_axis(GamepadAxis::RightTrigger, input::AxisComponent::None, 1.0f);
+    drive.add_action(std::move(throttle));
+
+    input::InputAction brake("Brake", input::ActionType::Axis1D);
+    brake.add_key(KeyCode::S);
+    brake.add_key(KeyCode::Down);
+    brake.add_gamepad_axis(GamepadAxis::LeftTrigger, input::AxisComponent::None, 1.0f);
+    drive.add_action(std::move(brake));
+
+    input::InputAction steer("Steer", input::ActionType::Axis1D);
+    steer.add_key(KeyCode::A, input::AxisComponent::None, -1.0f);
+    steer.add_key(KeyCode::D, input::AxisComponent::None, 1.0f);
+    steer.add_key(KeyCode::Left, input::AxisComponent::None, -1.0f);
+    steer.add_key(KeyCode::Right, input::AxisComponent::None, 1.0f);
+    steer.add_gamepad_axis(GamepadAxis::LeftX, input::AxisComponent::None, 1.0f);
+    drive.add_action(std::move(steer));
+
+    input::InputAction handbrake("Handbrake", input::ActionType::Bool);
+    handbrake.add_key(KeyCode::Space);
+    handbrake.add_gamepad_button(GamepadButton::A);
+    drive.add_action(std::move(handbrake));
+
+    input::InputAction reset("Reset", input::ActionType::Bool);
+    reset.add_key(KeyCode::R);
+    reset.add_gamepad_button(GamepadButton::Y);
+    reset.add_gamepad_button(GamepadButton::Start);
+    drive.add_action(std::move(reset));
+
+    input::InputAction quit("Quit", input::ActionType::Bool);
+    quit.add_key(KeyCode::Escape);
+    quit.add_gamepad_button(GamepadButton::Back);
+    drive.add_action(std::move(quit));
+
+    return mapper;
+}
+
 int run() {
     auto sdir = shader_dir();
     if (sdir.empty()) { NF_LOG_FATAL(LogCategory::Core, "VehicleDemo: shader dir not found"); return -1; }
@@ -76,7 +126,7 @@ int run() {
 
     WindowDesc wdesc{};
     wdesc.width = 1280; wdesc.height = 720;
-    wdesc.title = "NOVAForge — Vehicle Demo | WASD drive, Space brake, R reset";
+    wdesc.title = "NOVAForge — Vehicle Demo | WASD/Xbox drive, Space/A handbrake, R reset";
     wdesc.vsync = true;
     Window window;
     if (!window.create(wdesc)) { NF_LOG_FATAL(LogCategory::Platform, "Failed to create window"); return -1; }
@@ -181,10 +231,17 @@ int run() {
         t->local_x = kSpawn.x; t->local_y = kSpawn.y; t->local_z = kSpawn.z;
     }
     physics::VehicleComponent vc; // default JoltVehicleConfig: front = +Z
-    // Stability tune for the demo: a touch wider and less twitchy than the
-    // raw defaults, so full-lock steering at speed slides instead of rolling.
+    // Stability tune for the demo: wider track and less twitchy steering than
+    // the raw defaults so full-lock at speed slides instead of rolling, plus a
+    // firmer, better-damped suspension that keeps the chassis level over the
+    // obstacle boxes at full throttle. Tire grip just past 1.0 (a real tire
+    // profile holds more than its contact patch alone would).
     vc.config.track_half_width = 1.0f;
     vc.config.max_steer_deg = 22.0f;
+    vc.config.suspension_frequency_hz = 2.0f;
+    vc.config.suspension_damping = 0.85f;
+    vc.config.tire_peak_friction = 1.3f;
+    vc.config.tire_limit_friction = 1.05f;
     world.add<physics::VehicleComponent>(car, vc);
     {
         // Chassis visual matches the default config half extents (0.9/0.5/2.0).
@@ -273,7 +330,11 @@ int run() {
     Timer timer; timer.start();
     Clock title_clock;
 
-    NF_LOG_INFO(LogCategory::Core, "VehicleDemo: entering loop (WASD drive, Space brake, R reset)");
+    NF_LOG_INFO(LogCategory::Core,
+                "VehicleDemo: entering loop (WASD/Xbox drive, Space/A brake, R reset)");
+
+    input::InputMapper drive_mapper = make_drive_mapper();
+    bool pad_connected = false;
 
     while (!window.should_close()) {
         float dt = timer.tick();
@@ -285,8 +346,9 @@ int run() {
         if (window.should_close()) break;
 
         auto& input = InputSystem::instance();
-        if (input.is_key_down(KeyCode::Escape)) break;
-        if (input.is_key_pressed(KeyCode::R)) {
+        drive_mapper.update(input.state());
+        if (drive_mapper.is_pressed("Quit")) break;
+        if (drive_mapper.just_pressed("Reset")) {
             vehicles.reset(car, world, kSpawn);
             physics_acc = 0.0f;
             resets++;
@@ -294,16 +356,16 @@ int run() {
         }
 
         // --- Drive intents: the ONLY channel into the vehicle ---------------
-        float throttle = 0.0f, steer = 0.0f, brake = 0.0f;
-        if (input.is_key_down(KeyCode::W) || input.is_key_down(KeyCode::Up)) throttle += 1.0f;
-        if (input.is_key_down(KeyCode::S) || input.is_key_down(KeyCode::Down)) brake += 1.0f;
-        if (input.is_key_down(KeyCode::A) || input.is_key_down(KeyCode::Left)) steer -= 1.0f;
-        if (input.is_key_down(KeyCode::D) || input.is_key_down(KeyCode::Right)) steer += 1.0f;
-        if (input.is_key_down(KeyCode::Space)) brake = 1.0f;
+        // Values come from the action map (keys + pad compose into one action).
+        const float throttle = drive_mapper.get_axis("Throttle");
+        const float brake = drive_mapper.get_axis("Brake");
+        const float steer = drive_mapper.get_axis("Steer");
+        const float handbrake = drive_mapper.is_pressed("Handbrake") ? 1.0f : 0.0f;
         if (auto* drive = world.get<physics::VehicleComponent>(car)) {
             drive->throttle = throttle;
             drive->steer = steer;
             drive->brake = brake;
+            drive->handbrake = handbrake;
         }
 
         // --- Fixed-step physics: inputs, world step, pose writeback ---------
@@ -386,15 +448,34 @@ int run() {
             }
         }
 
-        // Title HUD: speed + score.
+        // Title HUD: speed + score + a per-wheel contact readout (the
+        // JoltWheelState path the wheel meshes pose from, surfaced as text).
         if (title_clock.elapsed_seconds() > 0.25) {
             title_clock.reset();
-            char buf[256];
+            const bool pad_now = input.gamepad_connected();
+            if (pad_now != pad_connected) {
+                pad_connected = pad_now;
+                NF_LOG_INFO(LogCategory::Platform, "VehicleDemo: gamepad {}",
+                            pad_connected ? "connected" : "disconnected");
+            }
+            char buf[320];
             const float kmh = chassis.linear_velocity.x * chassis.linear_velocity.x +
                               chassis.linear_velocity.z * chassis.linear_velocity.z;
+            // Wheels in contact: 4 bits, FL FR RL RR. Airborne reads as '-',
+            // which is also the "you left the ground" tell from the suspension.
+            const std::vector<physics::JoltWheelState> ws =
+                drive_comp->vehicle->wheel_states();
+            char wtxt[8] = "----";
+            for (usize i = 0; i < ws.size() && i < 4; ++i) {
+                wtxt[i] = ws[i].in_contact ? 'O' : '-';
+            }
+            const char* hand = pad_connected
+                                   ? "Xbox drive, A handbrake, Y reset, Back quit"
+                                   : "WASD drive, Space handbrake, R reset";
             std::snprintf(buf, sizeof(buf),
-                          "NOVAForge — Vehicle Demo | %d km/h | Gates=%d Resets=%d | WASD drive, Space brake, R reset",
-                          static_cast<int>(std::sqrt(kmh) * 3.6f), score, resets);
+                          "NOVAForge — Vehicle Demo | %d km/h | Wheels=%.4s | Gates=%d Resets=%d | %s",
+                          static_cast<int>(std::sqrt(kmh) * 3.6f), wtxt, score, resets,
+                          hand);
             window.set_title(buf);
         }
 
@@ -441,6 +522,7 @@ int run() {
         device->submit(*cmd, submit_info);
         swapchain->present(image_index, std::span<const rhi::Semaphore* const>(signal_sems));
 
+        drive_mapper.end_frame();
         InputSystem::instance().end_frame();
     }
 

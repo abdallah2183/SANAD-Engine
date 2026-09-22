@@ -183,8 +183,16 @@ NF_TEST(stick_axis_above_deadzone_is_rescaled) {
     state.gamepad_axes[static_cast<usize>(GamepadAxis::LeftX)] = 1.0f;
     state.gamepad_axes[static_cast<usize>(GamepadAxis::LeftY)] = 0.0f;
     mapper.update(state);
-    // Magnitude 1.0: rescaled by (1 - 0.25)/1 = 0.75.
-    NF_CHECK_NEAR(mapper.get_vector("Look").x, 0.75f, 1e-5f);
+    // Magnitude 1.0 is the top of the surviving [deadzone, 1] band, so the
+    // rescale must land it exactly on 1.0 — a full-lock stick commands the
+    // full action value. (Dividing by `mag` instead of `mag * (1 - deadzone)`
+    // would cap this at 0.75 and make full steer unreachable.)
+    NF_CHECK_NEAR(mapper.get_vector("Look").x, 1.0f, 1e-5f);
+
+    // Half deflection is rescaled linearly: (0.5 - 0.25) / (1 - 0.25) = 1/3.
+    state.gamepad_axes[static_cast<usize>(GamepadAxis::LeftX)] = 0.5f;
+    mapper.update(state);
+    NF_CHECK_NEAR(mapper.get_vector("Look").x, 1.0f / 3.0f, 1e-5f);
 }
 
 NF_TEST(trigger_deadzone_rescales_full_pull) {
@@ -384,4 +392,362 @@ NF_TEST(context_stable_references_across_growth) {
     InputState state;
     mapper.update(state);
     NF_CHECK(first.find_action("A") != nullptr); // still valid post-refresh
+}
+
+// --- live sample path (XInput mask → InputSystem edges → action map) --------
+// G1: headless proof that a real poll-shaped GamepadSample drives the same
+// actions VehicleDemo reads, with no device and no GPU.
+
+namespace {
+
+/// Clears any prior singleton gamepad edges so tests do not leak into each other.
+void reset_pad_edges(nf::InputSystem& sys) {
+    sys.begin_frame();
+    sys.end_frame();
+    sys.begin_frame();
+}
+
+} // namespace
+
+NF_TEST(xinput_mask_maps_to_engine_buttons_and_edges) {
+    auto& sys = nf::InputSystem::instance();
+    reset_pad_edges(sys);
+    NF_CHECK(!sys.gamepad_connected());
+
+    nf::GamepadSample press{};
+    press.connected = true;
+    press.buttons = nf::xinput_buttons::A | nf::xinput_buttons::DPadRight |
+                    nf::xinput_buttons::RightShoulder;
+    sys.apply_gamepad_sample(press);
+
+    NF_CHECK(sys.gamepad_connected());
+    NF_CHECK(sys.is_gamepad_down(nf::GamepadButton::A));
+    NF_CHECK(sys.is_gamepad_pressed(nf::GamepadButton::A));
+    NF_CHECK(sys.is_gamepad_down(nf::GamepadButton::DPadRight));
+    NF_CHECK(sys.is_gamepad_pressed(nf::GamepadButton::RightBumper));
+    NF_CHECK(!sys.is_gamepad_down(nf::GamepadButton::B));
+    NF_CHECK(!sys.is_gamepad_pressed(nf::GamepadButton::B));
+
+    // Hold: still down, edge gone after begin_frame.
+    sys.end_frame();
+    sys.begin_frame();
+    sys.apply_gamepad_sample(press);
+    NF_CHECK(sys.is_gamepad_down(nf::GamepadButton::A));
+    NF_CHECK(!sys.is_gamepad_pressed(nf::GamepadButton::A));
+
+    // Release: edge fires once.
+    sys.end_frame();
+    sys.begin_frame();
+    nf::GamepadSample release{};
+    release.connected = true;
+    release.buttons = 0;
+    sys.apply_gamepad_sample(release);
+    NF_CHECK(!sys.is_gamepad_down(nf::GamepadButton::A));
+    NF_CHECK(sys.is_gamepad_released(nf::GamepadButton::A));
+
+    // Disconnect clears pad state and flags.
+    sys.end_frame();
+    sys.begin_frame();
+    sys.apply_gamepad_sample(nf::GamepadSample{});
+    NF_CHECK(!sys.gamepad_connected());
+    NF_CHECK(!sys.is_gamepad_down(nf::GamepadButton::A));
+}
+
+NF_TEST(sample_sticks_and_triggers_normalize_to_unit_range) {
+    auto& sys = nf::InputSystem::instance();
+    reset_pad_edges(sys);
+
+    nf::GamepadSample s{};
+    s.connected = true;
+    s.left_x = 32767;
+    s.left_y = -32768;
+    s.right_x = 16384;
+    s.left_trigger = 255;
+    s.right_trigger = 0;
+    sys.apply_gamepad_sample(s);
+
+    NF_CHECK_NEAR(sys.gamepad_axis(nf::GamepadAxis::LeftX), 1.0f, 1e-5f);
+    NF_CHECK_NEAR(sys.gamepad_axis(nf::GamepadAxis::LeftY), -1.0f, 1e-5f);
+    NF_CHECK_NEAR(sys.gamepad_axis(nf::GamepadAxis::RightX), 16384.0f / 32767.0f, 1e-5f);
+    NF_CHECK_NEAR(sys.gamepad_axis(nf::GamepadAxis::LeftTrigger), 1.0f, 1e-5f);
+    NF_CHECK_NEAR(sys.gamepad_axis(nf::GamepadAxis::RightTrigger), 0.0f, 1e-6f);
+
+    // Clean singleton for any later test.
+    sys.end_frame();
+    sys.begin_frame();
+    sys.apply_gamepad_sample(nf::GamepadSample{});
+    sys.end_frame();
+}
+
+NF_TEST(sample_drives_vehicle_action_map_end_to_end) {
+    // Same shape as VehicleDemo: sample → InputSystem → mapper actions.
+    auto& sys = nf::InputSystem::instance();
+    reset_pad_edges(sys);
+
+    InputMapper mapper;
+    InputContext& drive = mapper.create_context("driving", 0);
+
+    InputAction throttle("Throttle", ActionType::Axis1D);
+    throttle.add_key(KeyCode::W);
+    throttle.add_gamepad_axis(GamepadAxis::RightTrigger, AxisComponent::None, 1.0f);
+    drive.add_action(std::move(throttle));
+
+    InputAction steer("Steer", ActionType::Axis1D);
+    steer.add_key(KeyCode::A, AxisComponent::None, -1.0f);
+    steer.add_key(KeyCode::D, AxisComponent::None, 1.0f);
+    steer.add_gamepad_axis(GamepadAxis::LeftX, AxisComponent::None, 1.0f);
+    drive.add_action(std::move(steer));
+
+    InputAction handbrake("Handbrake", ActionType::Bool);
+    handbrake.add_key(KeyCode::Space);
+    handbrake.add_gamepad_button(GamepadButton::A);
+    drive.add_action(std::move(handbrake));
+
+    InputAction reset("Reset", ActionType::Bool);
+    reset.add_key(KeyCode::R);
+    reset.add_gamepad_button(GamepadButton::Y);
+    drive.add_action(std::move(reset));
+
+    GamepadSettings pad; // defaults; stick deadzone 0.15
+    mapper.set_gamepad_settings(pad);
+
+    nf::GamepadSample s{};
+    s.connected = true;
+    s.buttons = nf::xinput_buttons::A | nf::xinput_buttons::Y;
+    s.left_x = 32767;                 // full right steer
+    s.right_trigger = 255;            // full throttle
+    sys.apply_gamepad_sample(s);
+
+    mapper.update(sys.state());
+    NF_CHECK_NEAR(mapper.get_axis("Throttle"), 1.0f, 1e-5f);
+    NF_CHECK_NEAR(mapper.get_axis("Steer"), 1.0f, 1e-5f);
+    NF_CHECK(mapper.is_pressed("Handbrake"));
+    NF_CHECK(mapper.just_pressed("Handbrake"));
+    NF_CHECK(mapper.is_pressed("Reset"));
+    NF_CHECK(mapper.just_pressed("Reset"));
+    mapper.end_frame();
+
+    // Hold: edges drop, values stay.
+    sys.end_frame();
+    sys.begin_frame();
+    sys.apply_gamepad_sample(s);
+    mapper.update(sys.state());
+    NF_CHECK_NEAR(mapper.get_axis("Throttle"), 1.0f, 1e-5f);
+    NF_CHECK(!mapper.just_pressed("Handbrake"));
+    NF_CHECK(mapper.is_pressed("Handbrake"));
+    mapper.end_frame();
+
+    // Disconnect: handbrake releases, throttle/steer zero.
+    sys.end_frame();
+    sys.begin_frame();
+    sys.apply_gamepad_sample(nf::GamepadSample{});
+    mapper.update(sys.state());
+    NF_CHECK(!mapper.is_pressed("Handbrake"));
+    NF_CHECK(mapper.just_released("Handbrake"));
+    NF_CHECK_NEAR(mapper.get_axis("Throttle"), 0.0f, 1e-6f);
+    NF_CHECK_NEAR(mapper.get_axis("Steer"), 0.0f, 1e-6f);
+    mapper.end_frame();
+
+    // Leave singleton clean.
+    sys.end_frame();
+}
+
+// --- action callbacks (held/pressed/released, G1) ---------------------------
+// Same headless shape as the query tests: a fake pad sample drives the mapper,
+// the callbacks record what a gameplay subscriber would have seen.
+
+NF_TEST(pad_button_fires_pressed_held_released_callbacks) {
+    InputMapper mapper;
+    InputContext& drive = mapper.create_context("driving", 0);
+    InputAction handbrake("Handbrake", ActionType::Bool);
+    handbrake.add_gamepad_button(GamepadButton::A);
+    drive.add_action(std::move(handbrake));
+
+    int pressed = 0, held = 0, released = 0;
+    mapper.set_action_callback("Handbrake", ActionPhase::Pressed,
+                               [&](const ActionValue&) { ++pressed; });
+    mapper.set_action_callback("Handbrake", ActionPhase::Held,
+                               [&](const ActionValue&) { ++held; });
+    mapper.set_action_callback("Handbrake", ActionPhase::Released,
+                               [&](const ActionValue&) { ++released; });
+
+    InputState state;
+    mapper.update(state); // nothing held: no callback at all
+    NF_CHECK(pressed == 0 && held == 0 && released == 0);
+    mapper.end_frame();
+
+    state.gamepad_buttons[static_cast<usize>(GamepadButton::A)] = true;
+    mapper.update(state); // press edge
+    NF_CHECK(pressed == 1);
+    NF_CHECK(held == 0); // Pressed frame is not also Held
+    NF_CHECK(released == 0);
+    mapper.end_frame();
+
+    mapper.update(state); // hold
+    NF_CHECK(pressed == 1);
+    NF_CHECK(held == 1);
+    mapper.end_frame();
+
+    mapper.update(state); // still held
+    NF_CHECK(held == 2);
+    mapper.end_frame();
+
+    state.gamepad_buttons[static_cast<usize>(GamepadButton::A)] = false;
+    mapper.update(state); // release edge
+    NF_CHECK(released == 1);
+    NF_CHECK(held == 2); // no Held on the Released frame
+    NF_CHECK(pressed == 1);
+    mapper.end_frame();
+
+    mapper.update(state); // idle again: no repeat release
+    NF_CHECK(released == 1);
+}
+
+NF_TEST(pad_axis_crossing_threshold_fires_edge_callbacks) {
+    InputMapper mapper;
+    InputContext& drive = mapper.create_context("driving", 0);
+    InputAction throttle("Throttle", ActionType::Axis1D);
+    throttle.add_gamepad_axis(GamepadAxis::RightTrigger, AxisComponent::None, 1.0f);
+    drive.add_action(std::move(throttle));
+
+    // Deadzone off: this test is about edge timing and payload, and a zero
+    // deadzone makes the callback value equal the raw trigger reading exactly.
+    // (With the default 0.05 deadzone the payload is the rescaled value, so a
+    // 0.9 pull reports 0.8947 — the deadzone math is pinned separately.)
+    GamepadSettings pad;
+    pad.trigger_deadzone = 0.0f;
+    mapper.set_gamepad_settings(pad);
+
+    int pressed = 0, held = 0, released = 0;
+    f32 last_value = -1.0f;
+    mapper.set_action_callback("Throttle", ActionPhase::Pressed,
+                               [&](const ActionValue& v) { ++pressed; last_value = v.x; });
+    mapper.set_action_callback("Throttle", ActionPhase::Held,
+                               [&](const ActionValue&) { ++held; });
+    mapper.set_action_callback("Throttle", ActionPhase::Released,
+                               [&](const ActionValue&) { ++released; });
+
+    InputState state;
+    mapper.update(state); // trigger at 0: nothing
+    NF_CHECK(pressed == 0 && held == 0 && released == 0);
+    mapper.end_frame();
+
+    // Half pull = exactly the threshold; pressed() is strictly greater, so no edge yet.
+    state.gamepad_axes[static_cast<usize>(GamepadAxis::RightTrigger)] = 0.5f;
+    mapper.update(state);
+    NF_CHECK(pressed == 0);
+    mapper.end_frame();
+
+    state.gamepad_axes[static_cast<usize>(GamepadAxis::RightTrigger)] = 0.9f;
+    mapper.update(state); // crosses 0.5: Pressed with the live value
+    NF_CHECK(pressed == 1);
+    NF_CHECK_NEAR(last_value, 0.9f, 1e-5f);
+    mapper.end_frame();
+
+    mapper.update(state); // sustained pull: Held
+    NF_CHECK(held == 1);
+    mapper.end_frame();
+
+    state.gamepad_axes[static_cast<usize>(GamepadAxis::RightTrigger)] = 0.0f;
+    mapper.update(state); // trigger released
+    NF_CHECK(released == 1);
+}
+
+NF_TEST(blocking_context_releases_callbacks_of_suppressed_actions) {
+    InputMapper mapper;
+    InputContext& gameplay = mapper.create_context("gameplay", 0);
+    InputAction jump("Jump", ActionType::Bool);
+    jump.add_key(KeyCode::Space);
+    jump.add_gamepad_button(GamepadButton::A);
+    gameplay.add_action(std::move(jump));
+
+    InputContext& menu = mapper.create_context("menu", 10, /*blocking=*/true);
+    InputAction confirm("Confirm", ActionType::Bool);
+    confirm.add_key(KeyCode::Enter);
+    menu.add_action(std::move(confirm));
+
+    int jump_pressed = 0, jump_released = 0;
+    int confirm_pressed = 0;
+    mapper.set_action_callback("Jump", ActionPhase::Pressed,
+                               [&](const ActionValue&) { ++jump_pressed; });
+    mapper.set_action_callback("Jump", ActionPhase::Released,
+                               [&](const ActionValue&) { ++jump_released; });
+    mapper.set_action_callback("Confirm", ActionPhase::Pressed,
+                               [&](const ActionValue&) { ++confirm_pressed; });
+
+    // Contexts default to active, and an active blocking context suppresses
+    // everything below it from the first frame — so the menu must be closed
+    // before the "menu opens" step below can mean anything.
+    mapper.set_context_active("menu", false);
+
+    InputState state;
+    state.gamepad_buttons[static_cast<usize>(GamepadButton::A)] = true;
+    mapper.update(state);
+    NF_CHECK(jump_pressed == 1);
+    mapper.end_frame();
+
+    // Menu opens while A is held: the suppressed action reads as Released —
+    // the same value just_released reports, so callbacks cannot disagree
+    // with queries.
+    mapper.set_context_active("menu", true);
+    mapper.update(state);
+    NF_CHECK(jump_released == 1);
+    NF_CHECK(!mapper.just_pressed("Jump"));
+    mapper.end_frame();
+
+    press(state, KeyCode::Enter);
+    mapper.update(state); // menu still works while gameplay is blocked
+    NF_CHECK(confirm_pressed == 1);
+}
+
+NF_TEST(callback_for_unknown_action_never_fires) {
+    InputMapper mapper;
+    InputContext& ctx = mapper.create_context("gameplay", 0);
+    ctx.add_action(InputAction{"Real", ActionType::Bool});
+
+    bool fired = false;
+    mapper.set_action_callback("Real", ActionPhase::Pressed,
+                               [&](const ActionValue&) { fired = true; });
+    mapper.set_action_callback("Ghost", ActionPhase::Pressed,
+                               [&](const ActionValue&) { fired = true; });
+
+    InputState state;
+    press(state, KeyCode::Space); // nothing bound to either name
+    mapper.update(state);
+    NF_CHECK(!fired); // no crash, no spurious fire
+}
+
+// --- live hardware path (env-gated, NF_SKIP per protocol) -------------------
+// Proves the real XInput poll — not just injected samples — drives the state.
+// Without a pad attached this must count as SKIPPED, never as a pass.
+
+NF_TEST(live_xinput_poll_reports_a_connected_pad) {
+    auto& sys = nf::InputSystem::instance();
+    reset_pad_edges(sys);
+
+    sys.poll_gamepad(); // real XInput slots 0–3 (no-op if the DLL is absent)
+    if (!sys.gamepad_connected()) {
+        NF_SKIP("no XInput pad connected — live hardware check requires a pad");
+    }
+
+    // A pad that XInput reports as connected must present sane analog data,
+    // whatever the sticks are physically doing this instant.
+    for (usize i = 0; i < static_cast<usize>(GamepadAxis::LeftTrigger); ++i) {
+        const f32 v = sys.gamepad_axis(static_cast<GamepadAxis>(i));
+        NF_CHECK(v >= -1.001f && v <= 1.001f);
+    }
+    NF_CHECK(sys.gamepad_axis(GamepadAxis::LeftTrigger) >= 0.0f);
+    NF_CHECK(sys.gamepad_axis(GamepadAxis::LeftTrigger) <= 1.001f);
+    NF_CHECK(sys.gamepad_axis(GamepadAxis::RightTrigger) >= 0.0f);
+    NF_CHECK(sys.gamepad_axis(GamepadAxis::RightTrigger) <= 1.001f);
+
+    // A second poll must be stable (connected stays connected).
+    sys.end_frame();
+    sys.begin_frame();
+    sys.poll_gamepad();
+    NF_CHECK(sys.gamepad_connected());
+
+    // Leave the singleton clean for any later suite in the same process.
+    sys.apply_gamepad_sample(nf::GamepadSample{});
+    sys.end_frame();
 }

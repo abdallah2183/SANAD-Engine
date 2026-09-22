@@ -29,6 +29,7 @@
 #include <NF/Input/InputAction.hpp>
 #include <NF/Input/InputContext.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -45,6 +46,22 @@ struct ActionValue {
 
     bool pressed() const { return x > PressedThreshold; }
 };
+
+/// Which transition a callback reports. Edges use the same post-suppression
+/// values (and the same threshold) as just_pressed / just_released, so a
+/// callback and the equivalent query can never disagree:
+///   Pressed  — the action crossed the threshold upward this update
+///   Held     — it stayed above it (every held update after the Pressed one)
+///   Released — it fell back below it
+enum class ActionPhase : u8 {
+    Pressed = 0,
+    Held,
+    Released,
+};
+
+/// Callback payload: the action's resolved value this frame (Vec2 actions use
+/// both components; Bool/Axis1D use `x`).
+using ActionCallback = std::function<void(const ActionValue&)>;
 
 class InputMapper {
 public:
@@ -97,6 +114,18 @@ public:
     /// Direction of an Axis2D action, each component in [-1, 1].
     Vec2 get_vector(std::string_view action) const;
 
+    // --- callbacks --------------------------------------------------------
+
+    /// Registers a callback for one action phase. Multiple phases (or several
+    /// callbacks on one phase — the newest replaces the older) are allowed;
+    /// passing a null function clears that phase. Callbacks fire during
+    /// update(), in evaluation order (context priority, then insertion), after
+    /// every action value is resolved — a callback may safely query any action.
+    /// Edge semantics match just_pressed / just_released exactly, including
+    /// suppression: a held action blocked by a menu reads as Released.
+    void set_action_callback(std::string_view action, ActionPhase phase,
+                             ActionCallback callback);
+
     // --- serialization (rebinding persistence) ----------------------------
 
     /// Human-readable binding dump (§73): contexts, actions, bindings.
@@ -109,6 +138,21 @@ public:
     static constexpr u32 BindingsVersion = 1;
 
 private:
+    /// Per-action callback slots, keyed by action name. `InputContext` refuses
+    /// a duplicate name *within* one context but there is no mapper-wide
+    /// uniqueness rule, so a name reused across two contexts would fire that
+    /// action's callbacks once per context per update (and the value map would
+    /// keep only the last context's value). Keep action names globally unique.
+    struct ActionCallbacks {
+        ActionCallback on_pressed;
+        ActionCallback on_held;
+        ActionCallback on_released;
+    };
+
+    /// Fires callbacks for the freshly resolved values, in evaluation order.
+    /// No-op (and allocation-free) while no callback is registered.
+    void fire_callbacks();
+
     void mark_dirty();
     /// Rebuild the flat evaluation order (contexts by priority, then their
     /// actions in insertion order) and pre-size the value maps so update()
@@ -138,6 +182,7 @@ private:
     HashMap<std::string, ActionValue>* m_previous = &m_values_b;
 
     GamepadSettings m_pad;
+    HashMap<std::string, ActionCallbacks> m_callbacks;
     bool m_dirty = true;
 };
 

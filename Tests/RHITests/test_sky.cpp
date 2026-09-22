@@ -79,14 +79,51 @@ NF_TEST(sky_disabled_returns_clear) {
     NF_CHECK_NEAR(c.z, sky.clear.z, 1e-6f);
 }
 
-NF_TEST(sky_gradient_midpoint_matches_pow_curve) {
+NF_TEST(sky_gradient_midpoint_follows_the_zenith_curve) {
     SkyParams sky;
-    // 45 degrees up: h = sqrt(0.5), mix factor pow(h, 0.6).
+    // 45 degrees up: h = sqrt(0.5), mix factor pow(h, kSkyZenithCurve). The haze
+    // band is exp(-(((h-0.06)*10)^2)) there, i.e. ~1e-18 — invisible by design,
+    // which is why this test can still pin the pure gradient.
     const Vec3 c = compute_sky_color(sky, dir(1, 1, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
     const float h = 0.70710678f;
-    const float t = std::pow(h, 0.6f);
+    const float t = std::pow(h, kSkyZenithCurve);
     NF_CHECK_NEAR(c.x, sky.horizon.x + (sky.zenith.x - sky.horizon.x) * t, 1e-4f);
     NF_CHECK_NEAR(c.z, sky.horizon.z + (sky.zenith.z - sky.horizon.z) * t, 1e-4f);
+}
+
+NF_TEST(sky_haze_band_peaks_above_the_horizon_and_vanishes_at_both_ends) {
+    // The natural-sky haze band is what separates "sky" from "grey card": it is
+    // exactly zero at eye level and at the zenith (so the pinned endpoints stay
+    // exact) and brightest a few degrees up.
+    SkyParams sky;
+    const Vec3 at_horizon = compute_sky_color(sky, dir(1, 0, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
+    NF_CHECK_NEAR(at_horizon.x, sky.horizon.x, 1e-5f); // no band at h == 0
+    const Vec3 just_up = compute_sky_color(sky, dir(10, 0.6f, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
+    // ~3.4 degrees up: brighter than a plain mix would be, because the band is
+    // on top of it.
+    const Vec3 plain = [&] {
+        const Vec3 r = Vec3{10.0f, 0.6f, 0.0f}.normalized();
+        const float t = std::pow(r.y, kSkyZenithCurve);
+        return Vec3{sky.horizon.x + (sky.zenith.x - sky.horizon.x) * t,
+                    sky.horizon.y + (sky.zenith.y - sky.horizon.y) * t,
+                    sky.horizon.z + (sky.zenith.z - sky.horizon.z) * t};
+    }();
+    NF_CHECK(just_up.x > plain.x + 0.05f);
+    const Vec3 zenith = compute_sky_color(sky, dir(0, 1, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
+    NF_CHECK_NEAR(zenith.z, sky.zenith.z, 1e-5f); // no band overhead
+}
+
+NF_TEST(sky_ground_fade_reaches_the_ground_colour_35_degrees_down) {
+    // Straight down and 35 degrees down both land on the ground colour; 10
+    // degrees down is still closer to the horizon than to the ground.
+    SkyParams sky;
+    const Vec3 straight = compute_sky_color(sky, dir(0, -1, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
+    NF_CHECK_NEAR(straight.y, sky.ground.y, 1e-5f);
+    const Vec3 at_fade = compute_sky_color(sky, dir(1, -0.7002f, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
+    NF_CHECK_NEAR(at_fade.x, sky.ground.x, 1e-4f);
+    const Vec3 shallow = compute_sky_color(sky, dir(1, -0.1763f, 0), dir(0, 1, 0), Vec3{1, 1, 1}, false);
+    NF_CHECK(shallow.x > sky.ground.x + 0.1f);
+    NF_CHECK(shallow.x < sky.horizon.x);
 }
 
 NF_TEST(renderer_sky_state_roundtrip_needs_no_device) {
@@ -100,9 +137,10 @@ NF_TEST(renderer_sky_state_roundtrip_needs_no_device) {
     NF_CHECK_NEAR(back.zenith.x, 0.1f, 1e-6f);
     NF_CHECK_NEAR(back.sun_disk, 2.5f, 1e-6f);
     NF_CHECK(!back.enabled);
-    // Defaults match the long-standing hardcoded look.
+    // Defaults are the natural-daylight palette (Phase 21): a saturated blue
+    // zenith and a pale hazy horizon, not the old three-grey card.
     Renderer3D fresh;
-    NF_CHECK_NEAR(fresh.sky().zenith.y, 0.42f, 1e-6f);
-    NF_CHECK_NEAR(fresh.sky().horizon.x, 0.62f, 1e-6f);
+    NF_CHECK_NEAR(fresh.sky().zenith.y, 0.195f, 1e-6f);
+    NF_CHECK_NEAR(fresh.sky().horizon.x, 0.550f, 1e-6f);
     NF_CHECK(fresh.sky().enabled);
 }

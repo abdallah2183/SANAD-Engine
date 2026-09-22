@@ -18,6 +18,8 @@
 #include <cmath>
 #include <filesystem>
 #include <span>
+#include <string>
+#include <vector>
 
 namespace nf::runtime {
 
@@ -32,6 +34,28 @@ f32 safe_scale_ratio(f32 posed, f32 rest) {
         return 1.0f;
     }
     return posed / rest;
+}
+
+/// The fracture piece for a box collider, in the asset's own local space. The
+/// collider is the only description of an object's shape a scene carries —
+/// there is no fracture-asset import pipeline — so the cut starts from it.
+/// NFDestruction deliberately knows nothing about physics shapes ("nothing here
+/// touches physics or rendering"), so the conversion lives in this integration
+/// layer. The winding matches the destruction suite's unit cube.
+destruction::FracturePiece box_fracture_piece(const Vec3& half) {
+    destruction::FracturePiece piece;
+    piece.vertices = {
+        Vec3{-half.x, -half.y, -half.z}, Vec3{ half.x, -half.y, -half.z},
+        Vec3{ half.x,  half.y, -half.z}, Vec3{-half.x,  half.y, -half.z},
+        Vec3{-half.x, -half.y,  half.z}, Vec3{ half.x, -half.y,  half.z},
+        Vec3{ half.x,  half.y,  half.z}, Vec3{-half.x,  half.y,  half.z},
+    };
+    piece.indices = {
+        0u, 2u, 1u,  0u, 3u, 2u,   1u, 6u, 5u,  1u, 2u, 6u,
+        5u, 7u, 4u,  5u, 6u, 7u,   4u, 3u, 0u,  4u, 7u, 3u,
+        4u, 0u, 1u,  4u, 1u, 5u,   3u, 6u, 2u,  3u, 7u, 6u,
+    };
+    return piece;
 }
 
 } // namespace
@@ -49,6 +73,7 @@ Runtime::~Runtime() {
     // Best effort: free GPU resources while the device is still alive.
     // If the device was already shut down this is a no-op (guards inside).
     // The explicit shutdown() path is preferred (called before device shutdown).
+    disable_destruction();
     if (m_renderer_initialized && m_renderer) {
         // Do not call device.wait_idle() here: the device may already be gone.
         // Renderer3D::shutdown() itself waits when the device is alive.
@@ -61,6 +86,9 @@ void Runtime::shutdown() {
     // Gameplay first: a module may still want to write through the scene, and
     // the scene outlives the GPU resources below.
     shutdown_gameplay();
+    // Debris next: its bodies live in the runtime's own Jolt world, which has
+    // to go while the Runtime still owns every object that references it.
+    disable_destruction();
     m_device.wait_idle();
     // The picker owns its own targets/pipeline/framebuffer; drop them while the
     // device is still alive. Rebuilt lazily if a pick happens after shutdown.
@@ -362,10 +390,25 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // Build the physics world from the scene that was just loaded, so a scene
     // containing physics is live as soon as it opens.
     rebuild_physics_from_scene();
+    // The previous scene's bindings and shards do not carry over. Assets stay
+    // (the game registered them), but which entities are breakable and what is
+    // flying around belongs to this scene.
+    reset_destruction_state();
+    // A scene that declares breakable objects gets them bound here, so the
+    // feature is live the moment the level opens. Until this existed the whole
+    // Phase 19 chain — enable, cook, bind, damage, step, draw — was reachable
+    // only from tests: no game entry point called any of it.
+    bind_scene_destructibles();
     // Gameplay: instantiate the registered modules on the first load, let the
     // scene's components restore their state, then announce the new scene.
     // apply_gameplay_state() must follow init_gameplay() — there is nothing to
     // restore into until the module instances exist.
+    // A freshly loaded scene starts a fresh simulation timeline: step N of this
+    // scene is frame N. The counter is not reset on shutdown_gameplay alone,
+    // because a scene loaded without re-adding modules still has to number its
+    // steps from zero — an input log's frame index is only meaningful relative
+    // to the scene it was recorded against.
+    m_gameplay_frame = 0;
     init_gameplay();
     apply_gameplay_state();
     {
@@ -440,6 +483,11 @@ void Runtime::update(float dt) {
     // whether the frame took 5 ms or 50. The render path then only reads the
     // transforms physics produced.
     step_physics(dt);
+    // Contacts are read straight after the step they belong to: the solver's
+    // manifolds are only valid until the next step, and a hit landed this frame
+    // has to be able to spawn its shards in the step_destruction below. A
+    // no-op unless the scene carries a bound destructible.
+    step_impact_damage();
     // Animation advances on the frame delta — it is a function of time, not of
     // state, so it needs no fixed clock. Runs after physics, so an entity that
     // carries both is driven by its animation.
@@ -452,6 +500,11 @@ void Runtime::update(float dt) {
     // everything, and before propagation, so whatever it writes is what gets
     // rendered rather than a frame late.
     step_gameplay(dt);
+    // Debris simulates in its own Jolt world, after gameplay so a module that
+    // applies damage this frame sees its shards spawn this frame. Shards are
+    // posed by the Jolt world rather than by scene Transforms, so propagation
+    // below does not touch them. No-op unless enable_destruction() ran.
+    step_destruction(dt);
     auto& world = m_scene_data_ptr->scene->world();
     scene::propagate_transforms(world);
 }
@@ -797,6 +850,7 @@ gameplay::GameplayContext Runtime::build_gameplay_context(f32 dt) {
     gameplay::GameplayContext ctx{};
     ctx.dt      = dt;
     ctx.frame   = m_gameplay_frame;
+    ctx.playing = m_playing;
     ctx.input   = m_input_source;
     ctx.audio   = &m_audio_bus;
     ctx.physics = m_physics.get();
@@ -808,8 +862,49 @@ gameplay::GameplayContext Runtime::build_gameplay_context(f32 dt) {
     return ctx;
 }
 
-ecs::Entity Runtime::find_gameplay_owner(std::string_view name) const {
-    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return ecs::Entity{};
+void Runtime::begin_input_capture() {
+    // Capturing over an existing recorder would nest them: the outer one would
+    // record the inner one's answers, doubling the log. Restore the real source
+    // first so the new recorder wraps the device, not the old recorder.
+    if (m_input_recorder != nullptr) end_input_capture();
+
+    m_input_prior = m_input_source;
+    m_capture_log.clear();
+    m_input_recorder = std::make_unique<InputRecorder>(m_input_source, m_capture_log);
+    m_input_source = m_input_recorder.get();
+}
+
+InputLog Runtime::end_input_capture() {
+    if (m_input_recorder == nullptr) return InputLog{};
+
+    // The recorder holds the live source; the replay holds the log, not the
+    // source, so stopping a replay does not disturb this restore.
+    m_input_source = m_input_recorder->real_source();
+    m_input_prior = m_input_source;
+    InputLog log = std::move(m_capture_log);
+    m_input_recorder.reset();
+    return log;
+}
+
+void Runtime::play_input_log(const InputLog& log) {
+    // A replay replaces the source rather than wrapping it, so an in-flight
+    // capture would otherwise be left pointing at a dead recorder. Its log is
+    // sealed and handed back first — the caller asked for a replay, not for the
+    // capture to be discarded.
+    if (m_input_recorder != nullptr) end_input_capture();
+
+    if (m_input_replay == nullptr) m_input_prior = m_input_source;
+    m_input_replay = std::make_unique<InputReplay>(log);
+    m_input_source = m_input_replay.get();
+}
+
+void Runtime::stop_input_replay() {
+    if (m_input_replay == nullptr) return;
+    m_input_source = m_input_prior;
+    m_input_replay.reset();
+}
+
+ecs::Entity Runtime::find_gameplay_owner(std::string_view name) const {    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return ecs::Entity{};
     const ecs::World& world = m_scene_data_ptr->scene->world();
     for (ecs::Entity e : world.query<gameplay::GameplayModuleComponent>()) {
         const auto* comp = world.get<gameplay::GameplayModuleComponent>(e);
@@ -845,6 +940,15 @@ u32 Runtime::step_gameplay(float dt) {
     }
 
     const std::unordered_map<std::string, bool> enabled = collect_gameplay_enabled();
+
+    // The replay advances before the modules read, not after: frame N of the log
+    // has to answer the queries of step N. Sealing the recorder comes after the
+    // loop for the mirror-image reason — the frame has to describe what this
+    // step actually polled. Both are anchored to m_gameplay_frame and both are
+    // behind the same empty-modules early return, so a log's frame indices line
+    // up with the steps the runtime actually took.
+    if (m_input_replay != nullptr) m_input_replay->advance(m_gameplay_frame);
+
     gameplay::GameplayContext ctx = build_gameplay_context(dt);
 
     u32 stepped = 0;
@@ -854,6 +958,8 @@ u32 Runtime::step_gameplay(float dt) {
         slot.module->on_update(ctx);
         ++stepped;
     }
+
+    if (m_input_recorder != nullptr) m_input_recorder->seal(m_gameplay_frame);
 
     ++m_gameplay_frame;
     m_gameplay_updates += stepped;
@@ -1138,6 +1244,9 @@ void Runtime::resync_after_streaming() {
     // gone with the fresh world. Loads are rare capped events, so the simple
     // correct pass beats an incremental one that must mirror its invariants.
     rebuild_physics_from_scene();
+    // Same reasoning for the debris world: the level geometry a shard lands on
+    // changed, and stale bindings would point at entities the unload removed.
+    reset_destruction_state();
     mark_scene_edited();
 }
 
@@ -1181,6 +1290,577 @@ void Runtime::rebuild_physics_from_scene() {
     }
     if (created > 0) {
         NF_LOG_INFO(LogCategory::Core, "Runtime: physics world created with {} bodies", created);
+    }
+}
+
+bool Runtime::enable_destruction(const DestructionConfig& config) {
+    if (m_destruction_enabled) {
+        return true;
+    }
+    // Built in dependency order and assigned only when every piece is valid, so
+    // a failure leaves nothing half-constructed: the world owns the sink's
+    // bodies, the sink owns the destruction world's debris, and the destructor
+    // tears them down in reverse.
+    auto world = std::make_unique<physics::JoltWorld>();
+    if (!world->valid()) {
+        NF_LOG_ERROR(LogCategory::Core, "Runtime: destruction disabled, Jolt world unavailable");
+        return false;
+    }
+    auto sink = std::make_unique<physics::JoltDebrisSink>(*world, config.sink);
+    auto destruction = std::make_unique<destruction::DestructionWorld>(*sink, config.budget);
+
+    m_debris_world = std::move(world);
+    m_debris_sink = std::move(sink);
+    m_destruction = std::move(destruction);
+    m_debris_clock.reset();
+    m_destruction_enabled = true;
+    // The level's statics go in now so the first blast of the game lands on
+    // something. Dynamic bodies stay with the engine solver — see the header.
+    rebuild_debris_statics();
+    NF_LOG_INFO(LogCategory::Core, "Runtime: destruction enabled (cap {} shards, {} static colliders)",
+                config.budget.max_active_debris, m_debris_statics.size());
+    return true;
+}
+
+void Runtime::disable_destruction() {
+    if (!m_destruction_enabled) {
+        return;
+    }
+    // Reverse dependency order: the destruction world holds a reference to the
+    // sink, and the sink holds bodies in the world, so each must go before the
+    // thing it references.
+    m_destruction.reset();
+    m_debris_sink.reset();
+    m_debris_statics.clear();
+    m_debris_world.reset();
+    m_destructibles.clear();
+    m_debris_asset.clear();
+    m_shard_meshes.clear();
+    m_debris_clock.reset();
+    m_destruction_enabled = false;
+}
+
+void Runtime::reset_destruction_state() {
+    // Bindings and shards are scene-scoped; the fracture assets are registered
+    // by the game and outlive a scene change, so they stay.
+    m_destructibles.clear();
+    if (m_debris_sink) {
+        m_debris_sink->clear();
+    }
+    // Every shard id is now retired, so its asset entry is dead too. The shard
+    // meshes stay: they are keyed by (asset, chunk), which does not change with
+    // the scene, and a second scene that breaks the same asset reuses them.
+    m_debris_asset.clear();
+    m_debris_clock.reset();
+    if (m_destruction_enabled) {
+        // The new scene has its own level geometry.
+        rebuild_debris_statics();
+    }
+}
+
+void Runtime::rebuild_debris_statics() {
+    if (!m_debris_world) {
+        return;
+    }
+    for (const physics::JoltBody& body : m_debris_statics) {
+        m_debris_world->remove_body(body);
+    }
+    m_debris_statics.clear();
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<physics::RigidBodyComponent>()) {
+        const auto* rb = world.get<physics::RigidBodyComponent>(e);
+        const auto* collider = world.get<physics::ColliderComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (rb == nullptr || collider == nullptr || t == nullptr) {
+            continue;
+        }
+        // Statics only. A dynamic body here would be simulated twice — once by
+        // the engine solver, once by Jolt — and the two would disagree about
+        // where it is.
+        if (rb->type != physics::BodyType::Static) {
+            continue;
+        }
+        physics::BodyDesc desc;
+        desc.type = physics::BodyType::Static;
+        desc.shape = collider->shape;
+        desc.position = Vec3(t->world_x, t->world_y, t->world_z);
+        desc.orientation = scene::quat_from_euler_xyz_degrees(t->rot_x, t->rot_y, t->rot_z);
+        const physics::JoltBody body = m_debris_world->add_body(desc);
+        if (body.valid()) {
+            m_debris_statics.push_back(body);
+        }
+    }
+}
+
+u32 Runtime::register_fracture_asset(const destruction::FractureAsset& asset) {
+    if (asset.empty()) {
+        return destruction::kInvalidChunk;
+    }
+    const u32 index = static_cast<u32>(m_fracture_assets.size());
+    m_fracture_assets.push_back(asset);
+    return index;
+}
+
+bool Runtime::bind_destructible(ecs::Entity entity, u32 asset_index) {
+    if (asset_index >= m_fracture_assets.size()) {
+        return false;
+    }
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false;
+    }
+    // Without a Transform there is nowhere to place the asset in the world, and
+    // inventing the identity pose would spawn shards at the origin when the
+    // object is clearly somewhere else.
+    if (!m_scene_data_ptr->scene->world().has<scene::Transform>(entity)) {
+        return false;
+    }
+    DestructibleBinding binding;
+    binding.asset_index = asset_index;
+    // resize_for is idempotent, so rebinding the same asset keeps whatever
+    // damage the object has already taken.
+    binding.component.resize_for(m_fracture_assets[asset_index]);
+    m_destructibles[entity] = std::move(binding);
+    return true;
+}
+
+u32 Runtime::apply_damage(ecs::Entity entity, const destruction::DamageEvent& event) {
+    if (!m_destruction_enabled || !m_destruction || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    const auto it = m_destructibles.find(entity);
+    if (it == m_destructibles.end()) {
+        return 0;
+    }
+    const scene::Transform* t = m_scene_data_ptr->scene->world().get<scene::Transform>(entity);
+    if (t == nullptr) {
+        return 0;
+    }
+    // The propagated world transform: apply_damage works in world space, and a
+    // destructible that is a child of a moving platform has to break where the
+    // platform actually is. Callers that set a transform by hand must propagate
+    // first (update() does this every frame before this can run).
+    const Mat4 world = scene::compose_trs_mat4(t->world_x, t->world_y, t->world_z,
+                                               t->rot_x, t->rot_y, t->rot_z,
+                                               t->scale_x, t->scale_y, t->scale_z);
+    // apply_damage is the only path that creates shards, and the sink hands out
+    // fresh ids monotonically, so the ids present afterwards but not before are
+    // exactly this call's new shards. Recording the asset here — rather than in
+    // the sink — keeps NFDestruction ignorant of the asset table, which is the
+    // seam the whole module is built on; the sink carries the chunk id because
+    // the spawn already carries it.
+    const std::vector<u32> before = m_debris_sink ? m_debris_sink->live_ids() : std::vector<u32>{};
+    const u32 shattered = m_destruction->apply_damage(m_fracture_assets[it->second.asset_index],
+                                                      it->second.component, world, event);
+    if (m_debris_sink) {
+        size_t next = 0u;
+        const std::vector<u32> after = m_debris_sink->live_ids();
+        for (const u32 id : after) {
+            // Both lists are ascending, so a single sweep matches them.
+            while (next < before.size() && before[next] < id) {
+                ++next;
+            }
+            if (next < before.size() && before[next] == id) {
+                continue;
+            }
+            m_debris_asset[id] = it->second.asset_index;
+        }
+    }
+    return shattered;
+}
+
+u32 Runtime::step_destruction(f32 frame_delta) {
+    if (!m_destruction_enabled || !m_debris_world || !m_destruction) {
+        return 0;
+    }
+    // Same fixed-clock contract as step_physics: the trajectories a shard
+    // follows must not depend on the frame rate the machine happened to deliver.
+    const u32 steps = m_debris_clock.advance(frame_delta);
+    for (u32 i = 0; i < steps; ++i) {
+        m_debris_world->step(m_debris_clock.step());
+    }
+    if (steps > 0) {
+        // Aging after the step, so a shard that came to rest this step is
+        // sleeping before the budget decides whether to retire it.
+        m_destruction->tick(m_debris_clock.step() * static_cast<f32>(steps));
+    }
+    return steps;
+}
+
+void Runtime::bind_scene_destructibles() {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    u32 bound = 0u;
+    for (auto e : world.query<DestructibleComponent>()) {
+        const auto* d = world.get<DestructibleComponent>(e);
+        const auto* collider = world.get<physics::ColliderComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (d == nullptr || !d->enabled) {
+            continue;
+        }
+        if (collider == nullptr || t == nullptr) {
+            // No collider means no shape to cut, no transform means nowhere to
+            // put the pieces. Reported rather than defaulted: an invented
+            // one-unit box is not what the author placed.
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: entity {} is destructible but has no collider or transform; it will not break",
+                        e.id);
+            continue;
+        }
+        destruction::FracturePiece piece;
+        if (collider->shape.type == physics::ShapeType::Box) {
+            piece = box_fracture_piece(collider->shape.box.half_extents);
+        } else {
+            // Only the box for v0.1. Substituting a box for another shape would
+            // fracture something that does not look like what the player sees.
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: entity {} is destructible but its collider is not a box; it will not break",
+                        e.id);
+            continue;
+        }
+
+        destruction::FractureParams params;
+        params.seed = d->seed;
+        params.target_chunks = d->chunks;
+        params.strength_per_area = d->strength;
+        destruction::FractureAsset asset;
+        std::string build_error;
+        build_fracture_asset(piece, params, asset, &build_error);
+        if (asset.empty() || asset.leaf_count() < 2u) {
+            // Fewer than two leaves means no bonds, so no blast can ever take
+            // the object apart. Binding it would advertise a breakable that
+            // cannot break.
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: entity {} fracture asset has nothing to split ({}); it will not break",
+                        e.id, build_error);
+            continue;
+        }
+
+        // Enabled on the first bindable object, not once per object. A failure
+        // here bails out of the whole scene: if the debris world cannot be
+        // built, none of the remaining objects can break either.
+        if (!m_destruction_enabled && !enable_destruction(DestructionConfig{})) {
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: scene's destructibles will not break (destruction unavailable)");
+            return;
+        }
+        const u32 asset_index = register_fracture_asset(asset);
+        if (asset_index == destruction::kInvalidChunk) {
+            continue;
+        }
+        if (bind_destructible(e, asset_index)) {
+            ++bound;
+        }
+    }
+    if (bound > 0u) {
+        NF_LOG_INFO(LogCategory::Core, "Runtime: scene carries {} destructible object(s)", bound);
+    }
+}
+
+void Runtime::step_impact_damage() {
+    if (!m_destruction_enabled || !m_physics || !m_destruction || !m_scene_data_ptr) {
+        return;
+    }
+    if (m_destructibles.empty()) {
+        return;
+    }
+    const std::vector<physics::Manifold>& manifolds = m_physics->last_manifolds();
+    if (manifolds.empty()) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+
+    // Retiring an object erases its map entry, so a hit found while walking the
+    // bindings is collected and acted on afterwards rather than in place.
+    std::vector<ecs::Entity> shattered;
+    for (auto& [entity, binding] : m_destructibles) {
+        const auto* rb = world.get<physics::RigidBodyComponent>(entity);
+        if (rb == nullptr || !rb->body.valid()) {
+            continue;
+        }
+        const auto* d = world.get<DestructibleComponent>(entity);
+        for (const physics::Manifold& manifold : manifolds) {
+            if (manifold.body_a != rb->body.index && manifold.body_b != rb->body.index) {
+                continue;
+            }
+            if (manifold.point_count == 0u) {
+                continue;
+            }
+            // The accumulated normal impulse across the step is the impact's
+            // actual magnitude, not a speed heuristic: a slam is mass × Δv
+            // delivered in one step, a resting contact only weight × dt. The
+            // contact point is the mean of the manifold's, which keeps a
+            // face-on hit centred and an edge hit where the edge is.
+            f32 impulse = 0.0f;
+            Vec3 point{0.0f, 0.0f, 0.0f};
+            for (u32 i = 0u; i < manifold.point_count; ++i) {
+                impulse += manifold.points[i].normal_impulse;
+                point = point + manifold.points[i].position;
+            }
+            point = point * (1.0f / static_cast<f32>(manifold.point_count));
+            const f32 threshold = (d != nullptr) ? d->damage_threshold : 8.0f;
+            if (impulse <= threshold) {
+                continue;
+            }
+            destruction::DamageEvent event;
+            event.world_point = point;
+            event.radius = (d != nullptr) ? d->blast_radius : 2.0f;
+            event.impulse = impulse;
+            static_cast<void>(apply_damage(entity, event));
+            // Retire only when something actually came loose: apply_damage can
+            // sever bonds while every chunk stays attached to the root, and
+            // removing that object would delete a crate the player can still
+            // see and stand on.
+            if (binding.component.emitted_count() > 0u) {
+                shattered.push_back(entity);
+            }
+            // One blast per object per frame; the manifold that mattered has
+            // been found.
+            break;
+        }
+    }
+    // unordered_map iteration order is not stable across runs, so the retire
+    // order is fixed here: two objects broken in the same frame must come
+    // apart in the same order every run, or their shard ids would differ and
+    // the determinism guarantee (§114) would not hold.
+    std::sort(shattered.begin(), shattered.end(),
+              [](const ecs::Entity& a, const ecs::Entity& b) {
+                  return (a.id != b.id) ? (a.id < b.id) : (a.generation < b.generation);
+              });
+    for (ecs::Entity e : shattered) {
+        retire_shattered_entity(e);
+    }
+}
+
+void Runtime::retire_shattered_entity(ecs::Entity e) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    if (!world.is_alive(e)) {
+        // Already gone (a second manifold, or a streaming unload raced the
+        // retire). Drop the binding so a recycled id does not inherit it.
+        m_destructibles.erase(e);
+        return;
+    }
+    // The engine body goes before the components do: destroy_entity drops the
+    // RigidBodyComponent and with it the handle, and a static body left in the
+    // solver is an invisible box the rest of the level keeps colliding with
+    // long after the player watched it explode.
+    if (auto* rb = world.get<physics::RigidBodyComponent>(e)) {
+        if (rb->body.valid() && m_physics) {
+            m_physics->remove_body(rb->body);
+        }
+    }
+    m_destructibles.erase(e);
+    world.destroy_entity(e);
+    // The debris world holds its own copy of the same static, and the shards
+    // would land on it. Rebuilding from the surviving scene picks the floor up
+    // and leaves the crate out. (Streaming is off by default; a level that
+    // streams would need the same treatment on resync, which reset_destruction
+    // already gives.)
+    rebuild_debris_statics();
+    NF_LOG_INFO(LogCategory::Core, "Runtime: destructible entity {} came apart", e.id);
+}
+
+std::vector<Runtime::DebrisSample> Runtime::debris_samples() const {
+    std::vector<DebrisSample> samples;
+    if (!m_debris_sink || !m_debris_world) {
+        return samples;
+    }
+    const std::vector<u32> ids = m_debris_sink->live_ids();
+    samples.reserve(ids.size());
+    for (const u32 id : ids) {
+        const physics::JoltBody body = m_debris_sink->body_of(id);
+        if (!body.valid()) {
+            continue;
+        }
+        const physics::JoltBodyState state = m_debris_world->state(body);
+        samples.push_back(DebrisSample{id, state.position, state.rotation, state.linear_velocity});
+    }
+    return samples;
+}
+
+size_t Runtime::active_debris() const {
+    return m_destruction ? m_destruction->active_debris() : 0u;
+}
+
+u32 Runtime::bonds_shattered_total() const {
+    return m_destruction ? m_destruction->bonds_shattered_total() : 0u;
+}
+
+u32 Runtime::shards_dropped_for_budget() const {
+    return m_destruction ? m_destruction->shards_dropped_for_budget() : 0u;
+}
+
+rendering::StaticMeshHandle Runtime::shard_mesh(u32 asset_index, u32 chunk_id) {
+    if (asset_index >= m_fracture_assets.size()) {
+        return rendering::StaticMeshHandle{};
+    }
+    const auto cached = m_shard_meshes.find({asset_index, chunk_id});
+    if (cached != m_shard_meshes.end()) {
+        return cached->second;
+    }
+    const destruction::FractureAsset& asset = m_fracture_assets[asset_index];
+    if (chunk_id >= asset.chunks.size()) {
+        return rendering::StaticMeshHandle{};
+    }
+    const destruction::FracturePiece& piece = asset.chunks[chunk_id].piece;
+    if (piece.vertices.empty() || piece.indices.empty()) {
+        return rendering::StaticMeshHandle{};
+    }
+
+    // The chunk's hull is the collision shape; the mesh drawn for it is the
+    // same vertices and indices, so the shard's silhouette is the fracture
+    // itself rather than an approximation of it. Flat normals: a convex hull
+    // has no smooth seams to blend across, so per-triangle normals are the
+    // honest answer, and they cost nothing to compute here.
+    // The constructor already pushes an empty default LOD 0 — fill it rather
+    // than appending a second LOD, or bounds()/bounding_sphere() (which read
+    // m_lods[0]) keep describing the empty one and every shard culls and draws
+    // from a zero-size box. This is the same entry point Terrain uses.
+    auto mesh = std::make_unique<rendering::StaticMesh>("debris shard");
+    rendering::MeshLOD& lod = mesh->lod(0);
+    lod.vertices.reserve(piece.vertices.size());
+    for (const Vec3& p : piece.vertices) {
+        rendering::Vertex v{};
+        v.position[0] = p.x;
+        v.position[1] = p.y;
+        v.position[2] = p.z;
+        lod.vertices.push_back(v);
+    }
+    for (usize t = 0u; t + 2u < piece.indices.size(); t += 3u) {
+        const Vec3& a = piece.vertices[piece.indices[t + 0u]];
+        const Vec3& b = piece.vertices[piece.indices[t + 1u]];
+        const Vec3& c = piece.vertices[piece.indices[t + 2u]];
+        Vec3 n = { (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y),
+                   (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z),
+                   (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) };
+        const f32 len_sq = n.x * n.x + n.y * n.y + n.z * n.z;
+        if (len_sq > 1e-12f) {
+            const f32 inv = 1.0f / std::sqrt(len_sq);
+            n = { n.x * inv, n.y * inv, n.z * inv };
+        } else {
+            n = { 0.0f, 1.0f, 0.0f }; // degenerate triangle: pick something safe
+        }
+        for (usize k = 0u; k < 3u; ++k) {
+            rendering::Vertex& v = lod.vertices[piece.indices[t + k]];
+            v.normal[0] = n.x;
+            v.normal[1] = n.y;
+            v.normal[2] = n.z;
+        }
+        lod.indices.push_back(piece.indices[t + 0u]);
+        lod.indices.push_back(piece.indices[t + 1u]);
+        lod.indices.push_back(piece.indices[t + 2u]);
+    }
+    rendering::SubMesh sm;
+    sm.index_offset = 0;
+    sm.index_count = static_cast<u32>(lod.indices.size());
+    sm.vertex_offset = 0;
+    sm.vertex_count = static_cast<u32>(lod.vertices.size());
+    sm.material_slot = 0;
+    lod.submeshes.push_back(sm);
+    lod.material_slots.push_back(rendering::MaterialSlot{"default"});
+    rendering::StaticMesh::compute_lod_bounds(lod);
+    // Submesh bounds follow the LOD bounds, as compute_bounds would have done.
+    lod.submeshes[0].bounds = lod.bounds;
+    lod.submeshes[0].sphere = lod.sphere;
+
+    // Upload on the render thread like every other mesh: shards appear this
+    // frame, not next, which matters for the one frame the player is watching.
+    if (!mesh->upload(m_device)) {
+        return rendering::StaticMeshHandle{};
+    }
+    const rendering::StaticMeshHandle handle = m_mesh_library->add(std::move(mesh));
+    if (!handle.valid()) {
+        return rendering::StaticMeshHandle{};
+    }
+    m_shard_meshes[{asset_index, chunk_id}] = handle;
+    return handle;
+}
+
+void Runtime::build_debris_render_world(rendering::RenderWorld& out) {
+    if (!m_destruction_enabled || !m_debris_world || !m_debris_sink || !m_debris_world->valid()) {
+        return;
+    }
+    if (!m_mesh_library) {
+        return;
+    }
+    ensure_default_material();
+    const std::vector<u32> ids = m_debris_sink->live_ids();
+    for (const u32 id : ids) {
+        const physics::JoltBody body = m_debris_sink->body_of(id);
+        if (!body.valid()) {
+            continue;
+        }
+        const auto asset_it = m_debris_asset.find(id);
+        if (asset_it == m_debris_asset.end()) {
+            continue;
+        }
+        const u32 chunk_id = m_debris_sink->chunk_of(id);
+        if (chunk_id == destruction::kInvalidChunk) {
+            continue;
+        }
+        const rendering::StaticMeshHandle handle = shard_mesh(asset_it->second, chunk_id);
+        if (!handle.valid()) {
+            continue;
+        }
+        const rendering::StaticMesh* mesh = m_mesh_library->get(handle);
+        if (mesh == nullptr || !mesh->is_uploaded()) {
+            continue;
+        }
+
+        const physics::JoltBodyState state = m_debris_world->state(body);
+        // The state's position is the shape-local origin in world space — the
+        // same origin the hull points are relative to — so this pose puts the
+        // shard's geometry exactly where the physics body is. This is the same
+        // contract as the JoltBodyState read-back for scene bodies, and it is
+        // why writing GetCenterOfMassPosition() here would offset every shard
+        // by its own centroid (see JoltWorld::state).
+        //
+        // rotation * translate, NOT translate * rotation: the engine's matrices
+        // apply rightmost-first (v * M = ((v * R) * T), the same order
+        // compose_trs_mat4 bakes in), so rotation must be on the LEFT. Swapping
+        // them still rotates the shard correctly but rotates its POSITION about
+        // the world origin as well — a tumbling shard at (32, 86, 35) renders
+        // somewhere entirely else, while a nearly-still one is off by
+        // millimetres and the bug looks like a tolerance issue.
+        const Mat4 world = state.rotation.to_matrix() * Mat4::translate(state.position);
+
+        rendering::RenderObject ro{};
+        ro.id = 0; // not an entity: picking a shard reports no object, by design
+        ro.visible = true;
+        ro.world = world;
+        ro.mesh_handle = handle;
+        ro.material_handle = m_default_material;
+        ro.lod = 0;
+        // A shard tumbles, so its bounds cannot be translated the way the
+        // scene's are: the eight corners of the local AABB go through the
+        // rotation, and the result is re-boxed. Larger than the true rotated
+        // box by construction, which is exactly what a cull test wants.
+        const rendering::AABB lb = mesh->bounds();
+        Vec3 corners[8] = {
+            { lb.min_x, lb.min_y, lb.min_z }, { lb.max_x, lb.min_y, lb.min_z },
+            { lb.min_x, lb.max_y, lb.min_z }, { lb.max_x, lb.max_y, lb.min_z },
+            { lb.min_x, lb.min_y, lb.max_z }, { lb.max_x, lb.min_y, lb.max_z },
+            { lb.min_x, lb.max_y, lb.max_z }, { lb.max_x, lb.max_y, lb.max_z },
+        };
+        Vec3 mn = state.position;
+        Vec3 mx = state.position;
+        for (const Vec3& c : corners) {
+            const Vec3 w = world.transform_point(c);
+            mn.x = std::min(mn.x, w.x); mn.y = std::min(mn.y, w.y); mn.z = std::min(mn.z, w.z);
+            mx.x = std::max(mx.x, w.x); mx.y = std::max(mx.y, w.y); mx.z = std::max(mx.z, w.z);
+        }
+        ro.bounds = rendering::AABB{ mn.x, mn.y, mn.z, mx.x, mx.y, mx.z };
+        const rendering::BoundingSphere ls = mesh->bounding_sphere();
+        const Vec3 sphere_centre = world.transform_point({ ls.cx, ls.cy, ls.cz });
+        ro.sphere = rendering::BoundingSphere{ sphere_centre.x, sphere_centre.y, sphere_centre.z, ls.radius };
+        out.objects.push_back(std::move(ro));
     }
 }
 
@@ -1378,6 +2058,8 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
         ro.sphere = rendering::transform_sphere(mesh->bounding_sphere(), tr->world_x, tr->world_y, tr->world_z);
         out.objects.push_back(std::move(ro));
     }
+    build_debris_render_world(out);
+
     NF_LOG_TRACE(LogCategory::Core, "Runtime: built render world with {} objects (meshes={})", out.objects.size(),
                  m_mesh_library->size());
 }
@@ -1463,6 +2145,12 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd) {
     const auto& stats = m_renderer->last_stats();
     NF_LOG_TRACE(LogCategory::Core, "Runtime::render: extracted={} visible={} draws={}", stats.extracted,
                  stats.visible, stats.draw_calls);
+}
+
+rendering::RenderWorld Runtime::render_world_snapshot() {
+    rendering::RenderWorld out;
+    build_render_world(out);
+    return out;
 }
 
 void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd) {

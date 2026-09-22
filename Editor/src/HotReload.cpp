@@ -200,6 +200,7 @@ std::vector<ReloadResult> HotReload::poll(assets::VirtualFileSystem& vfs, assets
         r.message = "watched but unclassified; ignored";
         out.push_back(r);
     }
+    m_last = out;
     return out;
 }
 

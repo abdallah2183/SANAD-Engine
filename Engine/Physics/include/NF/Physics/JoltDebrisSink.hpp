@@ -87,6 +87,13 @@ public:
     /// body_of() to pose debris; the order is the same on every run.
     std::vector<u32> live_ids() const;
 
+    /// The chunk whose geometry this shard was spawned from, or
+    /// `kInvalidChunk` for an unknown or retired id. The render layer pairs
+    /// this with the asset it registered the shard against to fetch the shard
+    /// mesh — a shard carries no geometry of its own, only a hull for
+    /// collision, so the renderer has to be told which piece to draw.
+    u32 chunk_of(u32 debris_id) const;
+
     /// Retires every shard still live. Called when a scene unloads so debris
     /// from the previous scene cannot outlive it — and so a test can reset a
     /// world to a known state without rebuilding it.
@@ -101,6 +108,10 @@ private:
     /// pointer values — the same spawns always visit the same bodies in the
     /// same order.
     std::map<u32, JoltBody>                   live_;
+    /// The chunk the shard was carved out of, keyed the same way as live_.
+    /// Kept in the sink rather than the runtime because the spawn carries it
+    /// here and a shard that retires must lose its chunk with its body.
+    std::map<u32, u32>                        chunks_;
     u32                                       next_id_ = 1u; // 0 is never handed out
 };
 

@@ -8,12 +8,21 @@
 # mixing) is testable without a sound card, and CI stays green on runners
 # with no audio hardware because every backend degrades to silence, loudly
 # logged, never as a failure.
+#
+# AudioScene.hpp composes the shipped pieces (reverb zones, occlusion, music
+# /ambience, buses + volume settings) into one block-based mix, so a game
+# level's audio is authoring + three calls rather than an integration project.
 
 set(NFAUDIO_SOURCES
     src/AudioEngine.cpp
     src/AudioDecoder.cpp
+    src/AudioScene.cpp
+    src/Buses.cpp
     src/MiniAudioImpl.cpp
+    src/MusicSystem.cpp
+    src/Occlusion.cpp
     src/OggVorbisImpl.cpp
+    src/Reverb.cpp
 )
 
 if(WIN32)

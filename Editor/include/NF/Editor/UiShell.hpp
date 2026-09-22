@@ -49,14 +49,30 @@ struct UiIntents {
     // arms a gizmo drag; drag moves the selection live; release folds the
     // whole gesture into one undoable command (a click without movement
     // folds into nothing, so plain selection never touches undo).
-    // Panel NDC in all three.
+    // Panel NDC in all three. `press_additive` carries Shift (group select:
+    // the hit entity toggles into the selection instead of replacing it).
     bool viewport_press = false;
+    bool viewport_press_additive = false;
     float press_ndc_x = 0.0f;
     float press_ndc_y = 0.0f;
     bool viewport_drag = false;
     float drag_ndc_x = 0.0f;
     float drag_ndc_y = 0.0f;
     bool viewport_release = false;
+    // Viewport navigation (right button held on the viewport image): orbit
+    // look + WASD/QE fly + wheel zoom. Pixel deltas accumulate while held;
+    // main.cpp drains them once per frame, so a slow frame never drops a
+    // gesture the way per-event consumption would.
+    bool nav_orbit = false;
+    float nav_dx = 0.0f; // +x = pointer moved right, pixels
+    float nav_dy = 0.0f; // +y = pointer moved down, pixels
+    float nav_wheel = 0.0f; // + = wheel up (zoom in), notches
+    bool nav_f = false; // W: dolly toward the pivot
+    bool nav_b = false; // S: dolly away
+    bool nav_l = false; // A: orbit left
+    bool nav_r = false; // D: orbit right
+    bool nav_u = false; // E: rise
+    bool nav_d = false; // Q: sink
 
     // --- Project actions -----------------------------------------------------
     // Scaffolding and building happen in main.cpp, not here: this layer only
@@ -76,6 +92,22 @@ struct UiFrameStats {
     // Frame delta in seconds. Carried here rather than read from ImGui so the
     // headless path drives the same autosave clock as the windowed one.
     float dt_seconds = 0.0f;
+    // Profiler panel (P4). The RHI has no timestamp queries in v0.1, so the
+    // GPU figure is the wall clock from submit of the viewport command buffer
+    // to its fence signalling — a real measurement of GPU work, coarse but
+    // honest, and it is the number a stalled frame inflates. cull_us and
+    // draw_prep_us are the renderer's own CPU timings; draw_calls/visible are
+    // its counts. scene_open_us is the most recent scene-or-asset load the
+    // editor timed (the dominant load cost in v0.1), assets_cached how many
+    // mesh handles the manager currently holds.
+    uint64_t gpu_us = 0;
+    uint64_t gpu_avg_us = 0;
+    double cull_us = 0.0;
+    double draw_prep_us = 0.0;
+    uint32_t draw_calls = 0;
+    uint32_t visible_objects = 0;
+    uint64_t scene_open_us = 0;
+    size_t assets_cached = 0;
 };
 
 UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats);

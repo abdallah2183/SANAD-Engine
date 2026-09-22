@@ -17,7 +17,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-blue.svg" alt="اللغة" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-00599C.svg?logo=c%2B%2B" alt="C++23" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-1007%20Passed-brightgreen.svg" alt="Tests" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-1284%20Passed-brightgreen.svg" alt="Tests" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Validation-0%20Errors-success.svg" alt="Validation" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
@@ -118,7 +118,7 @@ SANAD Engine Architecture
 
 ## Current Status (Phase 12–20 Verification)
 
-- **1007 Automated Tests Passed** across 23 test suites (0 failed, 1 benchmark skipped). Verified by a full clean build + run, not a doc estimate.
+- **1284 Automated Tests Passed** across 24 test suites (0 failed, 1 benchmark skipped). Verified by a full clean build + run, not a doc estimate.
 - **0 Vulkan Validation Layer Errors** and zero memory leaks.
 - Clean compilation under `/W4 /WX` with MSVC.
 - End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, input replays, and scene transform hierarchies in lockstep.
@@ -201,6 +201,23 @@ cmake --build build/DebugNinja --parallel
 cd MyGame/dist && .\NFPlayer.exe
 ```
 
+### 6. Import a Blender Character
+Export from Blender with the shipped add-on, then cook the `.glb`:
+```cmd
+.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --info
+.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --output Content/Meshes/Hero.nfmesh
+```
+Full walkthrough (add-on install, export settings, round trip, current gaps):
+[`Docs/Blender_Pipeline.md`](Docs/Blender_Pipeline.md)
+
+### First time here?
+- **New to the engine?** [`Docs/Tutorial.ar.md`](Docs/Tutorial.ar.md) — a 20-minute
+  Arabic walkthrough from an empty machine to a built, runnable game, with
+  screenshots.
+- **Starting a game?** `Templates/` ships four project trees — `Default`,
+  `ThirdPerson`, `FPSStarter`, `Platformer2D`. Every one of them scaffolds into a
+  project that loads and plays (pinned by `Tests/ToolTests/test_templates.cpp`).
+
 ---
 
 ## Project Roadmap
@@ -213,7 +230,7 @@ cd MyGame/dist && .\NFPlayer.exe
 - **Phase 16:** Jolt Physics Backend (Completed) + UDP/Reliable/Snapshots + Authoritative Server & Prediction (Completed) — vehicle wheel-state readback/reset and cross-body constraint cloning (Completed) — vehicle/constraint network replication: drive inputs, chassis snapshots, joint events (Completed) — C# bindings (Completed)
 - **Phase 17:** Body & joint replication over the wire (vehicle orientation snapshots, body registry, constraint applier) (Completed)
 - **Phase 18:** Independent 2D layer (`NFScene2D`) — deterministic atlas/batcher, signed-chunk tilemaps, sequential-impulse 2D physics (circle/box, distance/revolute), `Scene2DTests` 37/37 (Completed)
-- **Phase 19:** Destruction — fracture geometry & chunk assets, damage world, debris budgets, `IDebrisSink` seam with a Jolt implementation (Completed)
+- **Phase 19:** Destruction — fracture geometry & chunk assets, damage world, debris budgets, `IDebrisSink` seam with a Jolt implementation, and a `Destructible:` component in `.nfscene` that cooks, binds and shatters from impact with no game code (Completed)
 - **Phase 20:** Cascaded Shadow Maps — camera-fitted shadow cascades in a 2x2 atlas, per-cascade derived bias, texel snapping, cross-fade blending (Completed)
 
 Full details are documented in [ROADMAP.md](ROADMAP.md).

@@ -99,12 +99,23 @@ public:
 
     // --- Autosave -----------------------------------------------------------
 
-    void set_autosave(f32 interval_seconds, const std::string& slot_prefix);
+    /// How many rotating autosave slots are kept before the oldest is replaced.
+    /// Three is the usual answer for a game a player can save manually: enough
+    /// to undo a mistake, few enough that the disk does not fill over a long
+    /// session. `set_autosave` accepts a smaller cap but not a zero one — a cap
+    /// of zero would mean "save and immediately delete".
+    static constexpr u32 kDefaultAutosaveSlots = 3;
+
+    /// `max_slots` defaults to the ring above; pass a smaller number for a
+    /// platform with less disk. A non-positive interval still means off.
+    void set_autosave(f32 interval_seconds, const std::string& slot_prefix,
+                      u32 max_slots = kDefaultAutosaveSlots);
     void disable_autosave();
     [[nodiscard]] bool autosave_enabled() const { return m_autosave_interval > 0.0f; }
     [[nodiscard]] u32  autosaves_performed() const { return m_autosaves; }
     [[nodiscard]] f32  autosave_elapsed() const { return m_autosave_elapsed; }
     [[nodiscard]] const std::string& autosave_slot_prefix() const { return m_autosave_prefix; }
+    [[nodiscard]] u32  autosave_max_slots() const { return m_autosave_max_slots; }
 
     /// Accumulates `dt` and saves when the interval elapses. Driven from
     /// Runtime::update. A non-positive interval is ignored rather than treated
@@ -121,16 +132,38 @@ public:
     // is 1->2 then 2->3. Registering a single function that jumps versions would
     // force it to know every intermediate format, which is the thing migrations
     // exist to avoid.
+    //
+    // The migration sees the slot's own bytes and may rewrite them: a version
+    // bump that changes nothing is a no-op, and a migration that cannot touch
+    // the data cannot fix an old save either. The chain stamps meta's
+    // schema_version forward as it goes, so a partially-migrated slot can never
+    // be mistaken for a current one.
 
-    using MigrationFn = bool (*)(std::string& out_error);
+    /// The three files a slot holds, mutable. `meta` is parsed by the save
+    /// system itself; `scene` and `modules` are read by the loader after the
+    /// chain finishes, so what the reader sees is what the chain produced.
+    struct SlotFiles {
+        std::string meta;
+        std::string scene;
+        std::string modules;
+    };
+
+    using MigrationFn = bool (*)(SlotFiles& files, std::string& out_error);
 
     /// Registers (or replaces) the migration from `from_version` to
     /// `from_version + 1`.
     static void register_migration(u32 from_version, MigrationFn fn);
 
-    /// Schema version the last successful load had to migrate from, or 0 when it
-    /// did not migrate. The observable that separates "the migration path ran"
-    /// from "the version happened to match".
+    /// Returned by `last_migration_from` when a load matched the current schema
+    /// and no chain ran. It is a sentinel rather than 0 because 0 is also a real
+    /// schema version a save can legitimately have migrated *from* — without it,
+    /// "nothing happened" and "the oldest save we support was upgraded" report
+    /// the same number and are indistinguishable.
+    static constexpr u32 kNoMigration = 0xFFFFFFFFu;
+
+    /// Schema version the last successful load had to migrate from, or
+    /// `kNoMigration` when it did not. The observable that separates "the
+    /// migration path ran" from "the version happened to match".
     [[nodiscard]] u32 last_migration_from() const { return m_last_migration_from; }
 
 private:
@@ -164,7 +197,8 @@ private:
     f32         m_autosave_elapsed = 0.0f;
     std::string m_autosave_prefix;
     u32         m_autosaves = 0;
-    u32         m_last_migration_from = 0;
+    u32         m_autosave_max_slots = kDefaultAutosaveSlots;
+    u32         m_last_migration_from = kNoMigration;
 };
 
 } // namespace nf::runtime

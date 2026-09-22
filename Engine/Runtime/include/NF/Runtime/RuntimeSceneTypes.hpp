@@ -60,4 +60,40 @@ struct CameraComponent {
     // Position is stored in Transform, not here
 };
 
+/// A breakable object authored in the scene (Phase 19, design doc §41
+/// "Breakable meshes / Fracture assets / Debris / Impulses").
+///
+/// There is no fracture-asset import pipeline, so the asset is cooked at load
+/// time from this spec — the same relationship an Animation component's
+/// `procedural=` spec has to the clip it builds, and an Audio component's
+/// `tone=` to the buffer it synthesises. The spec is what survives save/load;
+/// the cooked FractureAsset is a runtime artefact.
+///
+/// The collider on the same entity supplies the shape the asset is cut from
+/// (a box, for v0.1 — other shapes are ignored with a warning, not substituted,
+/// because a silently-different fracture shape is the kind of gap this project
+/// keeps having to re-find). The RigidBody must be Static: a dynamic
+/// destructible would be simulated by the engine solver and by the debris world
+/// at once, and the two would disagree about where it is.
+struct DestructibleComponent {
+    /// FractureParams::target_chunks: how many leaves the cut tree has, and so
+    /// how many bodies a complete break can spawn.
+    u32 chunks = 4u;
+    /// FractureParams::seed. Same seed, same shards (§114 determinism): two
+    /// runs of one scene produce one pile of debris.
+    u32 seed = 0x5EEDBEEFu;
+    /// FractureParams::strength_per_area: bond strength per unit of shared face
+    /// area. Higher means the object takes a harder hit to come apart.
+    f32 strength = 25.0f;
+    /// Impact impulse (N·s) a contact must deliver in one step before the
+    /// object takes damage at all. Resting contacts deliver only weight·dt per
+    /// step, so this is what tells a slam from a stack.
+    f32 damage_threshold = 8.0f;
+    /// How far from the impact point the damage spreads, in world units.
+    f32 blast_radius = 2.0f;
+    /// Off: the object renders and collides but never breaks. Lets a level
+    /// author place the prop without opting the scene into the debris budget.
+    bool enabled = true;
+};
+
 } // namespace nf::runtime

@@ -33,9 +33,12 @@ public:
 
     bool valid() const;
 
-    /// Arcade inputs: forward/steer in [-1, 1], brake in [0, 1].
+    /// Arcade inputs: forward/steer in [-1, 1], brake/handbrake in [0, 1].
+    /// The handbrake is separate from the brake: it clamps only the rear
+    /// wheels (the differential pair) at the hand-brake torque, which is why
+    /// it breaks traction into a slide instead of stopping the car.
     /// Applied on the next world.step().
-    void drive(float forward, float steer, float brake = 0.0f);
+    void drive(float forward, float steer, float brake = 0.0f, float handbrake = 0.0f);
 
     JoltBodyState chassis_state() const;
     /// Horizontal speed in m/s.

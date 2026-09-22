@@ -174,6 +174,61 @@ void InputMapper::update(const InputState& state) {
             m_current->put(action.name(), value);
         }
     }
+
+    fire_callbacks();
+}
+
+void InputMapper::set_action_callback(std::string_view action,
+                                      ActionPhase phase, ActionCallback callback) {
+    const std::string key(action);
+    ActionCallbacks* slots = m_callbacks.get(key);
+    if (slots == nullptr) {
+        m_callbacks.put(key, ActionCallbacks{});
+        slots = m_callbacks.get(key);
+    }
+    switch (phase) {
+    case ActionPhase::Pressed:
+        slots->on_pressed = std::move(callback);
+        break;
+    case ActionPhase::Held:
+        slots->on_held = std::move(callback);
+        break;
+    case ActionPhase::Released:
+        slots->on_released = std::move(callback);
+        break;
+    }
+}
+
+void InputMapper::fire_callbacks() {
+    if (m_callbacks.empty()) return;
+
+    // Evaluation order (context priority, then insertion) — identical to the
+    // value pass, so callback sequencing is reproducible (design doc §114).
+    // Every action reached here was just put into m_current, so its value
+    // pointer is live; the previous frame may not exist yet (first update).
+    for (const usize ci : m_context_order) {
+        const InputContext& ctx = *m_contexts[ci];
+        for (const InputAction& action : ctx.actions()) {
+            const ActionCallbacks* slots = m_callbacks.get(action.name());
+            if (slots == nullptr) continue;
+            if (!slots->on_pressed && !slots->on_held && !slots->on_released) continue;
+
+            // Edge semantics mirror just_pressed / just_released exactly:
+            // a missing previous frame counts as "was not pressed".
+            const ActionValue* cur = m_current->get(action.name());
+            const ActionValue* prev = m_previous->get(action.name());
+            const bool pressed_now = cur != nullptr && cur->pressed();
+            const bool pressed_before = prev != nullptr && prev->pressed();
+
+            if (pressed_now && !pressed_before) {
+                if (slots->on_pressed) slots->on_pressed(*cur);
+            } else if (pressed_now && pressed_before) {
+                if (slots->on_held) slots->on_held(*cur);
+            } else if (!pressed_now && pressed_before) {
+                if (slots->on_released) slots->on_released(*cur);
+            }
+        }
+    }
 }
 
 void InputMapper::end_frame() {
@@ -291,6 +346,7 @@ bool InputMapper::load_string(std::string_view text) {
     m_context_suppressed.clear();
     m_values_a.clear();
     m_values_b.clear();
+    m_callbacks.clear(); // actions are rebuilt; stale callbacks must not fire
     mark_dirty();
 
     DynamicArray<std::string_view> tokens;

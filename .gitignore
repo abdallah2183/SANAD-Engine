@@ -66,3 +66,18 @@ desktop.ini
 # Python (scripts)
 __pycache__/
 *.pyc
+
+# MedievalVillage cooked kit content - regenerate with Samples/MedievalVillage/Tools/import_kit.sh
+Samples/MedievalVillage/Content/Medieval/Meshes/
+Samples/MedievalVillage/Content/Medieval/Textures/
+
+# Session scratch: build logs, probes, ad-hoc screenshots
+build_out.txt
+editor_tests_out.txt
+eng_build.txt
+probe_nav.ps1
+shots/
+.workbuddy-ai/g10_*.log
+.workbuddy-ai/tmp/
+.workbuddy-ai/tmp_build.sh
+.workbuddy-ai/agents/

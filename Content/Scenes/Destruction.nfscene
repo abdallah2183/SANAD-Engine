@@ -1,0 +1,61 @@
+# NOVAForge Scene v1
+version: 1
+name: Destruction
+entity_count: 9
+---
+entity: 1:0
+  Name: Camera
+  Transform: local(7,7,7) world(7,7,7) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+---
+entity: 2:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.5,-1,-0.3) color(1,1,1) intensity=1
+---
+entity: 3:0
+  Name: Sky
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Sky: zenith(0.2,0.42,0.85) horizon(0.62,0.72,0.82) ground(0.09,0.09,0.11) clear(0.03,0.03,0.07) sun_disk=1 sun_glow=1 enabled=true
+---
+entity: 4:0
+  Name: Floor
+  Transform: local(0,-1,0) world(0,-1,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  RigidBody: type=Static mass=1 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(20,1,20)
+---
+entity: 5:0
+  Name: Crate
+  Transform: local(0,5,0) world(0,5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=1 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(0.5,0.5,0.5)
+  Destructible: chunks=4 seed=1595070029 strength=25 damage_threshold=8 blast_radius=2 enabled=true
+---
+entity: 6:0
+  Name: WreckingBall
+  Transform: local(0,10.5,0) world(0,10.5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  RigidBody: type=Dynamic mass=5 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Sphere radius=0.5
+---
+entity: 7:0
+  Name: WeakCrate
+  Transform: local(-3,5,0) world(-3,5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=1 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(0.5,0.5,0.5)
+  Destructible: chunks=4 seed=231197441 strength=5 damage_threshold=2 blast_radius=3 enabled=true
+---
+entity: 8:0
+  Name: DenseCrate
+  Transform: local(3,5,0) world(3,5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=1 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(0.5,0.5,0.5)
+  Destructible: chunks=4 seed=884290113 strength=80 damage_threshold=20 blast_radius=1 enabled=true
+---
+entity: 9:0
+  Name: IronBall
+  Transform: local(3,9,0) world(3,9,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  RigidBody: type=Dynamic mass=12 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Sphere radius=0.5

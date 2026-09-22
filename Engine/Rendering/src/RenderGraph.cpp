@@ -89,32 +89,88 @@ bool RenderGraph::build_execution_order() {
     std::vector<std::vector<u32>> adj(n);
     std::vector<int> indegree(n, 0);
 
-    // Map each resource to its producer (writer) pass.
-    // In a DAG frame render graph, writes produce a resource version that readers consume.
-    std::unordered_map<RGTextureHandle, int> resource_producer;
+    // Dependency model (registration order = program order, with one
+    // dataflow exception):
+    // 1. WAW: writers of one resource execute in registration order
+    //    (w[i] -> w[i+1]). Two writers of one target — Lighting then
+    //    Transparency over one HDR image — must not order by luck of the
+    //    queue's tie-break in Kahn's algorithm below.
+    // 2. RAW: a reader consumes the version its nearest PRIOR writer produced
+    //    (last writer with index < reader). A later writer has not run yet
+    //    when the reader executes, so resolving against the LAST writer
+    //    overall would point the edge backwards and report a cycle in a
+    //    graph that has no dataflow loop (GBuffer writes depth, Lighting
+    //    reads it, Transparency writes it again).
+    // 3. WAR: a reader must run before the next writer OVERWRITES the version
+    //    it just read (reader -> first writer with index > reader). Without
+    //    it the later writer may run first and the reader samples garbage.
+    // 4. Out-of-order single producer: a reader registered BEFORE any writer
+    //    of that resource takes its data from the first writer (writer ->
+    //    reader, backwards in registration order). This is what lets passes
+    //    be added dependency-first and still execute writer-first; it only
+    //    applies when no prior writer exists, so it can never contradict a
+    //    RAW edge on the same resource.
+    // Rules 1-3 only ever point forward in registration order; rule 4 points
+    // backwards only where no forward RAW edge exists for that reader, so the
+    // combination is acyclic for any acyclic dataflow.
+    std::unordered_map<RGTextureHandle, std::vector<u32>> writers_of;
+    writers_of.reserve(n * 2);
     for (u32 pass_idx = 0; pass_idx < n; ++pass_idx) {
         for (RGTextureHandle w : m_passes[pass_idx].writes) {
-            resource_producer[w] = static_cast<int>(pass_idx);
+            writers_of[w].push_back(pass_idx);
         }
     }
 
-    // Build dataflow dependencies:
-    // 1. RAW: If pass B reads resource R, and pass A wrote resource R, A must run before B (A -> B).
-    // 2. WAR: If pass B writes resource R, and pass A was registered before B and reads resource R, A -> B.
-    // 3. WAW: If pass A wrote resource R, and later pass B also writes resource R in registration order, A -> B.
+    auto add_edge = [&](u32 from, u32 to) {
+        if (from == to) return;
+        auto& edges = adj[from];
+        if (std::find(edges.begin(), edges.end(), to) == edges.end()) {
+            edges.push_back(to);
+            ++indegree[to];
+        }
+    };
+
+    // WAW chains.
+    for (const auto& [handle, writers] : writers_of) {
+        (void)handle;
+        for (size_t i = 0; i + 1 < writers.size(); ++i) {
+            add_edge(writers[i], writers[i + 1]);
+        }
+    }
+
+    // RAW + WAR (+ out-of-order producer) per reader.
     for (u32 pass_idx = 0; pass_idx < n; ++pass_idx) {
         const Pass& pass = m_passes[pass_idx];
-
-        // RAW dependencies
         for (RGTextureHandle r : pass.reads) {
-            auto it = resource_producer.find(r);
-            if (it != resource_producer.end() && it->second != -1 && it->second != static_cast<int>(pass_idx)) {
-                u32 producer = static_cast<u32>(it->second);
-                // Check if edge producer -> pass_idx already exists
-                auto& edges = adj[producer];
-                if (std::find(edges.begin(), edges.end(), pass_idx) == edges.end()) {
-                    edges.push_back(pass_idx);
-                    ++indegree[pass_idx];
+            auto it = writers_of.find(r);
+            if (it == writers_of.end()) continue;
+            const std::vector<u32>& writers = it->second;
+            // Nearest writer strictly before this pass (its version supplier).
+            u32 prior = kInvalidRGHandle;
+            // Nearest writer strictly after this pass.
+            u32 next = kInvalidRGHandle;
+            for (u32 w : writers) {
+                if (w == pass_idx) continue; // read-modify-write: self is not its own supplier
+                if (w < pass_idx) prior = w; // writers are in registration order: last one wins
+                else if (next == kInvalidRGHandle) next = w; // first one wins
+            }
+            if (prior != kInvalidRGHandle) {
+                add_edge(prior, pass_idx); // RAW: correct version, not the last writer overall
+                if (next != kInvalidRGHandle) {
+                    add_edge(pass_idx, next); // WAR: read before the overwrite
+                }
+            } else if (next != kInvalidRGHandle) {
+                add_edge(next, pass_idx); // out-of-order producer: writer runs first
+                // WAR to the writers after the producer (if any): the reader
+                // consumes the producer's version, so later overwrites wait.
+                bool seen_producer = false;
+                for (u32 w : writers) {
+                    if (w == pass_idx) continue;
+                    if (!seen_producer) {
+                        if (w == next) seen_producer = true;
+                        continue;
+                    }
+                    add_edge(pass_idx, w);
                 }
             }
         }

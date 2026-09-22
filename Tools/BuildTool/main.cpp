@@ -45,8 +45,12 @@ void print_help() {
               << "Usage:\n"
               << "  nf new <dir> [--name <Name>]     create a project\n"
               << "  nf cook  [--project <file>]      cook every asset\n"
-              << "  nf build [--project <file>] [--out <dir>]\n"
+              << "  nf build [--project <file>] [--out <dir>] [--shipping]\n"
               << "                                   cook and package into dist/\n"
+              << "  nf package [--project <file>] [--out <dir>] [--shipping]\n"
+              << "                                   package; --shipping adds the\n"
+              << "                                   version stamp, redist/uninstall\n"
+              << "                                   notes, and a distributable zip\n"
               << "  nf run   [--project <file>] [--frames N] [--headless] [--validation]\n"
               << "                                   build, then launch the player\n"
               << "  nf verify [--project <file>]     check every cooked asset is present\n"
@@ -208,24 +212,47 @@ BuildOptions make_build_options(const std::filesystem::path& project_file,
     return opts;
 }
 
-int cmd_build(const std::filesystem::path& project_file,
-              const std::string& out_dir,
-              const char* argv0) {
-    BuildReport report;
-    std::string err;
-    if (!build_project(make_build_options(project_file, out_dir, argv0), report, err)) {
-        std::cerr << "nf build: " << err << "\n";
-        return 1;
-    }
+void print_build_report(const BuildReport& report) {
     std::cout << "Cook report: cooked " << report.cook.cooked << ", skipped " << report.cook.skipped
               << ", failed " << report.cook.failed << ", pruned " << report.cook.pruned
               << ", total " << report.cook.total() << "\n";
     std::cout << "Packaged " << report.files_packaged << " file(s) (" << report.manifest_entries
               << " manifest entries), " << report.shaders_copied << " shader(s)\n";
     std::cout << "Output: " << report.output_dir.string() << "\n";
-    std::cout << "Run:    " << report.output_dir.string() << "/NFPlayer --project "
+    if (!report.zip_path.empty()) {
+        std::cout << "Archive: " << report.zip_path.string() << "\n";
+    }
+    std::cout << "Run:    " << (report.output_dir / "NFPlayer.exe").string() << " --project "
               << report.packaged_project.string() << "\n";
+}
+
+// `nf build` and `nf package` are the same pipeline; --shipping is what makes
+// the difference, so both go through here and only the label differs.
+int run_build(const char* label,
+              const std::filesystem::path& project_file,
+              const std::string& out_dir,
+              bool shipping,
+              const char* argv0) {
+    BuildOptions opts = make_build_options(project_file, out_dir, argv0);
+    opts.shipping = shipping;
+    // A shipping package is a distributable, so it carries the tool version in
+    // its VERSION.txt stamp; build_project refuses a shipping build without one.
+    if (shipping) opts.version = kVersion;
+
+    BuildReport report;
+    std::string err;
+    if (!build_project(opts, report, err)) {
+        std::cerr << "nf " << label << ": " << err << "\n";
+        return 1;
+    }
+    print_build_report(report);
     return 0;
+}
+
+int cmd_build(const std::filesystem::path& project_file,
+              const std::string& out_dir,
+              const char* argv0) {
+    return run_build("build", project_file, out_dir, false, argv0);
 }
 
 int cmd_run(const std::filesystem::path& project_file,
@@ -290,6 +317,7 @@ int main(int argc, char** argv) {
     }
 
     std::string project_arg, out_dir, name;
+    bool shipping = false;
     std::vector<std::string> passthrough;
     std::string positional;
 
@@ -302,6 +330,7 @@ int main(int argc, char** argv) {
         else if (arg.rfind("--out=", 0) == 0) out_dir = arg.substr(6);
         else if (arg == "--name") name = next();
         else if (arg.rfind("--name=", 0) == 0) name = arg.substr(7);
+        else if (arg == "--shipping") shipping = true;
         else if (arg == "--frames" || arg == "--headless" || arg == "--validation") {
             // Forwarded verbatim to the player.
             passthrough.push_back(arg);
@@ -330,7 +359,9 @@ int main(int argc, char** argv) {
 
     if (command == "cook") return cmd_cook(project_file);
     if (command == "verify") return cmd_verify(project_file);
-    if (command == "build") return cmd_build(project_file, out_dir, argv[0]);
+    // `--shipping` is accepted by both, so it is never silently ignored.
+    if (command == "build") return run_build("build", project_file, out_dir, shipping, argv[0]);
+    if (command == "package") return run_build("package", project_file, out_dir, shipping, argv[0]);
     if (command == "run") return cmd_run(project_file, out_dir, passthrough, argv[0]);
 
     std::cerr << "nf: unknown command '" << command << "'\n";

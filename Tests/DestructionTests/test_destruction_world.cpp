@@ -15,6 +15,7 @@
 #include <NF/Destruction/DestructibleComponent.hpp>
 #include <NF/Destruction/DestructionWorld.hpp>
 #include <NF/Destruction/FractureAsset.hpp>
+#include <NF/Destruction/FractureMaterial.hpp>
 #include <NF/Test/TestFramework.hpp>
 
 #include <vector>
@@ -65,6 +66,28 @@ DamageEvent blast_at(const Vec3& point, f32 radius, f32 impulse) {
     event.radius = radius;
     event.impulse = impulse;
     return event;
+}
+
+/// The same blast with a brisance zone: full impulse out to `inner_radius`.
+DamageEvent blast_at_with_inner(const Vec3& point, f32 radius, f32 inner_radius, f32 impulse) {
+    DamageEvent event = blast_at(point, radius, impulse);
+    event.inner_radius = inner_radius;
+    return event;
+}
+
+/// Four leaves: enough bonds at enough places to see a blast's shape, and the
+/// smallest object whose complete break can exceed a debris cap of one.
+FractureAsset four_piece_asset() {
+    FractureParams params;
+    params.target_chunks = 4u;
+    params.strength_per_area = 10.0f;
+
+    FractureAsset asset;
+    std::string error;
+    build_fracture_asset(unit_cube(), params, asset, &error);
+    NF_CHECK(error.empty());
+    NF_CHECK(asset.leaf_count() >= 2u);
+    return asset;
 }
 
 /// True when `descendant` is inside the subtree rooted at `ancestor`.
@@ -228,7 +251,9 @@ NF_TEST(destruction_shard_flies_away_from_the_blast) {
     world.apply_damage(asset, cmp, Mat4::identity(), event);
 
     const DebrisSpawn& shard = sink.records[0u].spawn;
-    const Vec3 outward = shard.position - event.world_point;
+    // The kick is radial from the chunk's centre of mass, and spawn.position is
+    // the asset origin — not the COM — so the direction comes from the asset.
+    const Vec3 outward = asset.chunks[bond.detach_chunk].centroid - event.world_point;
 
     // The kick is radial, so the velocity and the displacement agree on a
     // direction; with the blast on the shared face, the displacement is not
@@ -255,8 +280,12 @@ NF_TEST(destruction_shard_spins_about_the_tear_point) {
     world.apply_damage(asset, cmp, Mat4::identity(), event);
 
     const DebrisSpawn& shard = sink.records[0u].spawn;
-    const Vec3 arm = shard.position - bond.centroid;
-    const Vec3 dir = (shard.position - event.world_point).normalized();
+    // Both the arm and the kick direction are measured from the chunk's centre
+    // of mass; spawn.position is the asset origin now, so the COM comes from
+    // the asset (identity world transform here, so local == world).
+    const Vec3 centroid = asset.chunks[bond.detach_chunk].centroid;
+    const Vec3 arm = centroid - bond.centroid;
+    const Vec3 dir = (centroid - event.world_point).normalized();
     const f32  falloff = 1.0f - (event.world_point - bond.centroid).length() / event.radius;
     const f32  delivered = event.impulse * falloff;
     const f32  arm_sq = arm.length_sq() + EPSILON;
@@ -300,9 +329,15 @@ NF_TEST(destruction_world_transform_places_the_shard) {
     DestructibleComponent cmp;
     cmp.resize_for(asset);
 
-    // The object sits ten units off the origin, so the blast is placed in world
-    // space and the shard must land where the chunk actually is, not at its
-    // asset-local centroid.
+    // The object sits ten units off the origin. A shard's hull is authored in
+    // the asset's own space and the sink places that hull's local origin at
+    // `position`, so the position has to be the asset's origin in world space —
+    // not the chunk's centroid, which would offset the shard by its own local
+    // centroid and fly it through empty air next to the object it came from.
+    // The invariant that makes that visible is reconstructing the hull in world
+    // space: position + rotation * vertex must equal the world transform of
+    // that vertex, at every vertex. That is also exactly what a renderer
+    // drawing the chunk mesh at the body's pose depends on.
     const Vec3 offset{10.0f, 0.0f, -4.0f};
     const Mat4 xform = Mat4::translate(offset);
     const DamageEvent event = blast_at(bond.centroid + offset, 4.0f, bond.strength * 2.0f);
@@ -310,8 +345,16 @@ NF_TEST(destruction_world_transform_places_the_shard) {
     world.apply_damage(asset, cmp, xform, event);
 
     NF_CHECK(sink.records.size() == 1u);
-    NF_CHECK(sink.records[0u].spawn.position.nearly_equals(
-        asset.chunks[bond.detach_chunk].centroid + offset, 1e-4f));
+    const DebrisSpawn& spawn = sink.records[0u].spawn;
+    NF_CHECK(spawn.position.nearly_equals(offset, 1e-4f));
+
+    const FractureChunk& chunk = asset.chunks[bond.detach_chunk];
+    NF_CHECK(spawn.hull_points.size() == chunk.piece.vertices.size());
+    for (size_t i = 0u; i < spawn.hull_points.size(); ++i) {
+        const Vec3 placed = spawn.position + spawn.rotation.rotate(spawn.hull_points[i]);
+        const Vec3 expected = xform.transform_point(chunk.piece.vertices[i]);
+        NF_CHECK(placed.nearly_equals(expected, 1e-4f));
+    }
 }
 
 // =========================================================================
@@ -648,4 +691,354 @@ NF_TEST(destruction_same_blasts_give_identical_shards) {
         NF_CHECK(a.linear_velocity.nearly_equals(b.linear_velocity, 1e-6f));
         NF_CHECK(a.angular_velocity.nearly_equals(b.angular_velocity, 1e-6f));
     }
+}
+
+// =========================================================================
+// Explosion shape: the brisance zone
+// =========================================================================
+
+NF_TEST(destruction_inner_radius_delivers_the_full_impulse) {
+    const FractureAsset asset = two_piece_asset();
+    const FractureBond& bond = asset.bonds[0u];
+
+    // A sub-strength impulse so nothing shatters and the delivered amount can
+    // be read straight off the accumulated stress, not inferred from breaks.
+    const f32 impulse = bond.strength * 0.5f;
+    const Vec3 blast = bond.centroid + Vec3{2.0f, 0.0f, 0.0f};
+
+    auto stress_for = [&](f32 inner_radius) {
+        NullDebrisSink sink;
+        DestructionWorld world(sink);
+        DestructibleComponent cmp;
+        cmp.resize_for(asset);
+        const DamageEvent event = blast_at_with_inner(blast, 10.0f, inner_radius, impulse);
+        NF_CHECK(world.apply_damage(asset, cmp, Mat4::identity(), event) == 0u);
+        return cmp.bond_stress[0u];
+    };
+
+    // Plain linear blast two tenths of the way out: 80% of the impulse.
+    NF_CHECK_NEAR(stress_for(0.0f), impulse * 0.8f, 1e-5f);
+    // The bond sits inside the brisance zone: the whole impulse arrives even
+    // though the bond is not at the blast centre.
+    NF_CHECK_NEAR(stress_for(5.0f), impulse, 1e-5f);
+    // Barely inside the zone edge.
+    NF_CHECK_NEAR(stress_for(2.0f), impulse, 1e-5f);
+    // A degenerate inner radius (>= the radius) is the plain blast, not a
+    // free full-impulse hit.
+    NF_CHECK_NEAR(stress_for(10.0f), impulse * 0.8f, 1e-5f);
+    NF_CHECK_NEAR(stress_for(99.0f), impulse * 0.8f, 1e-5f);
+}
+
+NF_TEST(destruction_inner_radius_bends_the_blast) {
+    const FractureAsset asset = four_piece_asset();
+    const Vec3  blast{0.0f, 0.0f, 0.0f};
+    const f32   radius = 10.0f;
+
+    // Shards broken by a blast of the given brisance zone. The cube spans
+    // [-1, 1] so every bond sits well inside the radius and the comparison is
+    // about the falloff *shape*, not about reach.
+    auto broken_for = [&](f32 inner_radius, f32 impulse) {
+        NullDebrisSink sink;
+        DestructionWorld world(sink);
+        DestructibleComponent cmp;
+        cmp.resize_for(asset);
+        const DamageEvent event = blast_at_with_inner(blast, radius, inner_radius, impulse);
+        return world.apply_damage(asset, cmp, Mat4::identity(), event);
+    };
+
+    // The piecewise falloff dominates the linear one everywhere inside the
+    // radius (1 out to `inner`, then a shallower slope to zero), so no bond can
+    // receive *less* stress when the brisance zone widens — the break count is
+    // monotone in it for every impulse, not just a tuned one.
+    u32 impulses_where_wide_breaks_more = 0u;
+    for (f32 pulse = 1.0f; pulse < 500.0f; pulse *= 1.4f) {
+        const u32 narrow = broken_for(0.0f, pulse);
+        const u32 wide = broken_for(4.0f, pulse);
+        NF_CHECK(wide >= narrow);
+        if (wide > narrow) ++impulses_where_wide_breaks_more;
+    }
+
+    // ...and there is at least one impulse the two shapes actually separate on:
+    // a brisance zone that changed nothing would be a no-op, and a test that
+    // could not tell would be one.
+    NF_CHECK(impulses_where_wide_breaks_more > 0u);
+}
+
+// =========================================================================
+// Per-object shard lifetime
+// =========================================================================
+
+NF_TEST(destruction_short_lived_shards_retire_before_the_budget_lifetime) {
+    const FractureAsset asset = two_piece_asset();
+    const FractureBond& bond = asset.bonds[0u];
+
+    DestructionBudget budget;
+    budget.max_debris_lifetime = 100.0f; // the world would keep the shard here
+
+    NullDebrisSink sink;
+    DestructionWorld world(sink, budget);
+
+    DestructibleComponent cmp;
+    cmp.shard_lifetime = 3.0f;
+    cmp.resize_for(asset);
+    NF_CHECK(world.apply_damage(asset, cmp, Mat4::identity(),
+                                blast_at(bond.centroid, 4.0f, bond.strength * 2.0f)) == 1u);
+    NF_CHECK(sink.records.size() == 1u);
+
+    // Not yet: one tick short of the shard's own deadline.
+    world.tick(2.9f);
+    NF_CHECK(sink.records.size() == 1u);
+    // The budget lifetime is 100 s, so it is the *shard's* 3 s clock that
+    // retires it — the world's deadline alone would leave it live.
+    world.tick(0.2f);
+    NF_CHECK(sink.records.empty());
+    NF_CHECK(world.active_debris() == 0u);
+}
+
+NF_TEST(destruction_shard_lifetime_zero_falls_back_to_the_budget) {
+    const FractureAsset asset = two_piece_asset();
+    const FractureBond& bond = asset.bonds[0u];
+
+    DestructionBudget budget;
+    budget.max_debris_lifetime = 3.0f;
+
+    NullDebrisSink sink;
+    DestructionWorld world(sink, budget);
+
+    DestructibleComponent cmp; // shard_lifetime == 0: use the budget
+    cmp.resize_for(asset);
+    world.apply_damage(asset, cmp, Mat4::identity(),
+                       blast_at(bond.centroid, 4.0f, bond.strength * 2.0f));
+    NF_CHECK(sink.records.size() == 1u);
+
+    world.tick(2.9f);
+    NF_CHECK(sink.records.size() == 1u);
+    world.tick(0.2f);
+    NF_CHECK(sink.records.empty());
+}
+
+NF_TEST(destruction_two_objects_retire_on_their_own_clocks) {
+    // A short-lived shard and a lingering one from the same instant: 4 s vs
+    // 40 s against a budget of 60 s. This is the pile-mixing case that makes
+    // the lifetime per-object rather than per-world.
+    const FractureAsset asset = two_piece_asset();
+    const FractureBond& bond = asset.bonds[0u];
+    const DamageEvent event = blast_at(bond.centroid, 4.0f, bond.strength * 4.0f);
+
+    NullDebrisSink sink;
+    DestructionBudget budget;
+    budget.max_debris_lifetime = 60.0f;
+    DestructionWorld world(sink, budget);
+
+    DestructibleComponent brief;
+    brief.shard_lifetime = 4.0f;
+    brief.resize_for(asset);
+    world.apply_damage(asset, brief, Mat4::identity(), event);
+    const u32 brief_id = sink.records.back().id;
+
+    DestructibleComponent lingering;
+    lingering.shard_lifetime = 40.0f;
+    lingering.resize_for(asset);
+    world.apply_damage(asset, lingering, Mat4::identity(), event);
+    // back(), not front(): records are appended, so the first shard is still
+    // the brief one's and would alias it here.
+    const u32 lingering_id = sink.records.back().id;
+
+    world.tick(5.0f);
+    NF_CHECK(sink.find(brief_id) == nullptr);    // its own clock ran out
+    NF_CHECK(sink.find(lingering_id) != nullptr); // not the budget's
+
+    world.tick(40.0f);
+    NF_CHECK(sink.find(lingering_id) == nullptr);
+    NF_CHECK(sink.records.empty());
+}
+
+// =========================================================================
+// Named material presets
+// =========================================================================
+
+NF_TEST(destruction_material_presets_are_found_by_name) {
+    NF_CHECK(find_material("glass") != nullptr);
+    NF_CHECK(find_material("GLASS") != nullptr);  // case-insensitive
+    NF_CHECK(find_material("Wood") != nullptr);
+    NF_CHECK(find_material("stone") != nullptr);
+    NF_CHECK(find_material("steel") != nullptr);
+    NF_CHECK(find_material("unobtanium") == nullptr); // unknown: no substitution
+    NF_CHECK(find_material("") == nullptr);           // empty: no material
+}
+
+NF_TEST(destruction_material_presets_scale_up_in_strength) {
+    // The table is ordered brittle -> stubborn, so a walkthrough is the
+    // assertion that the shipped values are monotone: glass < wood < stone <
+    // steel. A reorder would break a level that picked materials by name.
+    NF_CHECK(std::size(kFractureMaterials) >= 4u);
+    for (std::size_t i = 1u; i < std::size(kFractureMaterials); ++i) {
+        NF_CHECK(kFractureMaterials[i].strength_scale >
+                 kFractureMaterials[i - 1u].strength_scale);
+    }
+}
+
+NF_TEST(destruction_apply_material_writes_the_component_knobs) {
+    DestructibleComponent cmp;
+    cmp.strength_scale = 7.0f;
+    cmp.density = 7.0f;
+    cmp.shard_lifetime = 7.0f;
+
+    const FractureMaterial* glass = find_material("glass");
+    NF_CHECK(glass != nullptr);
+    apply_material(cmp, *glass);
+    NF_CHECK(cmp.strength_scale == glass->strength_scale);
+    NF_CHECK(cmp.density == glass->density);
+    NF_CHECK(cmp.shard_lifetime == glass->shard_lifetime);
+
+    // Wood's lifetime is the budget's, which is expressed as 0 here.
+    const FractureMaterial* wood = find_material("wood");
+    apply_material(cmp, *wood);
+    NF_CHECK(cmp.shard_lifetime == 0.0f);
+}
+
+NF_TEST(destruction_glass_shatters_where_steel_survives_the_same_blast) {
+    const FractureAsset asset = two_piece_asset();
+    const FractureBond& bond = asset.bonds[0u];
+
+    auto breaks = [&](std::string_view material) {
+        NullDebrisSink sink;
+        DestructionWorld world(sink);
+        DestructibleComponent cmp;
+        const FractureMaterial* preset = find_material(material);
+        NF_CHECK(preset != nullptr);
+        apply_material(cmp, *preset);
+        cmp.resize_for(asset);
+        // A blast sized for wood: half the bond's raw strength.
+        const DamageEvent event = blast_at(bond.centroid, 4.0f, bond.strength * 0.5f);
+        return world.apply_damage(asset, cmp, Mat4::identity(), event) > 0u;
+    };
+
+    NF_CHECK(breaks("glass"));  // 0.2x strength: the half-strength blast is plenty
+    NF_CHECK(!breaks("wood"));  // 1.0x: half the strength is not enough
+    NF_CHECK(!breaks("stone")); // 3.0x: shrugs it off
+    NF_CHECK(!breaks("steel")); // 8.0x: untouched
+}
+
+NF_TEST(destruction_material_density_sets_the_shard_mass) {
+    const FractureAsset asset = two_piece_asset();
+    const FractureBond& bond = asset.bonds[0u];
+
+    auto shard_mass = [&](std::string_view material) {
+        NullDebrisSink sink;
+        DestructionWorld world(sink);
+        DestructibleComponent cmp;
+        apply_material(cmp, *find_material(material));
+        cmp.resize_for(asset);
+        world.apply_damage(asset, cmp, Mat4::identity(),
+                           blast_at(bond.centroid, 4.0f, bond.strength * 8.0f));
+        return sink.records.front().spawn.mass;
+    };
+
+    const f32 glass = shard_mass("glass");
+    const f32 steel = shard_mass("steel");
+    NF_CHECK(glass > 0.0f);
+    NF_CHECK(steel > glass); // steel shards are dense, glass ones are light
+    NF_CHECK_NEAR(steel / glass,
+                  find_material("steel")->density / find_material("glass")->density, 1e-4f);
+}
+
+namespace {
+
+/// A sink with its own hard ceiling, which is the realistic backend: Jolt can
+/// be out of bodies or out of contact slots. The world's budget is a *policy*
+/// cap, and it is checked before spawn is called, but a sink that refuses for
+/// its own reasons exercises the accounting the refusal path has to keep.
+class CappedSink final : public IDebrisSink {
+public:
+    explicit CappedSink(std::size_t capacity) : capacity_(capacity) {}
+
+    u32 spawn(const DebrisSpawn& spawn) override {
+        if (records.size() >= capacity_) return kInvalidDebris;
+        const u32 id = next_id++;
+        records.push_back(NullDebrisSink::Record{id, spawn, 0.0f});
+        return id;
+    }
+
+    void destroy(u32 debris_id) override {
+        for (std::size_t i = 0u; i < records.size(); ++i) {
+            if (records[i].id != debris_id) continue;
+            records.erase(records.begin() + i);
+            return;
+        }
+    }
+
+    std::size_t active_count() const override { return records.size(); }
+
+    std::vector<NullDebrisSink::Record> records;
+    const std::size_t                   capacity_;
+
+private:
+    u32 next_id = 1u;
+};
+
+} // namespace
+
+NF_TEST(destruction_budget_is_enforced_inside_apply_damage_not_reconciled) {
+    // Section 41's "budget so it does not kill the game's performance" only
+    // holds if the decision happens *before* a body is asked for, not in a
+    // reconciliation pass afterwards. A blast that releases several shards
+    // against a ceiling of two: the live count is at the ceiling the instant
+    // apply_damage returns, never above it, and no later tick is needed to
+    // bring it down.
+    const FractureAsset asset = four_piece_asset();
+
+    DestructionBudget budget;
+    budget.max_active_debris = 2u;          // the world's policy cap
+    budget.max_breaks_per_frame = 32u;      // do not let the frame allowance mask it
+    budget.max_debris_lifetime = 1000.0f;   // no lifetime pressure at all
+
+    NullDebrisSink sink;
+    DestructionWorld world(sink, budget);
+
+    DestructibleComponent cmp;
+    cmp.resize_for(asset);
+    const u32 broken =
+        world.apply_damage(asset, cmp, Mat4::identity(),
+                           blast_at(Vec3::zero, 50.0f, 1e6f));
+
+    // The ceiling held without a tick, and the world evicted to make room
+    // rather than refusing — the newest shard is always the one kept.
+    NF_CHECK(broken >= 2u);
+    NF_CHECK_EQ(world.active_debris(), static_cast<std::size_t>(budget.max_active_debris));
+    NF_CHECK(world.shards_dropped_for_budget() == 0u);
+    NF_CHECK(cmp.emitted_count() == cmp.broken_count());
+}
+
+NF_TEST(destruction_sink_refusal_is_counted_and_never_inflates_the_count) {
+    // The sink's own ceiling is lower than the world's policy cap, so the world
+    // believes there is room and does not evict — but the backend refuses. The
+    // books have to stay consistent anyway: the drop is counted, the live count
+    // is what the sink actually holds, and chunk_emitted stays an exact mirror
+    // of the sink rather than recording a shard that never became a body.
+    const FractureAsset asset = four_piece_asset();
+
+    DestructionBudget budget;
+    budget.max_active_debris = 4u;          // deliberately above the sink's ceiling
+    budget.max_breaks_per_frame = 32u;
+    budget.max_debris_lifetime = 1000.0f;
+
+    CappedSink sink(1u); // one body in the whole backend
+    DestructionWorld world(sink, budget);
+
+    DestructibleComponent cmp;
+    cmp.resize_for(asset);
+    const u32 broken =
+        world.apply_damage(asset, cmp, Mat4::identity(),
+                           blast_at(Vec3::zero, 50.0f, 1e6f));
+
+    NF_CHECK(broken >= 2u);                       // the bonds went
+    NF_CHECK_EQ(world.active_debris(), std::size_t{1u}); // the backend holds one
+    NF_CHECK(world.shards_dropped_for_budget() > 0u);
+    // chunk_emitted mirrors the sink exactly: no phantom shard.
+    NF_CHECK(cmp.emitted_count() == static_cast<u32>(world.active_debris()));
+    // The chunks the sink never took are still marked detached — the object is
+    // genuinely in pieces — but they have no debris body, which is the honest
+    // state rather than a silent success.
+    NF_CHECK(cmp.detached_count() > cmp.emitted_count());
 }

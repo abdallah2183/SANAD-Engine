@@ -53,6 +53,7 @@ u32 JoltDebrisSink::spawn(const nf::destruction::DebrisSpawn& spawn) {
 
     const u32 id = next_id_++;
     live_.emplace(id, body);
+    chunks_.emplace(id, spawn.chunk_id);
     return id;
 }
 
@@ -61,6 +62,7 @@ void JoltDebrisSink::destroy(u32 debris_id) {
     if (it == live_.end()) return;
     world_.remove_body(it->second);
     live_.erase(it);
+    chunks_.erase(debris_id);
 }
 
 std::size_t JoltDebrisSink::active_count() const {
@@ -82,11 +84,18 @@ std::vector<u32> JoltDebrisSink::live_ids() const {
     return ids;
 }
 
+u32 JoltDebrisSink::chunk_of(u32 debris_id) const {
+    const auto it = chunks_.find(debris_id);
+    if (it == chunks_.end()) return nf::destruction::kInvalidChunk;
+    return it->second;
+}
+
 void JoltDebrisSink::clear() {
     for (const std::pair<const u32, JoltBody>& entry : live_) {
         world_.remove_body(entry.second);
     }
     live_.clear();
+    chunks_.clear();
 }
 
 } // namespace nf::physics

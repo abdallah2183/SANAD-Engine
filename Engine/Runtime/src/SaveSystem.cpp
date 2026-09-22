@@ -85,10 +85,27 @@ std::vector<Migration>& migrations() {
     return table;
 }
 
-/// Runs the chain from `from` up to `SaveSystem::kSchemaVersion`.
-/// Returns false when a link is missing, rather than loading a save whose format
-/// the reader does not actually understand.
-bool run_migrations(u32 from, std::string& out_error) {
+/// Rewrites meta's `schema_version:` line to `to_version`. A migration has to
+/// leave the stamp consistent with the bytes it produced, otherwise a load that
+/// crashed mid-chain would describe itself as newer than it is.
+void stamp_schema(SaveSystem::SlotFiles& files, u32 to_version) {
+    const std::string key = "schema_version:";
+    usize pos = files.meta.find(key);
+    if (pos == std::string::npos) {
+        files.meta += "schema_version: " + std::to_string(to_version) + "\n";
+        return;
+    }
+    const usize line_end = files.meta.find('\n', pos);
+    const usize value_pos = pos + key.size();
+    files.meta.replace(value_pos,
+                       (line_end == std::string::npos ? files.meta.size() : line_end) - value_pos,
+                       " " + std::to_string(to_version));
+}
+
+/// Runs the chain from `from` up to `SaveSystem::kSchemaVersion`, handing the
+/// slot's bytes to each link. Returns false when a link is missing, rather than
+/// loading a save whose format the reader does not actually understand.
+bool run_migrations(u32 from, SaveSystem::SlotFiles& files, std::string& out_error) {
     if (from == SaveSystem::kSchemaVersion) return true;
 
     // A save from a *newer* engine is refused outright. There is no chain that
@@ -116,11 +133,14 @@ bool run_migrations(u32 from, std::string& out_error) {
                         " (this build reads schema " + std::to_string(SaveSystem::kSchemaVersion) + ")";
             return false;
         }
-        if (!fn(out_error)) {
+        if (!fn(files, out_error)) {
             out_error = "save: migration " + std::to_string(current) + "->" +
                         std::to_string(current + 1) + " failed: " + out_error;
             return false;
         }
+        // Each link owns its own stamp: a migration that changed the bytes is
+        // the only authority on which version they now describe.
+        stamp_schema(files, current + 1);
         ++current;
     }
     return true;
@@ -363,40 +383,44 @@ bool SaveSystem::load_game(const std::string& slot, std::string& out_error) {
         return false;
     }
 
-    const std::string schema_text = line_value(meta_file.value, "schema_version:");
-    const u32 schema = schema_text.empty()
-                           ? 0u
-                           : static_cast<u32>(std::strtoul(schema_text.c_str(), nullptr, 10));
+    SlotFiles files;
+    files.meta = meta_file.value;
 
-    if (!run_migrations(schema, out_error)) return false;
-    m_last_migration_from = (schema == kSchemaVersion) ? 0u : schema;
-
+    // The scene and the modules are read *before* the chain runs so a migration
+    // can rewrite them. Reading first and migrating second would be the same
+    // thing for a link that touches nothing, and the only thing a link that
+    // touches nothing is good for.
     const auto scene_file = m_vfs.read_text(base + "/" + kSceneFile);
     if (!scene_file.ok) {
         out_error = "load: slot '" + slot + "' has no readable " + kSceneFile;
         return false;
     }
+    files.scene = scene_file.value;
 
-    const auto scene_path = m_vfs.resolve(base + "/" + kSceneFile);
-    if (!scene_path.ok) {
-        out_error = "load: " + scene_path.error;
-        return false;
-    }
+    const auto modules_file = m_vfs.read_text(base + "/" + kModulesFile);
+    files.modules = modules_file.ok ? modules_file.value : std::string{};
+
+    const std::string schema_text = line_value(files.meta, "schema_version:");
+    const u32 schema = schema_text.empty()
+                           ? 0u
+                           : static_cast<u32>(std::strtoul(schema_text.c_str(), nullptr, 10));
+
+    if (!run_migrations(schema, files, out_error)) return false;
+    m_last_migration_from = (schema == kSchemaVersion) ? kNoMigration : schema;
 
     // Reuse the scene loader rather than a second parser, so a save cannot drift
     // from the format the editor writes.
-    SceneLoadResult loaded = load_scene_from_physical(scene_path.value);
+    SceneLoadResult loaded = load_scene_from_text(files.scene);
     if (!loaded.success || loaded.scene == nullptr) {
         out_error = "load: scene in slot '" + slot + "' did not load: " + loaded.error;
         return false;
     }
 
-    const auto modules_file = m_vfs.read_text(base + "/" + kModulesFile);
-    if (modules_file.ok) {
+    if (!files.modules.empty()) {
         ecs::World& world = loaded.scene->world();
 
         // Blocks are `---`-separated; each names a module and carries its state.
-        std::istringstream stream(modules_file.value);
+        std::istringstream stream(files.modules);
         std::string line;
         std::string module_name;
         bool enabled = true;
@@ -435,6 +459,31 @@ bool SaveSystem::load_game(const std::string& slot, std::string& out_error) {
     // Runtime::load_scene keeps the slot's own path out of the scene's
     // "last loaded from" bookkeeping — a save is not where the scene lives.
     m_runtime.adopt_scene(std::move(loaded.scene), base + "/" + kSceneFile);
+
+    // A migrated slot is written back with the new schema stamp, so the next
+    // load takes the no-migration path. Without this the chain would run on
+    // every load forever — and a link that rewrites bytes would rewrite them
+    // again on a slot it already rewrote.
+    //
+    // All three files go back, not just meta: a property rename lands in the
+    // scene's component properties *and* in modules.txt's live state, so a slot
+    // that persisted only the stamp would be half v0, half v1 — the chain would
+    // stop running while un-migrated module bytes were still what the runtime
+    // loaded. `files.modules` is guarded on non-empty so a slot that never had a
+    // modules file does not gain a zero-byte one.
+    if (m_last_migration_from != kNoMigration) {
+        const std::string stamped[] = {files.meta, files.scene, files.modules};
+        const char* const names[]   = {kMetaFile, kSceneFile, kModulesFile};
+        for (usize i = 0; i < 3u; ++i) {
+            if (stamped[i].empty()) continue;
+            const auto write = m_vfs.write_text(base + "/" + names[i], stamped[i]);
+            if (!write.ok) {
+                out_error = "load: slot '" + slot + "' migrated but its " +
+                            std::string(names[i]) + " could not be written back";
+                return false;
+            }
+        }
+    }
 
     NF_LOG_INFO(LogCategory::Core, "SaveSystem: loaded slot '{}'", slot);
     return true;
@@ -565,11 +614,15 @@ bool SaveSystem::wait_for_async_save(std::string& out_error) {
 
 // --- Autosave ---------------------------------------------------------------
 
-void SaveSystem::set_autosave(f32 interval_seconds, const std::string& slot_prefix) {
+void SaveSystem::set_autosave(f32 interval_seconds, const std::string& slot_prefix,
+                              u32 max_slots) {
     if (interval_seconds <= 0.0f) {
         disable_autosave();
         return;
     }
+    // A cap below one means "keep no slots", which is a delete policy wearing a
+    // save policy's clothes. Clamp rather than honour it.
+    m_autosave_max_slots = max_slots < 1u ? 1u : max_slots;
     m_autosave_interval = interval_seconds;
     m_autosave_prefix = slot_prefix.empty() ? std::string("autosave_") : slot_prefix;
     m_autosave_elapsed = 0.0f;
@@ -595,7 +648,12 @@ void SaveSystem::tick(f32 dt) {
         return;
     }
 
-    const std::string slot = m_autosave_prefix + std::to_string(m_autosaves + 1);
+    // Rotating ring: slot N+1 lands on slot (N mod max) + 1, so a long session
+    // reuses a fixed handful of directories instead of growing forever. The
+    // write is a staging-directory swap, so landing on an occupied slot leaves
+    // none of the previous occupant's files behind.
+    const u32 index = (m_autosaves % m_autosave_max_slots) + 1u;
+    const std::string slot = m_autosave_prefix + std::to_string(index);
     std::string error;
     if (!save_game(slot, error)) {
         NF_LOG_ERROR(LogCategory::Core, "SaveSystem: autosave to '{}' failed: {}", slot, error);

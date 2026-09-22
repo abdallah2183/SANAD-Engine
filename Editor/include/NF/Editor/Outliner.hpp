@@ -28,8 +28,8 @@ struct OutlinerRow {
 struct OutlinerState {
     // Entity ids whose children are expanded (default: all expanded).
     std::set<uint32_t> collapsed;
-    // Inline-delete confirmation target (kInvalidEntity when none pending).
-    ecs::Entity pending_delete = ecs::kInvalidEntity;
+    // A4: there is no pending_delete field any more. Delete is immediate and
+    // undoable, so there is no confirmation target to carry between frames.
 
     bool is_expanded(ecs::Entity e) const { return collapsed.count(e.id) == 0; }
     void set_expanded(ecs::Entity e, bool expanded) {
