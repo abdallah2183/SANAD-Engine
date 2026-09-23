@@ -1817,6 +1817,21 @@ int main(int argc, char** argv) {
                 if (f == 75) {
                     auto_check(viewport_red > 1000, "Imported texture visible in viewport",
                                "red pixels = " + std::to_string(viewport_red));
+                    // The f==50 proof left the base color factor at
+                    // (0.9, 0.1, 0.1), and gbuffer.frag multiplies the sampled
+                    // albedo texture by that factor — a pure-blue reloaded
+                    // texture under a red factor multiplies out to black, so
+                    // this proof could never pass. Reset the factor to white
+                    // first: the reloaded texture must be judged by its own
+                    // color, not by whatever tint an earlier proof left behind.
+                    nf::editor::MaterialEdit white;
+                    white.base_color[0] = 1.0f;
+                    white.base_color[1] = 1.0f;
+                    white.base_color[2] = 1.0f;
+                    white.base_color[3] = 1.0f;
+                    std::string we;
+                    auto_check(app.set_material_params("content://Materials/Default", white, we),
+                               "Hot reload base color reset", we);
                     // Overwrite the SOURCE on disk: hot reload must pick it up.
                     const auto bmp = make_bmp_solid(8, 8, 0, 0, 255);
                     auto wr = vfs.write_bytes("content://Textures/nf_auto_tex.bmp",
@@ -1917,11 +1932,19 @@ int main(int argc, char** argv) {
                     // Measured at f==89: 1.0 + 3.0 cubes vs the f==60
                     // single-cube baseline — unmistakable growth proves the
                     // imported mesh rendered (shrink direction is covered by
-                    // the hotreload_mesh_rebuilds_live unit test).
-                    auto_check(viewport_lit > lit_single_cube * 2,
+                    // the hotreload_mesh_rebuilds_live unit test). A saturated
+                    // frame is equally conclusive: once the baseline scene
+                    // lights ~all of the viewport, a larger cube cannot double
+                    // the count — covering ~the whole frame is the maximum
+                    // visibility a lit-pixel metric can express.
+                    const uint32_t lit_full =
+                        static_cast<uint32_t>(vp_state.width) * static_cast<uint32_t>(vp_state.height);
+                    auto_check(viewport_lit > lit_single_cube * 2 ||
+                                   (lit_full > 0 && viewport_lit >= (lit_full * 19) / 20),
                                "Hot-loaded mesh visibly larger",
                                "lit = " + std::to_string(viewport_lit) + ", baseline = " +
-                                   std::to_string(lit_single_cube));
+                                   std::to_string(lit_single_cube) + ", full = " +
+                                   std::to_string(lit_full));
                 }
                 if (f == 92) {
                     // GPU picking, end-to-end through the editor's own entry

@@ -25,7 +25,8 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
                 "NF_BUILD_TESTS": "ON",
-                "NF_BUILD_SAMPLES": "ON"
+                "NF_BUILD_SAMPLES": "ON",
+                "NF_BUILD_TOOLS": "ON"
             }
         },
         {
@@ -36,7 +37,10 @@
             "binaryDir": "${sourceDir}/build/relwithdebinfo",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "NF_BUILD_TESTS": "ON",
+                "NF_BUILD_SAMPLES": "ON",
+                "NF_BUILD_TOOLS": "ON"
             }
         }
     ],
