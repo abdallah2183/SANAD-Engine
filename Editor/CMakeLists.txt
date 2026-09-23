@@ -99,7 +99,21 @@ if(WIN32)
 endif()
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NOVAForgeEditor NFEditorImGuiShaders)
+    # The editor bakes NF_BASIC3D_SHADER_DIR into the binary and loads the
+    # Basic3D pipelines (depth/gbuffer/lighting/forward/tonemap/pick/present)
+    # at startup. Without these edges an editor-only build (samples off)
+    # ships with an empty shader directory and silently renders unlit
+    # fallbacks — discovered when a fresh worktree editor failed every
+    # pixel-based automation proof.
+    add_dependencies(NOVAForgeEditor
+        NFEditorImGuiShaders
+        NFBasic3DDepthShaders
+        NFBasic3DGBufferShaders
+        NFBasic3DLightingShaders
+        NFBasic3DForwardShaders
+        NFBasic3DTonemapShaders
+        NFBasic3DPickShaders
+        NFBasic3DPresentShaders)
 endif()
 
 if(WIN32 AND DEFINED NF_VULKAN_SDK_PATH)
