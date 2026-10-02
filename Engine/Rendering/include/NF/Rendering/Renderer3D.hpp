@@ -50,6 +50,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -135,12 +136,109 @@ enum class TonemapMode : int {
     Linear     = 3, // exposure only; for diagnostics and HDR capture.
 };
 
-// Post-processing applied in the tonemap pass (after gamma). Neutral values
-// (saturation 1, vignette 0) are exactly identity, so existing content and
-// golden pixels are unaffected until a game opts in.
+// --- Bloom (design §206) -------------------------------------------------
+//
+// A real multi-pass chain, not a single-shader glow: the HDR image is
+// thresholded into a half-resolution level, that level is downsampled with a
+// 13-tap box filter into three more, and the tonemap pass sums all four with
+// bilinear taps — a bilinear fetch of a smaller level IS a 2x2 tent filter, so
+// the "upsample" costs no passes at all. The alternative (an explicit
+// upsample-and-add pass per level) needs additive blending, and the RHI's
+// blend state lives on the render-pass attachment rather than the pipeline;
+// spending four more passes to avoid one sampler read per level is the wrong
+// trade.
+//
+// `enabled` is the only switch that costs anything: with it false the renderer
+// records no bloom pass at all, and the tonemap shader is compiled so that a
+// zero intensity never even reads the bloom bindings.
+struct BloomParams {
+    bool enabled = false;
+    // Luminance above which a pixel contributes to the glow. Below it a pixel
+    // contributes nothing, so a normal-lit scene (peak luminance around 1-2
+    // with the default exposure) does not bloom its whole surface.
+    float threshold = 1.0f;
+    // Width of the soft knee, in the same luminance units. 0 is a hard cut,
+    // which makes the bloom's edge pop as the camera moves; a small knee
+    // (0.2-0.5) fades the contribution in and is what the default ships with.
+    float knee = 0.5f;
+    // Multiplier applied to the summed levels before it is added back. 0 is
+    // exactly "no bloom" regardless of `enabled`, which is what lets a test
+    // pin "the sum is added, not assigned".
+    float intensity = 1.0f;
+    // Blur spread, as a multiplier on the downsample kernel's tap spacing.
+    // 1 is the reference kernel; below 1 tightens the glow toward a
+    // highlight-only halo, above 1 widens it.
+    float radius = 1.0f;
+};
+
+// --- Colour grading (design §206) ----------------------------------------
+//
+// Applied in HDR *before* the tonemap operator, which is where the design
+// document puts grading. That ordering is deliberate and worth stating: a
+// contrast operation performed after the tonemap is a curve applied to an
+// already-compressed image, so raising it clips highlights that the operator
+// had carefully rolled off; in HDR it is a scene-luminance remap and the
+// tonemap still gets to do its job on the result.
+struct ColorGradeParams {
+    bool enabled = false;
+    // Scale about `pivot`. 1 is neutral. Applied per channel, so a saturated
+    // pixel can clip one channel before another — that is the point of a
+    // contrast control and not a bug to smooth away.
+    float contrast = 1.0f;
+    // The luminance the contrast scale leaves untouched. In HDR units, so 1.0
+    // is "as bright as a fully lit white surface", not mid-grey.
+    float pivot = 1.0f;
+    // Warm/cool balance, -1 (blue) .. +1 (orange). Implemented as a red/blue
+    // gain pair, not as a hue rotation: a photographer's white balance moves
+    // the two ends of the visible spectrum against each other.
+    float temperature = 0.0f;
+    // Green/magenta balance, -1 (green) .. +1 (magenta). Green is moved
+    // against the red/blue average, which is the axis a white balance leaves
+    // uncorrected.
+    float tint = 0.0f;
+    // Per-channel power applied last. 1 is neutral. >1 darkens midtones,
+    // <1 lifts them — a gamma control, distinct from contrast's linear scale.
+    float gamma = 1.0f;
+};
+
+// --- Sharpening (design §206) --------------------------------------------
+//
+// An unsharp mask on the linear HDR image: the tonemap pass takes a
+// four-neighbour average and adds the difference back. It runs on the HDR
+// signal rather than the tonemapped one because a sharpen applied after the
+// tonemap amplifies the operator's own compression artefacts (visible as
+// halos around bright edges) instead of the scene's detail.
+struct SharpenParams {
+    bool enabled = false;
+    // Strength of the added difference. 0 is exactly "off" regardless of
+    // `enabled`, so a disabled stage and a zero-strength one are the same
+    // image.
+    float amount = 0.0f;
+    // Neighbour offset as a multiplier on one output texel. 1 samples the
+    // adjacent texel (a tight sharpen); larger values reach further and are
+    // the usual cure for a sharpen that only touches single-pixel noise.
+    float radius = 1.0f;
+};
+
+// The whole §206 post stack, minus the stages that are separate renderer state
+// by history: exposure and the tonemap mode are their own setters because they
+// predate this struct and the golden pixels are pinned to their defaults.
+//
+// Every stage is neutral by default and every neutral value is EXACTLY
+// identity, so a renderer that never touches this renders the same frame it
+// rendered before the stack existed. That is a hard contract, not a
+// convention: `Tests/RHITests` pins it by comparing a default-constructed
+// params block against a hand-computed identity.
+//
+// `saturation` and `vignette` stay first so the aggregate initialisation
+// `PostFxParams{1.15f, 0.28f}` that samples and tests already use keeps
+// meaning what it meant.
 struct PostFxParams {
     float saturation = 1.0f; // 0 = grayscale, 1 = neutral, >1 = vivid
     float vignette = 0.0f;   // 0 = off .. 1 = strong corner darkening
+    BloomParams bloom{};
+    ColorGradeParams grade{};
+    SharpenParams sharpen{};
 };
 
 /// CPU mirror of the tonemap operator (pre-gamma). Matches tonemap.frag
@@ -152,10 +250,64 @@ Vec3 tonemap(Vec3 hdr, float exposure, TonemapMode mode);
 /// Matches tonemap.frag exactly; uv is the fullscreen uv in [0, 1].
 Vec3 apply_postfx(Vec3 color, Vec2 uv, const PostFxParams& params);
 
+/// CPU mirror of bloom.frag's prefilter branch: the soft-knee threshold that
+/// decides how much of an HDR pixel survives into the bloom chain.
+///
+/// The knee is what stops the glow from switching on per-pixel as a surface
+/// crosses the threshold — a hard cut makes a moving light's bloom crawl. The
+/// formula is the standard soft-knee one: below `threshold - knee` nothing
+/// passes, above `threshold + knee` everything above the threshold passes, and
+/// in between the contribution is a quadratic ramp. `knee` at or below zero is
+/// the hard cut, and a non-positive `threshold` passes everything (useful for
+/// a diagnostic that wants to see the chain's own response).
+Vec3 bloom_prefilter(Vec3 hdr, float threshold, float knee);
+
+/// CPU mirror of bloom.frag's downsample branch, for a 4x4 neighbourhood read
+/// around `uv` from an image of `src_w` x `src_h` texels. `radius` multiplies
+/// the tap spacing, matching the shader's own parameter.
+///
+/// The image is passed as a flat span in row-major order so this is testable
+/// without a GPU; the sampler's bilinear filtering is approximated by clamping
+/// to the nearest texel, which is what the tests compare against (the shader
+/// samples with a linear filter, so a test that asserts equality with a
+/// non-trivial image would be pinning the filtering mode, not the kernel).
+Vec3 bloom_downsample(std::span<const Vec3> src, u32 src_w, u32 src_h,
+                      Vec2 uv, float radius);
+
+/// CPU mirror of the unsharp mask the tonemap pass applies before the bloom
+/// add. `blurred` is the four-neighbour average the shader computes.
+Vec3 unsharp_hdr(Vec3 center, Vec3 blurred, float amount);
+
+/// CPU mirror of the colour grade. Matches tonemap.frag's grade branch.
+Vec3 apply_color_grade(Vec3 hdr, const ColorGradeParams& params);
+
+/// CPU mirror of the whole tonemap.frag fragment body, in the shader's own
+/// order: sharpen -> bloom add -> exposure -> grade -> tonemap operator ->
+/// gamma -> saturation -> vignette.
+///
+/// `blurred` and `bloom` are pass outputs the CPU cannot compute without a
+/// whole image, so the caller supplies them; everything the shader does with
+/// them, and the order it does it in, is mirrored here. This exists so the
+/// stack's *ordering* is testable: a stage moved in the shader without moving
+/// it here fails the comparison, which is the failure that actually matters
+/// and that no per-stage unit test can see.
+Vec3 apply_post_chain(Vec3 hdr, Vec3 blurred, Vec3 bloom, Vec2 uv,
+                      float exposure, TonemapMode mode, const PostFxParams& params);
+
 class Renderer3D {
 public:
     static constexpr u32 kMaxPointLights = 8;  // must match lighting.frag
     static constexpr u32 kMaxSpotLights = 8;   // must match lighting.frag
+
+    // Bloom mip count. Every level is half the previous one, so level i covers
+    // 1/(2^(i+1)) of each axis and the widest level's bilinear taps reach
+    // across a large fraction of the screen — which is why four is enough and
+    // why the sum of the levels reads as one wide glow rather than four
+    // visible rings. Must match the binding count tonemap.frag declares.
+    static constexpr u32 kBloomLevels = 4;
+    static_assert(kBloomLevels >= 2,
+                  "one level is a blur, not a bloom: the sum needs at least "
+                  "two scales to read as a glow");
 
     struct Stats {
         u32 extracted = 0;   // objects received in the RenderWorld
@@ -172,6 +324,12 @@ public:
         // 1). Zero means the pass recorded no draw and the frame is pixel-
         // identical to one this renderer produced before the pass existed.
         u32 transparent_objects = 0;
+        // Bloom passes recorded this frame: 0 when the stage is off, and
+        // kBloomLevels when it is on (one prefilter plus kBloomLevels-1
+        // downsamples). Exposed for the same reason `transparent_objects` is —
+        // "the stage is enabled" and "the stage recorded work" are different
+        // claims, and only the second one is worth asserting.
+        u32 bloom_levels_recorded = 0;
     };
 
     Renderer3D() = default;
@@ -247,9 +405,21 @@ public:
     void set_tonemap_mode(TonemapMode mode) { m_tonemap_mode = mode; }
     TonemapMode tonemap_mode() const { return m_tonemap_mode; }
 
-    // --- Post FX (tonemap tail) ---
+    // --- Post FX (design §206: the post stack) ---
+    // One setter for the whole stack. There is deliberately no per-stage setter
+    // set: a caller that wants to change one stage reads the current block,
+    // changes the field and writes it back, which keeps the "who owns this
+    // state" question answerable (the caller does, and it round-trips).
     void set_postfx(const PostFxParams& params) { m_postfx = params; }
     const PostFxParams& postfx() const { return m_postfx; }
+
+    /// True when the bloom chain is actually recorded this frame: the stage is
+    /// enabled AND the shaders/pipelines for it came up. A device or a shader
+    /// directory without bloom_*.spv leaves this false while everything else
+    /// still renders — the same degradation contract as present_texture.
+    bool bloom_active() const {
+        return m_postfx.bloom.enabled && m_bloom_pipeline != nullptr;
+    }
 
     // --- Terrain layer splat (design 59: splat maps) ---
     // A surface the mesh has classified carries `uv1 = (slot, blend)`; slot 0
@@ -348,6 +518,12 @@ public:
 private:
     bool create_resolution_dependent(u32 width, u32 height);
     void destroy_resolution_dependent();
+    /// Registers the bloom mip chain with the graph. MUST run before
+    /// m_graph->compile(): a graph texture is materialized by compile(), and a
+    /// handle created after the last compile() resolves to nullptr until the
+    /// next one — which is the next frame's compile(), i.e. a first frame that
+    /// records bloom passes against nothing.
+    void create_bloom_textures(u32 width, u32 height);
 
     // Frame uniform block — must stay in sync with lighting.frag (std140).
     struct FrameUniforms {
@@ -465,6 +641,14 @@ private:
     std::unique_ptr<rhi::ShaderModule> m_lighting_vs, m_lighting_fs;
     std::unique_ptr<rhi::ShaderModule> m_forward_vs, m_forward_fs;
     std::unique_ptr<rhi::ShaderModule> m_tonemap_vs, m_tonemap_fs;
+    // Bloom chain (see BloomParams). One shader pair serves every level: the
+    // prefilter and the downsample are the same "sample one texture, write one
+    // colour" shape and differ only in the kernel, which rides a push-constant
+    // mode flag. Two pipelines for the same two entry points would be two
+    // pipeline objects, two cache keys and two places to forget the mode.
+    // Optional at init, like the present pair: a shader directory without
+    // bloom_*.spv disables the bloom stage and nothing else.
+    std::unique_ptr<rhi::ShaderModule> m_bloom_vs, m_bloom_fs;
     // Present passthrough (see present_texture). Optional at init: an older
     // shader directory without present_*.spv only disables present_texture(),
     // never the scene path.
@@ -478,6 +662,7 @@ private:
     rhi::Pipeline* m_tonemap_pipeline_present = nullptr;
     rhi::Pipeline* m_present_pipeline_off = nullptr;   // owned by m_pipeline_cache
     rhi::Pipeline* m_present_pipeline_present = nullptr;
+    rhi::Pipeline* m_bloom_pipeline = nullptr;         // owned by m_pipeline_cache
 
     /// Lazily creates the swapchain-variant tonemap/present render pass and
     /// pipelines (they need the swapchain extension, which headless/CI devices
@@ -496,6 +681,11 @@ private:
     // material pair sits at 7-8 where neither lighting.frag nor the shared
     // include looks.
     std::unique_ptr<rhi::DescriptorSetLayout> m_forward_layout;    // set 0: material + frame
+    // Bloom chain: one sampled image in, one colour out. Deliberately NOT the
+    // tonemap layout even though the shape matches, because the two describe
+    // different things and a future bloom binding (a per-level weight table)
+    // must not silently appear in the tonemap shader's set.
+    std::unique_ptr<rhi::DescriptorSetLayout> m_bloom_layout;      // set 0: source level
 
     // --- render passes (owned) ---
     std::unique_ptr<rhi::RenderPass> m_depth_rp;
@@ -509,6 +699,10 @@ private:
     // writing, so two panes can overlap and still sort correctly.
     std::unique_ptr<rhi::RenderPass> m_transparency_rp;
     std::unique_ptr<rhi::RenderPass> m_tonemap_rp_off;
+    // Bloom levels all share one format (RGBA16F, no depth), so they share one
+    // render pass and differ only in the framebuffer bound to it. A pass per
+    // level would be four identical VkRenderPass objects.
+    std::unique_ptr<rhi::RenderPass> m_bloom_rp;
     // The present-source variant is created lazily on first use: it needs the
     // swapchain extension, which a headless/CI device does not have — creating
     // it eagerly would fail vkCreateRenderPass there.
@@ -521,10 +715,16 @@ private:
     RGTextureHandle m_gbuffer1_handle = kInvalidRGHandle;
     RGTextureHandle m_gbuffer2_handle = kInvalidRGHandle;
     RGTextureHandle m_hdr_handle = kInvalidRGHandle;
+    // The bloom mip chain, level 0 = half resolution. Graph-owned so the graph
+    // transitions them, exactly like HDR; created at the same point in init/
+    // resize (BEFORE compile(), which is what materializes a graph texture) and
+    // sized from the render target, so a resize rebuilds them.
+    RGTextureHandle m_bloom_handles[kBloomLevels] = {};
 
     std::unique_ptr<rhi::TextureView> m_gbuffer0_view, m_gbuffer1_view;
     std::unique_ptr<rhi::TextureView> m_gbuffer2_view, m_gbuffer_depth_view;
     std::unique_ptr<rhi::TextureView> m_hdr_view;
+    std::unique_ptr<rhi::TextureView> m_bloom_views[kBloomLevels];
     std::unique_ptr<rhi::Sampler> m_sampler;
 
     // Framebuffers: depth-only, gbuffer, lighting, transparency, and one per
@@ -533,6 +733,7 @@ private:
     std::unique_ptr<rhi::Framebuffer> m_gbuffer_fb;
     std::unique_ptr<rhi::Framebuffer> m_lighting_fb;
     std::unique_ptr<rhi::Framebuffer> m_transparency_fb;
+    std::unique_ptr<rhi::Framebuffer> m_bloom_fbs[kBloomLevels];
     // Keyed by creation serial, NEVER by raw pointer: heap address reuse
     // across create/destroy cycles used to resurrect framebuffers whose image
     // views were long destroyed (invalid framebuffer + potential GPU hang).

@@ -193,6 +193,11 @@ std::string recent_store_path() {
     return p.string();
 }
 
+// Defined with the gallery table below; declared here because
+// create_project_in_shell() — which comes first — calls it.
+std::string selected_template_dir(int index, const char* templates_root,
+                                  std::string& out_error);
+
 // --- control ids -------------------------------------------------------------
 // Native controls are used only for text input (search, name, location);
 // navigation and cards are hit-tested manually so the shell stays a single
@@ -515,7 +520,18 @@ void on_create(HWND hwnd) {
 #ifndef NF_TEMPLATE_DIR
 #define NF_TEMPLATE_DIR ""
 #endif
-    so.template_dir = NF_TEMPLATE_DIR;
+    // The gallery card the user actually chose, resolved through the SAME
+    // allow-list the CLI uses. A placeholder or out-of-range index yields the
+    // Default template rather than a project with no scene to open.
+    std::string create_err;
+    so.template_dir = selected_template_dir(st->selected_template, NF_TEMPLATE_DIR,
+                                             create_err);
+    if (so.template_dir.empty()) {
+        // A named template whose folder is missing must not silently scaffold an
+        // empty project: say which template is broken and stop.
+        set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + create_err);
+        return;
+    }
     std::string perr;
     if (!nf::project::scaffold_project(so, perr)) {
         set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + perr);
@@ -533,6 +549,69 @@ void on_create(HWND hwnd) {
     st->result.quit = false;
     st->done = true;
     ::PostQuitMessage(0);
+}
+
+// Template gallery for New Project. The four shipped project templates
+// (Templates/Default, ThirdPerson, FPSStarter, Platformer2D) are REAL: `nf new
+// --template <name>` scaffolds each of them, and the three named genres below are
+// placeholders whose content has not been written. Placeholders stay visible but
+// disabled with a "soon" ribbon — the shape of the page is the design, and a card
+// that simply vanished would leave a hole in the grid.
+//
+// `template_name` is empty for a placeholder, and the create path then scaffolds
+// the Default tree, so a click on a disabled card cannot produce an empty
+// project. That matters: scaffolding with no template gives a Content/ with no
+// Main.nfscene, and the editor exits the moment it opens that.
+//
+// Declared here, above create_project_in_shell(), because that function reads it
+// to decide what to scaffold — the card the user picked is the whole point of the
+// gallery, and a table defined further down would leave the selection unused.
+struct TemplateInfo {
+    const char* name_key;
+    const char* desc_key; // one-line blurb painted in the card's title strip
+    int thumb; // index into LauncherState::thumbs, -1 = gradient block
+    bool enabled;
+    // Empty = a placeholder. Non-empty = the folder under NF_TEMPLATE_DIR that
+    // `nf new --template <name>` also accepts, so the gallery and the CLI cannot
+    // drift apart into offering different content.
+    const char* template_name;
+};
+constexpr TemplateInfo kTemplates[6] = {
+    {"sh_tpl_nature", "sh_tpl_nature_desc", 0, false, ""},
+    {"sh_tpl_platformer", "sh_tpl_platformer_desc", 1, true, "Platformer2D"},
+    {"sh_tpl_arena", "sh_tpl_arena_desc", 2, false, ""},
+    {"sh_tpl_side", "sh_tpl_side_desc", 0, true, "ThirdPerson"},
+    {"sh_tpl_blank", "sh_tpl_blank_desc", 2, true, "Default"},
+    {"sh_tpl_marine", "sh_tpl_marine_desc", 1, false, ""},
+};
+
+/// The template folder for gallery card `index`, or "" with `out_error` set.
+///
+/// Three cases, each falling back for a different reason:
+///
+///  - A real card   -> the folder named by the table, resolved through the CLI's
+///                     own allow-list so the two cannot drift.
+///  - A placeholder -> Default, because scaffolding with no template yields a
+///                     Content/ with no Main.nfscene and the editor exits on
+///                     opening it. A greyed-out card must never be able to
+///                     produce an unusable project.
+///  - Out of range  -> Default, for that reason and because it means the state
+///                     and the table have drifted apart.
+///
+/// `out_error` is set only when a NAMED template could not be resolved, which is
+/// a broken build (the folder is gone), not a user mistake.
+std::string selected_template_dir(int index, const char* templates_root,
+                                  std::string& out_error) {
+    out_error.clear();
+    const char* requested = "Default";
+    if (index >= 0 && index < static_cast<int>(std::size(kTemplates)) &&
+        kTemplates[index].enabled && kTemplates[index].template_name != nullptr &&
+        kTemplates[index].template_name[0] != '\0') {
+        requested = kTemplates[index].template_name;
+    }
+    const auto resolved = nf::project::resolve_project_template(
+        requested, std::filesystem::path(templates_root), {}, out_error);
+    return resolved.string();
 }
 
 // --- owner-draw painting -----------------------------------------------------
@@ -826,26 +905,6 @@ void open_url(const char* url) {
 // switching languages repaints the sidebar with zero extra work.
 constexpr const char* kNavKeys[6] = {"sh_nav_projects", "sh_nav_new", "sh_nav_learn",
                                      "sh_nav_store", "sh_nav_settings", "sh_nav_help"};
-
-// Template gallery for New Project. Only Blank Scene scaffolds today (the
-// Templates/Default tree); the rest are visible but disabled with a "soon"
-// ribbon rather than absent — the shape of the page is the design, the
-// catalogue arrives with the content.
-struct TemplateInfo {
-    const char* name_key;
-    const char* desc_key; // one-line blurb painted in the card's title strip
-    int thumb; // index into LauncherState::thumbs, -1 = gradient block
-    bool enabled;
-};
-constexpr TemplateInfo kTemplates[6] = {
-    {"sh_tpl_nature", "sh_tpl_nature_desc", 0, false},
-    {"sh_tpl_platformer", "sh_tpl_platformer_desc", 1, false},
-    {"sh_tpl_arena", "sh_tpl_arena_desc", 2, false},
-    {"sh_tpl_side", "sh_tpl_side_desc", 0, false},
-    {"sh_tpl_blank", "sh_tpl_blank_desc", 2, true},
-    {"sh_tpl_marine", "sh_tpl_marine_desc", 1, false},
-};
-
 
 // --- subclass for button hover ----------------------------------------------
 

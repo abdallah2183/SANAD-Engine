@@ -205,11 +205,11 @@ build\DebugNinja\bin\nf.exe
 nf build --project "C:\Users\<اسمك>\Documents\MyFirstGame\MyFirstGame.nfproj"
 ```
 
-**ماذا يحدث؟** ثلاث مراحل، وستراها مكتوبة:
+**ماذا يحدث؟** تُطبع أرقام تختلف حسب عدد أصول مشروعك؛ المهم أن `failed` يبقى `0`:
 
 ```
-Cook report: cooked 4, skipped 0, failed 0, pruned 0, total 4
-Packaged 21 file(s) (21 manifest entries), 12 shader(s)
+Cook report: cooked <عدد أصولك>, skipped 0, failed 0, pruned 0
+Packaged <عدد ملفات الحزمة> file(s) (<عدد entries> manifest entries), <عدد ملفات shader> shader(s)
 Output: C:\Users\<اسمك>\Documents\MyFirstGame\dist
 ```
 
@@ -217,14 +217,15 @@ Output: C:\Users\<اسمك>\Documents\MyFirstGame\dist
 - **Packaged** = جمع المشهد والأصول والشيدرز في مجلد واحد مكتمل.
 - **Output** = المجلد `dist\` — هذه هي لعبتك.
 
-**شغّل اللعبة:** افتح `dist\NFPlayer.exe` بنقرة مزدوجة. هذا المشغّل المستقل: لا محرّر،
-لا قوائم تحرير — لعبتك فقط.
+**شغّل اللعبة:** يمكنك فتح `dist\NFPlayer.exe` بنقرة مزدوجة، أو استخدم `nf run` للبناء
+والتشغيل معًا:
 
-> **ملاحظة صريحة:** هناك أمر مختصر `nf run` يفترض أن يبني ويشغّل في خطوة واحدة، لكنه
-> **معطوب حاليًا على ويندوز**: يُطلق المشغّل بعلامات اقتباس يرفضها النظام، فيفشل
-> بالرمز `1` دون تشغيل اللعبة. العِلّة مسجَّلة لدى الفريق المسؤول عن أداة سطر الأوامر
-> في `.workbuddy-ai/COORDINATION.md`. حتى تُصلَح، استخدم `nf build` ثم افتح
-> `dist\NFPlayer.exe` بنقرة مزدوجة — وهذا ما يعمل فعليًا اليوم.
+```bat
+nf run --project "C:\Users\<اسمك>\Documents\MyFirstGame\MyFirstGame.nfproj"
+```
+
+للفحص السريع بدون نافذة، أضف `--frames 60 --headless`. الأمر يستخدم تشغيل Windows
+مباشرًا، فلا تمرّ المسارات عبر `cmd.exe`، ويعيد رمز العملية نفسه إلى الطرفية.
 
 **لإنتاج نسخة قابلة للمشاركة** (ملف مضغوط + ملفات النسخة والترخيص):
 
@@ -276,34 +277,23 @@ MyFirstGame\
 
 ![قالب Platformer2D مفتوحًا في المحرّر](images/tut_05_platformer_ar.png)
 
-**كيف تُنشئ مشروعًا من أحد قوالب الألعاب اليوم؟** بطاقات القوالب في المشغّل ما زالت
-معلّمة `قريبًا`، لذا المسار الحالي هو نسخ محتوى القالب فوق مشروع جديد:
+**كيف تُنشئ مشروعًا من أحد قوالب الألعاب؟** استخدم `nf new` مع `--template` مباشرة.
+لا تحتاج إلى `xcopy`، ويختار الأمر القالب من قائمة مسموح بها صريحة:
 
 ```bat
 cd /d "%USERPROFILE%\Documents"
-"C:\<مجلد المحرّك>\build\DebugNinja\bin\nf.exe" new MyGame --name MyGame
-xcopy /E /I /Y "C:\<مجلد المحرّك>\Templates\ThirdPerson\Content" "MyGame\Content"
-"C:\<مجلد المحرّك>\build\DebugNinja\bin\nf.exe" build --project "MyGame\MyGame.nfproj"
+"C:\<مجلد المحرّك>\build\DebugNinja\bin\nf.exe" new MyGame --name MyGame --template ThirdPerson
+"C:\<مجلد المحرّك>\build\DebugNinja\bin\nf.exe" run --project "MyGame\MyGame.nfproj" --frames 60 --headless
 ```
 
-استبدل `ThirdPerson` بأي قالب من الجدول أعلاه، و`<مجلد المحرّك>` بمسار مجلد سند عندك.
-السطر الثالث ينسخ محتوى القالب **فوق** محتوى «مشهد فارغ» الذي أنشأه السطر الثاني،
-فيسجّل أصول القالب الصحيحة مكان السابقة.
+القيم المقبولة هي `Default` و`ThirdPerson` و`FPSStarter` و`Platformer2D`. أي اسم
+آخر — بما فيه مسار مثل `Templates/ThirdPerson` — يفشل بصوت واضح ولا يعود إلى
+`Default` تلقائيًا. بطاقات معرض المشغّل قد لا تعرض بعد القوالب الثلاثة، لكن مسار
+الأمر أعلاه هو طريق موثوق ومختبر.
 
-ثم افتح `MyGame\MyGame.nfproj` من المشغّل (`فتح ملف مشروع`). الزمن الكامل من أول أمر
-إلى لعبة تعمل: **نحو 12 ثانية** — مقيسة فعليًا على جهاز التطوير (إنشاء المشروع +
-نسخ القالب + المعالجة + الحزم + تشغيل 60 إطارًا من اللعبة = 12.2 ثانية). الأرقام
-الحقيقية لكل قالب:
-
-| القالب | الكيانات | ما يتحرّك | الصوت |
-|---|---|---|---|
-| ThirdPerson | 12 | مجسّمان دوّاران | مصدران، ذروة 0.32 |
-| FPSStarter | 15 | ثلاثة أهداف دوّارة | مصدران، ذروة 0.31 |
-| Platformer2D | 16 | خمسة (عملات، عدوّ، هدف) | مصدران، ذروة 0.30 |
-
-> **معلومة للمهتمّين بالمستقبل:** ربط بطاقات المعرض بهذه القوالب الثلاثة (وإضافة خيار
-> `--template` إلى `nf new`) مطلوب من الفريق المسؤول عن واجهة المشغّل وأداة سطر الأوامر،
-> ومسجَّل في `.workbuddy-ai/COORDINATION.md`. حتى ذلك الحين، المسار أعلاه هو المعتمد.
+اختبارات القوالب تُثبت إنشاء المشروع، والطبخ، والحزم، وتشغيل `NFPlayer` فعليًا
+لمدة 60 إطارًا مع الحركة والصوت. وهي لا تثبت بعد أن كل قالب يحتوي لعبة
+تفاعلية كاملة؛ لذلك لا تصفها الوثائق كأنها ألعاب نهائية.
 
 ---
 
@@ -312,15 +302,14 @@ xcopy /E /I /Y "C:\<مجلد المحرّك>\Templates\ThirdPerson\Content" "MyG
 | الاختصار | الوظيفة |
 |---|---|
 | `Ctrl+S` | حفظ المشهد |
-| `Ctrl+Shift+S` | حفظ المشهد باسم آخر |
-| `Ctrl+N` | مشهد جديد |
-| `Ctrl+O` | فتح مشهد |
 | `Ctrl+Z` | تراجع |
 | `Ctrl+Y` | إعادة |
-| `Ctrl+I` | استيراد مجسّم (glTF/GLB/OBJ) |
-| `Ctrl+E` | تصدير |
 | `Del` | حذف العنصر المحدَّد |
 | `W` / `E` / `R` | تبديل أداة التحريك: نقل / دوران / تحجيم |
+| `Escape` | إلغاء الإجراء الحالي |
+
+> اختصارات أخرى تظهر في بعض القوائم، لكنها ليست جزءًا من عقد Tutorial حتى يثبت
+> المسار الفعلي handler لها.
 
 ---
 
@@ -331,8 +320,8 @@ xcopy /E /I /Y "C:\<مجلد المحرّك>\Templates\ThirdPerson\Content" "MyG
 | المحرّر يفتح ثم يُغلق فورًا | المشروع بلا مشهد بداية | تأكّد أن `Content\Scenes\Main.nfscene` موجود، وأن `MyGame.nfproj` يشير إليه في `startup_scene` |
 | «`Structural edits are disabled while playing`» | أنت في وضع التشغيل | اضغط `إيقاف`، ثم عدّل |
 | الطرفية: «`drew no geometry`» أو مشهد فارغ في اللعبة | الأصول لم تُعالَج | نفّذ `nf build --project <مسار المشروع>` ثم شغّل `dist\NFPlayer.exe` |
-| `nf run` يخرج بالرمز `1` بلا رسالة من اللعبة | عِلّة معروفة في الاقتباس على ويندوز | استخدم `nf build` ثم افتح `dist\NFPlayer.exe` مباشرة |
-| `The filename, directory name, or volume label syntax is incorrect` | نفس العِلّة أعلاه | نفس الحل |
+| `nf run` يخرج بالرمز `1` | فشل البناء أو تشغيل `NFPlayer` | نفّذ `nf build` أولاً، ثم `nf run` من مجلد يحتوي `NFPlayer.exe` |
+| `The filename, directory name, or volume label syntax is incorrect` | مسار المشروع أو أداة `nf` غير موجود/غير صحيح | تحقق من المسار ومن أن البناء يستخدم `NF_BUILD_TOOLS=ON` |
 | `nf: unknown command` | خطأ إملائي في الأمر | `nf --help` يعرض الأوامر كلها |
 | «`a project already exists at …`» | المجلد يحتوي مشروعًا بالفعل | اختر اسمًا آخر، أو احذف ملف `.nfproj` القديم |
 | «`invalid project name`» | الاسم فيه `/` أو `\` أو `:` | استخدم حروفًا وأرقامًا وشرطات فقط |
@@ -385,9 +374,11 @@ xcopy /E /I /Y "C:\<مجلد المحرّك>\Templates\ThirdPerson\Content" "MyG
 أصبح لديك الآن كل ما تحتاجه لتصنع لعبتك:
 
 1. **غيّر المشهد حتى يعجبك** — أضف مجسّمات، أضف أضواء، جرّب السماء.
-2. **استورد مجسّماتك** — `Ctrl+I` يقبل صيغ glTF/GLB/OBJ. ولتصدير شخصية من Blender
-   بالضبط كما يتوقّعه سند، راجع `Docs/Blender_Pipeline.md` وإضافة التصدير في
-   `Templates/Blender/nf_gltf_export.py`.
+2. **استورد أصول glTF/GLB** — استخدم `NFModelImporter.exe --input Hero.glb --info` لفحص
+   الملف، و`--character` للتحقق الصارم من وجود mesh وskin ومقطعي حركة على الأقل
+   وmaterial. صيغة `.nfmesh` الحالية تحمل الهندسة فقط؛ لذلك لا ينشئ المحرك بعد شخصية
+   skinned كاملة من ملف Blender داخل المشهد. راجع `Docs/Blender_Pipeline.md` وإضافة
+   `Templates/Blender/nf_gltf_export.py`، ولا تعتمد على `Ctrl+I` لهذه الصيغ بعد.
 3. **أضف صوتًا وحركة** — المشهد الواحد يقبل كيانات صوتية وكيانات حركة معًا؛ القوالب
    الثلاثة أمثلة حيّة على ذلك.
 4. **شارك نتيجتك** — `nf package --shipping` ثم أرسل ملف `.zip`.

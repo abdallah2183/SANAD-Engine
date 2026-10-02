@@ -13,6 +13,7 @@ enum class AssetType : uint8_t {
     Scene = 3,
     Texture = 4,
     Material = 5,
+    Script = 6,
 };
 
 inline std::string to_string(AssetType type) {
@@ -22,6 +23,7 @@ inline std::string to_string(AssetType type) {
         case AssetType::Scene: return "Scene";
         case AssetType::Texture: return "Texture";
         case AssetType::Material: return "Material";
+        case AssetType::Script: return "Script";
         default: return "Unknown";
     }
 }
@@ -32,6 +34,7 @@ inline AssetType asset_type_from_string(const std::string& s) {
     if (s=="Scene") return AssetType::Scene;
     if (s=="Texture") return AssetType::Texture;
     if (s=="Material") return AssetType::Material;
+    if (s=="Script") return AssetType::Script;
     return AssetType::Unknown;
 }
 

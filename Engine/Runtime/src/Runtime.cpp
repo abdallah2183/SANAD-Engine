@@ -1,6 +1,7 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/BuiltinModules.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Runtime/SceneExtraction.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 #include <NF/Rendering/ImageDecode.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
@@ -13,8 +14,10 @@
 #include <NF/Rendering/Camera.hpp>
 #include <NF/Rendering/Culling.hpp>
 #include <NF/Rendering/RenderWorld.hpp>
+#include <NF/Rendering/TimeOfDay.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -68,6 +71,10 @@ Runtime::Runtime(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry
     m_material_library = std::make_unique<rendering::MaterialLibrary>(m_device);
     m_pipeline_cache = std::make_unique<rendering::PipelineCache>(m_device);
     m_renderer = std::make_unique<rendering::Renderer3D>();
+    m_scripts = std::make_unique<scripting::ScriptSystem>();
+    // Default open-field grid; games resize expectations through ai_world()
+    // (set_budget/set_tier_radii) or by replacing the population per scene.
+    m_ai_world = std::make_unique<ai::AIWorld>(32.0f, 8, 8);
 }
 
 Runtime::~Runtime() {
@@ -367,6 +374,9 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // failed, so the previous scene's verdicts must not carry over.
     m_failed_meshes.clear();
     m_failed_mesh_reports = 0;
+    // The next scene is allowed to overflow the light slots too, and saying so
+    // again is a fact about this scene, not a fact about the run.
+    m_local_light_warning_shown = false;
     // Assign display names to entities that have none (older scenes predate
     // NameComponent). Keeps the outliner meaningful without touching the file.
     {
@@ -380,8 +390,20 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
                 label = "Camera";
             } else if (world.has<DirectionalLight>(e)) {
                 label = "DirectionalLight";
+            } else if (world.has<PointLightComponent>(e)) {
+                label = "PointLight";
+            } else if (world.has<SpotLightComponent>(e)) {
+                label = "SpotLight";
             } else if (world.has<MeshComponent>(e)) {
                 label = "Mesh";
+            } else if (world.has<scripting::ScriptComponent>(e)) {
+                label = "Script";
+            } else if (world.has<vfx::ParticleComponent>(e)) {
+                label = "Particles";
+            } else if (world.has<physics::ClothComponent>(e)) {
+                label = "Cloth";
+            } else if (world.has<physics::CharacterComponent>(e)) {
+                label = "Character";
             } else {
                 label = "Entity " + std::to_string(e.id);
             }
@@ -391,6 +413,21 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // Build the physics world from the scene that was just loaded, so a scene
     // containing physics is live as soon as it opens.
     rebuild_physics_from_scene();
+    // Scripts: a fresh scene gets a fresh VM cache and its file-backed
+    // sources resolved from the VFS, so the previous scene's bytecode never
+    // serves the next one and a path-only component becomes runnable.
+    clear_script_cache();
+    m_script_updates = 0;
+    resolve_scene_scripts();
+    // Particles/cloth: live objects are per-scene artefacts like fracture
+    // assets — the previous scene's emitters and sheets do not carry over.
+    build_scene_particles();
+    build_scene_cloths();
+    // AI population is game-registered per scene; a previous scene's crowd
+    // must not govern the next one.
+    if (m_ai_world) {
+        m_ai_world->clear();
+    }
     // The previous scene's bindings and shards do not carry over. Assets stay
     // (the game registered them), but which entities are breakable and what is
     // flying around belongs to this scene.
@@ -506,14 +543,30 @@ void Runtime::update(float dt) {
     // state, so it needs no fixed clock. Runs after physics, so an entity that
     // carries both is driven by its animation.
     step_animation(dt);
+    // The day/night clock advances here, before the render extracts the light and
+    // sky, so a frame's sun is the one this frame's dt produced. Advancing it in
+    // render() instead would make the hour depend on how often the frame was
+    // drawn, which is not the same thing as how long it took.
+    advance_time_of_day(dt);
     // Audio mixes after the transforms are final for this frame, so a source on
     // a moving entity is spatialised where it will actually be rendered rather
     // than one frame behind.
     step_audio(dt);
-    // Gameplay runs last, so a module observes where this frame actually put
-    // everything, and before propagation, so whatever it writes is what gets
-    // rendered rather than a frame late.
+    // Gameplay runs after simulation, so a module observes where this frame
+    // actually put everything, and before propagation, so whatever it writes
+    // is what gets rendered rather than a frame late.
     step_gameplay(dt);
+    // Scripts run after gameplay and before destruction, so a script observes
+    // the same post-simulation world a module does, and damage it applies
+    // still spawns shards in the same frame.
+    step_script(dt);
+    // World-scale AI plans next: a plan only assigns tiers and grants, so a
+    // script that moved an actor this frame is already visible to it.
+    step_ai_world(dt);
+    // Particles and cloth simulate after decisions, before debris, so a burst
+    // or gust triggered this frame is already integrated when it renders.
+    step_particles(dt);
+    step_cloth(dt);
     // Debris simulates in its own Jolt world, after gameplay so a module that
     // applies damage this frame sees its shards spawn this frame. Shards are
     // posed by the Jolt world rather than by scene Transforms, so propagation
@@ -730,6 +783,13 @@ u32 Runtime::step_audio(float dt) {
     // silence, so anything non-zero afterwards is the scene's audio.
     m_audio_device->request_buffer(m_audio_left.data(), m_audio_right.data(), frames);
 
+    // One scene mixes the whole block, in the order AudioScene documents:
+    // begin_block sizes it, mix_emitter runs each source, finalize adds music,
+    // ambience, the reverb tail and the bus volumes onto the buffers above.
+    m_audio_scene.set_listener(m_audio_listener);
+    m_audio_scene.begin_block(frames, m_audio_device->sample_rate());
+
+    m_audio_emitter_seen.clear();
     for (auto e : world.query<audio::AudioComponent>()) {
         auto* comp = world.get<audio::AudioComponent>(e);
         if (comp == nullptr) {
@@ -754,27 +814,43 @@ u32 Runtime::step_audio(float dt) {
             position = Vec3(t->world_x, t->world_y, t->world_z);
         }
 
-        audio::AudioSource source;
-        source.buffer = buffer;
-        source.volume = comp->volume;
-        source.pitch = comp->pitch;
-        source.looping = comp->looping;
-        source.playing = true;
-        source.sample_cursor = comp->sample_cursor;
-        source.spatial = comp->spatial;
-        source.position = position;
-        source.spatial_settings = comp->spatial_settings;
+        // The emitter is persistent state, not a per-frame temporary: its
+        // cursors and its occlusion filter have to survive the frame or the
+        // playback position truncates every block and the muffle clicks.
+        audio::Emitter& emitter = m_audio_emitters[e];
+        emitter.buffer = buffer;
+        emitter.volume = comp->volume;
+        emitter.pitch = comp->pitch;
+        emitter.looping = comp->looping;
+        emitter.playing = true;
+        emitter.spatial = comp->spatial;
+        emitter.position = position;
+        emitter.spatial_settings = comp->spatial_settings;
+        emitter.occluded = comp->occluded;
+        emitter.bus = comp->bus;
 
-        m_audio_bus.mix_source(source, m_audio_listener.position, m_audio_listener.forward,
-                               m_audio_listener.up, m_audio_left.data(), m_audio_right.data(),
-                               frames, audio::kDefaultSampleRate);
+        m_audio_scene.mix_emitter(emitter);
+        m_audio_emitter_seen.push_back(e);
 
-        // The cursor is the one piece of playback state that has to survive the
-        // frame; everything else is re-derived from the component next time.
-        comp->sample_cursor = source.sample_cursor;
-        comp->playing = source.playing;
+        // Both cursor fields go back to the component. Persisting only
+        // sample_cursor would re-seek a rate-converted buffer to a truncated
+        // position every block and drift audibly away from where it should be.
+        comp->sample_cursor = emitter.sample_cursor;
+        comp->sample_position = emitter.sample_position;
+        comp->playing = emitter.playing;
         ++m_audio_sources_mixed;
     }
+
+    // Retire sources that stopped playing or lost their component, so the map
+    // tracks the scene instead of growing once per emitter ever created.
+    for (auto it = m_audio_emitters.begin(); it != m_audio_emitters.end();) {
+        const bool live =
+            std::find(m_audio_emitter_seen.begin(), m_audio_emitter_seen.end(),
+                      it->first) != m_audio_emitter_seen.end();
+        it = live ? std::next(it) : m_audio_emitters.erase(it);
+    }
+
+    m_audio_scene.finalize(m_audio_left.data(), m_audio_right.data());
 
     for (usize i = 0; i < frames; ++i) {
         m_audio_output_peak = std::max(m_audio_output_peak, std::abs(m_audio_left[i]));
@@ -874,7 +950,7 @@ gameplay::GameplayContext Runtime::build_gameplay_context(f32 dt) {
     ctx.frame   = m_gameplay_frame;
     ctx.playing = m_playing;
     ctx.input   = m_input_source;
-    ctx.audio   = &m_audio_bus;
+    ctx.audio   = &m_audio_scene;
     ctx.physics = m_physics.get();
     if (m_scene_data_ptr && m_scene_data_ptr->scene) {
         ctx.scene         = m_scene_data_ptr->scene.get();
@@ -988,6 +1064,226 @@ u32 Runtime::step_gameplay(float dt) {
     return stepped;
 }
 
+u32 Runtime::step_script(float dt) {
+    if (!m_scripts || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    // Count runnable scripts first so the counter stays meaningful even when
+    // every script is disabled or empty (0 stepped, but the call happened).
+    size_t runnable = 0;
+    for (auto e : world.query<scripting::ScriptComponent>()) {
+        const auto* comp = world.get<scripting::ScriptComponent>(e);
+        if (comp != nullptr && comp->enabled && !comp->source.empty()) {
+            ++runnable;
+        }
+    }
+    if (runnable == 0) {
+        return 0;
+    }
+    m_scripts->update(world, dt);
+    m_script_updates += runnable;
+    return static_cast<u32>(runnable);
+}
+
+size_t Runtime::script_count() const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    return m_scene_data_ptr->scene->world().query<scripting::ScriptComponent>().size();
+}
+
+size_t Runtime::scripts_runnable_count() const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    const auto& world = m_scene_data_ptr->scene->world();
+    size_t runnable = 0;
+    for (auto e : world.query<scripting::ScriptComponent>()) {
+        const auto* comp = world.get<scripting::ScriptComponent>(e);
+        if (comp != nullptr && comp->enabled && !comp->source.empty()) {
+            ++runnable;
+        }
+    }
+    return runnable;
+}
+
+void Runtime::clear_script_cache() {
+    if (m_scripts) {
+        m_scripts->clear_cache();
+    }
+}
+
+void Runtime::resolve_scene_scripts() {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<scripting::ScriptComponent>()) {
+        auto* comp = world.get<scripting::ScriptComponent>(e);
+        if (comp == nullptr || comp->path.empty() || !comp->source.empty()) {
+            continue;
+        }
+        auto bytes = m_vfs.read_bytes(comp->path);
+        if (!bytes.ok) {
+            NF_LOG_WARN(LogCategory::Core, "Runtime: script '{}' not found in VFS; the entity will run nothing",
+                        comp->path);
+            continue;
+        }
+        comp->source.assign(reinterpret_cast<const char*>(bytes.value.data()), bytes.value.size());
+    }
+}
+
+void Runtime::build_scene_particles() {
+    m_particles.clear();
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<vfx::ParticleComponent>()) {
+        const auto* comp = world.get<vfx::ParticleComponent>(e);
+        const auto* transform = world.get<scene::Transform>(e);
+        if (comp == nullptr || transform == nullptr || !comp->enabled) {
+            continue;
+        }
+        // The emitter follows its entity: the authored origin is the local
+        // offset, the transform is where it stands in the world.
+        vfx::EmitterConfig cfg = comp->config;
+        cfg.origin.x += transform->local_x;
+        cfg.origin.y += transform->local_y;
+        cfg.origin.z += transform->local_z;
+        m_particles.emplace(e, vfx::ParticleSystem(cfg));
+    }
+}
+
+void Runtime::build_scene_cloths() {
+    m_cloths.clear();
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<physics::ClothComponent>()) {
+        const auto* comp = world.get<physics::ClothComponent>(e);
+        const auto* transform = world.get<scene::Transform>(e);
+        if (comp == nullptr || transform == nullptr || !comp->enabled) {
+            continue;
+        }
+        // Sheet placement comes from the entity: the config's origin is kept
+        // as the authored local offset, exactly like particle emitters.
+        physics::ClothConfig cfg = comp->config;
+        cfg.origin.x += transform->local_x;
+        cfg.origin.y += transform->local_y;
+        cfg.origin.z += transform->local_z;
+        auto cloth = std::make_unique<physics::Cloth>(cfg);
+        m_cloths.emplace(e, std::move(cloth));
+    }
+}
+
+u32 Runtime::step_particles(float dt) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    u32 stepped = 0;
+    for (auto& [entity, system] : m_particles) {
+        if (!world.is_alive(entity)) {
+            continue;
+        }
+        const auto* comp = world.get<vfx::ParticleComponent>(entity);
+        const auto* transform = world.get<scene::Transform>(entity);
+        if (comp == nullptr || transform == nullptr || !comp->enabled) {
+            continue;
+        }
+        vfx::EmitterConfig cfg = comp->config;
+        cfg.origin.x += transform->local_x;
+        cfg.origin.y += transform->local_y;
+        cfg.origin.z += transform->local_z;
+        system.set_config(cfg);
+        system.update(dt);
+        ++stepped;
+    }
+    return stepped;
+}
+
+u32 Runtime::step_cloth(float dt) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    // Colliders are re-submitted every step: a collider driven by a rigid
+    // body moves, and the cloth module's contract is that moving colliders
+    // are re-submitted (its AABBs are hoisted at set_colliders time).
+    std::vector<physics::ClothCollider> colliders;
+    for (auto e : world.query<physics::ColliderComponent>()) {
+        const auto* col = world.get<physics::ColliderComponent>(e);
+        const auto* transform = world.get<scene::Transform>(e);
+        if (col == nullptr || transform == nullptr) {
+            continue;
+        }
+        physics::ClothCollider cc;
+        cc.shape = col->shape;
+        cc.position = Vec3(transform->local_x, transform->local_y, transform->local_z);
+        cc.orientation =
+            scene::quat_from_euler_xyz_degrees(transform->rot_x, transform->rot_y, transform->rot_z);
+        colliders.push_back(cc);
+    }
+    u32 stepped = 0;
+    for (auto& [entity, cloth] : m_cloths) {
+        if (cloth == nullptr || !world.is_alive(entity)) {
+            continue;
+        }
+        const auto* comp = world.get<physics::ClothComponent>(entity);
+        if (comp == nullptr || !comp->enabled) {
+            continue;
+        }
+        cloth->set_colliders(colliders);
+        cloth->step(dt);
+        ++stepped;
+    }
+    return stepped;
+}
+
+u32 Runtime::step_ai_world(float dt) {
+    if (!m_ai_world || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    m_ai_world->plan(dt);
+    u32 ticking = 0;
+    for (const ai::AIActor& actor : m_ai_world->actors()) {
+        if (m_ai_world->wants_tick(actor.id)) {
+            ++ticking;
+        }
+    }
+    return ticking;
+}
+
+size_t Runtime::particles_alive() const {
+    size_t alive = 0;
+    for (const auto& [entity, system] : m_particles) {
+        (void)entity;
+        alive += system.alive();
+    }
+    return alive;
+}
+
+bool Runtime::character_grounded(ecs::Entity e) const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false;
+    }
+    const auto* comp = m_scene_data_ptr->scene->world().get<physics::CharacterComponent>(e);
+    return comp != nullptr && comp->grounded;
+}
+
+const vfx::ParticleSystem* Runtime::particle_system(ecs::Entity e) const {
+    const auto it = m_particles.find(e);
+    return it != m_particles.end() ? &it->second : nullptr;
+}
+
+const physics::Cloth* Runtime::cloth(ecs::Entity e) const {
+    const auto it = m_cloths.find(e);
+    return (it != m_cloths.end()) ? it->second.get() : nullptr;
+}
+
 void Runtime::capture_gameplay_state() {
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) return;
     ecs::World& world = m_scene_data_ptr->scene->world();
@@ -1059,6 +1355,10 @@ void Runtime::enable_streaming(const std::string& chunk_dir_logical,
     (void)ecs::component_type_id<animation::AnimationComponent>();
     (void)ecs::component_type_id<audio::AudioComponent>();
     (void)ecs::component_type_id<gameplay::GameplayModuleComponent>();
+    (void)ecs::component_type_id<scripting::ScriptComponent>();
+    (void)ecs::component_type_id<vfx::ParticleComponent>();
+    (void)ecs::component_type_id<physics::ClothComponent>();
+    (void)ecs::component_type_id<physics::CharacterComponent>();
     m_streaming_chunk_dir = chunk_dir_logical;
     m_streaming_enabled = true;
     m_streamer.set_handlers(
@@ -1273,6 +1573,9 @@ void Runtime::resync_after_streaming() {
 }
 
 void Runtime::rebuild_physics_from_scene() {
+    // Controllers hold a raw PhysicsWorld pointer and body handles into it:
+    // they must die before the world they point at is replaced.
+    m_characters.clear();
     m_physics = std::make_unique<physics::PhysicsWorld>();
     m_physics_clock.reset();
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
@@ -1308,6 +1611,21 @@ void Runtime::rebuild_physics_from_scene() {
         desc.allow_sleep = rb->allow_sleep;
 
         rb->body = m_physics->add_body(desc);
+        ++created;
+    }
+    // Characters own a dynamic body each through their controller (spawn pose
+    // from the entity Transform, like rigid bodies above). An entity missing
+    // its Transform is left without a controller, same rule as bodies.
+    for (auto e : world.query<physics::CharacterComponent>()) {
+        auto* ch = world.get<physics::CharacterComponent>(e);
+        auto* transform = world.get<scene::Transform>(e);
+        if (ch == nullptr || transform == nullptr || !ch->enabled) {
+            continue;
+        }
+        const Vec3 spawn{transform->local_x, transform->local_y, transform->local_z};
+        auto controller =
+            std::make_unique<physics::CharacterController>(*m_physics, ch->config, spawn);
+        m_characters.emplace(e, std::move(controller));
         ++created;
     }
     if (created > 0) {
@@ -1892,8 +2210,45 @@ u32 Runtime::step_physics(float frame_delta) {
     }
 
     const u32 steps = m_physics_clock.advance(frame_delta);
+    // Character tick protocol (order matters): move() sets velocities, the
+    // world solves, post_step() refreshes grounded from the fresh manifolds.
+    // Sorted by handle so the sequence never depends on hash order.
+    std::vector<ecs::Entity> characters;
+    characters.reserve(m_characters.size());
+    for (const auto& [entity, controller] : m_characters) {
+        (void)controller;
+        characters.push_back(entity);
+    }
+    std::sort(characters.begin(), characters.end(), [](ecs::Entity a, ecs::Entity b) {
+        return (a.id != b.id) ? (a.id < b.id) : (a.generation < b.generation);
+    });
+    auto& world_for_characters = m_scene_data_ptr->scene->world();
     for (u32 i = 0; i < steps; ++i) {
-        m_physics->step(m_physics_clock.step());
+        const float h = m_physics_clock.step();
+        for (ecs::Entity e : characters) {
+            auto it = m_characters.find(e);
+            if (it == m_characters.end() || it->second == nullptr) {
+                continue;
+            }
+            if (!world_for_characters.is_alive(e)) {
+                continue;
+            }
+            const auto* comp = world_for_characters.get<physics::CharacterComponent>(e);
+            if (comp == nullptr || !comp->enabled) {
+                continue;
+            }
+            it->second->move(comp->wish_dir, comp->jump, h);
+        }
+        m_physics->step(h);
+        for (ecs::Entity e : characters) {
+            auto it = m_characters.find(e);
+            if (it == m_characters.end() || it->second == nullptr) {
+                continue;
+            }
+            if (world_for_characters.is_alive(e)) {
+                it->second->post_step();
+            }
+        }
     }
     if (steps == 0) {
         return 0;
@@ -1919,6 +2274,23 @@ u32 Runtime::step_physics(float frame_delta) {
 
         rb->linear_velocity = state.linear_velocity;
         rb->angular_velocity = state.angular_velocity;
+    }
+    // Characters write back the same way: physics owns the position, the
+    // transform follows, and grounded lands in the component for gameplay.
+    for (ecs::Entity e : characters) {
+        auto it = m_characters.find(e);
+        auto* comp = world.get<physics::CharacterComponent>(e);
+        auto* transform = world.get<scene::Transform>(e);
+        if (it == m_characters.end() || it->second == nullptr || comp == nullptr ||
+            transform == nullptr) {
+            continue;
+        }
+        const Vec3 pos = it->second->position();
+        transform->local_x = pos.x;
+        transform->local_y = pos.y;
+        transform->local_z = pos.z;
+        transform->dirty = true;
+        comp->grounded = it->second->grounded();
     }
     return steps;
 }
@@ -1976,6 +2348,56 @@ bool Runtime::extract_camera(uint32_t target_width, uint32_t target_height, rend
     return false;
 }
 
+void Runtime::advance_time_of_day(f32 dt) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene || dt <= 0.0f) {
+        return;
+    }
+    // Only the enabled component drives, matching the "first one wins" rule every
+    // other singleton component here follows (Sky, DirectionalLight). A scene
+    // with two would silently fight over the same clock.
+    auto& world = m_scene_data_ptr->scene->world();
+    TimeOfDayComponent* tod = find_time_of_day_mutable(world);
+    if (tod == nullptr) {
+        return;
+    }
+    // The clock is rebuilt from the component's authored state each frame rather
+    // than kept as a live object, so the value the scene holds and the value
+    // driving the render can never drift apart — there is only one of them. The
+    // component is the single source of truth, which is also why a save
+    // mid-cycle round-trips the exact hour.
+    rendering::TimeOfDay clock;
+    clock.set_time_hours(tod->time_hours);
+    clock.set_day_length_seconds(tod->day_length_seconds);
+    clock.advance(dt);
+    tod->time_hours = clock.time_hours();
+}
+
+const TimeOfDayComponent* Runtime::find_time_of_day(const ecs::World& world) {
+    // The enabled component, or null when the scene has none or has it switched
+    // off. One lookup shared by extract_light and extract_sky so the two cannot
+    // disagree about which clock — and therefore which hour — is in force.
+    for (auto e : world.query<TimeOfDayComponent>()) {
+        const auto* tod = world.get<TimeOfDayComponent>(e);
+        if (tod != nullptr && tod->enabled) {
+            return tod;
+        }
+    }
+    return nullptr;
+}
+
+TimeOfDayComponent* Runtime::find_time_of_day_mutable(ecs::World& world) {
+    // Same rule as the const overload, so the clock that advances is always the
+    // one that renders. Duplicated rather than const_cast on purpose: casting
+    // away constness here would be a lie about what advance_time_of_day does.
+    for (auto e : world.query<TimeOfDayComponent>()) {
+        auto* tod = world.get<TimeOfDayComponent>(e);
+        if (tod != nullptr && tod->enabled) {
+            return tod;
+        }
+    }
+    return nullptr;
+}
+
 void Runtime::extract_light() {
     if (!m_renderer || !m_renderer_initialized) {
         return;
@@ -1984,6 +2406,12 @@ void Runtime::extract_light() {
         return;
     }
     auto& world = m_scene_data_ptr->scene->world();
+    // A TimeOfDay component, when enabled and driving the light, supplies the sun
+    // instead of the authored DirectionalLight — but only its colour, intensity
+    // and direction. The shadow tuning stays the authored one: a scene that
+    // authored cascade count and shadow distance chose those for its own
+    // geometry, and a day/night cycle has no opinion about them.
+    const TimeOfDayComponent* tod = find_time_of_day(world);
     for (auto e : world.query<DirectionalLight>()) {
         const auto* l = world.get<DirectionalLight>(e);
         if (l == nullptr) {
@@ -1993,7 +2421,20 @@ void Runtime::extract_light() {
         rl.direction = {l->dir_x, l->dir_y, l->dir_z};
         rl.color = {l->color_r, l->color_g, l->color_b};
         rl.intensity = l->intensity;
-        rl.enabled = true;
+        if (tod != nullptr && tod->drive_light) {
+            rendering::TimeOfDay clock;
+            clock.set_time_hours(tod->time_hours);
+            clock.set_day_length_seconds(tod->day_length_seconds);
+            const rendering::DirectionalLight sun = clock.make_light();
+            rl.direction = sun.direction;
+            rl.color = sun.color;
+            rl.intensity = sun.intensity;
+            // The sun below the horizon must not light the scene from underneath.
+            // TimeOfDay already dims it toward moonlight; this stops the light
+            // itself entirely once the elevation is negative, which is what keeps
+            // a night scene from showing a shadow cast upward.
+            rl.enabled = clock.sun_elevation() > 0.0f;
+        }
         rl.shadows_enabled = l->cast_shadows;
         rl.shadow_strength = l->shadow_strength;
         rl.shadow_bias = l->shadow_bias;
@@ -2005,6 +2446,41 @@ void Runtime::extract_light() {
     // No light in the scene: keep the renderer's default directional light.
 }
 
+void Runtime::extract_local_lights() {
+    if (!m_renderer || !m_renderer_initialized) {
+        return;
+    }
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    const LocalLights lights = collect_local_lights(m_scene_data_ptr->scene->world());
+    // Cleared and refilled every frame. The renderer keeps lights in a slot
+    // array, so a light that vanished from the world has to be taken out of the
+    // array by putting the whole set back; and a per-frame rebuild is also what
+    // lets a lamp destroyed by gameplay or switched off in the inspector stop
+    // lighting the scene on the very next frame.
+    m_renderer->clear_point_lights();
+    m_renderer->clear_spot_lights();
+    for (const rendering::PointLight& pl : lights.points) {
+        m_renderer->add_point_light(pl);
+    }
+    for (const rendering::SpotLight& sl : lights.spots) {
+        m_renderer->add_spot_light(sl);
+    }
+    if (lights.dropped_points != 0 || lights.dropped_spots != 0) {
+        // Once per scene, not once per frame: this repeats every frame while the
+        // level author watches, and 90 identical lines a second buries the
+        // warning along with everything else in the log.
+        if (!m_local_light_warning_shown) {
+            m_local_light_warning_shown = true;
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: scene asks for {} more point and {} more spot light(s) than the "
+                        "renderer has slots for; those lights are not drawn this frame",
+                        lights.dropped_points, lights.dropped_spots);
+        }
+    }
+}
+
 void Runtime::extract_sky() {
     if (!m_renderer || !m_renderer_initialized) {
         return;
@@ -2013,6 +2489,18 @@ void Runtime::extract_sky() {
         return;
     }
     auto& world = m_scene_data_ptr->scene->world();
+    // An enabled TimeOfDay supplies the whole palette: the cycle exists to move
+    // the sky, and leaving the authored colours in place would make it drive the
+    // sun across a noon-blue sky — the one result that looks broken rather than
+    // merely wrong.
+    const TimeOfDayComponent* tod = find_time_of_day(world);
+    if (tod != nullptr) {
+        rendering::TimeOfDay clock;
+        clock.set_time_hours(tod->time_hours);
+        clock.set_day_length_seconds(tod->day_length_seconds);
+        m_renderer->set_sky(clock.make_sky());
+        return;
+    }
     for (auto e : world.query<SkyComponent>()) {
         const auto* s = world.get<SkyComponent>(e);
         if (s == nullptr) {
@@ -2030,6 +2518,45 @@ void Runtime::extract_sky() {
         return;
     }
     // No sky in the scene: keep the renderer's default sky.
+}
+
+void Runtime::extract_post_process() {
+    if (!m_renderer || !m_renderer_initialized) {
+        return;
+    }
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<PostProcessComponent>()) {
+        const auto* pp = world.get<PostProcessComponent>(e);
+        if (pp == nullptr) {
+            continue;
+        }
+        rendering::PostFxParams params;
+        params.bloom.enabled = pp->bloom_enabled;
+        params.bloom.threshold = pp->bloom_threshold;
+        params.bloom.knee = pp->bloom_knee;
+        params.bloom.intensity = pp->bloom_intensity;
+        params.bloom.radius = pp->bloom_radius;
+        params.grade.enabled = pp->grade_enabled;
+        params.grade.contrast = pp->grade_contrast;
+        params.grade.pivot = pp->grade_pivot;
+        params.grade.temperature = pp->grade_temperature;
+        params.grade.tint = pp->grade_tint;
+        params.grade.gamma = pp->grade_gamma;
+        params.sharpen.enabled = pp->sharpen_enabled;
+        params.sharpen.amount = pp->sharpen_amount;
+        params.sharpen.radius = pp->sharpen_radius;
+        params.saturation = pp->saturation;
+        params.vignette = pp->vignette;
+        m_renderer->set_postfx(params);
+        return;
+    }
+    // No post block in the scene: keep the renderer's neutral defaults. Not
+    // "reset to neutral" — a caller that configured the renderer directly
+    // (a sample) must not have that configuration erased by a scene that simply
+    // says nothing about post-processing.
 }
 
 void Runtime::build_render_world(rendering::RenderWorld& out) {
@@ -2063,11 +2590,15 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
         ro.transform.x = tr->world_x;
         ro.transform.y = tr->world_y;
         ro.transform.z = tr->world_z;
-        // Full TRS matrix: translation from the propagated world position,
-        // rotation/scale from the local transform.
-        ro.world = scene::compose_trs_mat4(tr->world_x, tr->world_y, tr->world_z, tr->rot_x,
-                                           tr->rot_y, tr->rot_z, tr->scale_x, tr->scale_y,
-                                           tr->scale_z);
+        // The FULL world matrix, from the propagated world pose — not
+        // world_pos with the LOCAL rotation and scale bolted on. Those agree
+        // for a root and disagree for a child: a prefab instance under a rotated
+        // parent was drawn with the parent's translation but the child's own
+        // unrotated-by-the-parent orientation, so the mesh visibly detached from
+        // its parent when the parent turned. world_matrix() is the one place a
+        // Transform becomes a matrix, so this path, extract_render_objects, the
+        // editor's bounds and the gizmo all agree.
+        ro.world = scene::world_matrix(*tr);
         ro.mesh_handle = it->second;
         // Shared material assignment: same path shares one renderer instance.
         ro.material_handle = material_for_path(mc->material);
@@ -2075,20 +2606,15 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
             ro.material_handle = m_default_material;
         }
         ro.lod = 0;
-        // World-space bounds for frustum culling (translation only).
-        ro.bounds = rendering::transform_aabb(mesh->bounds(), tr->world_x, tr->world_y, tr->world_z);
-        ro.sphere = rendering::transform_sphere(mesh->bounding_sphere(), tr->world_x, tr->world_y, tr->world_z);
-        // transform_sphere only translates. A scaled entity's geometry reaches
-        // farther from its origin than the authored radius claims, and every
-        // rejection test downstream (camera frustum AND shadow cascades) works
-        // on this sphere — an undersized radius would cull geometry the GPU
-        // would have drawn. Scaling the radius by the largest axis is exact for
-        // uniform scale and conservative (never under-covers) otherwise.
-        {
-            const float max_scale = std::max({std::abs(tr->scale_x), std::abs(tr->scale_y),
-                                              std::abs(tr->scale_z)});
-            ro.sphere.radius *= max_scale;
-        }
+        // World-space bounds for frustum culling, through the SAME matrix the
+        // draw uses. The previous translation-only box under-reported every
+        // rotated and scaled object, and both the camera frustum and the shadow
+        // cascades reject on it — so a scaled ground plane was culled while
+        // filling the screen. The matrix forms re-fit the AABB around the 8
+        // transformed corners and scale the sphere by the largest axis, both
+        // conservative: the volume can only grow, so nothing is wrongly dropped.
+        ro.bounds = rendering::transform_aabb(mesh->bounds(), ro.world);
+        ro.sphere = rendering::transform_sphere(mesh->bounding_sphere(), ro.world);
         out.objects.push_back(std::move(ro));
     }
     build_debris_render_world(out);
@@ -2160,7 +2686,9 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd, u32 frame_sl
     rendering::Camera cam{};
     extract_camera(w, h, cam);
     extract_light();
+    extract_local_lights();
     extract_sky();
+    extract_post_process();
     // Reused scratch: build_render_world clears it, so the per-object storage
     // survives frames instead of churning the heap each frame.
     build_render_world(m_render_world);
@@ -2239,7 +2767,9 @@ void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd, u3
     rendering::Camera cam{};
     extract_camera(w, h, cam);
     extract_light();
+    extract_local_lights();
     extract_sky();
+    extract_post_process();
     build_render_world(m_render_world);
     if (!m_renderer->render(cmd, m_render_world, cam, target, false, frame_slot)) {
         NF_LOG_ERROR(LogCategory::Core, "Runtime::render_offscreen: Renderer3D failed");

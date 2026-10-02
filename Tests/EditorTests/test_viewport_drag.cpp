@@ -367,6 +367,105 @@ NF_TEST(viewport_press_miss_clears_selection) {
     rhi::reset_validation_error_count();
 }
 
+// An AXIS-HANDLE drag (the arrows) is the gesture the user reports as
+// "forward works, backward doesn't". It is driven through the real app entry
+// point here — viewport_gizmo_press + viewport_drag — because the defect lived
+// in the axis-parameter mapping those two share, and no amount of pure
+// arithmetic coverage would have caught the reported asymmetry on its own.
+//
+// The camera is dragged in from a shallow angle so the ray and the axis are far
+// from perpendicular: that is the configuration where the old ray-parameter
+// scaled the two directions differently.
+NF_TEST(viewport_gizmo_axis_drag_is_symmetric) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+    rhi::reset_validation_error_count();
+
+    VirtualFileSystem vfs;
+    const auto tmp = temp_dir_for("nf_ed_axisdrag");
+    std::filesystem::create_directories(tmp / "Content" / "Scenes");
+    std::filesystem::create_directories(tmp / "Cache" / "Meshes");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    std::string err;
+    const ecs::Entity cube = setup_drag_scene(vfs, reg, manager, runtime, app, err);
+    NF_CHECK(cube.valid());
+
+    app.set_gizmo_mode(editor::GizmoMode::Translate);
+
+    // The default drag camera: on +Z looking down -Z. The X axis then lies in
+    // the plane of symmetry of the two opposite gestures, so a +/- NDC drag
+    // MUST produce equal and opposite world displacement. (An off-axis camera
+    // does not have this property — perspective makes the two NDC steps
+    // unequal in world space — which is why this fixture stays frontal.)
+    const editor::ViewCamera vc = drag_camera();
+
+    // The expected displacement, straight from the pure mapping: the axis
+    // parameter at the press ray and at the current ray. This is the number
+    // the app is supposed to apply, and asserting against it is what pins
+    // "axis parameter, not ray parameter" at the integration level.
+    auto expected_dx = [&vc](float ndc_x) {
+        const scene::Transform* t = nullptr;
+        (void)t;
+        float s_press = 0.0f, s_now = 0.0f;
+        const editor::Ray r0 = editor::pick_ray(vc, 0.0f, 0.0f);
+        const editor::Ray r1 = editor::pick_ray(vc, ndc_x, 0.0f);
+        if (!editor::gizmo_axis_param(r0, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, s_press) ||
+            !editor::gizmo_axis_param(r1, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, s_now)) {
+            return 0.0f;
+        }
+        return s_now - s_press;
+    };
+
+    // Select the cube, then grab the X arrow at the gizmo origin.
+    NF_CHECK(app.viewport_press(0.0f, 0.0f, vc, false, err));
+    NF_CHECK(app.selection().primary() == cube);
+    NF_CHECK(app.viewport_gizmo_press(editor::GizmoHandle::AxisX, 0.0f, 0.0f, vc, err));
+    NF_CHECK(app.gizmo_drag_handle() == editor::GizmoHandle::AxisX);
+
+    // Drag +0.2 NDC in x, release, remember how far it went.
+    NF_CHECK(app.viewport_drag(0.2f, 0.0f, vc, err));
+    const float forward = app.world()->get<scene::Transform>(cube)->local_x;
+    NF_CHECK(forward > 0.05f);
+    NF_CHECK(app.viewport_release(err));
+
+    // Now the same gesture the other way, from the same start.
+    NF_CHECK(app.undo(err));
+    NF_CHECK_NEAR(app.world()->get<scene::Transform>(cube)->local_x, 0.0f, 1e-5f);
+    NF_CHECK(app.viewport_press(0.0f, 0.0f, vc, false, err));
+    NF_CHECK(app.viewport_gizmo_press(editor::GizmoHandle::AxisX, 0.0f, 0.0f, vc, err));
+    NF_CHECK(app.viewport_drag(-0.2f, 0.0f, vc, err));
+    const float backward = app.world()->get<scene::Transform>(cube)->local_x;
+    NF_CHECK(backward < -0.05f);
+    NF_CHECK(app.viewport_release(err));
+
+    // The whole point: equal and opposite. The old mapping scaled each step by
+    // the angle between the ray and the axis, so the two disagreed by ~25% and
+    // the mismatch grew as the view turned away from the axis.
+    NF_CHECK_NEAR(forward, -backward, std::abs(forward) * 0.01f + 1e-4f);
+    // And the applied displacement IS the axis-parameter delta, exactly.
+    NF_CHECK_NEAR(forward, expected_dx(0.2f), 1e-4f);
+    NF_CHECK_NEAR(backward, expected_dx(-0.2f), 1e-4f);
+    // And the axis drag stays on X: no Y/Z leakage.
+    NF_CHECK_NEAR(app.world()->get<scene::Transform>(cube)->local_y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(app.world()->get<scene::Transform>(cube)->local_z, 0.0f, 1e-4f);
+
+    device.wait_idle();
+    runtime.shutdown();
+    manager.clear();
+    device.wait_idle();
+    std::filesystem::remove_all(tmp);
+    rhi::reset_validation_error_count();
+}
+
 NF_TEST(viewport_abort_restores_start_transform) {
     const GpuFixture& f = require_gpu();
     auto& device = *f.device;

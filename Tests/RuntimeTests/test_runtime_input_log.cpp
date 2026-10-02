@@ -18,6 +18,8 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Runtime/InputLog.hpp>
+#include <NF/Runtime/Application.hpp>
+#include <NF/Runtime/RunConfigResolver.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/Scene.hpp>
@@ -27,6 +29,7 @@
 #include <NF/Gameplay/GameplayModule.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -166,8 +169,347 @@ private:
 } // namespace
 
 // ---------------------------------------------------------------------------
-// The log itself
+// The CLI route: `--input-log` / `--replay` (G5 gap #2)
+//
+// Everything below drives the recorder and the replay through the C++ API.
+// That was the whole of the reachability problem: `InputLog`, `InputRecorder`,
+// `InputReplay`, `begin_input_capture()` and `play_input_log()` were all built,
+// documented and tested — and a *shipped game* could not touch any of them,
+// because no command-line flag led there. `PlayerController` polls an action and,
+// with no input source installed (which is every headless run), polls nothing and
+// does nothing. So "the player moved" could be asserted only from C++.
+//
+// These tests exercise the layer a game actually uses: a log file on disk, and
+// the validation that decides whether the run may start at all.
 // ---------------------------------------------------------------------------
+
+namespace {
+
+/// Write a log file holding `frames` frames that drive `move_x` at `value`, in
+/// the engine's own text form. Written by hand rather than by a recorder so the
+/// test does not depend on the very capture path it feeds.
+void write_move_log(const std::filesystem::path& file, int frames, float value) {
+    InputLog log;
+    for (int i = 0; i < frames; ++i) {
+        log.write("move_x", value);
+        log.seal(static_cast<u64>(i));
+    }
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    out << log.serialize();
+    out.close();
+}
+
+} // namespace
+
+NF_TEST(replay_flag_loads_a_log_file_from_disk) {
+    auto dir = std::filesystem::temp_directory_path() / "nf_replay_flag_load";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto log_file = dir / "session.nfinput";
+    write_move_log(log_file, 5, 1.0f);
+
+    ApplicationConfig cfg;
+    cfg.input_replay_path = log_file.string();
+
+    InputLog loaded;
+    ReplayProbe probe = ReplayProbe::NotConfigured;
+    std::string err;
+    NF_CHECK(prepare_input_replay(cfg, loaded, probe, err));
+    NF_CHECK(err.empty());
+    NF_CHECK(probe == ReplayProbe::Loaded);
+    NF_CHECK_EQ(loaded.frame_count(), 5u);
+    NF_CHECK_NEAR(loaded.value_at(0, "move_x"), 1.0f, 1e-6f);
+
+    std::filesystem::remove_all(dir);
+}
+
+NF_TEST(replay_flag_rejects_a_missing_file) {
+    auto dir = std::filesystem::temp_directory_path() / "nf_replay_flag_missing";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    ApplicationConfig cfg;
+    cfg.input_replay_path = (dir / "nope.nfinput").string();
+
+    InputLog loaded;
+    ReplayProbe probe = ReplayProbe::NotConfigured;
+    std::string err;
+    // Reported, not accepted: a run that silently replayed nothing would exit 0
+    // having demonstrated nothing at all.
+    NF_CHECK(!prepare_input_replay(cfg, loaded, probe, err));
+    NF_CHECK(probe == ReplayProbe::Unreadable);
+    NF_CHECK(err.find("--replay") != std::string::npos);
+
+    std::filesystem::remove_all(dir);
+}
+
+NF_TEST(replay_flag_distinguishes_an_empty_log_from_a_corrupt_one) {
+    auto dir = std::filesystem::temp_directory_path() / "nf_replay_flag_corrupt";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    // Both files are unusable and both must be refused, but they are different
+    // mistakes: one is "you pointed me at nothing", the other is "this is not a
+    // log". `deserialize` answers an empty log for both, so the distinction has
+    // to be made from the file's own bytes.
+    {
+        ApplicationConfig cfg;
+        cfg.input_replay_path = (dir / "empty.nfinput").string();
+        { std::ofstream(dir / "empty.nfinput", std::ios::binary); }
+
+        InputLog loaded;
+        ReplayProbe probe = ReplayProbe::NotConfigured;
+        std::string err;
+        NF_CHECK(!prepare_input_replay(cfg, loaded, probe, err));
+        NF_CHECK(probe == ReplayProbe::EmptyLog);
+        NF_CHECK(err.find("empty") != std::string::npos);
+    }
+    {
+        ApplicationConfig cfg;
+        cfg.input_replay_path = (dir / "corrupt.nfinput").string();
+        {
+            std::ofstream f(dir / "corrupt.nfinput", std::ios::binary);
+            // Frames out of order: deserialize refuses the whole log rather than
+            // replaying it at the wrong time.
+            f << "# NOVAForge InputLog v1\nframe_count: 2\n@0 a=1\n@5 b=2\n";
+        }
+
+        InputLog loaded;
+        ReplayProbe probe = ReplayProbe::NotConfigured;
+        std::string err;
+        NF_CHECK(!prepare_input_replay(cfg, loaded, probe, err));
+        NF_CHECK(probe == ReplayProbe::RejectedLog);
+        NF_CHECK(err.find("not a valid input log") != std::string::npos);
+    }
+
+    std::filesystem::remove_all(dir);
+}
+
+NF_TEST(recording_and_replaying_at_once_is_refused) {
+    // Recording a replay would log the replay back into itself. The recorder and
+    // the replay source are mutually exclusive by construction, so the
+    // combination is refused by name instead of one flag quietly winning.
+    ApplicationConfig cfg;
+    cfg.input_log_path = "out.nfinput";
+    cfg.input_replay_path = "in.nfinput";
+
+    InputLog loaded;
+    ReplayProbe probe = ReplayProbe::NotConfigured;
+    std::string err;
+    NF_CHECK(!prepare_input_replay(cfg, loaded, probe, err));
+    NF_CHECK(err.find("--input-log") != std::string::npos);
+    NF_CHECK(err.find("--replay") != std::string::npos);
+}
+
+NF_TEST(no_replay_flags_is_a_valid_configuration) {
+    // The overwhelmingly common case must keep working, and must not be treated
+    // as "a replay was requested and found nothing".
+    ApplicationConfig cfg;
+
+    InputLog loaded;
+    ReplayProbe probe = ReplayProbe::Loaded;  // wrong on purpose; must be overwritten
+    std::string err = "untouched";
+    NF_CHECK(prepare_input_replay(cfg, loaded, probe, err));
+    NF_CHECK(probe == ReplayProbe::NotConfigured);
+    NF_CHECK(err == "untouched");
+    NF_CHECK_EQ(loaded.frame_count(), 0u);
+}
+
+NF_TEST(a_log_from_disk_drives_the_entity_through_a_fresh_runtime) {
+    // The end-to-end claim: a file on disk, with no input source installed at
+    // all, moves an entity. This is the assertion the gap prevented — before the
+    // CLI route only a C++ host could produce it, and a packaged game could not
+    // demonstrate its own gameplay at all.
+    InputHarness harness("replay_from_file");
+    if (!harness.ready()) {
+        NF_SKIP("no Vulkan device available");
+    }
+    harness.write_scene("content://Scenes/Input.nfscene");
+
+    auto dir = std::filesystem::temp_directory_path() / "nf_replay_from_file";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto log_file = dir / "drive.nfinput";
+    // 60 frames at axis 1.0 with dt 1/60 = one full unit of travel.
+    write_move_log(log_file, 60, 1.0f);
+
+    ApplicationConfig cfg;
+    cfg.input_replay_path = log_file.string();
+
+    InputLog loaded;
+    ReplayProbe probe = ReplayProbe::NotConfigured;
+    std::string err;
+    NF_CHECK(prepare_input_replay(cfg, loaded, probe, err));
+    NF_CHECK(probe == ReplayProbe::Loaded);
+
+    Runtime& rt = harness.rt();
+    auto module = std::make_unique<MoverModule>();
+    MoverModule* mover = module.get();
+    rt.add_gameplay_module(std::move(module));
+    rt.set_playing(true);
+
+    std::string load_err;
+    NF_CHECK(rt.load_scene("content://Scenes/Input.nfscene", load_err));
+
+    // No set_input_source() call anywhere: the replay IS the input source, which
+    // is the whole point on a headless run where no keyboard exists.
+    NF_CHECK(rt.input_source() == nullptr);
+    rt.play_input_log(loaded);
+    NF_CHECK(rt.input_replay_active());
+    NF_CHECK(rt.input_source() != nullptr);
+
+    for (int i = 0; i < 60; ++i) {
+        rt.update(1.0f / 60.0f);
+    }
+
+    // The module polled "move_x" and got the recorded value, so the entity moved.
+    // A log that parsed but never reached the simulation would leave this at 0.
+    NF_CHECK_NEAR(mover->last_read(), 1.0f, 1e-6f);
+    const ecs::World& w = rt.edit_scene()->world();
+    const scene::Transform* t = w.get<scene::Transform>(mover->entity());
+    NF_CHECK(t != nullptr);
+    if (t != nullptr) {
+        NF_CHECK_NEAR(t->local_x, 1.0f, 1e-3f);
+    }
+
+    rt.stop_input_replay();
+    NF_CHECK(!rt.input_replay_active());
+    // Unwinding must restore the source that was live before — here, none.
+    NF_CHECK(rt.input_source() == nullptr);
+
+    std::filesystem::remove_all(dir);
+}
+
+NF_TEST(a_replay_advances_the_module_against_the_frame_index) {
+    // The log is a timeline, not a soup of inputs: frame 5 of the run must be
+    // answered by frame 5 of the log. Serving the last frame forever, or always
+    // serving frame 0, would both "work" in the sense of producing movement while
+    // being a completely wrong replay.
+    InputHarness harness("replay_timeline");
+    if (!harness.ready()) {
+        NF_SKIP("no Vulkan device available");
+    }
+    harness.write_scene("content://Scenes/Input.nfscene");
+
+    InputLog log;
+    log.write("move_x", 1.0f);
+    log.seal(0);
+    log.write("move_x", 0.0f);
+    log.seal(1);
+    log.write("move_x", -1.0f);
+    log.seal(2);
+
+    Runtime& rt = harness.rt();
+    auto module = std::make_unique<MoverModule>();
+    MoverModule* mover = module.get();
+    rt.add_gameplay_module(std::move(module));
+    rt.set_playing(true);
+
+    std::string load_err;
+    NF_CHECK(rt.load_scene("content://Scenes/Input.nfscene", load_err));
+    rt.play_input_log(log);
+
+    rt.update(1.0f / 60.0f);
+    NF_CHECK_NEAR(mover->last_read(), 1.0f, 1e-6f);
+    rt.update(1.0f / 60.0f);
+    NF_CHECK_NEAR(mover->last_read(), 0.0f, 1e-6f);
+    rt.update(1.0f / 60.0f);
+    NF_CHECK_NEAR(mover->last_read(), -1.0f, 1e-6f);
+    // Past the end the last recorded frame is held, never invented input.
+    rt.update(1.0f / 60.0f);
+    NF_CHECK_NEAR(mover->last_read(), -1.0f, 1e-6f);
+
+    rt.stop_input_replay();
+}
+
+NF_TEST(a_recorded_log_replays_to_the_same_place_it_was_recorded) {
+    // The property the whole subsystem exists for: record a session, then prove a
+    // second run of a freshly loaded scene ends in the same place. If the file
+    // route lost anything, this is where it would show — and unlike the tests
+    // above it covers the round trip through disk, which is the shipped path.
+    InputHarness harness("replay_determinism");
+    if (!harness.ready()) {
+        NF_SKIP("no Vulkan device available");
+    }
+    harness.write_scene("content://Scenes/Input.nfscene");
+
+    auto dir = std::filesystem::temp_directory_path() / "nf_replay_determinism";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto log_file = dir / "session.nfinput";
+
+    float recorded_x = 0.0f;
+
+    // --- Session one: a scripted source, recorded to a file on disk. ---------
+    {
+        ScriptedInput scripted;
+        scripted.axis("move_x", 0.75f);
+
+        Runtime& rt = harness.rt();
+        auto module = std::make_unique<MoverModule>();
+        MoverModule* mover = module.get();
+        rt.add_gameplay_module(std::move(module));
+        rt.set_playing(true);
+
+        std::string load_err;
+        NF_CHECK(rt.load_scene("content://Scenes/Input.nfscene", load_err));
+        rt.set_input_source(&scripted);
+        rt.begin_input_capture();
+        NF_CHECK(rt.input_capture_active());
+
+        for (int i = 0; i < 30; ++i) {
+            rt.update(1.0f / 60.0f);
+        }
+        const InputLog recorded = rt.end_input_capture();
+        NF_CHECK(!rt.input_capture_active());
+        // "Nothing was polled" is itself a recordable frame, so a module that
+        // reads nothing still produces a 30-frame log rather than an empty one.
+        NF_CHECK_EQ(recorded.frame_count(), 30u);
+
+        const ecs::World& w = rt.edit_scene()->world();
+        const scene::Transform* t = w.get<scene::Transform>(mover->entity());
+        NF_CHECK(t != nullptr);
+        recorded_x = t != nullptr ? t->local_x : 0.0f;
+
+        { std::ofstream f(log_file, std::ios::binary | std::ios::trunc); f << recorded.serialize(); }
+    }
+
+    // --- Session two: fresh scene, replay from that file. --------------------
+    {
+        ApplicationConfig cfg;
+        cfg.input_replay_path = log_file.string();
+        InputLog loaded;
+        ReplayProbe probe = ReplayProbe::NotConfigured;
+        std::string err;
+        NF_CHECK(prepare_input_replay(cfg, loaded, probe, err));
+        NF_CHECK(probe == ReplayProbe::Loaded);
+
+        Runtime& rt2 = harness.rt();
+        auto module2 = std::make_unique<MoverModule>();
+        MoverModule* mover2 = module2.get();
+        rt2.add_gameplay_module(std::move(module2));
+        rt2.set_playing(true);
+        std::string load_err;
+        NF_CHECK(rt2.load_scene("content://Scenes/Input.nfscene", load_err));
+        rt2.play_input_log(loaded);
+        for (int i = 0; i < 30; ++i) {
+            rt2.update(1.0f / 60.0f);
+        }
+
+        const ecs::World& w2 = rt2.edit_scene()->world();
+        const scene::Transform* t2 = w2.get<scene::Transform>(mover2->entity());
+        NF_CHECK(t2 != nullptr);
+        if (t2 != nullptr) {
+            // 0.75 * 30 frames * 1/60 s = 0.375, and the same twice: the replay
+            // landed exactly where the recording did.
+            NF_CHECK_NEAR(t2->local_x, recorded_x, 1e-6f);
+            NF_CHECK_NEAR(t2->local_x, 0.375f, 1e-4f);
+        }
+        rt2.stop_input_replay();
+    }
+
+    std::filesystem::remove_all(dir);
+}
 
 NF_TEST(an_input_log_round_trips_through_text_unchanged) {
     InputLog log;

@@ -115,6 +115,93 @@ NF_TEST(music_mixes_base_volume_times_envelope_and_loops) {
     }
 }
 
+NF_TEST(music_preserves_stereo_channels) {
+    AudioBuffer buffer;
+    buffer.channels = 2;
+    buffer.sample_rate = 44100;
+    buffer.samples = {0.25f, -0.5f, 0.75f, -1.0f};
+
+    MusicSystem music;
+    music.play(track_of(buffer, 1.0f), 0.0f);
+    std::vector<f32> left(2, 0.0f);
+    std::vector<f32> right(2, 0.0f);
+    music.mix_music(left.data(), right.data(), 2, buffer.sample_rate);
+
+    NF_CHECK_NEAR(left[0], 0.25f, 1e-6f);
+    NF_CHECK_NEAR(right[0], -0.5f, 1e-6f);
+    NF_CHECK_NEAR(left[1], 0.75f, 1e-6f);
+    NF_CHECK_NEAR(right[1], -1.0f, 1e-6f);
+}
+
+NF_TEST(music_resamples_differing_source_rate_without_pitch_or_duration_shift) {
+    AudioBuffer buffer;
+    buffer.channels = 1;
+    buffer.sample_rate = 96000;
+    buffer.samples = {0.0f, 1.0f, 2.0f, 3.0f, 4.0f,
+                      5.0f, 6.0f, 7.0f, 8.0f, 9.0f};
+
+    MusicSystem music;
+    music.play(track_of(buffer, 1.0f), 0.0f);
+    std::vector<f32> left(5, 0.0f);
+    std::vector<f32> right(5, 0.0f);
+    music.mix_music(left.data(), right.data(), 5, 48000);
+
+    // Ten source frames at 96 kHz become five output frames at 48 kHz: the
+    // same real duration, not a 0.5x-speed pitch drop.
+    for (usize i = 0; i < left.size(); ++i) {
+        NF_CHECK_NEAR(left[i], static_cast<f32>(i * 2), 1e-6f);
+        NF_CHECK_NEAR(right[i], static_cast<f32>(i * 2), 1e-6f);
+    }
+}
+
+NF_TEST(music_resampling_stays_continuous_across_blocks) {
+    AudioBuffer buffer;
+    buffer.channels = 1;
+    buffer.sample_rate = 48000;
+    buffer.samples.resize(96);
+    for (usize i = 0; i < buffer.samples.size(); ++i) {
+        buffer.samples[i] = static_cast<f32>(i) / 95.0f;
+    }
+
+    constexpr usize kOutputFrames = 44;
+    constexpr usize kSplit = 22;
+    const auto mix = [&](MusicSystem& system, usize first, usize second,
+                         usize frames, u32 rate) {
+        std::vector<f32> left(frames, 0.0f);
+        std::vector<f32> right(frames, 0.0f);
+        system.mix_music(left.data(), right.data(), first, rate);
+        std::vector<f32> more(second, 0.0f);
+        std::vector<f32> more_right(second, 0.0f);
+        system.mix_music(more.data(), more_right.data(), second, rate);
+        left.insert(left.end(), more.begin(), more.end());
+        right.insert(right.end(), more_right.begin(), more_right.end());
+        return left;
+    };
+
+    MusicSystem one_block;
+    one_block.play(track_of(buffer, 1.0f), 0.0f);
+    const std::vector<f32> whole = [&] {
+        std::vector<f32> left(kOutputFrames, 0.0f);
+        std::vector<f32> right(kOutputFrames, 0.0f);
+        one_block.mix_music(left.data(), right.data(), kOutputFrames, 44100);
+        return left;
+    }();
+
+    MusicSystem split_blocks;
+    split_blocks.play(track_of(buffer, 1.0f), 0.0f);
+    const std::vector<f32> split = mix(split_blocks, kSplit,
+                                       kOutputFrames - kSplit, kSplit, 44100);
+    NF_CHECK_EQ(whole.size(), split.size());
+    // The exact source clock, not an integer one-sample-per-output step:
+    // output frame 11 interpolates between source frames 11 and 12.
+    const f32 expected_at_11 = static_cast<f32>(
+        (11.0 * 48000.0 / 44100.0) / 95.0);
+    NF_CHECK_NEAR(whole[11], expected_at_11, 1e-6f);
+    for (usize i = 0; i < whole.size(); ++i) {
+        NF_CHECK_NEAR(split[i], whole[i], 1e-6f);
+    }
+}
+
 NF_TEST(music_envelope_scales_what_is_mixed) {
     const AudioBuffer buffer = make_constant(1.0f, 64);
     MusicSystem music;
@@ -264,6 +351,30 @@ NF_TEST(ambience_fades_in_to_full_and_mixes_independently_of_music) {
     for (f32 v : music_left) {
         NF_CHECK_NEAR(v, 0.0f, 1e-9f);
     }
+}
+
+NF_TEST(ambience_preserves_stereo_channels) {
+    AudioBuffer bed;
+    bed.channels = 2;
+    bed.sample_rate = 48000;
+    bed.samples = {0.1f, 0.9f, -0.2f, 0.4f};
+
+    MusicSystem music;
+    music.set_ambience(&bed, 0.0f);
+    std::vector<f32> left(2, 0.0f);
+    std::vector<f32> right(2, 0.0f);
+    music.mix_ambience(left.data(), right.data(), 2, 44100);
+
+    // Linear 48 kHz -> 44.1 kHz conversion must not collapse the right lane.
+    NF_CHECK_NEAR(left[0], 0.1f, 1e-6f);
+    NF_CHECK_NEAR(right[0], 0.9f, 1e-6f);
+    const f64 step = 48000.0 / 44100.0;
+    const f32 expected_left = static_cast<f32>(
+        -0.2 + (0.1 - -0.2) * (step - 1.0));
+    const f32 expected_right = static_cast<f32>(
+        0.4 + (0.9 - 0.4) * (step - 1.0));
+    NF_CHECK_NEAR(left[1], expected_left, 1e-6f);
+    NF_CHECK_NEAR(right[1], expected_right, 1e-6f);
 }
 
 NF_TEST(ambience_clear_fades_out_over_the_requested_time) {

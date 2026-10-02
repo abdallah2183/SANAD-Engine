@@ -1,9 +1,30 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace nf::project {
+
+/// The only project templates `nf new` may select. Names are case-sensitive;
+/// keeping this as an allow-list makes path traversal and accidental fallback
+/// impossible by construction.
+inline constexpr std::array<std::string_view, 4> kProjectTemplateNames{
+    "Default", "ThirdPerson", "FPSStarter", "Platformer2D"};
+
+/// Human-readable valid-name list used in CLI errors and help-facing callers.
+std::string project_template_name_list();
+
+/// Resolves one explicitly requested template name beneath `templates_root`.
+/// An empty name preserves the no-flag path and returns `default_template_dir`
+/// unchanged. Unknown names (including paths and differently-cased names) fail;
+/// they never resolve to Default.
+std::filesystem::path resolve_project_template(std::string_view name,
+                                               const std::filesystem::path& templates_root,
+                                               const std::filesystem::path& default_template_dir,
+                                               std::string& out_error);
 
 struct ScaffoldOptions {
     std::filesystem::path root;         // directory to create the project in

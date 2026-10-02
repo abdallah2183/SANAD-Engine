@@ -72,6 +72,11 @@ add_executable(RHITests
     RHITests/test_timeofday.cpp
     RHITests/test_terrain.cpp
     RHITests/test_postfx_shake.cpp
+    # The §206 post stack: bloom chain, colour grade, sharpen. CPU mirrors for
+    # every stage (so the maths, the neutral values and the stage ORDER are
+    # pinned without a GPU) plus three GPU tests that assert the chain is
+    # recorded and that its result reaches the pixels.
+    RHITests/test_post_stack.cpp
     # Pure arithmetic (splits, fit, tiling, bias) over NFRendering's cascade
     # math, so it runs without a GPU — the one suite that proves the committed
     # CSM work, which had been sitting unregistered and unrun.
@@ -101,7 +106,7 @@ target_compile_definitions(RHITests PRIVATE
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(RHITests NFTriangleShaders NFQuadShaders NFRHIPushShaders
         NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders
-        NFBasic3DPickShaders)
+        NFBasic3DBloomShaders NFBasic3DPickShaders)
 endif()
 
 add_executable(AssetTests
@@ -113,6 +118,7 @@ add_executable(AssetTests
     AssetTests/test_project_cooker.cpp
     AssetTests/test_gltf_import.cpp
     AssetTests/test_gltf_character_import.cpp
+    AssetTests/test_mesh_import.cpp
 )
 target_include_directories(AssetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AssetTests PRIVATE NFCore NFAssets NFRHI NFRendering NFProjectTool)
@@ -127,6 +133,11 @@ add_executable(RuntimeTests
     RuntimeTests/test_run_config.cpp
     RuntimeTests/test_runtime_streaming.cpp
     RuntimeTests/test_runtime_sky.cpp
+    # The §206 post stack as scene data: the `PostProcess:` line round-trips, an
+    # absent component writes no line, and the runtime really pushes the block
+    # into the renderer (the integration half, without which the component is a
+    # library nobody drives).
+    RuntimeTests/test_runtime_post_process.cpp
     RuntimeTests/test_runtime_audio_import.cpp
     # The Rule 0 file: destruction's arithmetic world (DestructionTests) and its
     # Jolt sink (PhysicsTests) are both unit-tested in isolation. This one proves
@@ -147,9 +158,17 @@ add_executable(RuntimeTests
     # freshly loaded scene with no live input, lands the entity in the same
     # place — which only Runtime::update() can show.
     RuntimeTests/test_runtime_input_log.cpp
+    # Phase 24: Lua reachability from a scene. ScriptSystem is unit-tested in
+    # isolation; this file proves a `Script:` line is resolved and stepped by
+    # update() with no game code driving the seam.
+    RuntimeTests/test_runtime_scene_script.cpp
+    # Phase 25: the wired systems. Particles, cloth, the character mover and
+    # the AI budget are unit-tested in isolation; this file proves a scene
+    # that merely declares them is built and stepped by update().
+    RuntimeTests/test_runtime_scene_systems.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio)
+target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI)
 nf_target_set_warnings(RuntimeTests)
 
 # --- Physics tests (shapes, broadphase, narrowphase, solver, determinism) ---
@@ -197,6 +216,7 @@ add_executable(AudioTests
     AudioTests/test_audio.cpp
     AudioTests/test_audio_backend.cpp
     AudioTests/test_audio_buses.cpp
+AudioTests/test_audio_game_settings.cpp
     AudioTests/test_audio_decode.cpp
     AudioTests/test_audio_music.cpp
     AudioTests/test_audio_occlusion.cpp
@@ -248,9 +268,17 @@ add_executable(UITests
     UITests/test_arabic.cpp
     UITests/test_localization.cpp
     UITests/test_gameui.cpp
+    UITests/test_font_packaging.cpp
 )
 target_include_directories(UITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(UITests PRIVATE NFCore NFUI)
+# The editor's Arabic companion font, so the test can assert the file EXISTS and
+# resolves. A packaged build that ships without it renders its whole UI as tofu,
+# which no other test in the suite can see.
+target_compile_definitions(UITests PRIVATE
+    "NF_FONT_DIR=\"${CMAKE_SOURCE_DIR}/Resources/fonts\""
+    "NF_FONT_FILE=\"Amiri-Regular.ttf\""
+)
 nf_target_set_warnings(UITests)
 
 # --- Platform tests (input recording/playback; window tests stay manual) ---
@@ -400,8 +428,10 @@ add_executable(ToolTests
     ToolTests/test_project_scaffold.cpp
     ToolTests/test_project_packager.cpp
     ToolTests/test_shipping.cpp
+    ToolTests/test_build_tool.cpp
     ToolTests/test_model_importer_cli.cpp
     ToolTests/test_blender_preset.cpp
+    ToolTests/test_script_assets.cpp
     # G7: the three game templates must scaffold into a project that actually
     # loads and plays, not just one that copies files.
     ToolTests/test_templates.cpp
@@ -426,8 +456,11 @@ if(NF_BUILD_TOOLS)
     # the tree after Tests, so the path is a generator expression (resolved at
     # generate time, when NFPlayer exists) and the build-order dependency is
     # deferred to the end of the source tree.
-    target_compile_definitions(ToolTests PRIVATE "NF_PLAYER_EXE=\"$<TARGET_FILE:NFPlayer>\"")
-    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL add_dependencies ToolTests NFPlayer)
+    target_compile_definitions(ToolTests PRIVATE
+        "NF_PLAYER_EXE=\"$<TARGET_FILE:NFPlayer>\""
+        # test_build_tool.cpp exercises the real template selector and nf run path.
+        "NF_CLI_EXE=\"$<TARGET_FILE:nf>\"")
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL add_dependencies ToolTests NFPlayer nf)
     # test_model_importer_cli.cpp launches NFModelImporter, same pattern.
     target_compile_definitions(ToolTests PRIVATE
         "NF_MODEL_IMPORTER_EXE=\"$<TARGET_FILE:NFModelImporter>\"")
@@ -436,7 +469,7 @@ endif()
 if(NF_GLSLC_EXECUTABLE)
     # The packager copies these, so they must exist before the tests run.
     add_dependencies(ToolTests NFBasic3DDepthShaders NFBasic3DGBufferShaders
-        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DPickShaders)
+        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DPickShaders)
 endif()
 
 # --- Editor tests (window-independent editor logic + headless GPU viewport) ---
@@ -453,6 +486,8 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_playmode.cpp
         EditorTests/test_viewport.cpp
         EditorTests/test_viewport_drag.cpp
+        EditorTests/test_view_framing.cpp
+        EditorTests/test_imgui_id_uniqueness.cpp
         EditorTests/test_console.cpp
         EditorTests/test_ui_render.cpp
         EditorTests/test_materials.cpp
@@ -469,11 +504,20 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_profiler_session.cpp
         EditorTests/test_project_launcher.cpp
         EditorTests/test_editor_finishing.cpp
+        EditorTests/test_script_editor.cpp
+        EditorTests/test_wiring_editor.cpp
+        EditorTests/test_ide_open.cpp
+        EditorTests/test_transform_gizmo.cpp
     )
     target_include_directories(EditorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering NFGameplay NFUI)
+    target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering NFGameplay NFScripting NFVfx NFUI)
     target_compile_definitions(EditorTests PRIVATE
         "NF_EDITOR_IMGUI_SHADER_DIR=\"${NF_EDITOR_IMGUI_SHADER_DIR}\""
+        # For the ImGui duplicate-ID lint. It reads the panel sources because a
+        # duplicate ID is only observable at runtime with a GPU, a live EditorApp
+        # and a real window — which is exactly why one shipped and reached a
+        # user as a modal error popup instead of a failing test.
+        "NF_EDITOR_UI_SRC_DIR=\"${CMAKE_SOURCE_DIR}/Editor/src/ui\""
     )
     nf_target_set_warnings(EditorTests)
     if(NF_GLSLC_EXECUTABLE)
@@ -493,7 +537,7 @@ target_compile_definitions(HeadlessProbe PRIVATE
 )
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(HeadlessProbe NFTriangleShaders NFBasic3DDepthShaders
-        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders)
+        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
 endif()
 if(MSVC)
     set_property(TARGET HeadlessProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

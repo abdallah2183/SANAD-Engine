@@ -17,7 +17,7 @@ set(NFRUNTIME_SOURCES
 
 nf_engine_library(NFRuntime
     SOURCES ${NFRUNTIME_SOURCES}
-    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFDestruction NFAnimation NFAudio NFGameplay
+    DEPENDS NFCore NFJobs NFPlatform NFRHI NFRendering NFEcs NFScene NFAssets NFPhysics NFDestruction NFAnimation NFAudio NFGameplay NFScripting NFVfx NFAI
 )
 
 target_include_directories(NFRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

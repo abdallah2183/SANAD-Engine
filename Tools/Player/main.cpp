@@ -41,6 +41,9 @@ void print_help() {
               << "  --frames N          Run N frames then exit (0 = until the window closes)\n"
               << "  --validation        Enable Vulkan validation layers\n"
               << "  --headless          No window (offscreen only)\n"
+              << "  --input-log <file>  Record the input gameplay polls to <file>\n"
+              << "  --replay <file>     Replay a recorded input log instead of the keyboard\n"
+              << "  --replay-strict     Fail the run if --replay served no frames\n"
               << "  --help\n"
               << "\n"
               << "Without --project, a single .nfproj beside the executable is used.\n"
@@ -100,6 +103,11 @@ int main(int argc, char** argv) {
         else if (arg.rfind("--frames=", 0) == 0) config.max_frames = static_cast<uint32_t>(std::atoi(arg.substr(9).c_str()));
         else if (arg == "--validation") config.validation = true;
         else if (arg == "--headless") config.headless = true;
+        else if (arg == "--input-log") config.input_log_path = next();
+        else if (arg.rfind("--input-log=", 0) == 0) config.input_log_path = arg.substr(12);
+        else if (arg == "--replay") config.input_replay_path = next();
+        else if (arg.rfind("--replay=", 0) == 0) config.input_replay_path = arg.substr(9);
+        else if (arg == "--replay-strict") config.input_replay_strict = true;
         else if (arg == "--crash-test") crash_test = true;
         else if (arg.rfind("--crash-test=", 0) == 0) {
             crash_test = true;

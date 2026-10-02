@@ -1,6 +1,8 @@
 #include <NF/Audio/Buses.hpp>
 #include <NF/Audio/AudioEngine.hpp>
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -44,7 +46,7 @@ f32 AudioVolumeSettings::volume(BusId id) const {
 
 bool AudioVolumeSettings::set_volume(BusId id, f32 value) {
     const u32 index = static_cast<u32>(id);
-    if (index >= kBusCount) {
+    if (index >= kBusCount || !std::isfinite(value)) {
         return false;
     }
     const f32 clamped = std::clamp(value, 0.0f, 1.0f);
@@ -88,17 +90,24 @@ bool AudioVolumeSettings::apply_setting(std::string_view key,
         return false;
     }
 
-    // strtof wants a NUL-terminated string; settings values are short.
+    // The persisted format emits a bare decimal. Requiring the entire value to
+    // parse prevents a typo such as "0.50x" from silently becoming 0.5.
+    if (value.empty() || value.size() >= 64u ||
+        std::isspace(static_cast<unsigned char>(value.front())) != 0 ||
+        std::memchr(value.data(), '\0', value.size()) != nullptr) {
+        return false;
+    }
     char buffer[64] = {};
-    const usize len = std::min(value.size(), sizeof(buffer) - 1);
+    const usize len = value.size();
     std::memcpy(buffer, value.data(), len);
 
+    errno = 0;
     char* end = nullptr;
     const f32 parsed = std::strtof(buffer, &end);
-    if (end == buffer) {
-        return false; // not a number — leave the key for whoever owns it
+    if (errno == ERANGE || end != buffer + len || !std::isfinite(parsed)) {
+        return false; // malformed/non-finite — leave the setting unchanged
     }
-    set_volume(id, parsed);
+    (void)set_volume(id, parsed);
     return true;
 }
 

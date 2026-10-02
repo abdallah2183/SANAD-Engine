@@ -452,6 +452,118 @@ NF_TEST(static_mesh_extraction) {
     // Gameplay components never cross: RenderObject has no such fields
 }
 
+// --- Full TRS reaches the renderer -----------------------------------------
+//
+// The regression this pins: extract_render_objects built Mat4::translate(world)
+// and called it a world matrix, so a rotated object DREW UNROTATED and a scaled
+// object drew at 1x1. The Inspector would show scale 40 and the viewport a 1 m
+// cube, and the gizmo would sit in the right place on a mesh that was in the
+// wrong place. The bounds were translated only too, so culling discarded
+// objects that were plainly on screen.
+
+NF_TEST(extraction_applies_rotation_and_scale) {
+    World world;
+    MeshLibrary meshes;
+    auto cube = StaticMesh::create_cube(2.0f); // bounds -1..1
+    StaticMeshHandle h = meshes.add(std::move(cube));
+
+    const Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    auto* t = world.get<scene::Transform>(e);
+    t->local_x = 5.0f;
+    t->rot_y = 90.0f;
+    t->scale_x = 4.0f;
+    t->scale_y = 2.0f;
+    world.add<MeshComponent>(e, MeshComponent{h, kInvalidMaterialHandle, true});
+    scene::propagate_transforms(world);
+
+    RenderWorld rw;
+    nf::runtime::extract_render_objects(world, meshes, rw);
+    NF_CHECK_EQ(rw.size(), 1u);
+    if (rw.size() != 1u) return;
+
+    // The world matrix is the TRS, not a bare translation: the local +X axis
+    // scaled by 4 must come out along world -Z.
+    const Vec3 axis = rw.objects[0].world.transform_point({1.0f, 0.0f, 0.0f});
+    NF_CHECK_NEAR(axis.x, 5.0f, 1e-4f);
+    NF_CHECK_NEAR(axis.y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(axis.z, -4.0f, 1e-4f);
+
+    // Bounds follow the same matrix. The 2x2x2 cube becomes 8 wide on Z and 4 on
+    // Y: -4..4 on Z and -2..2 on Y, centred on x = 5.
+    NF_CHECK_NEAR(rw.objects[0].bounds.min_z, -4.0f, 1e-4f);
+    NF_CHECK_NEAR(rw.objects[0].bounds.max_z, 4.0f, 1e-4f);
+    NF_CHECK_NEAR(rw.objects[0].bounds.min_y, -2.0f, 1e-4f);
+    NF_CHECK_NEAR(rw.objects[0].bounds.max_y, 2.0f, 1e-4f);
+    NF_CHECK_NEAR(rw.objects[0].bounds.min_x, 4.0f, 1e-4f);
+    NF_CHECK_NEAR(rw.objects[0].bounds.max_x, 6.0f, 1e-4f);
+
+    // And the bounds agree with the matrix rather than merely being plausible:
+    // transforming the local box by the extracted matrix must reproduce them.
+    const AABB local = meshes.get(h)->bounds();
+    const AABB again = transform_aabb(local, rw.objects[0].world);
+    NF_CHECK_NEAR(again.min_z, rw.objects[0].bounds.min_z, 1e-4f);
+    NF_CHECK_NEAR(again.max_y, rw.objects[0].bounds.max_y, 1e-4f);
+}
+
+NF_TEST(extraction_refits_bounds_under_a_diagonal_rotation) {
+    // An AABB under a rotation is NOT the rotated AABB: a cube turned 45 degrees
+    // is sqrt(2) wider on each diagonal. Refitting the 8 corners is the only
+    // correct answer, and the conservative one (the box grows, never shrinks, so
+    // nothing is wrongly culled).
+    World world;
+    MeshLibrary meshes;
+    auto cube = StaticMesh::create_cube(2.0f);
+    StaticMeshHandle h = meshes.add(std::move(cube));
+    const Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    world.get<scene::Transform>(e)->rot_y = 45.0f;
+    world.add<MeshComponent>(e, MeshComponent{h, kInvalidMaterialHandle, true});
+    scene::propagate_transforms(world);
+
+    RenderWorld rw;
+    nf::runtime::extract_render_objects(world, meshes, rw);
+    NF_CHECK_EQ(rw.size(), 1u);
+    if (rw.size() != 1u) return;
+    const float half = std::sqrt(2.0f); // 1 * sqrt(2)
+    NF_CHECK_NEAR(rw.objects[0].bounds.max_x, half, 1e-4f);
+    NF_CHECK_NEAR(rw.objects[0].bounds.min_z, -half, 1e-4f);
+    // Strictly wider than the untransformed 1.0: a translation-only box would
+    // have reported exactly 1.0 and clipped the corners.
+    NF_CHECK(rw.objects[0].bounds.max_x > 1.0f);
+}
+
+NF_TEST(culling_keeps_a_scaled_object_that_fills_the_screen) {
+    // The user-visible consequence of the old bug: a ground plane scaled to 60
+    // was culled away because its bounds were a 1x1 box at the origin while the
+    // mesh covered the whole view. Culling must now keep it.
+    World world;
+    MeshLibrary meshes;
+    auto plane = StaticMesh::create_quad(1.0f);
+    StaticMeshHandle h = meshes.add(std::move(plane));
+    const Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    auto* t = world.get<scene::Transform>(e);
+    t->local_y = -0.05f;
+    t->scale_x = 60.0f;
+    t->scale_z = 60.0f;
+    world.add<MeshComponent>(e, MeshComponent{h, kInvalidMaterialHandle, true});
+    scene::propagate_transforms(world);
+
+    RenderWorld rw;
+    nf::runtime::extract_render_objects(world, meshes, rw);
+    NF_CHECK_EQ(rw.size(), 1u);
+    if (rw.size() != 1u) return;
+    // The extracted extent is the scaled one, so it straddles the camera.
+    NF_CHECK(rw.objects[0].bounds.max_x > 10.0f);
+    NF_CHECK(rw.objects[0].bounds.min_x < -10.0f);
+
+    Camera cam = make_camera(5.0f);
+    std::vector<u32> visible;
+    cull_render_world(rw, cam, visible);
+    NF_CHECK_EQ(visible.size(), 1u);
+}
+
 NF_TEST(renderobject_culling_pipeline) {
     // RenderWorld → Frustum Culling → Visible Objects: inside submitted, outside culled
     World world;

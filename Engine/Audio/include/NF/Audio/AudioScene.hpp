@@ -20,6 +20,10 @@ struct Emitter {
     const AudioBuffer* buffer = nullptr;
     Vec3 position{};
     f32 volume = 1.0f;
+    /// Playback rate multiplier, applied to the resampling step. Kept in step
+    /// with `AudioSource::pitch` so a component authored with a pitch survives
+    /// the trip through this scene unchanged.
+    f32 pitch = 1.0f;
     bool playing = false;
     bool looping = false;
     bool spatial = false;
@@ -31,6 +35,9 @@ struct Emitter {
 
     // --- state the scene keeps for you (do not reset between blocks) --------
     usize sample_cursor = 0;
+    /// Exact source position used when a buffer rate differs from the block
+    /// rate. `AudioBus` updates both cursor fields; persist both between calls.
+    f64 sample_position = -1.0;
     LowPassFilter filter;
 
     // --- written by mix_emitter, for HUDs, logs and tests -------------------

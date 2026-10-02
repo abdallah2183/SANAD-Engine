@@ -96,8 +96,13 @@ void install_ecs_bindings(LuaVM& vm, ecs::World& world);
 
 /// Per-entity game logic. `update(dt)` is looked up in the script's own
 /// environment every tick; missing update() disables the script loudly.
+/// `path` is the authoring-time logical VFS path (e.g.
+/// content://Scripts/spin.lua) the source was loaded from; empty for inline
+/// or test-authored sources. It is what the scene format persists — the
+/// source itself is reloaded from the path on load, never stored inline.
 struct ScriptComponent {
     std::string source;
+    std::string path;
     bool enabled = true;
 };
 

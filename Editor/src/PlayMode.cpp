@@ -7,6 +7,8 @@
 #include <NF/Animation/Components.hpp>
 #include <NF/Audio/Components.hpp>
 #include <NF/Gameplay/Components.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Vfx/Components.hpp>
 
 #include <unordered_map>
 #include <vector>
@@ -45,8 +47,17 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* l = sw.get<runtime::DirectionalLight>(se)) {
             dw.add<runtime::DirectionalLight>(de, *l);
         }
+        if (const auto* pl = sw.get<runtime::PointLightComponent>(se)) {
+            dw.add<runtime::PointLightComponent>(de, *pl);
+        }
+        if (const auto* sl = sw.get<runtime::SpotLightComponent>(se)) {
+            dw.add<runtime::SpotLightComponent>(de, *sl);
+        }
         if (const auto* s = sw.get<runtime::SkyComponent>(se)) {
             dw.add<runtime::SkyComponent>(de, *s);
+        }
+        if (const auto* pp = sw.get<runtime::PostProcessComponent>(se)) {
+            dw.add<runtime::PostProcessComponent>(de, *pp);
         }
         if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
             dw.add<scene::PrefabLinkComponent>(de, *p);
@@ -70,6 +81,22 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         }
         if (const auto* g = sw.get<gameplay::GameplayModuleComponent>(se)) {
             dw.add<gameplay::GameplayModuleComponent>(de, *g);
+        }
+        if (const auto* sc = sw.get<scripting::ScriptComponent>(se)) {
+            dw.add<scripting::ScriptComponent>(de, *sc);
+        }
+        if (const auto* pc = sw.get<vfx::ParticleComponent>(se)) {
+            dw.add<vfx::ParticleComponent>(de, *pc);
+        }
+        if (const auto* cc = sw.get<physics::ClothComponent>(se)) {
+            dw.add<physics::ClothComponent>(de, *cc);
+        }
+        if (const auto* ch = sw.get<physics::CharacterComponent>(se)) {
+            physics::CharacterComponent fresh = *ch;
+            fresh.wish_dir = Vec3{0.0f, 0.0f, 0.0f};
+            fresh.jump = false;
+            fresh.grounded = false;
+            dw.add<physics::CharacterComponent>(de, fresh);
         }
     }
     // Pass 2: remap parents.
@@ -110,6 +137,10 @@ std::string signature_of(const ecs::World& w, ecs::Entity e) {
     s += w.has<animation::AnimationComponent>(e) ? "A" : "-";
     s += w.has<audio::AudioComponent>(e) ? "U" : "-";
     s += w.has<gameplay::GameplayModuleComponent>(e) ? "G" : "-";
+    s += w.has<scripting::ScriptComponent>(e) ? "X" : "-";
+    s += w.has<vfx::ParticleComponent>(e) ? "V" : "-";
+    s += w.has<physics::ClothComponent>(e) ? "F" : "-";
+    s += w.has<physics::CharacterComponent>(e) ? "H" : "-";
     return s;
 }
 
@@ -150,11 +181,43 @@ bool scenes_equal_structure(const scene::Scene& a, const scene::Scene& b, std::s
             return false;
         }
         if (ta != nullptr && tb != nullptr) {
-            if (ta->local_x != tb->local_x || ta->local_y != tb->local_y ||
-                ta->local_z != tb->local_z || ta->rot_x != tb->rot_x || ta->rot_y != tb->rot_y ||
-                ta->rot_z != tb->rot_z || ta->scale_x != tb->scale_x || ta->scale_y != tb->scale_y ||
-                ta->scale_z != tb->scale_z) {
-                out_diff = "transform values differ for '" + key + "'";
+            // Epsilon, not ==. A save/load round trip puts every float through
+            // the scene text format, which writes 9 significant digits — enough to
+            // round-trip any f32, but only because `Transform` is written with
+            // `setprecision(9)`. A transform that reached here by a gizmo drag is
+            // the product of an add per frame, so its bits are whatever that sum
+            // produced; re-reading it as text can land one ULP away even when the
+            // two are the same number to any author-visible precision.
+            //
+            // The tolerance is relative for the large components (a world position
+            // after a long walk) and absolute for the small ones, so neither a tiny
+            // near-zero drift nor a large-coordinate last-bit difference is read as
+            // "the save corrupted the scene" — which is the failure this check
+            // exists to catch.
+            auto near = [](f32 x, f32 y) {
+                if (x == y) return true;              // covers both zero
+                const f32 diff = std::fabs(x - y);
+                const f32 scale = std::max({1.0f, std::fabs(x), std::fabs(y)});
+                return diff <= 1e-5f * scale;
+            };
+            if (!near(ta->local_x, tb->local_x) || !near(ta->local_y, tb->local_y) ||
+                !near(ta->local_z, tb->local_z) || !near(ta->rot_x, tb->rot_x) ||
+                !near(ta->rot_y, tb->rot_y) || !near(ta->rot_z, tb->rot_z) ||
+                !near(ta->scale_x, tb->scale_x) || !near(ta->scale_y, tb->scale_y) ||
+                !near(ta->scale_z, tb->scale_z)) {
+                // The values go IN the message: "transform values differ" alone
+                // sent whoever reads this log to the serializer to look for a
+                // precision bug that is not there, when the actual difference is
+                // usually a harness that edited the scene without saving.
+                {
+                    char buf[512];
+                    std::snprintf(buf, sizeof(buf),
+                                  "transform values differ for '%s' live=(%.6f,%.6f,%.6f) "
+                                  "saved=(%.6f,%.6f,%.6f)",
+                                  key.c_str(), ta->local_x, ta->local_y, ta->local_z,
+                                  tb->local_x, tb->local_y, tb->local_z);
+                    out_diff = buf;
+                }
                 return false;
             }
             const auto* pa = (ta->parent.valid()) ? a.world().get<scene::NameComponent>(ta->parent) : nullptr;
@@ -208,8 +271,17 @@ void copy_entity_all(const ecs::World& sw, ecs::Entity se, ecs::World& dw, ecs::
     if (const auto* l = sw.get<runtime::DirectionalLight>(se)) {
         dw.add<runtime::DirectionalLight>(de, *l);
     }
+    if (const auto* pl = sw.get<runtime::PointLightComponent>(se)) {
+        dw.add<runtime::PointLightComponent>(de, *pl);
+    }
+    if (const auto* sl = sw.get<runtime::SpotLightComponent>(se)) {
+        dw.add<runtime::SpotLightComponent>(de, *sl);
+    }
     if (const auto* s = sw.get<runtime::SkyComponent>(se)) {
         dw.add<runtime::SkyComponent>(de, *s);
+    }
+    if (const auto* pp = sw.get<runtime::PostProcessComponent>(se)) {
+        dw.add<runtime::PostProcessComponent>(de, *pp);
     }
     if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
         dw.add<scene::PrefabLinkComponent>(de, *p);
@@ -233,6 +305,22 @@ void copy_entity_all(const ecs::World& sw, ecs::Entity se, ecs::World& dw, ecs::
     }
     if (const auto* g = sw.get<gameplay::GameplayModuleComponent>(se)) {
         dw.add<gameplay::GameplayModuleComponent>(de, *g);
+    }
+    if (const auto* sc = sw.get<scripting::ScriptComponent>(se)) {
+        dw.add<scripting::ScriptComponent>(de, *sc);
+    }
+    if (const auto* pc = sw.get<vfx::ParticleComponent>(se)) {
+        dw.add<vfx::ParticleComponent>(de, *pc);
+    }
+    if (const auto* cc = sw.get<physics::ClothComponent>(se)) {
+        dw.add<physics::ClothComponent>(de, *cc);
+    }
+    if (const auto* ch = sw.get<physics::CharacterComponent>(se)) {
+        physics::CharacterComponent fresh = *ch;
+        fresh.wish_dir = Vec3{0.0f, 0.0f, 0.0f};
+        fresh.jump = false;
+        fresh.grounded = false;
+        dw.add<physics::CharacterComponent>(de, fresh);
     }
 }
 

@@ -1,12 +1,23 @@
 // Tools/ModelImporter/main.cpp — NFModelImporter CLI (Phase 14).
 //
-// Converts glTF 2.0 sources (.gltf + .bin, .glb) into the engine's cooked
-// mesh format (.nfmesh, MeshAsset v1). Thin front end: parsing/conversion
-// live in NFAssets (GltfImport) and are unit-tested there.
+// Converts any mesh source the engine can read into its cooked mesh format
+// (.nfmesh, MeshAsset v1). Thin front end: parsing/conversion live in NFAssets
+// and are unit-tested there.
 //
 // Usage:
-//   NFModelImporter --input <model.gltf|model.glb> --output <mesh.nfmesh> [--mesh N|all]
-//   NFModelImporter --input <model.gltf|model.glb> --info
+//   NFModelImporter --input <model> --output <mesh.nfmesh> [--mesh N|all]
+//   NFModelImporter --input <model> --info
+//   NFModelImporter --input <model> --character [--info]
+//
+// Accepted inputs are exactly the reader's format table
+// (nf::assets::mesh_import_formats): .gltf, .glb, .obj, .stl, .ply, .nfmesh.
+// The CLI and the editor's Import dialog both go through
+// nf::assets::import_mesh_file, so a format the engine can read is a format
+// every tool can read — they cannot drift apart.
+//
+// Non-strict output is geometry-only and is accepted only for static sources.
+// --character is validation-only in v1: .nfmesh cannot carry skin, skeleton,
+// clips, or material definitions, so it never writes a fake character cook.
 //
 // Multi-mesh files: default writes mesh 0; --mesh N picks one; --mesh all
 // writes <stem>_<i>.nfmesh beside the output path.
@@ -15,10 +26,13 @@
 // clips, and every skip count) without writing anything — the visible half of
 // the "no silent format substitution" rule.
 
-#include <NF/Assets/GltfImport.hpp>
+#include <NF/Assets/AnimationImport.hpp>
 #include <NF/Assets/MeshAsset.hpp>
+#include <NF/Assets/MeshImport.hpp>
 #include <NF/Core/Logger.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -29,23 +43,45 @@ using namespace nf::assets;
 
 namespace {
 
+/// The format table, as one line, for help and error text.
+std::string accepted_input_list() {
+    std::string out;
+    for (MeshImportFormat format : mesh_import_formats()) {
+        if (!out.empty()) out += ", ";
+        out += ".";
+        out += mesh_import_format_extension(format);
+    }
+    return out;
+}
+
 void print_help() {
-    std::cout << "NFModelImporter — NOVAForge glTF importer\n"
+    std::cout << "NFModelImporter — NOVAForge mesh importer\n"
               << "Usage:\n"
-              << "  NFModelImporter --input <model.gltf|model.glb> --output <mesh.nfmesh> [--mesh N|all]\n"
-              << "  NFModelImporter --input <model.gltf|model.glb> --info\n"
+              << "  NFModelImporter --input <model> --output <mesh.nfmesh> [--mesh N|all]\n"
+              << "  NFModelImporter --input <model> --info\n"
+              << "  NFModelImporter --input <model> --character [--info]\n"
+              << "\n"
+              << "Inputs: " << accepted_input_list() << "\n"
+              << "  .gltf/.glb carry skins and clips; .obj/.stl/.ply are static geometry.\n"
+              << "\n"
+              << "Modes:\n"
+              << "  default output  Geometry-only static-prop cook; refuses character-like sources.\n"
+              << "  --character     Strict source validation only; writes nothing in v1 because\n"
+              << "                  .nfmesh cannot store skeleton, skin, clips, or materials.\n"
               << "\n"
               << "Examples:\n"
               << "  NFModelImporter --input Content/Models/Box.glb --output Content/Meshes/Box.nfmesh\n"
+              << "  NFModelImporter --input props/Crate.obj --output Content/Meshes/Crate.nfmesh\n"
               << "  NFModelImporter --input scene.gltf --output out.nfmesh --mesh all\n"
-              << "  NFModelImporter --input Hero.glb --info\n";
+              << "  NFModelImporter --input Hero.glb --character --info\n";
 }
 
 // Prints the whole import result — including everything the importer could not
 // use. Nothing here is optional: a static mesh says so, and every skip is
 // counted. This is the CLI half of the no-silent-substitution rule.
-void print_report(const GltfImportResult& r, const std::string& source) {
+void print_report(const MeshImportResult& r, const std::string& source) {
     std::cout << "\n=== NFModelImporter report: " << source << " ===\n";
+    std::cout << "format: " << mesh_import_format_name(r.format) << "\n";
 
     std::cout << "meshes: " << r.meshes.size() << "\n";
     for (usize i = 0; i < r.meshes.size(); ++i) {
@@ -77,7 +113,28 @@ void print_report(const GltfImportResult& r, const std::string& source) {
         std::cout << "  [" << i << "] " << (mt.name.empty() ? std::string("<unnamed>") : mt.name)
                   << ": baseColor (" << mt.base_color[0] << ", " << mt.base_color[1] << ", "
                   << mt.base_color[2] << ", " << mt.base_color[3] << "), metallic " << mt.metallic
-                  << ", roughness " << mt.roughness << "\n";
+                  << ", roughness " << mt.roughness;
+        if (mt.albedo_image >= 0) {
+            std::cout << ", albedo image " << mt.albedo_image;
+        }
+        std::cout << "\n";
+        // What the source declared and this pipeline has no room for. Printed
+        // under the material it belongs to, because that is where a developer
+        // looks when a surface comes out wrong.
+        for (const std::string& entry : mt.dropped) {
+            std::cout << "      dropped: " << entry << "\n";
+        }
+    }
+
+    std::cout << "images: " << r.images.size() << "\n";
+    for (usize i = 0; i < r.images.size(); ++i) {
+        const MeshImportImage& image = r.images[i];
+        std::cout << "  [" << i << "] "
+                  << (image.name.empty() ? std::string("<unnamed>") : image.name) << ": "
+                  << image.bytes.size() << " bytes, "
+                  << (image.extension.empty() ? std::string("<unknown container>")
+                                              : image.extension)
+                  << " (" << image.source << ")\n";
     }
 
     std::cout << "skins: " << r.skins.size() << "\n";
@@ -104,11 +161,38 @@ void print_report(const GltfImportResult& r, const std::string& source) {
 
     std::cout << "skipped (counted, never silently substituted):\n";
     std::cout << "  primitives (non-triangle / unusable): " << r.primitives_skipped << "\n";
-    std::cout << "  animation channels (CUBICSPLINE / morph / unsupported): "
+    std::cout << "  animation channels (STEP / CUBICSPLINE / morph / unsupported): "
               << r.anim_channels_skipped << "\n";
     std::cout << "  skin bindings rejected (malformed JOINTS_0/WEIGHTS_0): "
               << r.skin_bindings_rejected << "\n";
+    std::cout << "  faces (malformed / out of range): " << r.faces_skipped << "\n";
+    std::cout << "  vertices (non-finite): " << r.vertices_skipped << "\n";
+    std::cout << "  images (unreadable): " << r.images_skipped << "\n";
     std::cout << "nodes: " << r.nodes.size() << "\n";
+
+    // What the format itself cannot carry — STL's missing UVs, computed
+    // normals, a face list this reader had to skip. Named, never implied.
+    std::cout << "warnings: " << r.warnings.size() << "\n";
+    for (const std::string& warning : r.warnings) {
+        std::cout << "  ! " << warning << "\n";
+    }
+}
+
+bool contains_character_data(const MeshImportResult& result) {
+    if (!result.skins.empty() || result.anim_channels_skipped != 0 ||
+        !result.animations.empty()) {
+        return true;
+    }
+    return std::any_of(result.mesh_skins.begin(), result.mesh_skins.end(),
+                       [](const GltfMeshSkin& skin) { return skin.skin_index >= 0; });
+}
+
+bool has_nfmesh_extension(const std::string& path) {
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return ext == ".nfmesh";
 }
 
 bool save_mesh(const MeshAsset& mesh, const std::string& path, std::string& err) {
@@ -130,6 +214,7 @@ int main(int argc, char** argv) {
     std::string output;
     std::string mesh_sel = "0";
     bool info_only = false;
+    bool strict_character = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if ((arg == "--input") && i + 1 < argc) {
@@ -140,6 +225,8 @@ int main(int argc, char** argv) {
             mesh_sel = argv[++i];
         } else if (arg == "--info") {
             info_only = true;
+        } else if (arg == "--character") {
+            strict_character = true;
         } else if (arg == "--help" || arg == "-h") {
             print_help();
             return 0;
@@ -149,21 +236,26 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (input.empty() || (output.empty() && !info_only)) {
+    if (input.empty() || (output.empty() && !info_only && !strict_character)) {
         print_help();
         return 2;
     }
+    if (!output.empty() && !has_nfmesh_extension(output)) {
+        std::cerr << "output must use the .nfmesh extension (geometry-only MeshAsset v1)\n";
+        return 2;
+    }
 
-    GltfImportResult result = import_gltf_file(input);
+    // One entry point for every readable format: the same call the editor's
+    // Import dialog makes, so the two can never accept different sets.
+    MeshImportResult result = import_mesh_file(input);
     if (!result.ok) {
         std::cerr << "import failed: " << result.error << "\n";
         return 1;
     }
 
-    if (info_only) {
-        print_report(result, input);
-        if (output.empty()) return 0; // report only; nothing to cook
-    }
+    // Every successful import prints the complete ledger, including output
+    // paths. Information must never depend on remembering a second --info run.
+    print_report(result, input);
 
     if (result.meshes.empty()) {
         std::cerr << "import ok but no triangle meshes found (" << result.primitives_skipped
@@ -173,6 +265,45 @@ int main(int argc, char** argv) {
     std::cout << "imported " << result.meshes.size() << " mesh(es), "
               << result.materials.size() << " material(s), " << result.nodes.size()
               << " node(s)\n";
+
+    if (strict_character) {
+        const CharacterImportValidation validation = validate_character_import(result);
+        if (!validation.ok) {
+            std::cerr << "strict character validation failed: " << validation.error << "\n";
+            return 1;
+        }
+        if (!output.empty()) {
+            std::cerr << "strict character validation passed, but no output was written: "
+                         ".nfmesh v1 carries geometry only and cannot store skin, skeleton, "
+                         "clips, or material definitions\n";
+            return 3;
+        }
+        std::cout << "strict character validation passed: skin " << validation.skin_index
+                  << ", " << validation.nonempty_clips
+                  << " usable clips, " << result.materials.size()
+                  << " material(s); no files written (validation-only mode)\n";
+        return 0;
+    }
+
+    if (output.empty()) return 0; // --info is report-only.
+
+    if (contains_character_data(result)) {
+        std::cerr << "refusing geometry-only cook: source contains skin and/or animation data; "
+                     "run --character for strict validation. .nfmesh v1 cannot carry a "
+                     "character, and no output was written\n";
+        return 3;
+    }
+    std::cout << "non-strict mode: writing geometry-only .nfmesh for a static source; "
+                 "no skin, animation, or material payload is implied\n";
+    // A material or texture this tool cannot write is a real loss, and saying so
+    // is the difference between "the import worked" and "the model came back
+    // grey and nobody knows why". The editor's File > Import writes both.
+    if (!result.materials.empty() || !result.images.empty()) {
+        std::cout << "note: " << result.materials.size() << " material(s) and "
+                  << result.images.size()
+                  << " image(s) are NOT written — .nfmesh carries geometry only. Use the editor's "
+                     "File > Import to get them as .nfmat and texture assets.\n";
+    }
 
     std::string err;
     if (mesh_sel == "all") {

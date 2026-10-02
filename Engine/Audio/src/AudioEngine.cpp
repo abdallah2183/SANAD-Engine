@@ -2,6 +2,7 @@
 #include <NF/Core/Logger.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #ifdef _WIN32
 #include <NF/Audio/WasapiAudioDevice.hpp>
@@ -96,11 +97,17 @@ void AudioBus::mix_source(AudioSource& source,
                            f32* out_left,
                            f32* out_right,
                            usize num_frames,
-                           u32 /*sample_rate*/) {
+                           u32 mix_sample_rate) {
     if (!source.playing || source.buffer == nullptr) return;
 
     const AudioBuffer& buf = *source.buffer;
-    if (buf.samples.empty() || buf.channels == 0 || buf.sample_rate == 0) return;
+    if (buf.samples.empty() || buf.channels == 0 || buf.sample_rate == 0 ||
+        num_frames == 0) {
+        return;
+    }
+    if (mix_sample_rate == 0) {
+        mix_sample_rate = kDefaultSampleRate;
+    }
 
     // Compute pan/gain (for spatial) or use volume directly (for 2D).
     f32 left_gain = source.volume;
@@ -113,30 +120,93 @@ void AudioBus::mix_source(AudioSource& source,
         right_gain *= pg.right;
     }
 
-    usize frames_available = buf.frame_count();
-    usize frames_to_mix = num_frames;
+    const usize frames_available = buf.frame_count();
+    if (frames_available == 0) return;
 
-    for (usize i = 0; i < frames_to_mix; ) {
-        if (source.sample_cursor >= frames_available) {
-            if (source.looping) {
-                source.sample_cursor = source.sample_cursor % frames_available;
-            } else {
+    // `sample_position` is authoritative after the first block. Preserve the
+    // established integer seek behaviour as well: callers that assign a new
+    // `sample_cursor` get that exact position even if the fractional cursor
+    // still points elsewhere. Setting sample_position to -1 is the explicit
+    // form of the same operation.
+    const bool has_fractional_position =
+        std::isfinite(source.sample_position) && source.sample_position >= 0.0;
+    f64 position = has_fractional_position
+                       ? source.sample_position
+                       : static_cast<f64>(source.sample_cursor);
+    if (has_fractional_position &&
+        position < static_cast<f64>((std::numeric_limits<usize>::max)())) {
+        const usize position_floor =
+            static_cast<usize>(std::floor(position));
+        if (source.sample_cursor != position_floor) {
+            position = static_cast<f64>(source.sample_cursor);
+        }
+    }
+
+    if (position >= static_cast<f64>(frames_available)) {
+        if (source.looping) {
+            position = std::fmod(position,
+                                 static_cast<f64>(frames_available));
+        } else {
+            source.playing = false;
+            source.sample_cursor = 0;
+            source.sample_position = 0.0;
+            return;
+        }
+    }
+
+    // Pitch multiplies the resampling step, so it composes with a buffer whose
+    // own rate already differs from the mix rate. A non-finite or non-positive
+    // pitch falls back to 1.0 instead of stalling (0) or running backwards (a
+    // negative step would walk off the front of the buffer forever): an authored
+    // value that cannot be honoured plays at the authored rate rather than
+    // going silent, which is the smaller surprise.
+    f32 pitch = source.pitch;
+    if (!std::isfinite(pitch) || pitch <= 0.0f) {
+        pitch = 1.0f;
+    }
+    const f64 source_step =
+        static_cast<f64>(buf.sample_rate) / static_cast<f64>(mix_sample_rate) *
+        static_cast<f64>(pitch);
+    for (usize i = 0; i < num_frames; ++i) {
+        if (position >= static_cast<f64>(frames_available)) {
+            if (!source.looping) {
                 source.playing = false;
                 source.sample_cursor = 0;
+                source.sample_position = 0.0;
                 break;
             }
+            position = std::fmod(position,
+                                 static_cast<f64>(frames_available));
         }
 
-        usize idx = source.sample_cursor * buf.channels;
-        f32 sample_left = buf.samples[idx];
-        f32 sample_right = (buf.channels >= 2) ? buf.samples[idx + 1] : sample_left;
+        const usize frame0 = static_cast<usize>(position);
+        const f64 fraction = position - static_cast<f64>(frame0);
+        usize frame1 = frame0 + 1;
+        if (frame1 >= frames_available) {
+            frame1 = source.looping ? 0u : frame0;
+        }
+
+        const usize index0 = frame0 * buf.channels;
+        const usize index1 = frame1 * buf.channels;
+        const f32 left0 = buf.samples[index0];
+        const f32 left1 = buf.samples[index1];
+        const f32 right0 = buf.channels >= 2 ? buf.samples[index0 + 1] : left0;
+        const f32 right1 = buf.channels >= 2 ? buf.samples[index1 + 1] : left1;
+        const f32 sample_left = static_cast<f32>(
+            static_cast<f64>(left0) +
+            (static_cast<f64>(left1) - static_cast<f64>(left0)) * fraction);
+        const f32 sample_right = static_cast<f32>(
+            static_cast<f64>(right0) +
+            (static_cast<f64>(right1) - static_cast<f64>(right0)) * fraction);
 
         out_left[i] += sample_left * left_gain;
         out_right[i] += sample_right * right_gain;
-
-        ++source.sample_cursor;
-        ++i;
+        position += source_step;
     }
+
+    source.sample_cursor =
+        static_cast<usize>(std::floor(position));
+    source.sample_position = position;
 }
 
 // ---------------------------------------------------------------------------

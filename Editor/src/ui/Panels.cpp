@@ -8,6 +8,7 @@
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Editor/AudioPreview.hpp>
+#include <NF/Editor/FileSystemPanel.hpp>
 #include <NF/Editor/ReflectedInspector.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Core/Profiler.hpp>
@@ -19,11 +20,16 @@
 #include <NF/Animation/Components.hpp>
 #include <NF/Audio/Components.hpp>
 #include <NF/Gameplay/Components.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Vfx/Components.hpp>
 #include <NF/Gameplay/GameplayModule.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 #include <NF/UI/ArabicShaper.hpp>
 #include <NF/UI/Localization.hpp>
 #include <NF/Editor/UiText.hpp> // AV()/AVF()/rt_* — the single display-string path
+#include <NF/Editor/UiTheme.hpp> // semantic colours (danger/success/accent)
+#include <NF/Editor/ScenePanels.hpp> // the dedicated per-function editors
+#include <NF/Editor/TransformGizmoView.hpp> // in-viewport arrows/rings/boxes
 
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder: default layout only (first frame)
@@ -31,6 +37,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -62,11 +69,39 @@ struct InspectorCache {
     // Sky / environment (Phase 13)
     bool sky_has = false;
     bool sky_enabled = true;
+    // Day/night cycle. `tod_has` stays false until the component is added, which
+    // is what the panel keys its "add" affordance off.
+    bool tod_has = false;
+    bool tod_enabled = true;
+    bool tod_drive_light = true;
+    float tod_hours = 12.0f;
+    float tod_day_length = 240.0f;
     float sky_zenith[3]{0.20f, 0.42f, 0.85f};
     float sky_horizon[3]{0.62f, 0.72f, 0.82f};
     float sky_ground[3]{0.09f, 0.09f, 0.11f};
     float sky_sun_disk = 1.0f;
     float sky_sun_glow = 1.0f;
+    // Post-processing stack (§206). Same "has" pattern as the sky above: the
+    // panel keys its "add" affordance off pp_has, because the component is
+    // absent until the author asks for it and an absent component is what keeps
+    // a scene's `PostProcess:` line out of the saved file.
+    bool pp_has = false;
+    bool pp_bloom_enabled = false;
+    float pp_bloom_threshold = 1.0f;
+    float pp_bloom_knee = 0.5f;
+    float pp_bloom_intensity = 1.0f;
+    float pp_bloom_radius = 1.0f;
+    bool pp_grade_enabled = false;
+    float pp_grade_contrast = 1.0f;
+    float pp_grade_pivot = 1.0f;
+    float pp_grade_temperature = 0.0f;
+    float pp_grade_tint = 0.0f;
+    float pp_grade_gamma = 1.0f;
+    bool pp_sharpen_enabled = false;
+    float pp_sharpen_amount = 0.0f;
+    float pp_sharpen_radius = 1.0f;
+    float pp_saturation = 1.0f;
+    float pp_vignette = 0.0f;
     char mesh_id[64]{};
     char mesh_mat[192]{};
     char mat_path[256]{};
@@ -118,6 +153,53 @@ struct InspectorCache {
     bool aud_autoplay = false;
     float aud_min_dist = 1.0f;
     float aud_max_dist = 50.0f;
+    char aud_buffer[256]{};
+    // Sky clear color (Phase 25; the file always carried it, the panel did not)
+    float sky_clear[3]{0.03f, 0.03f, 0.07f};
+    // Lua script (Phase 24). The path is the persisted field; enabled is the
+    // only other persisted field. The source lives in the file, so the cache
+    // carries no source copy — the panel reads size/line counts live.
+    char script_path[256]{};
+    bool script_enabled = true;
+    // Particles / cloth / character (Phase 25). Mirrors of the scene
+    // components; Apply forwards the whole struct through EditorApp.
+    bool part_has = false;
+    bool part_enabled = true;
+    float part_rate = 30.0f;
+    float part_lifetime = 1.5f;
+    float part_lifetime_spread = 0.5f;
+    float part_velocity[3]{0.0f, 3.0f, 0.0f};
+    float part_vel_spread[3]{1.0f, 1.0f, 1.0f};
+    float part_gravity[3]{0.0f, -9.8f, 0.0f};
+    float part_drag = 0.0f;
+    float part_start_size = 0.25f;
+    float part_end_size = 0.0f;
+    float part_start_color[3]{1.0f, 0.9f, 0.7f};
+    float part_end_color[3]{1.0f, 0.3f, 0.1f};
+    int part_max = 1024;
+    bool cloth_has = false;
+    bool cloth_enabled = true;
+    int cloth_res_x = 12;
+    int cloth_res_z = 12;
+    float cloth_spacing = 0.25f;
+    float cloth_mass = 0.2f;
+    float cloth_damping = 0.02f;
+    float cloth_stiffness = 0.9f;
+    int cloth_iterations = 8;
+    int cloth_substeps = 2;
+    float cloth_gravity[3]{0.0f, -9.81f, 0.0f};
+    bool char_has = false;
+    bool char_enabled = true;
+    float char_radius = 0.4f;
+    float char_max_speed = 6.0f;
+    float char_acceleration = 40.0f;
+    float char_air_control = 0.35f;
+    float char_jump_speed = 7.0f;
+    float char_slope = 45.0f;
+    float char_mass = 80.0f;
+    float char_friction = 0.8f;
+    float char_wish[3]{};
+    bool char_jump = false;
     std::string error;
 };
 
@@ -274,21 +356,39 @@ bool project_to_viewport(const Mat4& view_proj, float wx, float wy, float wz, co
     if (clip.w <= 1e-5f) {
         return false;
     }
+    // NDC -> px is LINEAR here, with NO y flip, and that is the point.
+    //
+    // The NDC that comes out of the camera's view_projection is y-DOWN:
+    // Mat4::perspective negates m[1][1] for Vulkan, so world +Y lands at
+    // NDC y < 0, which is memory row 0, and memory row 0 IS the top of the
+    // image ImGui::Image presents. So render-NDC -> pixel row is plain
+    // `ny * 0.5 + 0.5`.
+    //
+    // The `0.5 - ny * 0.5` this used to apply is the bridge for the OTHER
+    // direction: it converts RENDER NDC into POINTER NDC, which is y-UP
+    // (Panels' to_ndc maps the image top to +1, and viewport_ndc_to_pixel
+    // maps +1 back to row 0). Applying it here drew the ground grid
+    // vertically mirrored against the render underneath it.
     const float ndc_x = clip.x / clip.w;
     const float ndc_y = clip.y / clip.w;
     const float w = max.x - min.x;
     const float h = max.y - min.y;
     out.x = min.x + (ndc_x * 0.5f + 0.5f) * w;
-    out.y = min.y + (0.5f - ndc_y * 0.5f) * h;
+    out.y = min.y + (ndc_y * 0.5f + 0.5f) * h;
     return true;
 }
 
-/// Draws the y = 0 grid, `half_extent` metres either side, one line every
-/// `spacing`. Axis lines (x = 0 and z = 0) are drawn in their axis colours so
-/// the origin is unambiguous.
+/// Draws the y = 0 grid, `half_extent` cells either side of `center`, one line
+/// every `spacing`. The world axis lines (x = 0 and z = 0) are drawn in their
+/// axis colours so the origin stays unambiguous.
+///
+/// `center` is the VIEW PIVOT in x/z, not the origin. With the pivot hardcoded
+/// to (0,0) the grid was a fixed 50-cell patch around the world origin, so the
+/// moment a level was framed anywhere else the viewport lost its floor
+/// reference entirely — the exact situation framing exists to create.
 constexpr int kGridHalfExtent = 50; // cells either side; extent = 50 * grid_step
 void draw_ground_grid(ImDrawList* dl, const ImVec2& min, const ImVec2& max, const Mat4& view_proj,
-                      float spacing, int half_extent) {
+                      float spacing, int half_extent, float center_x, float center_z) {
     if (spacing <= 0.0f || half_extent <= 0) {
         return;
     }
@@ -299,31 +399,336 @@ void draw_ground_grid(ImDrawList* dl, const ImVec2& min, const ImVec2& max, cons
     const ImU32 line_col = IM_COL32(255, 255, 255, 18);
     const ImU32 axis_x = IM_COL32(230, 90, 90, 110);   // the X axis
     const ImU32 axis_z = IM_COL32(90, 140, 230, 110);  // the Z axis
-    for (int i = -half_extent; i <= half_extent; ++i) {
-        const float o = static_cast<float>(i) * spacing;
-        // Beyond 20 m only every other line survives; see grid_line_visible.
-        if (!grid_line_visible(i, o)) {
-            continue;
-        }
-        // Lines parallel to Z (varying x) and parallel to X (varying z).
-        const float segs[2][4] = {
-            {o, 0.0f, -extent, extent},  // x = o, z from -extent to extent
-            {-extent, 0.0f, o, extent},  // z = o, x from -extent to extent
-        };
-        for (int s = 0; s < 2; ++s) {
+    // Lines are laid out on the spacing grid anchored to the WORLD origin, not
+    // to the pivot: re-anchoring to the pivot would make the whole floor slide
+    // as the user orbits, which is far more distracting than a fixed lattice.
+    // The pivot only chooses WHICH 50 cells of that infinite lattice get drawn.
+    // Both helpers are pure and live in Viewport.hpp, so the window is pinned
+    // headlessly (test_viewport.cpp) rather than only by looking at the screen.
+    const GridCellRange xr = grid_cell_range_around(center_x, spacing, half_extent);
+    const GridCellRange zr = grid_cell_range_around(center_z, spacing, half_extent);
+    // Pass 0 = lines of constant x (running along z), pass 1 = constant z.
+    for (int pass = 0; pass < 2; ++pass) {
+        const GridCellRange& r = (pass == 0) ? xr : zr;
+        const bool along_z = (pass == 0);
+        for (int i = r.lo; i <= r.hi; ++i) {
+            const float o = static_cast<float>(i) * spacing;
+            // Beyond 20 m only every other line survives; see grid_line_visible.
+            if (!grid_line_visible(i, o)) {
+                continue;
+            }
+            const float fixed = (along_z ? o : center_z);
+            const float mid = (along_z ? center_x : o);
             ImVec2 a{}, b{};
-            const bool ax = (s == 0);
-            const bool ok_a = project_to_viewport(view_proj, ax ? segs[s][0] : segs[s][1], 0.0f,
-                                                  ax ? segs[s][2] : segs[s][3], min, max, a);
-            const bool ok_b = project_to_viewport(view_proj, ax ? segs[s][0] : segs[s][1], 0.0f,
-                                                  ax ? segs[s][3] : segs[s][2], min, max, b);
+            const bool ok_a =
+                project_to_viewport(view_proj, fixed, 0.0f, mid - extent, min, max, a);
+            const bool ok_b =
+                project_to_viewport(view_proj, fixed, 0.0f, mid + extent, min, max, b);
             if (!ok_a || !ok_b) {
                 continue; // a segment with an endpoint behind the camera is skipped whole
             }
-            const ImU32 col = (i == 0) ? (ax ? axis_z : axis_x) : line_col;
-            dl->AddLine(a, b, col, (i == 0) ? 1.4f : 1.0f);
+            // The world axis lines are the ones that pass through x = 0 / z = 0,
+            // which is NOT the same index as "the pivot line" — the pivot moves,
+            // the origin does not.
+            const bool on_axis = grid_cell_is_world_axis(i, spacing);
+            const ImU32 col = on_axis ? (along_z ? axis_z : axis_x) : line_col;
+            dl->AddLine(a, b, col, on_axis ? 1.4f : 1.0f);
         }
     }
+}
+
+// --- Orientation gizmo -------------------------------------------------------
+//
+// The world axes projected through the camera's own basis, pinned to the
+// viewport's bottom-right corner. Without it an orbited view has no fixed
+// reference for which way is up — the ground grid only helps while it is
+// switched on, and even then it is a reference on the floor, not a compass.
+//
+// The basis comes from position/target/up rather than from the view matrix on
+// purpose: this engine builds its matrices row-vector and reading axes out of
+// the columns of `view` is exactly the kind of sign slip that mirrors the
+// widget without ever failing to compile.
+void draw_orientation_gizmo(ImDrawList* dl, const ImVec2& max, const rendering::Camera& cam) {
+    const float line_h = ImGui::GetTextLineHeight();
+    const float radius = line_h * 2.0f;
+    const float pad = line_h * 0.9f;
+    const ImVec2 center(max.x - radius - pad, max.y - radius - pad);
+
+    float fx = cam.target.x - cam.position.x;
+    float fy = cam.target.y - cam.position.y;
+    float fz = cam.target.z - cam.position.z;
+    const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+    if (fl <= 1e-6f) {
+        return;
+    }
+    fx /= fl;
+    fy /= fl;
+    fz /= fl;
+
+    // A near-vertical look direction makes cross(forward, world_up) degenerate;
+    // -Z is the fallback so the widget keeps turning instead of collapsing.
+    float ux = 0.0f, uy = 1.0f, uz = 0.0f;
+    if (std::fabs(fy) > 0.999f) {
+        ux = 0.0f;
+        uy = 0.0f;
+        uz = 1.0f;
+    }
+    float rx = fy * uz - fz * uy;
+    float ry = fz * ux - fx * uz;
+    float rz = fx * uy - fy * ux;
+    const float rl = std::sqrt(rx * rx + ry * ry + rz * rz);
+    if (rl <= 1e-6f) {
+        return;
+    }
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+    // true_up = cross(right, forward)
+    const float tx = ry * fz - rz * fy;
+    const float ty = rz * fx - rx * fz;
+    const float tz = rx * fy - ry * fx;
+
+    struct Axis {
+        float x, y, z;
+        ImVec4 col;
+        const char* label;
+    };
+    const Axis axes[3] = {
+        {1.0f, 0.0f, 0.0f, theme::axis_x(), "X"},
+        {0.0f, 1.0f, 0.0f, theme::axis_y(), "Y"},
+        {0.0f, 0.0f, 1.0f, theme::axis_z(), "Z"},
+    };
+    // Depth = how much the axis points away from the camera. Draw far to near
+    // so an axis pointing into the screen passes behind the other two.
+    float depth[3];
+    for (int i = 0; i < 3; ++i) {
+        depth[i] = axes[i].x * fx + axes[i].y * fy + axes[i].z * fz;
+    }
+    int order[3] = {0, 1, 2};
+    for (int i = 1; i < 3; ++i) {
+        const int key = order[i];
+        int j = i - 1;
+        while (j >= 0 && depth[order[j]] < depth[key]) {
+            order[j + 1] = order[j];
+            --j;
+        }
+        order[j + 1] = key;
+    }
+
+    // Three clean arms from the origin, nothing else: no disc, no ring, no
+    // tails. Every extra shape was visual noise — this is the Unity/Blender
+    // tripod: colour + letter is the whole encoding.
+    dl->AddCircleFilled(center, 2.5f, IM_COL32(20, 22, 28, 230), 12);
+    for (int i = 0; i < 3; ++i) {
+        const Axis& a = axes[order[i]];
+        const float dx = (a.x * rx + a.y * ry + a.z * rz) * radius;
+        const float dy = -(a.x * tx + a.y * ty + a.z * tz) * radius;
+        const ImVec2 tip(center.x + dx, center.y + dy);
+        const ImU32 col = ImGui::GetColorU32(a.col);
+        // Arm: dark outline under the colour keeps it legible over any
+        // background.
+        dl->AddLine(center, tip, IM_COL32(0, 0, 0, 130), 4.5f);
+        dl->AddLine(center, tip, col, 2.5f);
+        // Knob: dark ring, colour fill, white letter with a shadow.
+        const float knob = line_h * 0.40f;
+        dl->AddCircleFilled(tip, knob + 1.5f, IM_COL32(12, 14, 18, 220), 20);
+        dl->AddCircleFilled(tip, knob, col, 20);
+        const ImVec2 ts = ImGui::CalcTextSize(a.label);
+        const ImVec2 tp(tip.x - ts.x * 0.5f, tip.y - ts.y * 0.5f);
+        dl->AddText(ImVec2(tp.x + 1.0f, tp.y + 1.0f), IM_COL32(0, 0, 0, 200), a.label);
+        dl->AddText(tp, IM_COL32(255, 255, 255, 255), a.label);
+    }
+
+    // Hover hint, only while the pointer is actually over the widget.
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    const float hx = mp.x - center.x;
+    const float hy = mp.y - center.y;
+    const float hit = radius + line_h * 0.55f;
+    if (hx * hx + hy * hy < hit * hit) {
+        ImGui::SetTooltip("%s", AV("axis_gizmo_hint").c_str());
+    }
+}
+
+// The per-row category chip in the console.
+//
+// DRAWN, not a Button. As a SmallButton its label WAS the category name, so any
+// two visible log lines in the same category submitted two items with the same
+// ID — ImGui's "2 visible items with conflicting ID!" popup (and, in the
+// non-programmer build, an invisible hit target that did nothing when clicked).
+// The conflict only surfaced once the panel was tall enough to show two lines of
+// one category at once, which is why it appeared after a layout change.
+//
+// A chip is a LABEL. A label must not consume an ID.
+void draw_category_chip(const char* text) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 ts = ImGui::CalcTextSize(text);
+    const float pad_x = 6.0f;
+    const float h = ts.y + 4.0f;
+    const ImVec2 a(pos.x, pos.y);
+    const ImVec2 b(pos.x + ts.x + pad_x * 2.0f, pos.y + h);
+    dl->AddRectFilled(a, b, IM_COL32(52, 56, 63, 255), 3.0f);
+    dl->AddText(ImVec2(a.x + pad_x, a.y + 2.0f), IM_COL32(168, 176, 188, 255), text);
+    // Reserve the space the chip occupies so SameLine() lands after it.
+    ImGui::Dummy(ImVec2(b.x - a.x, h));
+}
+
+// Row tint per entity type in the outliner.
+//
+// A colour, not an icon glyph. The UI font has no icon glyphs — Toolbar.cpp
+// learned that the hard way, every typed symbol rasterised as an empty box —
+// and drawing a glyph over the label would fight the tree node's own hit box,
+// which is what selection, drag & drop and the context menu hang off. A tint is
+// one PushStyleColor and cannot break any of them.
+//
+// Only the SPECIAL kinds are tinted; a mesh is the common case and stays the
+// theme's text colour, so the hierarchy does not turn into a colour chart.
+// Alpha 0 means "leave the theme colour alone".
+ImVec4 outliner_kind_color(OutlinerKind kind) {
+    switch (kind) {
+        case OutlinerKind::Camera:
+            return ImVec4(0.55f, 0.78f, 1.00f, 1.0f); // cool blue
+        case OutlinerKind::Light:
+            return ImVec4(1.00f, 0.80f, 0.45f, 1.0f); // warm amber
+        case OutlinerKind::Sky:
+            return ImVec4(0.60f, 0.88f, 0.85f, 1.0f); // pale teal
+        case OutlinerKind::Mesh:
+        case OutlinerKind::Empty:
+        default:
+            return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+// Tiny vector glyph per entity kind, drawn with ImDrawList right after the
+// tree node (never a font glyph: the UI font has no icon codepoints, typed
+// symbols rasterise as tofu). Same flat style as the FileSystem icons, sized
+// for a tree row (~13px): one glance tells camera / sun / sky / cube apart.
+void outliner_kind_icon(ImDrawList* dl, ImVec2 c, float s, OutlinerKind kind) {
+    if (dl == nullptr || s <= 0.0f) {
+        return;
+    }
+    const float h = s * 0.5f;
+    const float t = (s * 0.10f > 1.2f) ? s * 0.10f : 1.2f;
+    switch (kind) {
+        case OutlinerKind::Camera: {
+            const ImU32 body = IM_COL32(140, 200, 255, 255);
+            const float w = h * 0.95f;
+            const float bh = h * 0.62f;
+            // Viewfinder bump.
+            dl->AddRectFilled(ImVec2(c.x - w * 0.55f, c.y - bh - h * 0.28f),
+                              ImVec2(c.x - w * 0.05f, c.y - bh + 1.0f), body, 1.0f);
+            // Body.
+            dl->AddRectFilled(ImVec2(c.x - w, c.y - bh), ImVec2(c.x + w, c.y + bh), body,
+                              1.5f);
+            // Lens: dark ring + glass dot.
+            dl->AddCircleFilled(ImVec2(c.x + w * 0.25f, c.y), bh * 0.52f,
+                                IM_COL32(24, 32, 44, 255), 16);
+            dl->AddCircleFilled(ImVec2(c.x + w * 0.25f, c.y), bh * 0.26f, body, 12);
+            break;
+        }
+        case OutlinerKind::Light: {
+            const ImU32 sun = IM_COL32(255, 205, 110, 255);
+            dl->AddCircleFilled(c, h * 0.36f, sun, 16);
+            // 8 rays: axes + diagonals, no trig needed.
+            const float r0 = h * 0.55f;
+            const float r1 = h * 0.92f;
+            const float d = 0.7071f;
+            const float dirs[8][2] = {{1, 0}, {-1, 0}, {0, 1},  {0, -1},
+                                      {d, d}, {d, -d}, {-d, d}, {-d, -d}};
+            for (const auto& v : dirs) {
+                dl->AddLine(ImVec2(c.x + v[0] * r0, c.y + v[1] * r0),
+                            ImVec2(c.x + v[0] * r1, c.y + v[1] * r1), sun, t * 0.8f);
+            }
+            break;
+        }
+        case OutlinerKind::Sky: {
+            const ImU32 cl = IM_COL32(150, 225, 215, 255);
+            // Fluffy cloud, fills the cell: flat base + three puffs.
+            dl->AddRectFilled(ImVec2(c.x - h * 0.78f, c.y - h * 0.02f),
+                              ImVec2(c.x + h * 0.78f, c.y + h * 0.48f), cl, 2.5f);
+            dl->AddCircleFilled(ImVec2(c.x - h * 0.42f, c.y - h * 0.10f), h * 0.42f,
+                                cl, 14);
+            dl->AddCircleFilled(ImVec2(c.x + h * 0.08f, c.y - h * 0.32f), h * 0.54f,
+                                cl, 16);
+            dl->AddCircleFilled(ImVec2(c.x + h * 0.55f, c.y - h * 0.02f), h * 0.32f,
+                                cl, 12);
+            break;
+        }
+        case OutlinerKind::Mesh: {
+            // Solid cube: three shaded faces, not an outline — reads as a
+            // cube at a glance instead of a diamond.
+            const ImU32 top = IM_COL32(205, 220, 238, 255);
+            const ImU32 left = IM_COL32(140, 162, 188, 255);
+            const ImU32 right = IM_COL32(98, 118, 148, 255);
+            const ImVec2 ctop(c.x, c.y - h);
+            const ImVec2 r(c.x + h * 0.88f, c.y - h * 0.42f);
+            const ImVec2 m(c.x, c.y + h * 0.02f);
+            const ImVec2 l(c.x - h * 0.88f, c.y - h * 0.42f);
+            const ImVec2 b(c.x, c.y + h);
+            const ImVec2 bl(c.x - h * 0.88f, c.y + h * 0.52f);
+            const ImVec2 br(c.x + h * 0.88f, c.y + h * 0.52f);
+            dl->AddQuadFilled(ctop, r, m, l, top);
+            dl->AddQuadFilled(l, m, b, bl, left);
+            dl->AddQuadFilled(m, r, br, b, right);
+            break;
+        }
+        case OutlinerKind::Empty:
+        default: {
+            // Plain object: small hollow square, dim so it stays quiet.
+            const ImU32 dim = IM_COL32(125, 132, 145, 200);
+            const float q = h * 0.62f;
+            dl->AddRect(ImVec2(c.x - q, c.y - q), ImVec2(c.x + q, c.y + q), dim, 1.5f,
+                        0, t * 0.8f);
+            break;
+        }
+    }
+}
+
+// Ground plane glyph: a flat quad with grid lines. The outliner only knows
+// "Mesh" by components, so Ground and Cube would share the cube — the name
+// check below (display layer only) gives the default scene's ground a plane
+// that cannot be confused with a cube.
+bool outliner_is_ground_label(const std::string& label) {
+    if (label.size() != 6) {
+        return false;
+    }
+    const char* want = "ground";
+    for (size_t i = 0; i < 6; ++i) {
+        char ch = label[i];
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch + ('a' - 'A'));
+        }
+        if (ch != want[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void outliner_plane_icon(ImDrawList* dl, ImVec2 c, float s) {
+    if (dl == nullptr || s <= 0.0f) {
+        return;
+    }
+    const float h = s * 0.5f;
+    const float t = (s * 0.10f > 1.2f) ? s * 0.10f : 1.2f;
+    const ImU32 grass = IM_COL32(115, 195, 135, 255);
+    const ImU32 dark = IM_COL32(70, 130, 90, 255);
+    // Flat perspective quad.
+    const ImVec2 l(c.x - h * 0.95f, c.y + h * 0.05f);
+    const ImVec2 r(c.x + h * 0.95f, c.y + h * 0.05f);
+    const ImVec2 br(c.x + h * 0.55f, c.y + h * 0.60f);
+    const ImVec2 bl(c.x - h * 0.55f, c.y + h * 0.60f);
+    dl->AddQuadFilled(l, r, br, bl, grass);
+    // Grid lines across it.
+    dl->AddLine(ImVec2(c.x - h * 0.75f, c.y + h * 0.33f),
+                ImVec2(c.x + h * 0.75f, c.y + h * 0.33f), dark, t * 0.8f);
+    dl->AddLine(ImVec2(c.x - h * 0.12f, c.y + h * 0.05f),
+                ImVec2(c.x - h * 0.07f, c.y + h * 0.60f), dark, t * 0.8f);
+    dl->AddLine(ImVec2(c.x + h * 0.12f, c.y + h * 0.05f),
+                ImVec2(c.x + h * 0.07f, c.y + h * 0.60f), dark, t * 0.8f);
+    // Horizon: the plane floats under it.
+    dl->AddLine(ImVec2(c.x - h * 0.95f, c.y - h * 0.45f),
+                ImVec2(c.x + h * 0.95f, c.y - h * 0.45f), dark, t * 0.8f);
 }
 
 // --- Reflection-driven widgets ---------------------------------------------
@@ -463,34 +868,72 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    // Full-window dockspace with a Unity-style default layout, built once:
-    // Outliner left, Viewport center, Inspector right, Assets + Console
-    // tabbed at the bottom. The layout is rebuilt every launch (IniFilename
-    // is null, so there is nothing to load it from) but never again within
-    // a session, so the user can still drag panels around freely.
+    // Full-window dockspace. A human session restores the layout it saved last
+    // time (ui_init's IniFilename), so the default below is only built when
+    // there is nothing to restore — rebuilding unconditionally would throw the
+    // user's arrangement away on every launch. A scripted run has no ini and
+    // therefore always gets the deterministic default.
     {
         const ImGuiID dockspace_id = ImGui::GetID("NOVAForgeDockSpace");
         ImGui::DockSpaceOverViewport(dockspace_id, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         static bool dock_layout_built = false;
-        if (!dock_layout_built) {
+        // ImGui loads the ini during the first NewFrame, so by now a restored
+        // layout already has a split node tree under this id.
+        const ImGuiDockNode* existing = ImGui::DockBuilderGetNode(dockspace_id);
+        const bool layout_restored = (existing != nullptr && existing->ChildNodes[0] != nullptr);
+        if (!dock_layout_built || ui_settings().reset_layout_requested) {
+            const bool want_default = ui_settings().reset_layout_requested || !layout_restored;
             dock_layout_built = true;
-            ImGui::DockBuilderRemoveNode(dockspace_id);
-            ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
+            ui_settings().reset_layout_requested = false;
+            if (want_default) {
+                ImGui::DockBuilderRemoveNode(dockspace_id);
+                ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+                ImGuiViewport* viewport = ImGui::GetMainViewport();
+                ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
 
-            ImGuiID dock_left = 0, dock_right = 0, dock_bottom = 0, dock_center = 0;
+            ImGuiID dock_left = 0, dock_left_top = 0, dock_left_bottom = 0;
+            ImGuiID dock_right = 0, dock_bottom = 0, dock_center = 0;
             ImGuiID dock_rest = dockspace_id;
-            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Left, 0.18f, &dock_left, &dock_rest);
-            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Right, 0.24f, &dock_right, &dock_rest);
-            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
+            // Left column: outliner on top, FileSystem browser underneath. The
+            // browser belongs on the left, under the tree it browses — that is
+            // the arrangement every scene editor converges on, and it fills the
+            // dead space a short outliner otherwise leaves. The column is wider
+            // than a bare tree needs because it now carries two panels, and the
+            // split is even so the browser clears its own chrome (tabs + two
+            // nav rows + filter) with room left for a list.
+            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Left, 0.24f, &dock_left, &dock_rest);
+            ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.50f, &dock_left_bottom,
+                                        &dock_left_top);
+            // 0.32, not 0.26: the right column now carries FOUR tabs (Inspector,
+            // Camera, Lighting, Environment) and a tab bar that does not fit its
+            // own tabs scrolls them behind arrows — which hides a whole editor
+            // behind a widget the user has to discover.
+            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Right, 0.32f, &dock_right, &dock_rest);
+            ImGui::DockBuilderSplitNode(dock_rest, ImGuiDir_Down, 0.24f, &dock_bottom, &dock_center);
 
-            ImGui::DockBuilderDockWindow("Outliner", dock_left);
+            ImGui::DockBuilderDockWindow("Outliner", dock_left_top);
+            // "Assets" is the FileSystem browser's window ID (kept so existing
+            // layouts survive the upgrade) — see the note at its Begin().
+            ImGui::DockBuilderDockWindow("Assets", dock_left_bottom);
+            ImGui::DockBuilderDockWindow("World", dock_left_top);
             ImGui::DockBuilderDockWindow("Viewport", dock_center);
             ImGui::DockBuilderDockWindow("Inspector", dock_right);
-            ImGui::DockBuilderDockWindow("Assets", dock_bottom);
+            // The dedicated editors dock as tabs beside the Inspector: same
+            // column, one click apart, each a whole panel for one engine
+            // function rather than one more section of the generic inspector.
+            ImGui::DockBuilderDockWindow("NFCameraPanel", dock_right);
+            ImGui::DockBuilderDockWindow("NFLighting", dock_right);
+            ImGui::DockBuilderDockWindow("NFEnvironment", dock_right);
             ImGui::DockBuilderDockWindow("Console", dock_bottom);
-            ImGui::DockBuilderFinish(dockspace_id);
+            ImGui::DockBuilderDockWindow("NFRender", dock_bottom);
+                ImGui::DockBuilderFinish(dockspace_id);
+                // DockBuilderFinish does NOT mark the ini settings dirty (it
+                // only re-docks the windows into the new nodes), so a default
+                // layout built here was never written to disk — the persisted
+                // layout would only ever exist if the user happened to drag a
+                // splitter. Mark it explicitly.
+                ImGui::MarkIniSettingsDirty();
+            }
         }
     }
 
@@ -539,7 +982,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         if (!has_sel) {
             ImGui::BeginDisabled();
         }
-        if (ImGui::Button(AV("save_prefab").c_str())) {
+        // Short label + tooltip carrying the full name. "Save as prefab" is
+        // ~120px at this font, so at the outliner's share of a 1280px window it
+        // rendered as "Save as pr" — a clipped button reads as a broken panel,
+        // and the full wording is one hover away (and unchanged in the row's
+        // context menu, which has the width for it).
+        if (ImGui::Button(AV("prefab").c_str())) {
             const ecs::Entity sel = app.selection().primary();
             std::string err;
             const std::string prefab_path =
@@ -548,8 +996,37 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 push_error(app.console(), "Save as prefab failed", err);
             }
         }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", AV("save_prefab").c_str());
+        }
         if (!has_sel) {
             ImGui::EndDisabled();
+        }
+        // Live search: filters the cached rows every frame (see
+        // EditorApp::outliner_rows), so a match under a collapsed parent is
+        // still one glance away.
+        char outliner_filter[128]{};
+        std::strncpy(outliner_filter, app.outliner().filter_text.c_str(), sizeof(outliner_filter) - 1);
+        // The hint lives INSIDE the field. As a trailing label it ate ~60px of a
+        // narrow panel to repeat what an empty box already implies, and in the
+        // Arabic UI it was the only string in the row that had to be shifted.
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        if (ImGui::InputTextWithHint("##outliner_filter", AV("filter").c_str(), outliner_filter,
+                                     sizeof(outliner_filter))) {
+            app.outliner().filter_text = outliner_filter;
+        }
+        // Live census: total entities plus selection size, so an empty-looking
+        // tree still answers "is the scene really empty".
+        {
+            const size_t total = app.status().entity_count;
+            const size_t n_sel = app.selection().all().size();
+            if (n_sel > 0) {
+                ImGui::TextDisabled(
+                    "%s  |  %s", AVF("stats_entities", total).c_str(),
+                    AVF("selected_count", n_sel).c_str());
+            } else {
+                ImGui::TextDisabled("%s", AVF("stats_entities", total).c_str());
+            }
         }
         const std::vector<OutlinerRow> rows = app.outliner_rows();
         if (rows.empty()) {
@@ -559,6 +1036,21 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // Clipped: a 600-row village must not pay 600 shaped tree nodes per
         // frame. Open state is keyed by stable entity id (###e<id>), never by
         // row index, so clipping never collapses the tree.
+        //
+        // Icon gutter: every row reserves space for its kind glyph by prefixing
+        // plain spaces (measured once, display-only — the ###e<id> suffix keeps
+        // widget identity). The glyph is painted into that gutter after the
+        // node, so selection, drag & drop and the context menu are untouched.
+        const float ol_icon_sz = 13.0f;
+        const float ol_space_w = ImGui::CalcTextSize(" ").x;
+        int ol_pad_n = (ol_space_w > 0.0f)
+                           ? static_cast<int>(std::ceil((ol_icon_sz + 4.0f) / ol_space_w))
+                           : 4;
+        if (ol_pad_n < 2) {
+            ol_pad_n = 2;
+        }
+        const std::string ol_pad(static_cast<size_t>(ol_pad_n), ' ');
+        const float ol_pad_w = ImGui::CalcTextSize(ol_pad.c_str()).x;
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(rows.size()));
         while (clipper.Step()) {
@@ -580,10 +1072,35 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // right-to-left); the ID suffix stays the numeric entity, so
             // renaming an entity or switching language never collapses the
             // tree — the label text is not part of the widget identity.
+            // The leading spaces are the icon gutter (see above).
             const std::string row_text =
-                ui::shape_arabic(row.is_prefab ? ("[Prefab] " + row.label) : row.label);
+                ol_pad + ui::shape_arabic(row.is_prefab ? ("[Prefab] " + row.label) : row.label);
             const std::string row_id = "###e" + std::to_string(row.entity.id);
+            const ImVec4 kind_col = outliner_kind_color(row.kind);
+            const bool tinted = (kind_col.w > 0.0f);
+            if (tinted) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kind_col);
+            }
             const bool open = ImGui::TreeNodeEx((row_text + row_id).c_str(), flags);
+            if (tinted) {
+                ImGui::PopStyleColor();
+            }
+            // Paint the kind glyph into the gutter: label starts at the tree
+            // node's label spacing, the gutter is the reserved prefix.
+            {
+                const ImVec2 rmin = ImGui::GetItemRectMin();
+                const ImVec2 rmax = ImGui::GetItemRectMax();
+                const float label_x = rmin.x + ImGui::GetTreeNodeToLabelSpacing();
+                const float ix = label_x + (ol_pad_w - ol_icon_sz) * 0.5f;
+                const float iy = (rmin.y + rmax.y - ol_icon_sz) * 0.5f;
+                const ImVec2 ic(ix + ol_icon_sz * 0.5f, iy + ol_icon_sz * 0.5f);
+                if (row.kind == OutlinerKind::Mesh && outliner_is_ground_label(row.label)) {
+                    outliner_plane_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
+                } else {
+                    outliner_kind_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz,
+                                       row.kind);
+                }
+            }
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
                 const ImGuiIO& io = ImGui::GetIO();
                 // Ctrl OR Shift toggles (Shift matches the viewport gesture).
@@ -613,6 +1130,26 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
                 ImGui::EndDragDropTarget();
+            }
+            // Right-click menu: the same Delete / Save-as-prefab the toolbar
+            // buttons offer, where the pointer already is. Delete is undoable
+            // (Ctrl+Z restores), matching the button's safety contract.
+            if (ImGui::BeginPopupContextItem("##rowctx")) {
+                if (ImGui::MenuItem(AV("delete").c_str())) {
+                    std::string err;
+                    if (!app.delete_entity(row.entity, err)) {
+                        push_error(app.console(), "Delete failed", err);
+                    }
+                }
+                if (ImGui::MenuItem(AV("save_prefab").c_str())) {
+                    std::string err;
+                    const std::string prefab_path =
+                        std::string("content://Prefabs/") + row.label + ".nfscene";
+                    if (!app.create_prefab(row.entity, prefab_path, err)) {
+                        push_error(app.console(), "Save as prefab failed", err);
+                    }
+                }
+                ImGui::EndPopup();
             }
             if (open && row.has_children) {
                 ImGui::TreePop();
@@ -719,6 +1256,26 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                               (local_space ? AV("local_space") : AV("world_space")).c_str());
         }
         ImGui::SameLine();
+        // Frame the selection / frame everything. Two buttons rather than one
+        // with a modifier: they are both common, and a modifier-only variant is
+        // undiscoverable. Disabled (greyed, not hidden) when there is nothing
+        // selected, so the toolbar does not reflow as the selection changes.
+        ImGui::BeginDisabled(!app.selection().has_selection() || app.playing());
+        if (ImGui::Button((AV("frame_selection") + "###frame_sel").c_str())) {
+            intents.nav_frame = 1;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", AV("frame_selection_hint").c_str());
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button((AV("frame_all") + "###frame_all").c_str())) {
+            intents.nav_frame = 2;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", AV("frame_all_hint").c_str());
+        }
+        ImGui::SameLine();
         // Grid snapping (P2). A step of 0 disables its channel, so the
         // checkbox is "any channel on"; enabling with all steps at zero seeds
         // usable defaults rather than a checkbox that snaps to nothing.
@@ -789,21 +1346,69 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // projected through the camera the frame was rendered with, so the grid
         // sits in the scene rather than on the screen. Without it the viewport is
         // a gradient with no sense of scale or where the origin is.
-        if (ui_settings().show_grid) {
+        // One camera extraction serves both the ground grid and the orientation
+        // gizmo: asking the Runtime twice for the same frame's view is the kind
+        // of duplication that drifts apart later.
+        rendering::Camera vp_cam{};
+        const bool have_cam =
+            app.runtime() != nullptr &&
+            app.runtime()->extract_camera(static_cast<uint32_t>(std::max(1.0f, img_size.x)),
+                                          static_cast<uint32_t>(std::max(1.0f, img_size.y)),
+                                          vp_cam);
+        if (ui_settings().show_grid && have_cam) {
             const ImVec2 mn = ImGui::GetItemRectMin();
             const ImVec2 mx = ImGui::GetItemRectMax();
-            rendering::Camera cam{};
-            if (app.runtime() != nullptr &&
-                app.runtime()->extract_camera(static_cast<uint32_t>(std::max(1.0f, img_size.x)),
-                                              static_cast<uint32_t>(std::max(1.0f, img_size.y)), cam)) {
-                // ImGui draws AFTER the scene image, so the grid paints over the
-                // geometry where the two overlap. That is the standard editor
-                // compromise (the alternative is a depth-aware overlay pass, which
-                // needs the depth buffer in this draw list) and it is what keeps
-                // the grid usable as a reference while orbiting.
-                draw_ground_grid(ImGui::GetWindowDrawList(), mn, mx, cam.view_projection,
-                                 ui_settings().grid_step, kGridHalfExtent);
+            // ImGui draws AFTER the scene image, so the grid paints over the
+            // geometry where the two overlap. That is the standard editor
+            // compromise (the alternative is a depth-aware overlay pass, which
+            // needs the depth buffer in this draw list) and it is what keeps
+            // the grid usable as a reference while orbiting.
+            draw_ground_grid(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
+                             ui_settings().grid_step, kGridHalfExtent, app.view_pivot()[0],
+                             app.view_pivot()[2]);
+        }
+        // The gizmo hover for this frame: a click on it routes to a handle
+        // press (no re-pick), anywhere else to the pick press below.
+        GizmoHandle gizmo_hover = GizmoHandle::None;
+        if (have_cam) {
+            draw_orientation_gizmo(ImGui::GetWindowDrawList(), ImGui::GetItemRectMax(), vp_cam);
+            // Transform gizmo over the image (selection arrows / rings /
+            // boxes). Draws nothing while playing or with no selection. A
+            // click on the hovered handle below must raise a gizmo press
+            // instead of the pick press (no re-select while grabbing).
+            gizmo_hover = draw_transform_gizmo(app, vp_cam, ImGui::GetItemRectMin(),
+                                               ImGui::GetItemRectMax());
+        }
+        // Live simulation overlay: what the frame actually stepped, for the
+        // "is anything running" glance. Counts come straight from the Runtime
+        // getters, so a wired system shows up here the moment it binds.
+        if (app.runtime() != nullptr) {
+            runtime::Runtime* rt = app.runtime();
+            const ImVec2 img_mn = ImGui::GetItemRectMin();
+            ImGui::SetNextWindowPos(ImVec2(img_mn.x + 8.0f, img_mn.y + 8.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.6f);
+            if (ImGui::Begin("##viewport_stats", nullptr,
+                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
+                const EditorStatus status = app.status();
+                ImGui::TextDisabled("%s", AVF("stats_entities", status.entity_count).c_str());
+                ImGui::TextDisabled("%u x %u", app.viewport().width, app.viewport().height);
+                ImGui::TextDisabled(
+                    "%s",
+                    AVF("stats_scripts", static_cast<int>(rt->scripts_runnable_count()),
+                        static_cast<int>(rt->script_count()))
+                        .c_str());
+                ImGui::TextDisabled("%s",
+                                    AVF("stats_particles", rt->particles_alive(),
+                                        rt->particle_emitter_count())
+                                        .c_str());
+                ImGui::TextDisabled("%s", AVF("stats_cloths", rt->cloth_count()).c_str());
+                ImGui::TextDisabled("%s", AVF("stats_characters", rt->character_count()).c_str());
+                if (const ai::AIWorld* ai = rt->ai_world()) {
+                    ImGui::TextDisabled("%s", AVF("stats_ai", ai->actors().size()).c_str());
+                }
             }
+            ImGui::End();
         }
         // Pointer gesture state machine (one viewport, so statics are fine):
         // press on the image arms a gizmo drag in the app, movement feeds it,
@@ -831,15 +1436,23 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // While playing, the game owns the left button too (no gizmo
             // drags, no selection changes): structural edits are locked and
             // a drag would only fight the simulation.
+            // A click on a gizmo handle owns the click instead: constrained
+            // drag on the current selection, no re-pick.
             if (!app.playing() && !press_armed && ImGui::IsItemHovered() &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 if (w > 1.0f && h > 1.0f) {
                     press_armed = true;
-                    intents.viewport_press = true;
-                    // Ctrl/Shift at press time toggles the hit entity into the
-                    // selection (group drag) instead of replacing it.
-                    const ImGuiIO& press_io = ImGui::GetIO();
-                    intents.viewport_press_additive = press_io.KeyShift || press_io.KeyCtrl;
+                    if (gizmo_hover != GizmoHandle::None) {
+                        intents.viewport_gizmo_press = true;
+                        intents.gizmo_handle = static_cast<int>(gizmo_hover);
+                    } else {
+                        intents.viewport_press = true;
+                        // Ctrl/Shift at press time toggles the hit entity into the
+                        // selection (group drag) instead of replacing it.
+                        const ImGuiIO& press_io = ImGui::GetIO();
+                        intents.viewport_press_additive =
+                            press_io.KeyShift || press_io.KeyCtrl;
+                    }
                     to_ndc(intents.press_ndc_x, intents.press_ndc_y);
                     last_ndc_x = intents.press_ndc_x;
                     last_ndc_y = intents.press_ndc_y;
@@ -897,6 +1510,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     intents.nav_u = ImGui::IsKeyDown(ImGuiKey_E);
                     intents.nav_d = ImGui::IsKeyDown(ImGuiKey_Q);
                 }
+                // Home = frame the selection, Shift+Home = frame the scene.
+                // Home is free in the viewport's key map (F is dolly-forward,
+                // B is dolly-back, A/D/E/Q are the fly keys), and a bare letter
+                // would collide with the gizmo shortcuts. Typed text and an
+                // open rename field must never trigger it.
+                if (over_view && !nav_io.WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
+                        intents.nav_frame = nav_io.KeyShift ? 2 : 1;
+                    }
+                }
             }
             }
         }
@@ -935,6 +1558,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         if (w == nullptr || !sel.valid() || !w->is_alive(sel)) {
             ImGui::TextDisabled("%s", AV("nothing_selected").c_str());
         } else {
+            // Identity line: the stable Entity id + generation (what undo,
+            // logs and the outliner's ###e<id> all key on). English on purpose,
+            // like every other technical diagnostic in the editor.
+            ImGui::TextDisabled("Entity %u (gen %u)", static_cast<unsigned>(sel.id),
+                                static_cast<unsigned>(sel.generation));
             InspectorCache& ic = inspector_cache();
             if (!ic.valid || !(ic.entity == sel)) {
                 // A drag in progress targets the old material: fold it into
@@ -982,6 +1610,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ic.light_shadow_distance = l.shadow_distance;
                 const SkyEdit s = read_sky(*w, sel, ic.sky_has);
                 ic.sky_enabled = s.enabled;
+                // Read every frame, not only when the panel is open: a day/night
+                // cycle advances during play, and a stale cached hour would show
+                // the author a time the scene is no longer at.
+                const TimeOfDayEdit tod = read_time_of_day(*w, sel, ic.tod_has);
+                if (ic.tod_has) {
+                    ic.tod_hours = tod.time_hours;
+                    ic.tod_day_length = tod.day_length_seconds;
+                    ic.tod_enabled = tod.enabled;
+                    ic.tod_drive_light = tod.drive_light;
+                }
                 ic.sky_zenith[0] = s.zenith[0];
                 ic.sky_zenith[1] = s.zenith[1];
                 ic.sky_zenith[2] = s.zenith[2];
@@ -993,6 +1631,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ic.sky_ground[2] = s.ground[2];
                 ic.sky_sun_disk = s.sun_disk;
                 ic.sky_sun_glow = s.sun_glow;
+                const runtime::PostProcessComponent pp = read_post_process(*w, sel, ic.pp_has);
+                if (ic.pp_has) {
+                    ic.pp_bloom_enabled = pp.bloom_enabled;
+                    ic.pp_bloom_threshold = pp.bloom_threshold;
+                    ic.pp_bloom_knee = pp.bloom_knee;
+                    ic.pp_bloom_intensity = pp.bloom_intensity;
+                    ic.pp_bloom_radius = pp.bloom_radius;
+                    ic.pp_grade_enabled = pp.grade_enabled;
+                    ic.pp_grade_contrast = pp.grade_contrast;
+                    ic.pp_grade_pivot = pp.grade_pivot;
+                    ic.pp_grade_temperature = pp.grade_temperature;
+                    ic.pp_grade_tint = pp.grade_tint;
+                    ic.pp_grade_gamma = pp.grade_gamma;
+                    ic.pp_sharpen_enabled = pp.sharpen_enabled;
+                    ic.pp_sharpen_amount = pp.sharpen_amount;
+                    ic.pp_sharpen_radius = pp.sharpen_radius;
+                    ic.pp_saturation = pp.saturation;
+                    ic.pp_vignette = pp.vignette;
+                }
                 if (const auto* m = w->get<runtime::MeshComponent>(sel)) {
                     const std::string id = m->mesh_id.to_string();
                     std::strncpy(ic.mesh_id, id.c_str(), sizeof(ic.mesh_id) - 1);
@@ -1079,10 +1736,141 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.dst_blast = dst->blast_radius;
                     ic.dst_enabled = dst->enabled;
                 }
+                if (const auto* sc = w->get<scripting::ScriptComponent>(sel)) {
+                    std::strncpy(ic.script_path, sc->path.c_str(), sizeof(ic.script_path) - 1);
+                    ic.script_path[sizeof(ic.script_path) - 1] = '\0';
+                    ic.script_enabled = sc->enabled;
+                } else {
+                    ic.script_path[0] = '\0';
+                    ic.script_enabled = true;
+                }
+                if (const auto* aud = w->get<audio::AudioComponent>(sel)) {
+                    std::strncpy(ic.aud_buffer, aud->buffer_name.c_str(), sizeof(ic.aud_buffer) - 1);
+                    ic.aud_buffer[sizeof(ic.aud_buffer) - 1] = '\0';
+                } else {
+                    ic.aud_buffer[0] = '\0';
+                }
+                if (const auto* sky = w->get<runtime::SkyComponent>(sel)) {
+                    ic.sky_clear[0] = sky->clear_r;
+                    ic.sky_clear[1] = sky->clear_g;
+                    ic.sky_clear[2] = sky->clear_b;
+                }
+                if (const auto* pc = w->get<vfx::ParticleComponent>(sel)) {
+                    ic.part_has = true;
+                    ic.part_enabled = pc->enabled;
+                    ic.part_rate = pc->config.rate;
+                    ic.part_lifetime = pc->config.lifetime;
+                    ic.part_lifetime_spread = pc->config.lifetime_spread;
+                    ic.part_velocity[0] = pc->config.velocity.x;
+                    ic.part_velocity[1] = pc->config.velocity.y;
+                    ic.part_velocity[2] = pc->config.velocity.z;
+                    ic.part_vel_spread[0] = pc->config.velocity_spread.x;
+                    ic.part_vel_spread[1] = pc->config.velocity_spread.y;
+                    ic.part_vel_spread[2] = pc->config.velocity_spread.z;
+                    ic.part_gravity[0] = pc->config.gravity.x;
+                    ic.part_gravity[1] = pc->config.gravity.y;
+                    ic.part_gravity[2] = pc->config.gravity.z;
+                    ic.part_drag = pc->config.drag;
+                    ic.part_start_size = pc->config.start_size;
+                    ic.part_end_size = pc->config.end_size;
+                    ic.part_start_color[0] = pc->config.start_color.x;
+                    ic.part_start_color[1] = pc->config.start_color.y;
+                    ic.part_start_color[2] = pc->config.start_color.z;
+                    ic.part_end_color[0] = pc->config.end_color.x;
+                    ic.part_end_color[1] = pc->config.end_color.y;
+                    ic.part_end_color[2] = pc->config.end_color.z;
+                    ic.part_max = static_cast<int>(pc->config.max_particles);
+                } else {
+                    ic.part_has = false;
+                }
+                if (const auto* cc = w->get<physics::ClothComponent>(sel)) {
+                    ic.cloth_has = true;
+                    ic.cloth_enabled = cc->enabled;
+                    ic.cloth_res_x = cc->config.res_x;
+                    ic.cloth_res_z = cc->config.res_z;
+                    ic.cloth_spacing = cc->config.spacing;
+                    ic.cloth_mass = cc->config.mass;
+                    ic.cloth_damping = cc->config.damping;
+                    ic.cloth_stiffness = cc->config.stiffness;
+                    ic.cloth_iterations = cc->config.iterations;
+                    ic.cloth_substeps = cc->config.substeps;
+                    ic.cloth_gravity[0] = cc->config.gravity.x;
+                    ic.cloth_gravity[1] = cc->config.gravity.y;
+                    ic.cloth_gravity[2] = cc->config.gravity.z;
+                } else {
+                    ic.cloth_has = false;
+                }
+                if (const auto* ch = w->get<physics::CharacterComponent>(sel)) {
+                    ic.char_has = true;
+                    ic.char_enabled = ch->enabled;
+                    ic.char_radius = ch->config.radius;
+                    ic.char_max_speed = ch->config.max_speed;
+                    ic.char_acceleration = ch->config.acceleration;
+                    ic.char_air_control = ch->config.air_control;
+                    ic.char_jump_speed = ch->config.jump_speed;
+                    ic.char_slope = ch->config.slope_limit_deg;
+                    ic.char_mass = ch->config.mass;
+                    ic.char_friction = ch->config.friction;
+                    ic.char_wish[0] = ch->wish_dir.x;
+                    ic.char_wish[1] = ch->wish_dir.y;
+                    ic.char_wish[2] = ch->wish_dir.z;
+                    ic.char_jump = ch->jump;
+                } else {
+                    ic.char_has = false;
+                }
             }
             if (!ic.error.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "%s: %s", AV("error").c_str(),
                                    ic.error.c_str());
+            }
+            // --- Add Component (Unity-style single entry point) ---
+            // Every section below also carries its own Attach, but a user
+            // hunting for "where do I add X" should have one place to look.
+            // Each item forwards to the same validated EditorApp method the
+            // section uses; missing-component items only.
+            if (ImGui::Button((AV("add_component") + "###AddComponent").c_str())) {
+                ImGui::OpenPopup("##add_component_menu");
+            }
+            if (ImGui::BeginPopup("##add_component_menu")) {
+                std::string add_err;
+                bool added = false;
+                if (!w->has<runtime::CameraComponent>(sel) &&
+                    ImGui::MenuItem(AV("camera").c_str())) {
+                    added = app.set_camera(sel, CameraEdit{}, add_err);
+                } else if (!w->has<runtime::DirectionalLight>(sel) &&
+                           ImGui::MenuItem(AV("directional_light").c_str())) {
+                    added = app.set_light(sel, LightEdit{}, add_err);
+                } else if (!ic.sky_has && ImGui::MenuItem(AV("sky").c_str())) {
+                    added = app.apply_sky_edit(SkyEdit{}, add_err);
+                } else if (!ic.pp_has && ImGui::MenuItem(AV("post_process").c_str())) {
+                    added = app.set_post_process(sel, runtime::PostProcessComponent{}, add_err);
+                } else if (!w->has<physics::RigidBodyComponent>(sel) &&
+                           ImGui::MenuItem(AV("rigid_body").c_str())) {
+                    added = app.set_rigid_body(sel, physics::RigidBodyComponent{}, add_err);
+                } else if (!w->has<physics::ColliderComponent>(sel) &&
+                           ImGui::MenuItem(AV("collider").c_str())) {
+                    added = app.set_collider(sel, physics::ColliderComponent{}, add_err);
+                } else if (!w->has<runtime::DestructibleComponent>(sel) &&
+                           ImGui::MenuItem(AV("destructible").c_str())) {
+                    added = app.set_destructible(sel, runtime::DestructibleComponent{}, add_err);
+                } else if (!w->has<vfx::ParticleComponent>(sel) &&
+                           ImGui::MenuItem(AV("particles").c_str())) {
+                    added = app.attach_particles(sel, add_err);
+                } else if (!w->has<physics::ClothComponent>(sel) &&
+                           ImGui::MenuItem(AV("cloth").c_str())) {
+                    added = app.attach_cloth(sel, add_err);
+                } else if (!w->has<physics::CharacterComponent>(sel) &&
+                           ImGui::MenuItem(AV("character").c_str())) {
+                    added = app.attach_character(sel, add_err);
+                }
+                if (added) {
+                    ic.error.clear();
+                    ic.valid = false;
+                } else if (!add_err.empty()) {
+                    ic.error = add_err;
+                    push_error(app.console(), "Add component failed", add_err);
+                }
+                ImGui::EndPopup();
             }
             if (ImGui::CollapsingHeader((AV("name") + "###Name").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::InputText("##name", ic.name, sizeof(ic.name));
@@ -1166,7 +1954,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         }
                         return (*list)[static_cast<size_t>(idx)].c_str();
                     };
-                    ImGui::Combo(AV("material").c_str(), &ic.mat_choice, mat_combo_item, &mat_list,
+                    ImGui::Combo((AV("material") + "##material_asset").c_str(), &ic.mat_choice,
+                                 mat_combo_item, &mat_list,
                                  static_cast<int>(mat_list.size()));
                     ImGui::SameLine();
                     if (ImGui::Button((AV("assign") + "##material").c_str())) {
@@ -1433,7 +2222,45 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
             }
-            // --- Sky / environment (Phase 13) ---
+            // --- Day/night cycle (design doc §64) ---
+if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
+    if (!ic.tod_has) {
+        ImGui::TextDisabled("%s", AV("no_day_night").c_str());
+        if (ImGui::Button((AV("add_day_night") + "##addtod").c_str())) {
+            TimeOfDayEdit e; // defaults; the command adds the component
+            std::string err;
+            if (!app.set_time_of_day(sel, e, err)) {
+                ic.error = err;
+                push_error(app.console(), "Add day/night failed", err);
+            } else {
+                ic.error.clear();
+            }
+        }
+    } else {
+        ImGui::Checkbox((AV("enabled") + "##tod_enabled").c_str(), &ic.tod_enabled);
+        // 0..24 with a step of 0.25: an author setting a golden hour wants
+        // "17.5", not a spinner they have to nudge to 17.5.
+        ImGui::SliderFloat((AV("hour") + "##tod_hour").c_str(), &ic.tod_hours, 0.0f, 24.0f);
+        ImGui::SliderFloat((AV("day_length") + "##tod_len").c_str(), &ic.tod_day_length, 0.0f, 600.0f);
+        ImGui::Checkbox((AV("drive_light") + "##tod_drive").c_str(), &ic.tod_drive_light);
+        if (ImGui::Button((AV("apply") + "##tod").c_str())) {
+            TimeOfDayEdit e;
+            e.time_hours = ic.tod_hours;
+            e.day_length_seconds = ic.tod_day_length;
+            e.enabled = ic.tod_enabled;
+            e.drive_light = ic.tod_drive_light;
+            std::string err;
+            if (!app.set_time_of_day(sel, e, err)) {
+                ic.error = err;
+                push_error(app.console(), "Apply day/night failed", err);
+            } else {
+                ic.error.clear();
+            }
+        }
+    }
+}
+
+// --- Sky / environment (Phase 13) ---
             if (ImGui::CollapsingHeader((AV("sky") + "###Sky").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (!ic.sky_has) {
                     ImGui::TextDisabled("%s", AV("no_sky_settings").c_str());
@@ -1448,10 +2275,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         }
                     }
                 } else {
-                    ImGui::Checkbox(AV("enabled").c_str(), &ic.sky_enabled);
+                    ImGui::Checkbox((AV("enabled") + "##sky_enabled").c_str(), &ic.sky_enabled);
                     ImGui::ColorEdit3(AV("zenith").c_str(), ic.sky_zenith);
                     ImGui::ColorEdit3(AV("horizon").c_str(), ic.sky_horizon);
                     ImGui::ColorEdit3(AV("ground").c_str(), ic.sky_ground);
+                    ImGui::ColorEdit3(AV("clear").c_str(), ic.sky_clear);
                     ImGui::SliderFloat(AV("sun_disk").c_str(), &ic.sky_sun_disk, 0.0f, 8.0f);
                     ImGui::SliderFloat(AV("sun_glow").c_str(), &ic.sky_sun_glow, 0.0f, 8.0f);
                     if (ImGui::Button((AV("apply") + "##sky").c_str())) {
@@ -1465,6 +2293,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         e.ground[0] = ic.sky_ground[0];
                         e.ground[1] = ic.sky_ground[1];
                         e.ground[2] = ic.sky_ground[2];
+                        e.clear[0] = ic.sky_clear[0];
+                        e.clear[1] = ic.sky_clear[1];
+                        e.clear[2] = ic.sky_clear[2];
                         e.sun_disk = ic.sky_sun_disk;
                         e.sun_glow = ic.sky_sun_glow;
                         e.enabled = ic.sky_enabled;
@@ -1478,10 +2309,113 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
             }
+            // --- Post-processing (design §206) ---
+            if (ImGui::CollapsingHeader((AV("post_process") + "###PostProcess").c_str())) {
+                if (!ic.pp_has) {
+                    ImGui::TextDisabled("%s", AV("no_post_process").c_str());
+                    if (ImGui::Button((AV("add_post_process") + "##addpp").c_str())) {
+                        // The component's defaults are the renderer's neutral
+                        // values, so adding it changes nothing until a stage is
+                        // switched on — the author sees the panel appear, not
+                        // the picture change.
+                        runtime::PostProcessComponent e{};
+                        std::string err;
+                        if (!app.set_post_process(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Add post-processing failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                } else {
+                    // Bloom. The threshold and the knee are expressed in raw HDR
+                    // units, so the slider ceilings are well above 1: a value of
+                    // 1 is "only brighter than a fully lit white surface blooms",
+                    // and the interesting range for a stylized look starts there.
+                    ImGui::Checkbox((AV("enabled") + "##pp_bloom").c_str(), &ic.pp_bloom_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("bloom").c_str());
+                    ImGui::SliderFloat((AV("bloom_threshold") + "##pp_bloom_threshold").c_str(),
+                                       &ic.pp_bloom_threshold, 0.0f, 8.0f);
+                    ImGui::SliderFloat((AV("bloom_knee") + "##pp_bloom_knee").c_str(), &ic.pp_bloom_knee,
+                                       0.0f, 2.0f);
+                    ImGui::SliderFloat((AV("bloom_intensity") + "##pp_bloom_intensity").c_str(),
+                                       &ic.pp_bloom_intensity, 0.0f, 4.0f);
+                    ImGui::SliderFloat((AV("bloom_radius") + "##pp_bloom_radius").c_str(), &ic.pp_bloom_radius,
+                                       0.25f, 3.0f);
+
+                    ImGui::Separator();
+                    ImGui::Checkbox((AV("enabled") + "##pp_grade").c_str(), &ic.pp_grade_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("color_grade").c_str());
+                    ImGui::SliderFloat((AV("contrast") + "##pp_grade_contrast").c_str(), &ic.pp_grade_contrast,
+                                       0.0f, 4.0f);
+                    ImGui::SliderFloat((AV("pivot") + "##pp_grade_pivot").c_str(), &ic.pp_grade_pivot, 0.0f, 4.0f);
+                    ImGui::SliderFloat((AV("temperature") + "##pp_grade_temperature").c_str(),
+                                       &ic.pp_grade_temperature, -1.0f, 1.0f);
+                    ImGui::SliderFloat((AV("tint") + "##pp_grade_tint").c_str(), &ic.pp_grade_tint, -1.0f, 1.0f);
+                    ImGui::SliderFloat((AV("gamma") + "##pp_grade_gamma").c_str(), &ic.pp_grade_gamma, 0.2f, 3.0f);
+
+                    ImGui::Separator();
+                    ImGui::Checkbox((AV("enabled") + "##pp_sharpen").c_str(), &ic.pp_sharpen_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("sharpen").c_str());
+                    ImGui::SliderFloat((AV("sharpen_amount") + "##pp_sharpen_amount").c_str(),
+                                       &ic.pp_sharpen_amount, 0.0f, 4.0f);
+                    ImGui::SliderFloat((AV("sharpen_radius") + "##pp_sharpen_radius").c_str(),
+                                       &ic.pp_sharpen_radius, 0.25f, 4.0f);
+
+                    ImGui::Separator();
+                    ImGui::SliderFloat((AV("saturation") + "##pp_saturation").c_str(), &ic.pp_saturation, 0.0f,
+                                       4.0f);
+                    ImGui::SliderFloat((AV("vignette") + "##pp_vignette").c_str(), &ic.pp_vignette, 0.0f, 1.0f);
+
+                    ImGui::TextDisabled("%s", AV("post_process_hint").c_str());
+                    if (ImGui::Button((AV("apply") + "##pp_apply").c_str())) {
+                        runtime::PostProcessComponent e{};
+                        e.bloom_enabled = ic.pp_bloom_enabled;
+                        e.bloom_threshold = ic.pp_bloom_threshold;
+                        e.bloom_knee = ic.pp_bloom_knee;
+                        e.bloom_intensity = ic.pp_bloom_intensity;
+                        e.bloom_radius = ic.pp_bloom_radius;
+                        e.grade_enabled = ic.pp_grade_enabled;
+                        e.grade_contrast = ic.pp_grade_contrast;
+                        e.grade_pivot = ic.pp_grade_pivot;
+                        e.grade_temperature = ic.pp_grade_temperature;
+                        e.grade_tint = ic.pp_grade_tint;
+                        e.grade_gamma = ic.pp_grade_gamma;
+                        e.sharpen_enabled = ic.pp_sharpen_enabled;
+                        e.sharpen_amount = ic.pp_sharpen_amount;
+                        e.sharpen_radius = ic.pp_sharpen_radius;
+                        e.saturation = ic.pp_saturation;
+                        e.vignette = ic.pp_vignette;
+                        std::string err;
+                        if (!app.set_post_process(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Post-processing edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
             // --- Physics: RigidBody ---
-            if (w->has<physics::RigidBodyComponent>(sel) &&
-                ImGui::CollapsingHeader((AV("rigid_body") + "###RigidBody").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                // Owned AV strings (not temporaries): the pointers outlive Combo.
+            // Always visible: the setter is add-or-replace, so Attach authors
+            // the component with defaults instead of merely editing it.
+            if (ImGui::CollapsingHeader((AV("rigid_body") + "###RigidBody").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!w->has<physics::RigidBodyComponent>(sel)) {
+                    ImGui::TextDisabled("%s", AV("no_rigid_body").c_str());
+                    if (ImGui::Button((AV("attach") + "##rigidbody").c_str())) {
+                        std::string err;
+                        if (!app.set_rigid_body(sel, physics::RigidBodyComponent{}, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach rigid body failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
                 // Order mirrors the BodyType enum — index IS the value.
                 const std::string type_items[3] = {AV("rb_static"), AV("rb_dynamic"),
                                                    AV("rb_kinematic")};
@@ -1516,10 +2450,24 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         }
                     }
                 }
+                }
             }
             // --- Physics: Collider ---
-            if (w->has<physics::ColliderComponent>(sel) &&
-                ImGui::CollapsingHeader((AV("collider") + "###Collider").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            // Always visible, same add-or-replace contract as the body above.
+            if (ImGui::CollapsingHeader((AV("collider") + "###Collider").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!w->has<physics::ColliderComponent>(sel)) {
+                    ImGui::TextDisabled("%s", AV("no_collider").c_str());
+                    if (ImGui::Button((AV("attach") + "##collider").c_str())) {
+                        std::string err;
+                        if (!app.set_collider(sel, physics::ColliderComponent{}, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach collider failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
                 // Owned AV strings (not temporaries); order mirrors the shape
                 // switch below (0 = sphere, 1 = box, 2 = plane).
                 const std::string shape_items[3] = {AV("col_sphere"), AV("col_box"),
@@ -1553,6 +2501,63 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                             push_error(app.console(), "Collider edit failed", err);
                         } else {
                             ic.error.clear();
+                        }
+                    }
+                }
+                }
+            }
+            // --- Destruction (Phase 19 authoring, Phase 25 panel) ---
+            // Always visible like Sky: Attach authors a default spec, Apply
+            // forwards the cached fields through the validated setter.
+            if (ImGui::CollapsingHeader((AV("destructible") + "###Destructible").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!w->has<runtime::DestructibleComponent>(sel)) {
+                    ImGui::TextDisabled("%s", AV("no_destructible").c_str());
+                    if (ImGui::Button((AV("attach") + "##destructible").c_str())) {
+                        std::string err;
+                        if (!app.set_destructible(sel, runtime::DestructibleComponent{}, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach destructible failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::DragInt(AV("chunks").c_str(), &ic.dst_chunks, 0.2f, 2, 64);
+                    ImGui::DragScalar(AV("seed").c_str(), ImGuiDataType_U32, &ic.dst_seed, 1.0f);
+                    ImGui::DragFloat(AV("strength").c_str(), &ic.dst_strength, 0.5f, 0.01f,
+                                     10000.0f);
+                    ImGui::DragFloat(AV("damage_threshold").c_str(), &ic.dst_threshold, 0.2f, 0.0f,
+                                     1000.0f);
+                    ImGui::DragFloat(AV("blast_radius").c_str(), &ic.dst_blast, 0.05f, 0.01f,
+                                     100.0f);
+                    ImGui::Checkbox((AV("enabled") + "##dst_enabled").c_str(), &ic.dst_enabled);
+                    if (ImGui::Button((AV("apply") + "##destructible").c_str())) {
+                        runtime::DestructibleComponent edited;
+                        edited.chunks = static_cast<u32>(ic.dst_chunks);
+                        edited.seed = ic.dst_seed;
+                        edited.strength = ic.dst_strength;
+                        edited.damage_threshold = ic.dst_threshold;
+                        edited.blast_radius = ic.dst_blast;
+                        edited.enabled = ic.dst_enabled;
+                        std::string err;
+                        if (!app.set_destructible(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Destructible edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##destructible").c_str())) {
+                        std::string err;
+                        if (!app.detach_destructible(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach destructible failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
                         }
                     }
                 }
@@ -1622,8 +2627,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             // --- Audio ---
-            if (w->has<audio::AudioComponent>(sel) &&
-                ImGui::CollapsingHeader((AV("audio") + "###Audio").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            // Always visible: the buffer row below is add-or-replace, so an
+            // entity with no audio yet authors one by naming a file.
+            if (ImGui::CollapsingHeader((AV("audio") + "###Audio").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (const auto* aud = w->get<audio::AudioComponent>(sel)) {
                     rt_disabled_str(AVF("audio_buffer",
                                         aud->buffer_name.empty()
@@ -1697,6 +2703,240 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         }
                     }
                 }
+                // File-backed buffer: decodes now (add-or-replace), so the
+                // waveform above and Play hear it without a scene reload.
+                ImGui::InputText(AV("buffer").c_str(), ic.aud_buffer, sizeof(ic.aud_buffer));
+                if (ImGui::Button((AV("attach_buffer") + "##audio").c_str())) {
+                    std::string err;
+                    if (!app.set_audio_buffer(sel, ic.aud_buffer, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Attach audio buffer failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+            }
+            // --- Particles (Phase 25) ---
+            // Always visible: Attach authors defaults, Apply forwards the
+            // cached config through the validated setter.
+            if (ImGui::CollapsingHeader((AV("particles") + "###Particles").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.part_has) {
+                    ImGui::TextDisabled("%s", AV("no_particles").c_str());
+                    if (ImGui::Button((AV("attach") + "##particles").c_str())) {
+                        std::string err;
+                        if (!app.attach_particles(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach particles failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##part_enabled").c_str(), &ic.part_enabled);
+                    ImGui::DragFloat(AV("rate").c_str(), &ic.part_rate, 1.0f, 0.0f, 100000.0f);
+                    ImGui::DragFloat(AV("lifetime").c_str(), &ic.part_lifetime, 0.05f, 0.01f,
+                                     60.0f);
+                    ImGui::SliderFloat(AV("lifetime_spread").c_str(), &ic.part_lifetime_spread,
+                                       0.0f, 1.0f);
+                    ImGui::DragFloat3(AV("velocity").c_str(), ic.part_velocity, 0.1f);
+                    ImGui::DragFloat3(AV("spread").c_str(), ic.part_vel_spread, 0.1f, 0.0f,
+                                      100.0f);
+                    ImGui::DragFloat3(AV("gravity").c_str(), ic.part_gravity, 0.1f);
+                    ImGui::DragFloat(AV("drag").c_str(), &ic.part_drag, 0.05f, 0.0f, 10.0f);
+                    ImGui::DragFloat(AV("start_size").c_str(), &ic.part_start_size, 0.01f, 0.0f,
+                                     10.0f);
+                    ImGui::DragFloat(AV("end_size").c_str(), &ic.part_end_size, 0.01f, 0.0f,
+                                     10.0f);
+                    ImGui::ColorEdit3(AV("start_color").c_str(), ic.part_start_color);
+                    ImGui::ColorEdit3(AV("end_color").c_str(), ic.part_end_color);
+                    ImGui::DragInt(AV("max_particles").c_str(), &ic.part_max, 8.0f, 1, 1048576);
+                    if (ImGui::Button((AV("apply") + "##particles").c_str())) {
+                        vfx::ParticleComponent edited;
+                        edited.enabled = ic.part_enabled;
+                        edited.config.rate = ic.part_rate;
+                        edited.config.lifetime = ic.part_lifetime;
+                        edited.config.lifetime_spread = ic.part_lifetime_spread;
+                        edited.config.velocity =
+                            Vec3(ic.part_velocity[0], ic.part_velocity[1], ic.part_velocity[2]);
+                        edited.config.velocity_spread = Vec3(
+                            ic.part_vel_spread[0], ic.part_vel_spread[1], ic.part_vel_spread[2]);
+                        edited.config.gravity =
+                            Vec3(ic.part_gravity[0], ic.part_gravity[1], ic.part_gravity[2]);
+                        edited.config.drag = ic.part_drag;
+                        edited.config.start_size = ic.part_start_size;
+                        edited.config.end_size = ic.part_end_size;
+                        edited.config.start_color = Vec3(ic.part_start_color[0],
+                                                         ic.part_start_color[1],
+                                                         ic.part_start_color[2]);
+                        edited.config.end_color = Vec3(ic.part_end_color[0], ic.part_end_color[1],
+                                                       ic.part_end_color[2]);
+                        edited.config.max_particles = static_cast<u32>(ic.part_max);
+                        std::string err;
+                        if (!app.set_particles(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Particles edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##particles").c_str())) {
+                        std::string err;
+                        if (!app.detach_particles(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach particles failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Cloth (Phase 25) ---
+            if (ImGui::CollapsingHeader((AV("cloth") + "###Cloth").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.cloth_has) {
+                    ImGui::TextDisabled("%s", AV("no_cloth").c_str());
+                    if (ImGui::Button((AV("attach") + "##cloth").c_str())) {
+                        std::string err;
+                        if (!app.attach_cloth(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach cloth failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##cloth_enabled").c_str(), &ic.cloth_enabled);
+                    ImGui::DragInt(AV("res_x").c_str(), &ic.cloth_res_x, 1.0f, 2, 128);
+                    ImGui::DragInt(AV("res_z").c_str(), &ic.cloth_res_z, 1.0f, 2, 128);
+                    ImGui::DragFloat(AV("spacing").c_str(), &ic.cloth_spacing, 0.01f, 0.001f,
+                                     10.0f);
+                    ImGui::DragFloat(AV("mass").c_str(), &ic.cloth_mass, 0.01f, 0.001f,
+                                     1000.0f);
+                    ImGui::SliderFloat(AV("damping").c_str(), &ic.cloth_damping, 0.0f, 0.999f);
+                    ImGui::SliderFloat(AV("stiffness").c_str(), &ic.cloth_stiffness, 0.0f, 1.0f);
+                    ImGui::DragInt(AV("iterations").c_str(), &ic.cloth_iterations, 1.0f, 1, 32);
+                    ImGui::DragInt(AV("substeps").c_str(), &ic.cloth_substeps, 1.0f, 1, 8);
+                    ImGui::DragFloat3(AV("gravity").c_str(), ic.cloth_gravity, 0.1f);
+                    if (ImGui::Button((AV("apply") + "##cloth").c_str())) {
+                        physics::ClothComponent edited;
+                        edited.enabled = ic.cloth_enabled;
+                        edited.config.res_x = ic.cloth_res_x;
+                        edited.config.res_z = ic.cloth_res_z;
+                        edited.config.spacing = ic.cloth_spacing;
+                        edited.config.mass = ic.cloth_mass;
+                        edited.config.damping = ic.cloth_damping;
+                        edited.config.stiffness = ic.cloth_stiffness;
+                        edited.config.iterations = ic.cloth_iterations;
+                        edited.config.substeps = ic.cloth_substeps;
+                        edited.config.gravity = Vec3(ic.cloth_gravity[0], ic.cloth_gravity[1],
+                                                     ic.cloth_gravity[2]);
+                        std::string err;
+                        if (!app.set_cloth(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Cloth edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##cloth").c_str())) {
+                        std::string err;
+                        if (!app.detach_cloth(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach cloth failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Character (Phase 25) ---
+            if (ImGui::CollapsingHeader((AV("character") + "###Character").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.char_has) {
+                    ImGui::TextDisabled("%s", AV("no_character").c_str());
+                    if (ImGui::Button((AV("attach") + "##character").c_str())) {
+                        std::string err;
+                        if (!app.attach_character(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach character failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##char_enabled").c_str(), &ic.char_enabled);
+                    ImGui::DragFloat(AV("radius").c_str(), &ic.char_radius, 0.02f, 0.01f, 5.0f);
+                    ImGui::DragFloat(AV("max_speed").c_str(), &ic.char_max_speed, 0.1f, 0.0f,
+                                     100.0f);
+                    ImGui::DragFloat(AV("acceleration").c_str(), &ic.char_acceleration, 0.5f,
+                                     0.0f, 1000.0f);
+                    ImGui::SliderFloat(AV("air_control").c_str(), &ic.char_air_control, 0.0f,
+                                       1.0f);
+                    ImGui::DragFloat(AV("jump_speed").c_str(), &ic.char_jump_speed, 0.1f, 0.0f,
+                                     50.0f);
+                    ImGui::DragFloat(AV("slope_limit").c_str(), &ic.char_slope, 0.5f, 0.0f,
+                                     90.0f);
+                    ImGui::DragFloat(AV("mass").c_str(), &ic.char_mass, 1.0f, 0.01f, 10000.0f);
+                    ImGui::DragFloat(AV("friction").c_str(), &ic.char_friction, 0.05f, 0.0f,
+                                     10.0f);
+                    if (const auto* chc = w->get<physics::CharacterComponent>(sel)) {
+                        rt_disabled_key(chc->grounded ? "grounded_yes" : "grounded_no");
+                    }
+                    if (ImGui::Button((AV("apply") + "##character").c_str())) {
+                        physics::CharacterComponent edited;
+                        edited.enabled = ic.char_enabled;
+                        edited.config.radius = ic.char_radius;
+                        edited.config.max_speed = ic.char_max_speed;
+                        edited.config.acceleration = ic.char_acceleration;
+                        edited.config.air_control = ic.char_air_control;
+                        edited.config.jump_speed = ic.char_jump_speed;
+                        edited.config.slope_limit_deg = ic.char_slope;
+                        edited.config.mass = ic.char_mass;
+                        edited.config.friction = ic.char_friction;
+                        std::string err;
+                        if (!app.set_character(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Character edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##character").c_str())) {
+                        std::string err;
+                        if (!app.detach_character(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach character failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                    // Debug drive: writes live input only (never persisted),
+                    // so a level can be walked without gameplay code.
+                    ImGui::DragFloat3(AV("wish_dir").c_str(), ic.char_wish, 0.05f, -1.0f, 1.0f);
+                    ImGui::Checkbox(AV("jump").c_str(), &ic.char_jump);
+                    if (ImGui::Button((AV("drive") + "##character").c_str())) {
+                        std::string err;
+                        if (!app.set_character_input(
+                                sel, Vec3(ic.char_wish[0], ic.char_wish[1], ic.char_wish[2]),
+                                ic.char_jump, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Drive character failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
             }
             // --- Gameplay modules (reflection-driven) ---
             //
@@ -1762,10 +3002,116 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                     ImGui::SeparatorText(group.category.c_str());
                                 }
                                 for (usize index : group.field_indices) {
+                                    // One ID scope per field: the reflected
+                                    // widget labels come from the property
+                                    // names, and two properties that happen to
+                                    // share a label would otherwise submit two
+                                    // items with one ID.
+                                    ImGui::PushID(static_cast<int>(index));
                                     (void)draw_reflected_field(view, index);
+                                    ImGui::PopID();
                                 }
                             }
                         }
+                    }
+                }
+            }
+            // --- Lua script (file-backed ScriptComponent) ---
+            //
+            // The path is the persisted field; the file is the source of truth.
+            // Attach reads the file now (so Play works without a reload) and
+            // the Runtime re-resolves it on every scene adopt. New files are
+            // created from a minimal update(dt) template — an empty path or a
+            // missing file is rejected here rather than stored as a component
+            // that looks scripted but never ticks.
+            if (ImGui::CollapsingHeader((AV("script") + "###Script").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                const bool has_script = w->has<scripting::ScriptComponent>(sel);
+                ImGui::InputText(AV("script_path").c_str(), ic.script_path, sizeof(ic.script_path));
+                ImGui::Checkbox((AV("enabled") + "##script_enabled").c_str(), &ic.script_enabled);
+                if (const auto* sc = w->get<scripting::ScriptComponent>(sel)) {
+                    const size_t lines = std::count(sc->source.begin(), sc->source.end(), '\n') +
+                                         (sc->source.empty() ? 0 : 1);
+                    rt_disabled_str(AVF("script_loaded", static_cast<int>(sc->source.size()),
+                                        static_cast<int>(lines)));
+                } else {
+                    ImGui::TextDisabled("%s", AV("script_no_data").c_str());
+                }
+                if (ImGui::Button((AV("new_script") + "##script").c_str())) {
+                    std::string err, created;
+                    bool ok = false;
+                    if (std::string(ic.script_path).empty()) {
+                        // Empty field: first free name, never a clobber error.
+                        ok = app.create_unique_script_file("content://Scripts/", "script",
+                                                           created, err);
+                    } else {
+                        created = ic.script_path;
+                        ok = app.create_script_file(created, err);
+                    }
+                    if (ok) {
+                        // A new file belongs to this entity: attach it at
+                        // once, so the section leaves [no script] behind and
+                        // the VS button below appears.
+                        ok = app.attach_script(sel, created, err);
+                    }
+                    if (!ok) {
+                        ic.error = err;
+                        push_error(app.console(), "Create script failed", err);
+                    } else {
+                        std::strncpy(ic.script_path, created.c_str(),
+                                     sizeof(ic.script_path) - 1);
+                        ic.script_path[sizeof(ic.script_path) - 1] = '\0';
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+                ImGui::SameLine();
+                if (has_script ? ImGui::Button((AV("apply") + "##script").c_str())
+                               : ImGui::Button((AV("attach") + "##script").c_str())) {
+                    std::string err;
+                    bool ok = false;
+                    if (has_script) {
+                        ok = app.set_script_path(sel, ic.script_path, err) &&
+                             app.set_script_enabled(sel, ic.script_enabled, err);
+                    } else {
+                        ok = app.attach_script(sel, ic.script_path, err);
+                        if (ok && !ic.script_enabled) {
+                            ok = app.set_script_enabled(sel, false, err);
+                        }
+                    }
+                    if (!ok) {
+                        ic.error = err;
+                        push_error(app.console(), "Script edit failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+                ImGui::SameLine();
+                if (has_script && ImGui::Button((AV("detach") + "##script").c_str())) {
+                    std::string err;
+                    if (!app.detach_script(sel, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Detach script failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+                // Unity-style: write the object's code where code is written.
+                // Visible whenever a path is typed, not only when attached:
+                // opening a file to edit it must not require attaching first.
+                // Opens detached in Visual Studio / VS Code / the shell
+                // default and names the pick in the console.
+                if (ic.script_path[0] != '\0' &&
+                    ImGui::Button((AV("open_in_vs") + "##script").c_str())) {
+                    std::string kind, err;
+                    if (!app.open_asset_in_ide(ic.script_path, kind, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Open in IDE failed", err);
+                    } else {
+                        ic.error.clear();
+                        push_info(app.console(),
+                                  std::string("Opened in ") + kind + ": " + ic.script_path);
                     }
                 }
             }
@@ -1791,171 +3137,23 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     }
     ImGui::End();
 
-    // --- Bottom: Assets + Console ------------------------------------------------
-    if (ImGui::Begin((AV("assets") + "###Assets").c_str())) {
-        char filter[128]{};
-        std::strncpy(filter, app.browser().filter_text.c_str(), sizeof(filter) - 1);
-        if (ImGui::InputText(AV("filter").c_str(), filter, sizeof(filter))) {
-            app.browser().filter_text = filter;
-        }
-        // Type filter mirrors the model's own -1 = "all types" contract; the
-        // combo order is the same enum order filter_assets switches on.
-        // Owned AV strings (not temporaries): the pointers outlive Combo.
-        ImGui::SameLine();
-        const std::string type_items[6] = {AV("asset_type_all"), AV("asset_type_mesh"),
-                                           AV("asset_type_texture"), AV("asset_type_material"),
-                                           AV("asset_type_shader"), AV("asset_type_scene")};
-        const char* type_names[] = {type_items[0].c_str(), type_items[1].c_str(),
-                                    type_items[2].c_str(), type_items[3].c_str(),
-                                    type_items[4].c_str(), type_items[5].c_str()};
-        const int type_values[] = {-1, static_cast<int>(assets::AssetType::Mesh),
-                                  static_cast<int>(assets::AssetType::Texture),
-                                  static_cast<int>(assets::AssetType::Material),
-                                  static_cast<int>(assets::AssetType::Shader),
-                                  static_cast<int>(assets::AssetType::Scene)};
-        int combo_idx = 0; // All
-        for (size_t i = 1; i < std::size(type_values); ++i) {
-            if (app.browser().filter_type == type_values[i]) {
-                combo_idx = static_cast<int>(i);
-                break;
-            }
-        }
-        if (ImGui::Combo(AV("type").c_str(), &combo_idx, type_names, static_cast<int>(std::size(type_names)))) {
-            app.browser().filter_type = type_values[combo_idx];
-        }
-        // External import (no OS dialog in v0.1: absolute source path input).
-        // Types by extension: .nfmesh/.png/.jpg/.bmp/.tga/.nfmat/.nfscene.
-        static char import_src[256]{};
-        static char import_dir[128] = "content://Meshes";
-        static bool import_overwrite = false;
-        ImGui::InputText(AV("import_source").c_str(), import_src, sizeof(import_src));
-        ImGui::SameLine();
-        ImGui::InputText(AV("import_to").c_str(), import_dir, sizeof(import_dir));
-        ImGui::SameLine();
-        ImGui::Checkbox(AV("overwrite").c_str(), &import_overwrite);
-        ImGui::SameLine();
-        if (ImGui::Button(AV("import").c_str())) {
-            size_t job = 0;
-            std::string err;
-            if (!app.import_file(import_src, import_dir, import_overwrite, job, err)) {
-                push_error(app.console(), "Import rejected", err);
-            } else {
-                app.console().push(LogMessage{LogLevel::Info, LogCategory::Editor,
-                                              "Import queued (#" + std::to_string(job) + ")",
-                                              std::chrono::system_clock::now(), __FILE__, __LINE__});
-            }
-        }
-        // Queue states (processed incrementally by the shell, one job/frame).
-        // Technical diagnostics (job ids, absolute paths, states): English on
-        // purpose, like the console log lines — they mirror engine counters,
-        // not UI wording. (The import DIALOG's states translate via
-        // import_state_*; these inline rows are the debug tail.)
-        for (const ImportJob& job : app.import_queue().jobs()) {
-            const char* job_state = "?";
-            switch (job.state) {
-                case ImportJob::State::Queued: job_state = "queued"; break;
-                case ImportJob::State::Working: job_state = "working"; break;
-                case ImportJob::State::Done: job_state = "done"; break;
-                case ImportJob::State::Failed: job_state = "FAILED"; break;
-            }
-            ImGui::Text("[import #%zu] %s -> %s : %s", job.id, job.src_absolute.c_str(),
-                        job.dst_logical.c_str(), job_state);
-            if (job.state == ImportJob::State::Failed && !job.error.empty()) {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "%s", job.error.c_str());
-            }
-        }
-        if (ImGui::Button(AV("clear_imports").c_str())) {
-            app.import_queue().clear_finished();
-        }
-        const std::vector<AssetEntry> entries = app.browser_entries();
-        rt_text_str(AVF("assets_count_fmt", entries.size()));
-        if (ImGui::BeginChild("##assetlist", ImVec2(0, 0), true)) {
-            // Clipped: thumbnails and selectables only for visible rows.
-            // PushID uses the stable entry index so selection and drag
-            // payloads survive scrolling.
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(entries.size()));
-            while (clipper.Step()) {
-                for (int ei = clipper.DisplayStart; ei < clipper.DisplayEnd; ++ei) {
-                    const AssetEntry& e = entries[static_cast<size_t>(ei)];
-                    ImGui::PushID(ei);
-                const char* badge = "?";
-                switch (e.type) {
-                    case assets::AssetType::Mesh: badge = "[MESH]"; break;
-                    case assets::AssetType::Scene: badge = "[SCENE]"; break;
-                    case assets::AssetType::Shader: badge = "[SHADER]"; break;
-                    case assets::AssetType::Texture: badge = "[TEX]"; break;
-                    case assets::AssetType::Material: badge = "[MAT]"; break;
-                    default: badge = "[?]"; break;
-                }
-                const bool selected = (app.browser().selected_path == e.logical_path);
-                // Thumbnails for image assets: the shell's preview cache uploads
-                // on first request and hands back an ImGui id. 0 means "no
-                // preview" (headless/tests, or a not-yet-imported source) and
-                // draws a placeholder — never a missing-texture draw.
-                if (e.type == assets::AssetType::Texture && app.preview_texture) {
-                    const uintptr_t pid = app.preview_texture(e.logical_path);
-                    if (pid != 0) {
-                        ImGui::Image(static_cast<ImTextureID>(pid), ImVec2(48, 48));
-                        ImGui::SameLine();
-                    } else {
-                        ImGui::TextDisabled("%s", AV("asset_no_preview").c_str());
-                        ImGui::SameLine();
-                    }
-                }
-                if (ImGui::Selectable((std::string(badge) + " " + e.logical_path).c_str(), selected)) {
-                    app.browser().selected_path = e.logical_path;
-                }
-                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    std::string info;
-                    const AssetOpenAction act = classify_double_click(e, info);
-                    if (act == AssetOpenAction::OpenScene) {
-                        intents.open_scene_dialog_confirm = true;
-                        intents.open_scene_path = info;
-                    } else if (act == AssetOpenAction::ShowMeshInfo) {
-                        app.console().push(LogMessage{LogLevel::Info, LogCategory::Editor, info,
-                                                      std::chrono::system_clock::now(), __FILE__,
-                                                      __LINE__});
-                    } else if (act == AssetOpenAction::ShowTextureInfo) {
-                        app.console().push(LogMessage{
-                            LogLevel::Info, LogCategory::Editor,
-                            "Texture " + info + " — assign it from an entity's Material section.",
-                            std::chrono::system_clock::now(), __FILE__, __LINE__});
-                    } else if (act == AssetOpenAction::ShowMaterialInfo) {
-                        std::string detail = info;
-                        if (app.runtime() != nullptr) {
-                            rendering::PBRMaterialParams mp{};
-                            app.runtime()->material_params(info, mp);
-                            char buf[160];
-                            std::snprintf(buf, sizeof(buf), " base=(%.2f,%.2f,%.2f) metallic=%.2f "
-                                                            "roughness=%.2f",
-                                          static_cast<double>(mp.base_color[0]),
-                                          static_cast<double>(mp.base_color[1]),
-                                          static_cast<double>(mp.base_color[2]),
-                                          static_cast<double>(mp.metallic),
-                                          static_cast<double>(mp.roughness));
-                            detail += buf;
-                        }
-                        app.console().push(LogMessage{LogLevel::Info, LogCategory::Editor, detail,
-                                                      std::chrono::system_clock::now(), __FILE__,
-                                                      __LINE__});
-                    }
-                }
-                if (e.type == assets::AssetType::Mesh && ImGui::BeginDragDropSource()) {
-                    ImGui::SetDragDropPayload("NF_MESH", e.logical_path.c_str(),
-                                              e.logical_path.size() + 1);
-                    ImGui::Text("%s", e.logical_path.c_str());
-                    ImGui::EndDragDropSource();
-                }
-                ImGui::PopID();
-                }
-            }
-            clipper.End();
-        }
-        ImGui::EndChild();
+    // --- Dedicated editors (ScenePanels.cpp) -----------------------------------
+    // One window per engine function, each bound to the live scene object the
+    // renderer actually consumes (the light it lights with, the sky it paints,
+    // the camera it looks through) plus what the renderer is doing right now.
+    // Recorded here so they take part in the same dockspace as the panels.
+    scene_panels(app, stats);
+
+    // --- Bottom: FileSystem + Console ------------------------------------------
+    // FileSystem dock lives in its own TU (Editor/src/ui/FileSystemPanel.cpp):
+    // Godot-style favorites / history / breadcrumb / icons / grid. The window
+    // ID stays "###Assets" so existing dock layouts survive the upgrade.
+    if (ImGui::Begin((AV("filesystem") + "###Assets").c_str())) {
+        filesystem_panel(app, intents);
     }
     ImGui::End();
+
+
 
     if (ImGui::Begin((AV("console") + "###Console").c_str())) {
         static int level_filter = 2; // Info+
@@ -2010,6 +3208,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         ImGui::InputTextWithHint("##consolesearch", search_hint.c_str(), search,
                                  IM_ARRAYSIZE(search));
         ImGui::PopItemWidth();
+        ImGui::SameLine();
+        // Autoscroll used to be unconditional: reading an old error meant
+        // fighting the panel every frame. Off = the view stays where it is.
+        static bool auto_scroll = true;
+        ImGui::Checkbox(AV("autoscroll").c_str(), &auto_scroll);
         const int cat_index =
             (category_filter >= 0 && category_filter < IM_ARRAYSIZE(category_values))
                 ? category_filter
@@ -2020,6 +3223,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             (selected == LogCategory::All) ? LogCategory::All : selected,
             std::string(search)};
         const std::vector<LogMessage> lines = app.console().filtered(filter);
+        // --- Polished log rows: level dot + category chip + message ---------
+        // Denser than the old "[LEVEL][Category] text" line: a colored dot
+        // carries severity at a glance, the category is a muted chip, and the
+        // message keeps full width. Same data, same filters, faster scanning.
         if (ImGui::BeginChild("##consolelines", ImVec2(0, 0), true)) {
             // Clipped like the outliner: shaping runs only for visible rows,
             // not for the whole backlog every frame.
@@ -2028,17 +3235,27 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             while (clipper.Step()) {
                 for (int li = clipper.DisplayStart; li < clipper.DisplayEnd; ++li) {
                     const LogMessage& m = lines[static_cast<size_t>(li)];
+                    ImVec4 dot = level_color(m.level);
+                    const ImVec2 p = ImGui::GetCursorScreenPos();
+                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    dl->AddCircleFilled(
+                        ImVec2(p.x + 6.0f, p.y + 8.0f), 4.0f,
+                        IM_COL32(static_cast<int>(dot.x * 255.0f),
+                                 static_cast<int>(dot.y * 255.0f),
+                                 static_cast<int>(dot.z * 255.0f), 255));
+                    ImGui::SameLine(0.0f, 2.0f);
+                    draw_category_chip(category_name(m.category));
+                    ImGui::SameLine();
                     // Message text is arbitrary (asset paths, engine errors, an
                     // Arabic entity name in a rename failure), so shape it for
                     // display and avoid the %s format path entirely.
-                    const std::string line = "[" + std::string(level_name(m.level)) + "][" +
-                                             std::string(category_name(m.category)) + "] " +
-                                             ui::shape_arabic(m.text);
-                    ImGui::TextColored(level_color(m.level), "%s", line.c_str());
+                    const std::string shaped = ui::shape_arabic(m.text);
+                    ImGui::TextColored(level_color(m.level), "%s", shaped.c_str());
                 }
             }
             clipper.End();
-            if (!lines.empty()) {
+            if (auto_scroll && !lines.empty()) {
                 ImGui::SetScrollHereY(1.0f);
             }
         }
@@ -2107,6 +3324,133 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
         }
         ImGui::End();
+    }
+
+    // --- Top: missing-arabic-font banner ---------------------------------------
+    // Only ever visible when the UI language IS Arabic and the companion font
+    // failed to load, which is the one condition that produces an entire screen
+    // of tofu diamonds and no other symptom. A top strip rather than a console
+    // line because the user reading the screen cannot see the console, and a
+    // dismissal is a click away so it is never in the way of a fix.
+    //
+    // The wording is translated, which is of course ironic when the Arabic font
+    // is the thing that is missing - but a Latin fallback still says something
+    // useful, and the first run of this is exactly how a user learns what broke.
+    if (ui_arabic_font_missing()) {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        const float h = ImGui::GetFrameHeight() * 2.0f + 12.0f;
+        if (ImGui::BeginViewportSideBar("##NFFontWarn", vp, ImGuiDir_Up, h,
+                                        ImGuiWindowFlags_NoScrollbar |
+                                            ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::danger());
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::surface_raised());
+            ImGui::SetCursorPosX(12.0f);
+            ImGui::TextWrapped("%s", AV("err_font_missing_ar").c_str());
+            ImGui::PopStyleColor(2);
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 70.0f);
+            if (ImGui::Button(AV("close").c_str(), ImVec2(64.0f, 0.0f))) {
+                set_ui_arabic_font_missing(false);
+            }
+            ImGui::End();
+        }
+    }
+
+    // --- Bottom: status bar ----------------------------------------------------
+    // One strip that answers the three questions a user asks a hundred times a
+    // session — am I editing or playing, is this saved, is anything broken —
+    // without opening a panel. It reserves its own row through
+    // BeginViewportSideBar, so the dockspace ends above it and the bottom panel
+    // can never hide it.
+    {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        const float bar_h = ImGui::GetFrameHeight() + 10.0f;
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::surface_raised());
+        if (ImGui::BeginViewportSideBar("##NFStatusBar", vp, ImGuiDir_Down, bar_h,
+                                        ImGuiWindowFlags_NoScrollbar |
+                                            ImGuiWindowFlags_NoSavedSettings)) {
+            // A hairline on top separates the bar from the panel above it.
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wp = ImGui::GetWindowPos();
+                const ImVec2 ws = ImGui::GetWindowSize();
+                dl->AddLine(wp, ImVec2(wp.x + ws.x, wp.y),
+                            ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+            }
+
+            // A filled dot: the colour IS the state, so "playing" is legible
+            // from the corner of the eye without reading the word.
+            const auto status_dot = [](const ImVec4& col) {
+                const ImVec2 p = ImGui::GetCursorScreenPos();
+                const float lh = ImGui::GetTextLineHeight();
+                ImGui::GetWindowDrawList()->AddCircleFilled(
+                    ImVec2(p.x + lh * 0.30f, p.y + lh * 0.5f), lh * 0.22f,
+                    ImGui::GetColorU32(col));
+                ImGui::Dummy(ImVec2(lh * 0.68f, lh));
+                ImGui::SameLine(0.0f, 6.0f);
+            };
+            const auto bar_sep = []() {
+                ImGui::SameLine(0.0f, 12.0f);
+                ImGui::TextDisabled("|");
+                ImGui::SameLine(0.0f, 12.0f);
+            };
+
+            ImGui::AlignTextToFramePadding();
+
+            // 1. Mode.
+            const bool playing = st.playing || app.playing();
+            const ImVec4 mode_col = playing ? theme::danger() : theme::success();
+            status_dot(mode_col);
+            ImGui::TextColored(mode_col, "%s",
+                               playing ? AV("status_playing").c_str()
+                                       : AV("status_editing").c_str());
+            bar_sep();
+
+            // 2. Scene + save state.
+            if (st.scene_label.empty()) {
+                ImGui::TextDisabled("%s", AV("untitled").c_str());
+            } else {
+                ImGui::TextUnformatted(ui::shape_arabic(st.scene_label).c_str());
+            }
+            ImGui::SameLine(0.0f, 8.0f);
+            if (st.dirty) {
+                ImGui::TextColored(theme::warning(), "*");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", AV("status_unsaved").c_str());
+                }
+            } else {
+                ImGui::TextColored(theme::success(), "%s", AV("status_saved").c_str());
+            }
+
+            // 3. Right group: counts, frame cost, validation. Anchored at a
+            //    fraction of the width (the same trick the menu bar's status
+            //    block uses) so it stays put as the window resizes.
+            const float right_x = ImGui::GetWindowWidth() * 0.52f;
+            if (ImGui::GetCursorPosX() < right_x) {
+                ImGui::SetCursorPosX(right_x);
+            } else {
+                ImGui::SameLine(0.0f, 12.0f);
+            }
+            ImGui::TextDisabled("%s", AVF("stats_entities", st.entity_count).c_str());
+            bar_sep();
+            ImGui::TextDisabled("%s", AVF("selected_count", st.selected_count).c_str());
+            if (st.fps > 0.0) {
+                bar_sep();
+                // Frame time next to FPS: the average hides the stutter, the
+                // instantaneous number is what the user actually feels.
+                ImGui::TextDisabled("%s %.0f  %.1f ms", AV("fps").c_str(), st.fps, st.frame_ms);
+            }
+            if (stats.validation_on) {
+                bar_sep();
+                if (stats.validation_errors == 0) {
+                    ImGui::TextColored(theme::success(), "%s", AV("status_ok").c_str());
+                } else {
+                    ImGui::TextColored(theme::danger(), "%s",
+                                       AVF("status_errors", stats.validation_errors).c_str());
+                }
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleColor();
     }
 
     return intents;

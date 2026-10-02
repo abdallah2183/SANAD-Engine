@@ -45,6 +45,7 @@
 1. **محرك تصيير Vulkan 1.2+ حديث:**
    - مسار تصيير مؤجل (Multi-Pass Deferred PBR) يشمل مرحلة العمق، وتوليد GBuffer (اللون، النواظم، الخشونة/المعدنية، والانبعاث)، وإضاءة واقعية PBR (Cook-Torrance GGX) تدعم الإضاءة الاتجاهية والنقطية والمركزة، وتصحيح الألوان (Tonemapping).
    - مخطط تصيير ديناميكي (RenderGraph) يحدد ترتيب الممرات تلقائياً ويتحكم في تحويلات تخطيط الموارد.
+   - **حزمة المعالجة اللاحقة (§206):** وهج حقيقي متعدد الممرات (سلسلة تمويه بأربعة مستويات)، تصحيح ألوان في HDR (تباين/حرارة/صبغة/غاما)، حدّة بقناع unsharp، أربعة معاملات لتعيين الدرجات، تشبّع وتظليل جانبي — كل مرحلة قابلة للتشغيل على حدة، والمرحلة المتوقفة لا تكلّف شيئاً، والحزمة كلها قابلة للتأليف من سطر `PostProcess:` في ملف المشهد ومن قسم في المفتش.
    - التقاط الكائنات واختيارها برمجياً عبر الـ GPU (GPU Object Picking).
 
 2. **معمارية الكيانات والمكونات (ECS):**
@@ -94,6 +95,22 @@ build_nf.bat
 .\build\DebugNinja\bin\EditorTests.exe
 .\build\DebugNinja\bin\RHITests.exe
 ```
+
+### مسار بداية سريع
+```cmd
+.\build\DebugNinja\bin\nf.exe new MyGame --name MyGame --template ThirdPerson
+.\build\DebugNinja\bin\nf.exe run --project MyGame\MyGame.nfproj --frames 60 --headless
+```
+القوالب المتاحة: `Default` و`ThirdPerson` و`FPSStarter` و`Platformer2D`.
+الشرح العربي الكامل: [`Docs/Tutorial_Ar.md`](Docs/Tutorial_Ar.md).
+
+---
+
+## التوثيق ومسار العمل
+
+- **الدليل العربي الكامل (للمبتدئين):** [`Docs/Tutorial_Ar.md`](Docs/Tutorial_Ar.md) — من فراغ الجهاز إلى لعبة مبنية وقابلة للتشغيل خلال ٢٠ دقيقة، مع لقطات شاشة وجدول لحلّ المشكلات.
+- **استيراد الأصول:** [`Docs/Asset_Import.md`](Docs/Asset_Import.md) — الصيغ الست المقروءة (`.gltf`/`.glb`/`.obj`/`.stl`/`.ply`/`.nfmesh`)، قاعدة الامتداد مقابل المحتوى، الموادّ والخامات وكيف تُكتب كأصول، وما لا تستطيع الصيغة حمله، وجدول حلّ المشكلات.
+- **خط أنابيب Blender:** [`Docs/Blender_Pipeline.md`](Docs/Blender_Pipeline.md) — تثبيت الإضافة، إعدادات التصدير، ودورة الاستيراد الكاملة إلى صيغة المحرك `.nfmesh`.
 
 ---
 

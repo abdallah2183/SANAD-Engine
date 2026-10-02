@@ -5,6 +5,9 @@
 #include <NF/Core/Logger.hpp>
 
 #include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <utility>
 
 namespace nf::runtime {
 
@@ -15,6 +18,79 @@ namespace {
 constexpr int kMaxWalkUpLevels = 5;
 
 } // namespace
+
+const char* to_string(ReplayProbe probe) {
+    switch (probe) {
+        case ReplayProbe::NotConfigured: return "not configured";
+        case ReplayProbe::Loaded:        return "loaded";
+        case ReplayProbe::EmptyLog:      return "log recorded no frames";
+        case ReplayProbe::Unreadable:    return "log file could not be opened";
+        case ReplayProbe::RejectedLog:   return "log file is not a valid input log";
+    }
+    return "unknown";
+}
+
+bool prepare_input_replay(const ApplicationConfig& config,
+                          InputLog& out_log,
+                          ReplayProbe& out_probe,
+                          std::string& out_error) {
+    out_log.clear();
+    out_probe = ReplayProbe::NotConfigured;
+
+    const bool recording = !config.input_log_path.empty();
+    const bool replaying = !config.input_replay_path.empty();
+
+    if (recording && replaying) {
+        // Refused rather than resolved by precedence: one of the two would be
+        // silently ignored, and "my --input-log wrote nothing" is a much worse
+        // failure to debug than an error naming both flags.
+        out_error = "--input-log and --replay are mutually exclusive: recording a "
+                    "replay would log the replay back into itself.";
+        return false;
+    }
+
+    if (!replaying) {
+        return true;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(config.input_replay_path, ec) || ec) {
+        out_probe = ReplayProbe::Unreadable;
+        out_error = "--replay: '" + config.input_replay_path +
+                    "' is not a readable file.";
+        return false;
+    }
+
+    std::ifstream file(config.input_replay_path, std::ios::binary);
+    if (!file) {
+        out_probe = ReplayProbe::Unreadable;
+        out_error = "--replay: could not open '" + config.input_replay_path + "'.";
+        return false;
+    }
+    std::ostringstream text;
+    text << file.rdbuf();
+
+    InputLog log = InputLog::deserialize(text.str());
+
+    // `deserialize` answers an empty log for BOTH "the file was empty" and "the
+    // file was malformed" — it refuses a whole bad log rather than dropping the
+    // offending line. So the file being empty on disk is the only way to get
+    // back nothing, and a file with content that yields nothing is malformed.
+    // Distinguishing them here is the difference between "you pointed me at the
+    // wrong file" and "your log is corrupt", which are different bugs.
+    const bool file_empty = text.str().find_first_not_of(" \t\r\n") == std::string::npos;
+    if (log.frame_count() == 0) {
+        out_probe = file_empty ? ReplayProbe::EmptyLog : ReplayProbe::RejectedLog;
+        out_error = std::string("--replay: '") + config.input_replay_path + "' " +
+                    (file_empty ? "is empty" : "is not a valid input log") +
+                    " (expected the 'NOVAForge InputLog v1' text form).";
+        return false;
+    }
+
+    out_log = std::move(log);
+    out_probe = ReplayProbe::Loaded;
+    return true;
+}
 
 bool resolve_run_config(const ApplicationConfig& config,
                         assets::VirtualFileSystem& vfs,

@@ -252,6 +252,9 @@ SkyEdit read_sky(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.ground[0] = s->ground_r;
     out.ground[1] = s->ground_g;
     out.ground[2] = s->ground_b;
+    out.clear[0] = s->clear_r;
+    out.clear[1] = s->clear_g;
+    out.clear[2] = s->clear_b;
     out.sun_disk = s->sun_disk;
     out.sun_glow = s->sun_glow;
     out.enabled = s->enabled;
@@ -266,13 +269,14 @@ std::unique_ptr<ICommand> make_sky_command(ecs::World& world, ecs::Entity e,
     }
     if (!all_finite({edit.zenith[0], edit.zenith[1], edit.zenith[2], edit.horizon[0],
                       edit.horizon[1], edit.horizon[2], edit.ground[0], edit.ground[1],
-                      edit.ground[2], edit.sun_disk, edit.sun_glow})) {
+                      edit.ground[2], edit.clear[0], edit.clear[1], edit.clear[2],
+                      edit.sun_disk, edit.sun_glow})) {
         out_err = "Sky values must be finite numbers";
         return nullptr;
     }
     for (float c : {edit.zenith[0], edit.zenith[1], edit.zenith[2], edit.horizon[0],
                     edit.horizon[1], edit.horizon[2], edit.ground[0], edit.ground[1],
-                    edit.ground[2]}) {
+                    edit.ground[2], edit.clear[0], edit.clear[1], edit.clear[2]}) {
         if (c < 0.0f || c > 4.0f) {
             out_err = "Sky colors must be within [0, 4] (HDR headroom allowed)";
             return nullptr;
@@ -299,10 +303,122 @@ std::unique_ptr<ICommand> make_sky_command(ecs::World& world, ecs::Entity e,
     after.ground_r = edit.ground[0];
     after.ground_g = edit.ground[1];
     after.ground_b = edit.ground[2];
+    after.clear_r = edit.clear[0];
+    after.clear_g = edit.clear[1];
+    after.clear_b = edit.clear[2];
     after.sun_disk = edit.sun_disk;
     after.sun_glow = edit.sun_glow;
     after.enabled = edit.enabled;
     return std::make_unique<SetSkyCommand>(e, had, before, after);
+}
+
+TimeOfDayEdit read_time_of_day(const ecs::World& world, ecs::Entity e, bool& out_has) {
+    TimeOfDayEdit out;
+    const auto* t = world.get<runtime::TimeOfDayComponent>(e);
+    out_has = (t != nullptr);
+    if (t == nullptr) {
+        return out;
+    }
+    out.time_hours = t->time_hours;
+    out.day_length_seconds = t->day_length_seconds;
+    out.enabled = t->enabled;
+    out.drive_light = t->drive_light;
+    return out;
+}
+
+std::unique_ptr<ICommand> make_time_of_day_command(ecs::World& world, ecs::Entity e,
+                                                   const TimeOfDayEdit& edit,
+                                                   std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.time_hours, edit.day_length_seconds})) {
+        out_err = "Day/night values must be finite numbers";
+        return nullptr;
+    }
+    // A negative day length is normalised to 0 (frozen) rather than rejected,
+    // matching the scene loader: it is an obvious way to write "stop the clock",
+    // and rejecting the edit would be the larger surprise. A non-finite value is
+    // refused above, because that means the widget produced something broken.
+    float day_length = edit.day_length_seconds;
+    if (day_length < 0.0f) {
+        day_length = 0.0f;
+    }
+    // Wrapped, not clamped, and for the same reason the loader wraps: 25.0 means
+    // 1am. A clamp would silently turn an author's "one hour later" into 24:00.
+    float hours = std::fmod(edit.time_hours, 24.0f);
+    if (hours < 0.0f) {
+        hours += 24.0f;
+    }
+
+    const auto* cur = world.get<runtime::TimeOfDayComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::TimeOfDayComponent before = had ? *cur : runtime::TimeOfDayComponent{};
+    runtime::TimeOfDayComponent after = before;
+    after.time_hours = hours;
+    after.day_length_seconds = day_length;
+    after.enabled = edit.enabled;
+    after.drive_light = edit.drive_light;
+    return std::make_unique<SetTimeOfDayCommand>(e, had, before, after);
+}
+
+runtime::PostProcessComponent read_post_process(const ecs::World& world, ecs::Entity e,
+                                                bool& out_has) {
+    const auto* pp = world.get<runtime::PostProcessComponent>(e);
+    out_has = (pp != nullptr);
+    return pp != nullptr ? *pp : runtime::PostProcessComponent{};
+}
+
+std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Entity e,
+                                                    const runtime::PostProcessComponent& edit,
+                                                    std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.bloom_threshold, edit.bloom_knee, edit.bloom_intensity,
+                     edit.bloom_radius, edit.grade_contrast, edit.grade_pivot,
+                     edit.grade_temperature, edit.grade_tint, edit.grade_gamma,
+                     edit.sharpen_amount, edit.sharpen_radius, edit.saturation,
+                     edit.vignette})) {
+        out_err = "Post-processing values must be finite numbers";
+        return nullptr;
+    }
+    // The ranges match the scene loader's, deliberately: a value the editor
+    // accepts and the loader then refuses would make the same scene load
+    // differently depending on how it was authored, which is the worst of both.
+    // They are wide where the renderer tolerates an extreme (threshold 0 means
+    // "everything blooms", knee 0 is a hard cut) and tight only where the value
+    // would be nonsense.
+    const auto in_range = [&out_err](const char* name, float v, float lo, float hi) {
+        if (v < lo || v > hi) {
+            out_err = std::string(name) + " must be within [" + std::to_string(lo) + ", " +
+                      std::to_string(hi) + "]";
+            return false;
+        }
+        return true;
+    };
+    if (!in_range("bloom threshold", edit.bloom_threshold, 0.0f, 1000.0f)) return nullptr;
+    if (!in_range("bloom knee", edit.bloom_knee, 0.0f, 1000.0f)) return nullptr;
+    if (!in_range("bloom intensity", edit.bloom_intensity, 0.0f, 100.0f)) return nullptr;
+    // A radius at or below zero collapses all thirteen taps onto one texel.
+    if (!in_range("bloom radius", edit.bloom_radius, 0.01f, 16.0f)) return nullptr;
+    if (!in_range("grade contrast", edit.grade_contrast, 0.0f, 16.0f)) return nullptr;
+    if (!in_range("grade pivot", edit.grade_pivot, 0.0f, 1000.0f)) return nullptr;
+    if (!in_range("grade temperature", edit.grade_temperature, -1.0f, 1.0f)) return nullptr;
+    if (!in_range("grade tint", edit.grade_tint, -1.0f, 1.0f)) return nullptr;
+    if (!in_range("grade gamma", edit.grade_gamma, 0.05f, 8.0f)) return nullptr;
+    if (!in_range("sharpen amount", edit.sharpen_amount, 0.0f, 8.0f)) return nullptr;
+    if (!in_range("sharpen radius", edit.sharpen_radius, 0.01f, 16.0f)) return nullptr;
+    if (!in_range("saturation", edit.saturation, 0.0f, 8.0f)) return nullptr;
+    if (!in_range("vignette", edit.vignette, 0.0f, 1.0f)) return nullptr;
+
+    const auto* cur = world.get<runtime::PostProcessComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::PostProcessComponent before = had ? *cur : runtime::PostProcessComponent{};
+    runtime::PostProcessComponent after = edit;
+    return std::make_unique<SetPostProcessCommand>(e, had, before, after);
 }
 
 std::unique_ptr<ICommand> make_mesh_command(ecs::World& world, ecs::Entity e,

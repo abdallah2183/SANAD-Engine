@@ -24,6 +24,23 @@
 
 namespace nf::assets {
 
+/// Result of the strict source-data check used by NFModelImporter's
+/// validation-only character mode. This does not claim that a cooked character
+/// target exists; it proves that the source has a usable bound skin, at least
+/// two clips that convert against that skin, and material data.
+struct CharacterImportValidation {
+    bool ok = false;
+    int skin_index = -1;
+    usize nonempty_clips = 0;
+    std::string error;
+};
+
+/// Validate a complete character source without writing anything. Fails on
+/// malformed/partial skin state, unsupported animation channels, missing
+/// materials, fewer than two usable clips, or any clip that cannot target the
+/// selected skin.
+CharacterImportValidation validate_character_import(const GltfImportResult& result);
+
 /// Node index → bone index for the skin's joints. Size is
 /// `result.nodes.size()`; -1 for every node that is not a joint of that skin.
 /// Returns an empty vector when `skin_index` is out of range.

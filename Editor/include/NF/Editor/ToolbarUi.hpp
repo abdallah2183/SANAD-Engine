@@ -60,6 +60,25 @@ struct EditorUiSettings {
     bool show_export = false;
     bool show_import = false;
     bool show_about = false;
+    // Keyboard-shortcut reference (Help menu / F1). Discoverability is the one
+    // usability cost of a shortcut-driven tool: a user who never opens this
+    // window only ever finds the two or three keys they were told about.
+    bool show_shortcuts = false;
+    // View > Reset layout: rebuild the built-in default dock arrangement,
+    // discarding the persisted one. Panels.cpp consumes and clears this.
+    bool reset_layout_requested = false;
+
+    // --- Dedicated editors (ScenePanels.cpp) --------------------------------
+    // One panel per engine function, each bound to the live scene object the
+    // renderer actually consumes. The Window menu toggles these, so the flags
+    // live here rather than in the panel file. All closed by default: they
+    // used to open floating over the viewport and Begin() had no close
+    // button wired, so X could not dismiss them.
+    bool show_lighting = false;
+    bool show_environment = false;
+    bool show_camera_panel = false;
+    bool show_render = true;
+    bool show_world = false; // diagnostics: opened from the Window menu
 };
 
 EditorUiSettings& ui_settings();

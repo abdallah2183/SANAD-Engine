@@ -81,7 +81,11 @@
    - دمج محرك Jolt Physics لدعم تصادمات الأجسام والشبكات المعقدة.
 
 6. **إدارة واستيراد الأصول (Asset Pipelines):**
-   - بناء مستورد لنماذج glTF 2.0 و FBX وتحويلها إلى صيغة المحرك.
+   - قارئ نماذج موحّد يقرأ الصيغ الست التي يكتبها المحرك نفسه
+     (`.gltf` / `.glb` / `.obj` / `.stl` / `.ply` / `.nfmesh`) ويحوّلها إلى صيغة
+     المحرك، مع **موادّها وخاماتها**: يُستخرج الـ MTL من ملفات OBJ، وخامات glTF
+     المضمّنة، ويُكتب كل ذلك كأصول في `content://`. (FBX غير مدعوم — المسار
+     المعتمد هو glTF عبر إضافة Blender المرافقة.)
 
 للتفاصيل الكاملة، يرجى مراجعة [دليل المساهمة (CONTRIBUTING.md)](CONTRIBUTING.md) و[خارطة الطريق (ROADMAP.md)](ROADMAP.md).
 
@@ -131,14 +135,14 @@ SANAD Engine Architecture
 
 | Subsystem | Description and Capabilities |
 | :--- | :--- |
-| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, **cascaded shadows** — 4 camera-fitted cascades tiled into a 2048 atlas with texel snapping, per-cascade derived bias and cross-fade blending — procedural sky, Tonemapping, GPU Picking, distance LOD + LOD generator). |
+| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, **cascaded shadows** — 4 camera-fitted cascades tiled into a 2048 atlas with texel snapping, per-cascade derived bias and cross-fade blending — procedural sky, **post-processing stack**: a real 4-level bloom chain, HDR colour grading, unsharp-mask sharpening, 4 tonemap operators, saturation and vignette, each stage individually switchable and authorable from a `.nfscene` `PostProcess:` line, GPU Picking, distance LOD + LOD generator). |
 | **Data-Oriented ECS** | Cache-friendly sparse-set Entity-Component-System with high memory locality and hierarchical transform propagation. |
 | **2D Scene (`NFScene2D`)** | CPU-only, Jolt-independent: y-down cameras with pixel snap, shelf atlas, sprite batcher, 16×16 signed tile chunks (auto-tile / greedy collision / octile A* / streaming), sequential-impulse 2D world (spatial hash, SAT, generation handles, distance + revolute). |
 | **Destruction (`NFDestruction`)** | Fracture assets (convex-hull chunk tree, plane cuts), damage world with linear falloff and accumulated bond stress, shard emission whose volumes partition the detached region exactly, and a performance budget enforced inside `apply_damage` (per-frame break allowance, live-shard cap retiring oldest-first, lifetime expiry). Arithmetic-only behind an `IDebrisSink` seam, so the suite runs with no physics backend and no GPU; `JoltDebrisSink` implements it in `NFPhysics`. |
 | **Physics Solver** | Fully deterministic rigid-body solver (Sequential Impulses, Warm Starting, Baumgarte position correction, SAT narrowphase, Coulomb friction) + dynamic-body character controller + **Jolt v5.6 advanced backend** (vehicles with per-wheel state readback and reset/respawn, ragdolls, constraints with cross-body cloning, scene queries — ray casts, sphere sweeps, sphere/box overlaps — sensor triggers, continuous collision detection, and complex colliders: capsule, convex hull, static triangle mesh) + **cloth / soft body** (first-party deterministic PBD grid: structural/shear/bend constraints, pins, wind, and sphere/box/plane collision — independent of Jolt, which has no deformable solver). |
 | **Skeletal Animation** | Bone hierarchy evaluation, animation clips with slerp/lerp keyframe sampling, state machine with transitions and cross-fading, procedural clip generator, analytic two-bone IK. |
 | **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, WAV/OGG/MP3/FLAC import pipeline, and headless test driver. |
-| **Asset Pipeline** | glTF 2.0 importer (`.gltf`/`.glb` → `.nfmesh` via `NFModelImporter`), mesh cooking, and asset registry management. |
+| **Asset Pipeline** | One mesh reader for every format the engine writes — `.gltf`/`.glb`/`.obj`/`.stl`/`.ply`/`.nfmesh` → `.nfmesh` — carrying **materials and textures** with it (OBJ `.mtl`, glTF embedded/base64/external images) as registered texture assets and `.nfmat` files. Extension-first with content sniffing as the fallback, and an explicit failure on a mismatch instead of a guess. Shared by the editor's `File > Import`, the `NFModelImporter` CLI, and the API; plus mesh cooking and asset registry management. |
 | **Lua + C# Scripting** | Sandboxed Lua 5.4 VM with `nf.*` host library, entity bindings, per-entity `ScriptComponent` ticking, and instruction budgets — plus .NET 10 hosting for C# (UnmanagedCallersOnly sandbox, per-entity Start/Update/Counter, host callbacks). |
 | **Gameplay Framework** | Hierarchical gameplay tags + queries, staged quest log, stacked inventory, dialogue trees, deterministic input replays, and CPU profiler with Chrome-trace export. |
 | **Game AI** | Deterministic grid A* pathfinding (no corner cutting, LOS smoothing) + reactive behavior trees with blackboard. |
@@ -173,7 +177,7 @@ build_nf.bat
 
 Or configure and build directly via CMake:
 ```bash
-cmake -S . -B build/DebugNinja -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNF_BUILD_TESTS=ON -DNF_BUILD_SAMPLES=ON -DNF_BUILD_EDITOR=ON
+cmake -S . -B build/DebugNinja -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNF_BUILD_TESTS=ON -DNF_BUILD_SAMPLES=ON -DNF_BUILD_TOOLS=ON -DNF_BUILD_EDITOR=ON
 cmake --build build/DebugNinja --parallel
 ```
 
@@ -191,8 +195,8 @@ cmake --build build/DebugNinja --parallel
 
 ### 5. Create and Package a Project
 ```cmd
-# Create a new project from template
-.\build\DebugNinja\bin\nf.exe new MyGame --name MyGame
+# Create a new project from a starter template
+.\build\DebugNinja\bin\nf.exe new MyGame --name MyGame --template ThirdPerson
 
 # Cook assets and package standalone binary
 .\build\DebugNinja\bin\nf.exe build --project MyGame/MyGame.nfproj
@@ -201,22 +205,42 @@ cmake --build build/DebugNinja --parallel
 cd MyGame/dist && .\NFPlayer.exe
 ```
 
-### 6. Import a Blender Character
-Export from Blender with the shipped add-on, then cook the `.glb`:
+### 6. Import a model (any format the engine can read)
+`File > Import` in the editor, or the CLI for a one-off cook:
+```cmd
+.\build\DebugNinja\bin\NFModelImporter.exe --input props\Crate.obj --output Content\Meshes\Crate.nfmesh
+.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --info
+```
+Accepted inputs are `.gltf`, `.glb`, `.obj`, `.stl`, `.ply` and `.nfmesh` — the
+same six the engine's exporter writes, so a round trip is a test rather than a
+hope. The editor's import also brings **materials and textures**: each extracted
+image lands as a registered texture asset under `content://Textures` and each
+material as a `.nfmat` under `content://Materials` with its `albedo` already
+pointing at that texture. Whatever the source declared and the engine's material
+block has no room for is reported in the import row, never silently dropped.
+Full format table, rules and troubleshooting:
+[`Docs/Asset_Import.md`](Docs/Asset_Import.md)
+
+### 7. Inspect or validate a Blender character
+Export from Blender with the shipped add-on, then inspect the glTF document:
 ```cmd
 .\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --info
-.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --output Content/Meshes/Hero.nfmesh
+.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --character
 ```
+`--character` is strict validation-only today: it requires a bound skin, at least
+two usable clips, and material data, but `.nfmesh` still carries geometry only.
+Do not treat a geometry-only `.nfmesh` as a playable skinned character.
 Full walkthrough (add-on install, export settings, round trip, current gaps):
 [`Docs/Blender_Pipeline.md`](Docs/Blender_Pipeline.md)
 
 ### First time here?
-- **New to the engine?** [`Docs/Tutorial.ar.md`](Docs/Tutorial.ar.md) — a 20-minute
+- **New to the engine?** [`Docs/Tutorial_Ar.md`](Docs/Tutorial_Ar.md) — a 20-minute
   Arabic walkthrough from an empty machine to a built, runnable game, with
   screenshots.
 - **Starting a game?** `Templates/` ships four project trees — `Default`,
-  `ThirdPerson`, `FPSStarter`, `Platformer2D`. Every one of them scaffolds into a
-  project that loads and plays (pinned by `Tests/ToolTests/test_templates.cpp`).
+  `ThirdPerson`, `FPSStarter`, `Platformer2D`. Each can be selected with
+  `nf new --template <name>` and is tested through scaffold → cook → package → run;
+  the genre scenes are starter demos, not yet complete interactive games.
 
 ---
 

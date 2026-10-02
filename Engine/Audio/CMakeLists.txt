@@ -18,6 +18,7 @@ set(NFAUDIO_SOURCES
     src/AudioDecoder.cpp
     src/AudioScene.cpp
     src/Buses.cpp
+    src/GameSettingsBridge.cpp
     src/MiniAudioImpl.cpp
     src/MusicSystem.cpp
     src/Occlusion.cpp

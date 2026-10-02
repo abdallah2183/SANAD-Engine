@@ -515,7 +515,251 @@ NF_TEST(perf_gpu_frame_baseline) {
     h.teardown();
 }
 
-// --- GPU: the destruction in the perf scene is live, not decoration ----------
+// --- The "distinct meshes" law, measured rather than asserted ----------------
+//
+// The claim this pins down: frame time tracks the number of DISTINCT MESHES,
+// not the number of entities. A field report measured a 522-entity town at 56
+// distinct kit pieces running 5x slower than the *same* 522 entities sharing
+// one mesh and one material.
+//
+// That report carried its own caveat — "the numbers above are the reproduction,
+// not the diagnosis" — and nothing in the suite could check either the
+// reproduction or the claim. So this test builds the A/B pair itself: two scenes
+// with an identical entity count, identical triangles, identical material,
+// differing ONLY in whether the entities share a mesh.
+//
+// The measured numbers are recorded rather than asserted. A future optimisation
+// that legitimately removes this cost must be able to turn the test green by
+// making the two configurations equal — so the assertion runs only in the
+// direction no optimisation could justify.
+
+namespace {
+
+/// Minimal headless scene rig: no perf-scene fixture, no destructibles, no
+/// registry ceremony beyond the meshes it is asked to draw. Everything is built
+/// in code so the only variable is the mesh set.
+struct MeshLawHarness {
+    VirtualFileSystem vfs;
+    AssetRegistry registry;
+    std::unique_ptr<AssetManager> manager;
+    std::unique_ptr<rhi::IGraphicsDevice> device;
+    std::unique_ptr<Runtime> runtime;
+    std::filesystem::path tmp;
+
+    ~MeshLawHarness() {
+        if (runtime && device) {
+            device->wait_idle();
+            runtime->shutdown();
+        }
+        runtime.reset();
+        manager.reset();
+        if (device) {
+            device->wait_idle();
+            device->shutdown();
+        }
+        device.reset();
+        std::filesystem::remove_all(tmp);
+    }
+};
+
+/// Scene text, device setup and the measured frame loop for `measure_mesh_law`.
+/// Declared before its caller so the definition can follow it.
+double measure_mesh_law_scene(MeshLawHarness& h,
+                              u32 entities,
+                              u32 distinct_meshes,
+                              const std::vector<AssetId>& ids,
+                              u32& out_draws);
+
+/// Build a scene of `entities` boxes in front of a camera and measure the median
+/// frame time.
+///
+/// `distinct_meshes` <= 1 draws every entity from one mesh. Above 1 the entities
+/// are spread over that many *separate GPU meshes*, each its own cube instance —
+/// so triangles per entity, entity count and material are all held constant while
+/// only the number of distinct vertex/index buffers changes. That is the variable
+/// the report blamed.
+double measure_mesh_law(u32 entities, u32 distinct_meshes, u32& out_draws) {
+    MeshLawHarness h;
+    h.tmp = std::filesystem::temp_directory_path() /
+            ("nf_mesh_law_" + std::to_string(entities) + "_" +
+             std::to_string(distinct_meshes));
+    std::filesystem::remove_all(h.tmp);
+    std::filesystem::create_directories(h.tmp / "Content" / "Scenes");
+    std::filesystem::create_directories(h.tmp / "Cache" / "Meshes");
+    h.vfs.mount("content://", h.tmp / "Content");
+    h.vfs.mount("cache://", h.tmp / "Cache");
+
+    std::vector<AssetId> ids;
+    for (u32 i = 0; i < distinct_meshes; ++i) {
+        // Deterministic, distinct ids so the registry keeps N separate entries.
+        const u32 tag = 0x9E3779B9u * (i + 1u);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "aaaaaaaa-0000-4000-8000-%08x%08x",
+                      static_cast<unsigned>(tag), static_cast<unsigned>(i));
+        AssetId id = AssetId::from_string(buf);
+        ids.push_back(id);
+
+        auto cube = rendering::StaticMesh::create_cube(1.0f);
+        auto cooked = rendering::make_mesh_asset(*cube, id, "content://Meshes/m.nfmesh");
+        std::vector<uint8_t> bytes;
+        cooked->save_to_bytes(bytes);
+
+        AssetMetadata meta{};
+        meta.id = id;
+        meta.type = AssetType::Mesh;
+        meta.logical_path = "content://Meshes/m" + std::to_string(i) + ".nfmesh";
+        meta.cooked_path = "cache://Meshes/m" + std::to_string(i) + ".nfmesh";
+        meta.fingerprint = "mesh-law";
+        meta.format = "nfmesh-v1";
+        std::string reg_err;
+        NF_CHECK(h.vfs.write_bytes(meta.cooked_path, std::span<const uint8_t>(bytes)).ok);
+        NF_CHECK(h.registry.add(meta, reg_err));
+    }
+    return measure_mesh_law_scene(h, entities, distinct_meshes, ids, out_draws);
+}
+
+/// Scene text, device setup and the measured frame loop for `measure_mesh_law`.
+/// Split out so the mesh-set construction above reads on its own.
+double measure_mesh_law_scene(MeshLawHarness& h,
+                             u32 entities,
+                             u32 distinct_meshes,
+                             const std::vector<AssetId>& ids,
+                             u32& out_draws) {
+    {
+        std::string text;
+        text += "# NOVAForge Scene v1\nversion: 1\nname: MeshLaw\n";
+        text += "entity_count: " + std::to_string(entities + 2) + "\n";
+
+        text += "---\nentity: 1:0\n  Name: Cam\n";
+        text += "  Transform: local(0,4,40) world(0,4,40) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n";
+        text += "  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true\n";
+
+        text += "---\nentity: 2:0\n  Name: Sun\n";
+        text += "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n";
+        text += "  Light: type=Directional dir(-0.4,-1,-0.25) color(1,1,1) intensity=1.1\n";
+
+        // A grid between the camera and the origin, all inside the frustum. The
+        // camera is pulled back so every row is genuinely visible: a scene where
+        // the grid falls outside the view would compare two empty scenes.
+        const u32 side = 20;
+        for (u32 i = 0; i < entities; ++i) {
+            const u32 gx = i % side;
+            const u32 gz = i / side;
+            const f32 x = static_cast<f32>(gx) * 1.5f - 15.0f;
+            const f32 z = static_cast<f32>(gz) * 1.5f - 10.0f;
+            const u32 mesh_index = distinct_meshes == 0 ? 0 : (i % distinct_meshes);
+
+            text += "---\nentity: " + std::to_string(10 + i) + ":0\n";
+            text += "  Name: Box" + std::to_string(i) + "\n";
+            text += "  Transform: local(" + std::to_string(x) + ",0," + std::to_string(z) +
+                     ") world(" + std::to_string(x) + ",0," + std::to_string(z) +
+                     ") rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n";
+            text += "  Mesh: asset_id=" + ids[mesh_index].to_string() + " material=Default\n";
+        }
+
+        auto loaded = load_scene_from_text(text);
+        NF_CHECK(loaded.success);
+        if (!loaded.scene) return -1.0;
+        std::string err;
+        NF_CHECK(save_scene_to_vfs(h.vfs, "content://Scenes/MeshLaw.nfscene",
+                                   *loaded.scene, err));
+    }
+
+    h.device = rhi::create_device();
+    if (!h.device) return -1.0;
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!h.device->init(desc)) return -1.0;
+
+    h.manager = std::make_unique<AssetManager>(h.vfs, h.registry);
+    h.runtime = std::make_unique<Runtime>(h.vfs, h.registry, *h.manager, *h.device, nullptr);
+
+    std::string err;
+    if (!h.runtime->load_scene("content://Scenes/MeshLaw.nfscene", err)) return -1.0;
+
+    rhi::TextureDesc td{};
+    td.width = kRenderW;
+    td.height = kRenderH;
+    td.format = rhi::Format::R8G8B8A8_UNorm;
+    td.usage = rhi::ImageUsage::ColorAtt;
+    auto target = h.device->create_texture(td);
+    if (!target) return -1.0;
+
+    const auto frame = [&]() -> double {
+        nf::Clock c;
+        h.runtime->update(1.0f / 60.0f);
+        auto cmd = h.device->create_command_buffer();
+        auto fence = h.device->create_fence(false);
+        if (!cmd || !fence) return -1.0;
+        c.reset();
+        cmd->begin();
+        h.runtime->render_offscreen(*target, *cmd);
+        cmd->end();
+        h.device->submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+        fence->wait(5'000'000'000ull);
+        h.device->wait_idle();
+        return static_cast<double>(c.elapsed_us()) / 1000.0;
+    };
+
+    // Warmup: pipelines, uploads and allocator growth all land here, so the
+    // measured frames are steady-state. Timing a cold first frame is how a
+    // "regression" gets invented out of one-time setup.
+    for (u32 i = 0; i < 6; ++i) (void)frame();
+
+    std::vector<double> samples;
+    samples.reserve(kMeasuredFrames);
+    for (u32 i = 0; i < kMeasuredFrames; ++i) samples.push_back(frame());
+
+    const auto* stats = h.runtime->renderer() ? &h.runtime->renderer()->last_stats() : nullptr;
+    out_draws = stats ? stats->draw_calls : 0;
+
+    target.reset();
+    return median(samples);
+}
+
+} // namespace
+
+NF_TEST(perf_frame_time_tracks_distinct_meshes_not_entity_count) {
+    // Two scenes, the same 240 entities, the same material, the same triangles
+    // per entity — differing only in whether the entities share one GPU mesh or
+    // each own one. This is the field report's reproduction, built in code so it
+    // cannot rot and so it runs on every machine rather than once on a
+    // reporter's.
+    constexpr u32 kEntities = 240;
+
+    u32 shared_draws = 0;
+    u32 distinct_draws = 0;
+    const double shared_ms = measure_mesh_law(kEntities, 1, shared_draws);
+    // 64 is the widest spread this grid allows with 240 entities; it is the
+    // honest upper end of the variable, since a scene can never have more
+    // distinct meshes than it has entities.
+    const double distinct_ms = measure_mesh_law(kEntities, 64, distinct_draws);
+
+    if (shared_ms < 0.0 || distinct_ms < 0.0) {
+        NF_SKIP("no Vulkan device available — the mesh-set scaling law needs a GPU");
+    }
+
+    NF_LOG_INFO(LogCategory::Core,
+                "[perf] mesh law: {} entities | 1 mesh = {:.2} ms ({} draws) | "
+                "64 meshes = {:.2} ms ({} draws) | ratio {:.2}x",
+                kEntities, shared_ms, shared_draws, distinct_ms, distinct_draws,
+                shared_ms > 0.0 ? distinct_ms / shared_ms : 0.0);
+
+    // Both configurations must actually draw, or the comparison is meaningless:
+    // two empty scenes are trivially equal.
+    NF_CHECK(shared_draws > 0);
+    NF_CHECK(distinct_draws > 0);
+
+    perf_metric("mesh_law_shared_ms", shared_ms, this_machine_tag().c_str());
+    perf_metric("mesh_law_distinct_ms", distinct_ms, this_machine_tag().c_str());
+
+    // The one real assertion, and deliberately the weak direction. Sharing a mesh
+    // cannot legitimately be SLOWER than not sharing one — no optimisation
+    // justifies that, so if it ever happens something is genuinely wrong. The
+    // opposite (distinct being much slower) is the reported law, recorded above
+    // rather than asserted, because a fix that removes it must be able to pass.
+    NF_CHECK(shared_ms <= distinct_ms * 1.10);
+}
 
 NF_TEST(perf_scene_destruction_blast_is_live) {
     PerfHarness h;

@@ -1,4 +1,6 @@
 #include <NF/Editor/EditorApp.hpp>
+#include <NF/Audio/AudioDecoder.hpp>
+#include <NF/Editor/ExternalIde.hpp>
 #include <NF/Editor/Outliner.hpp>
 #include <NF/Editor/Prefabs.hpp>
 #include <NF/Rendering/MeshUpload.hpp>
@@ -7,6 +9,7 @@
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Scene.hpp>
+#include <NF/Scene/Transform.hpp>
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 
@@ -45,8 +48,33 @@ void normalize_direction(float v[3]) {
     }
 }
 
-void recompute_asset_bounds(assets::MeshAsset& mesh) {
-    assets::AssetAABB box;
+// assets::AssetAABB and rendering::AABB are field-for-field the same six
+// floats, and writing the conversion at the two use sites instead of here is how
+// they drift. Kept next to the other bounds code so the two types can never be
+// silently interchanged by a cast that happens to compile.
+static rendering::AABB assets_to_render_aabb(const assets::AssetAABB& b) {
+    rendering::AABB r;
+    r.min_x = b.min_x;
+    r.min_y = b.min_y;
+    r.min_z = b.min_z;
+    r.max_x = b.max_x;
+    r.max_y = b.max_y;
+    r.max_z = b.max_z;
+    return r;
+}
+
+static AABB to_editor_aabb(const rendering::AABB& b) {
+    AABB e;
+    e.min_x = b.min_x;
+    e.min_y = b.min_y;
+    e.min_z = b.min_z;
+    e.max_x = b.max_x;
+    e.max_y = b.max_y;
+    e.max_z = b.max_z;
+    return e;
+}
+
+void recompute_asset_bounds(assets::MeshAsset& mesh) {    assets::AssetAABB box;
     assets::AssetSphere sphere;
     if (mesh.vertices.empty()) {
         mesh.bounds = box;
@@ -221,8 +249,19 @@ void EditorApp::after_mutation(ecs::Entity touched) {
         m_runtime->mark_scene_edited();
     }
     m_dirty = true;
-    if (const ecs::World* w = world()) {
+    if (ecs::World* w = world()) {
         m_selection.prune(*w);
+        // Recompose the world pose immediately. Everything the editor DRAWS
+        // reads world_* (the gizmo origin, the grid, the bounds the viewport
+        // frames), and the editor mutates local_* from its own command path.
+        // Without this, a gizmo drag wrote local_x and the gizmo stayed put
+        // until the next runtime tick — a visible one-frame lag between the
+        // arrows and the object they are supposed to be dragging.
+        //
+        // propagate_transforms is a full BFS over the hierarchy, so this is not
+        // free; it runs once per committed edit (and once per live drag frame),
+        // never once per widget.
+        scene::propagate_transforms(*w);
     }
     if (touched.valid()) {
         if (const ecs::World* w = world()) {
@@ -602,6 +641,43 @@ bool EditorApp::set_sky(ecs::Entity e, const SkyEdit& edit, std::string& out_err
         return false;
     }
     auto cmd = make_sky_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_time_of_day(ecs::Entity e, const TimeOfDayEdit& edit, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_time_of_day_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_post_process(ecs::Entity e, const runtime::PostProcessComponent& edit,
+                                 std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_post_process_command(*w, e, edit, out_err);
     if (!cmd) {
         return false;
     }
@@ -1213,6 +1289,711 @@ bool EditorApp::detach_gameplay_module(ecs::Entity e, std::string& out_err) {
     return true;
 }
 
+namespace {
+
+bool valid_script_path(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    if (path.find(' ') != std::string::npos) {
+        return false;
+    }
+    if (path.size() < 4 || path.compare(path.size() - 4, 4, ".lua") != 0) {
+        return false;
+    }
+    return path.rfind("content://", 0) == 0 || path.rfind("project://", 0) == 0;
+}
+
+std::string script_template(const std::string& logical_path) {
+    std::string out = "-- " + logical_path + "\n";
+    out += "-- Authored in the NOVAForge editor (Inspector > Script).\n";
+    out += "-- `self` is this entity; see nf.* in Docs for the host API.\n";
+    out += "function update(dt)\n";
+    out += "end\n";
+    return out;
+}
+
+} // namespace
+
+bool EditorApp::create_script_file(const std::string& logical_path, std::string& out_err) {
+    if (!valid_script_path(logical_path)) {
+        out_err = "Script path must be a content:// or project:// .lua file with no spaces";
+        return false;
+    }
+    auto exists = m_vfs.exists(logical_path);
+    if (!exists.ok) {
+        out_err = "Failed to check script path: " + exists.error;
+        return false;
+    }
+    if (exists.value) {
+        out_err = "Script file already exists: " + logical_path;
+        return false;
+    }
+    auto written = m_vfs.write_text(logical_path, script_template(logical_path));
+    if (!written.ok) {
+        out_err = "Failed to write script file: " + written.error;
+        return false;
+    }
+    invalidate_browser();
+    return true;
+}
+
+bool EditorApp::create_unique_script_file(const std::string& dir_logical, const std::string& stem,
+                                          std::string& out_path, std::string& out_err) {
+    if (dir_logical.empty() || (dir_logical.rfind("content://", 0) != 0 &&
+                                dir_logical.rfind("project://", 0) != 0)) {
+        out_err = "Script folder must be a content:// or project:// directory";
+        return false;
+    }
+    if (stem.empty() || stem.find_first_of(" /\\:") != std::string::npos) {
+        out_err = "Script name must be non-empty with no spaces or separators";
+        return false;
+    }
+    std::string dir = dir_logical;
+    if (dir.back() != '/') {
+        dir.push_back('/');
+    }
+    for (int i = 0; i < 100; ++i) {
+        const std::string candidate =
+            (i == 0) ? (dir + stem + ".lua")
+                     : (dir + stem + "_" + (i < 10 ? "0" : "") + std::to_string(i) + ".lua");
+        auto exists = m_vfs.exists(candidate);
+        if (!exists.ok) {
+            out_err = "Failed to check script path: " + exists.error;
+            return false;
+        }
+        if (exists.value) {
+            continue;
+        }
+        if (!create_script_file(candidate, out_err)) {
+            return false;
+        }
+        out_path = candidate;
+        return true;
+    }
+    out_err = "No free script name under " + dir_logical;
+    return false;
+}
+
+bool EditorApp::attach_script(ecs::Entity e, const std::string& logical_path, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_script_path(logical_path)) {
+        out_err = "Script path must be a content:// or project:// .lua file with no spaces";
+        return false;
+    }
+    auto bytes = m_vfs.read_bytes(logical_path);
+    if (!bytes.ok) {
+        out_err = "Script file not found: " + logical_path;
+        return false;
+    }
+    if (auto* existing = w->get<scripting::ScriptComponent>(e)) {
+        if (existing->path == logical_path) {
+            return true;
+        }
+        existing->path = logical_path;
+        existing->source.assign(reinterpret_cast<const char*>(bytes.value.data()), bytes.value.size());
+        existing->enabled = true;
+        if (m_runtime != nullptr) {
+            m_runtime->clear_script_cache();
+        }
+        after_mutation(e);
+        return true;
+    }
+    scripting::ScriptComponent comp;
+    comp.path = logical_path;
+    comp.source.assign(reinterpret_cast<const char*>(bytes.value.data()), bytes.value.size());
+    comp.enabled = true;
+    w->add<scripting::ScriptComponent>(e, std::move(comp));
+    if (m_runtime != nullptr) {
+        m_runtime->clear_script_cache();
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_script_enabled(ecs::Entity e, bool enabled, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    auto* comp = w->get<scripting::ScriptComponent>(e);
+    if (comp == nullptr) {
+        out_err = "Entity has no ScriptComponent";
+        return false;
+    }
+    comp->enabled = enabled;
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_script_path(ecs::Entity e, const std::string& logical_path, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    auto* comp = w->get<scripting::ScriptComponent>(e);
+    if (comp == nullptr) {
+        out_err = "Entity has no ScriptComponent";
+        return false;
+    }
+    if (!valid_script_path(logical_path)) {
+        out_err = "Script path must be a content:// or project:// .lua file with no spaces";
+        return false;
+    }
+    auto bytes = m_vfs.read_bytes(logical_path);
+    if (!bytes.ok) {
+        out_err = "Script file not found: " + logical_path;
+        return false;
+    }
+    comp->path = logical_path;
+    comp->source.assign(reinterpret_cast<const char*>(bytes.value.data()), bytes.value.size());
+    if (m_runtime != nullptr) {
+        m_runtime->clear_script_cache();
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_script(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<scripting::ScriptComponent>(e)) {
+        out_err = "Entity has no ScriptComponent";
+        return false;
+    }
+    w->remove<scripting::ScriptComponent>(e);
+    if (m_runtime != nullptr) {
+        m_runtime->clear_script_cache();
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_destructible(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::DestructibleComponent>(e)) {
+        out_err = "Entity has no DestructibleComponent";
+        return false;
+    }
+    w->remove<runtime::DestructibleComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_audio_buffer(ecs::Entity e, const std::string& logical_path, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (logical_path.empty() || logical_path.find(' ') != std::string::npos) {
+        out_err = "Audio path must be non-empty with no spaces";
+        return false;
+    }
+    auto bytes = m_vfs.read_bytes(logical_path);
+    if (!bytes.ok) {
+        out_err = "Audio file not found: " + logical_path;
+        return false;
+    }
+    audio::DecodeOptions options;
+    options.target_sample_rate = audio::kDefaultSampleRate;
+    audio::DecodeResult decoded =
+        audio::decode_audio_memory(bytes.value.data(), bytes.value.size(), options);
+    if (!decoded.ok) {
+        out_err = "Audio file could not be decoded (" + decoded.error + ")";
+        return false;
+    }
+    if (auto* existing = w->get<audio::AudioComponent>(e)) {
+        existing->buffer_name = logical_path;
+        existing->owned_buffer = std::move(decoded.buffer);
+        existing->tone_hz = 0.0f;
+        existing->tone_duration = 0.0f;
+    } else {
+        audio::AudioComponent aud;
+        aud.buffer_name = logical_path;
+        aud.owned_buffer = std::move(decoded.buffer);
+        w->add<audio::AudioComponent>(e, std::move(aud));
+    }
+    after_mutation(e);
+    return true;
+}
+
+namespace {
+
+bool valid_particle_config(const vfx::EmitterConfig& cfg, std::string& out_err) {
+    if (!std::isfinite(cfg.rate) || cfg.rate < 0.0f || cfg.rate > 100000.0f) {
+        out_err = "Rate must be within [0, 100000]";
+        return false;
+    }
+    if (!std::isfinite(cfg.lifetime) || cfg.lifetime <= 0.0f || cfg.lifetime > 60.0f) {
+        out_err = "Lifetime must be within (0, 60]";
+        return false;
+    }
+    if (!std::isfinite(cfg.lifetime_spread) || cfg.lifetime_spread < 0.0f ||
+        cfg.lifetime_spread > 1.0f) {
+        out_err = "Lifetime spread must be within [0, 1]";
+        return false;
+    }
+    if (!std::isfinite(cfg.drag) || cfg.drag < 0.0f || cfg.drag > 10.0f) {
+        out_err = "Drag must be within [0, 10]";
+        return false;
+    }
+    if (!std::isfinite(cfg.start_size) || cfg.start_size < 0.0f ||
+        !std::isfinite(cfg.end_size) || cfg.end_size < 0.0f) {
+        out_err = "Sizes must be non-negative finite numbers";
+        return false;
+    }
+    if (cfg.max_particles < 1u || cfg.max_particles > 1048576u) {
+        out_err = "Max particles must be within [1, 1048576]";
+        return false;
+    }
+    return true;
+}
+
+bool valid_cloth_config(const physics::ClothConfig& cfg, std::string& out_err) {
+    if (cfg.res_x < 2 || cfg.res_x > 128 || cfg.res_z < 2 || cfg.res_z > 128) {
+        out_err = "Resolution must be within [2, 128] per axis";
+        return false;
+    }
+    if (!std::isfinite(cfg.spacing) || cfg.spacing <= 0.0f || cfg.spacing > 10.0f) {
+        out_err = "Spacing must be within (0, 10]";
+        return false;
+    }
+    if (!std::isfinite(cfg.mass) || cfg.mass <= 0.0f || cfg.mass > 1000.0f) {
+        out_err = "Mass must be within (0, 1000]";
+        return false;
+    }
+    if (!std::isfinite(cfg.damping) || cfg.damping < 0.0f || cfg.damping >= 1.0f) {
+        out_err = "Damping must be within [0, 1)";
+        return false;
+    }
+    if (!std::isfinite(cfg.stiffness) || cfg.stiffness < 0.0f || cfg.stiffness > 1.0f) {
+        out_err = "Stiffness must be within [0, 1]";
+        return false;
+    }
+    if (cfg.iterations < 1 || cfg.iterations > 32 || cfg.substeps < 1 || cfg.substeps > 8) {
+        out_err = "Iterations must be within [1, 32] and substeps within [1, 8]";
+        return false;
+    }
+    return true;
+}
+
+bool valid_character_config(const physics::CharacterConfig& cfg, std::string& out_err) {
+    if (!std::isfinite(cfg.radius) || cfg.radius <= 0.0f || cfg.radius > 5.0f) {
+        out_err = "Radius must be within (0, 5]";
+        return false;
+    }
+    if (!std::isfinite(cfg.max_speed) || cfg.max_speed < 0.0f || cfg.max_speed > 100.0f) {
+        out_err = "Max speed must be within [0, 100]";
+        return false;
+    }
+    if (!std::isfinite(cfg.acceleration) || cfg.acceleration < 0.0f || cfg.acceleration > 1000.0f) {
+        out_err = "Acceleration must be within [0, 1000]";
+        return false;
+    }
+    if (!std::isfinite(cfg.air_control) || cfg.air_control < 0.0f || cfg.air_control > 1.0f) {
+        out_err = "Air control must be within [0, 1]";
+        return false;
+    }
+    if (!std::isfinite(cfg.jump_speed) || cfg.jump_speed < 0.0f || cfg.jump_speed > 50.0f) {
+        out_err = "Jump speed must be within [0, 50]";
+        return false;
+    }
+    if (!std::isfinite(cfg.slope_limit_deg) || cfg.slope_limit_deg < 0.0f ||
+        cfg.slope_limit_deg > 90.0f) {
+        out_err = "Slope limit must be within [0, 90]";
+        return false;
+    }
+    if (!std::isfinite(cfg.mass) || cfg.mass <= 0.0f || cfg.mass > 10000.0f) {
+        out_err = "Mass must be within (0, 10000]";
+        return false;
+    }
+    if (!std::isfinite(cfg.friction) || cfg.friction < 0.0f || cfg.friction > 10.0f) {
+        out_err = "Friction must be within [0, 10]";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool EditorApp::attach_particles(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<vfx::ParticleComponent>(e)) {
+        return true;
+    }
+    w->add<vfx::ParticleComponent>(e, vfx::ParticleComponent{});
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_particles(ecs::Entity e, const vfx::ParticleComponent& pc, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_particle_config(pc.config, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<vfx::ParticleComponent>(e)) {
+        *existing = pc;
+    } else {
+        w->add<vfx::ParticleComponent>(e, pc);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_particles(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<vfx::ParticleComponent>(e)) {
+        out_err = "Entity has no ParticleComponent";
+        return false;
+    }
+    w->remove<vfx::ParticleComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_cloth(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<physics::ClothComponent>(e)) {
+        return true;
+    }
+    w->add<physics::ClothComponent>(e, physics::ClothComponent{});
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_cloth(ecs::Entity e, const physics::ClothComponent& cc, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_cloth_config(cc.config, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<physics::ClothComponent>(e)) {
+        *existing = cc;
+    } else {
+        w->add<physics::ClothComponent>(e, cc);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_cloth(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<physics::ClothComponent>(e)) {
+        out_err = "Entity has no ClothComponent";
+        return false;
+    }
+    w->remove<physics::ClothComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_character(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<physics::CharacterComponent>(e)) {
+        return true;
+    }
+    w->add<physics::CharacterComponent>(e, physics::CharacterComponent{});
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_character(ecs::Entity e, const physics::CharacterComponent& ch,
+                              std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_character_config(ch.config, out_err)) {
+        return false;
+    }
+    // Live input/state ride along structurally but are never authored here:
+    // a config edit preserves the running intent rather than inventing it.
+    if (auto* existing = w->get<physics::CharacterComponent>(e)) {
+        const Vec3 wish = existing->wish_dir;
+        const bool jump = existing->jump;
+        const bool grounded = existing->grounded;
+        *existing = ch;
+        existing->wish_dir = wish;
+        existing->jump = jump;
+        existing->grounded = grounded;
+    } else {
+        physics::CharacterComponent fresh = ch;
+        fresh.wish_dir = Vec3{0.0f, 0.0f, 0.0f};
+        fresh.jump = false;
+        fresh.grounded = false;
+        w->add<physics::CharacterComponent>(e, fresh);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_character_input(ecs::Entity e, const Vec3& wish_dir, bool jump,
+                                    std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    auto* comp = w->get<physics::CharacterComponent>(e);
+    if (comp == nullptr) {
+        out_err = "Entity has no CharacterComponent";
+        return false;
+    }
+    comp->wish_dir = wish_dir;
+    comp->jump = jump;
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_character(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<physics::CharacterComponent>(e)) {
+        out_err = "Entity has no CharacterComponent";
+        return false;
+    }
+    w->remove<physics::CharacterComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_asset_folder(const std::string& logical_dir, std::string& out_err) {
+    if (!valid_asset_folder(logical_dir, out_err)) {
+        return false;
+    }
+    auto exists = m_vfs.exists(logical_dir);
+    if (!exists.ok) {
+        out_err = "Failed to check folder: " + exists.error;
+        return false;
+    }
+    if (exists.value) {
+        out_err = "Folder already exists: " + logical_dir;
+        return false;
+    }
+    auto made = m_vfs.create_directories(logical_dir);
+    if (!made.ok) {
+        out_err = "Failed to create folder: " + made.error;
+        return false;
+    }
+    invalidate_browser();
+    return true;
+}
+
+bool EditorApp::delete_asset(const std::string& logical_path, bool recursive, std::string& out_err) {
+    if (logical_path.empty()) {
+        out_err = "Asset path is empty";
+        return false;
+    }
+    // Refuse a bare mount here as well as in the VFS: this is the layer a
+    // future "delete by accident" would go through, and a clear refusal with
+    // the offending name is worth more than a filesystem error code.
+    if (logical_path == "content://" || logical_path == "project://" ||
+        logical_path == "cache://") {
+        out_err = "Refusing to delete a root: " + logical_path;
+        return false;
+    }
+    auto is_dir = m_vfs.is_directory(logical_path);
+    if (!is_dir.ok) {
+        out_err = "Cannot inspect asset: " + is_dir.error;
+        return false;
+    }
+    // A scene that is currently OPEN would leave the editor editing a file that
+    // no longer exists. Refuse with an explanation rather than delete and
+    // leave the session pointing at nothing.
+    if (!is_dir.value && m_scene_path == logical_path) {
+        out_err = "Cannot delete the open scene — open another scene first";
+        return false;
+    }
+    // `recursive` is honoured rather than inferred: a caller that says
+    // "this one file" must get the single-file path, so a future non-recursive
+    // delete of a directory fails loudly instead of quietly taking a tree.
+    const auto res = recursive ? m_vfs.remove_all(logical_path) : m_vfs.remove(logical_path);
+    if (!res.ok) {
+        out_err = "Delete failed: " + res.error;
+        return false;
+    }
+    // Drop a selection that pointed at the deleted file, so the inspector does
+    // not keep rendering fields for something that is gone.
+    if (m_browser.selected_path == logical_path) {
+        m_browser.selected_path.clear();
+    }
+    invalidate_browser();
+    return true;
+}
+
+bool EditorApp::rename_asset(const std::string& from_logical, const std::string& to_logical,
+                             std::string& out_err) {
+    if (from_logical.empty() || to_logical.empty()) {
+        out_err = "Asset path is empty";
+        return false;
+    }
+    if (from_logical == to_logical) {
+        return true; // nothing to do; not an error the user needs to read
+    }
+    // A rename target is a FILE path, so it inherits the script-path rules:
+    // no spaces (a Lua host stops at the first space) and the file extensions
+    // the engine actually consumes. A folder rename goes through the same door
+    // so "Meshes " cannot be typed.
+    if (to_logical.find(' ') != std::string::npos) {
+        out_err = "Name must contain no spaces";
+        return false;
+    }
+    const auto renamed = m_vfs.rename(from_logical, to_logical);
+    if (!renamed.ok) {
+        out_err = "Rename failed: " + renamed.error;
+        return false;
+    }
+    // Keep the session's pointers at the asset's new name, so an open scene
+    // that was renamed still saves and reloads.
+    if (m_scene_path == from_logical) {
+        m_scene_path = to_logical;
+    }
+    // A folder rename moves everything under it, so any pointer that names a
+    // path INSIDE the old tree has to follow it — not just one that names the
+    // tree root. A dock selection of "content://Meshes/cube.nfmesh" while
+    // "content://Meshes" is renamed is the common case, and leaving it behind
+    // means the panel keeps a highlighted row for a file that no longer exists
+    // and its context menu opens a path that resolves to nothing.
+    auto inside_old = [&from_logical](const std::string& p) {
+        return p == from_logical ||
+               (p.rfind(from_logical + "/", 0) == 0);
+    };
+    auto retarget = [&inside_old, &from_logical, &to_logical](std::string& p) {
+        if (inside_old(p)) {
+            p = to_logical + p.substr(from_logical.size());
+        }
+    };
+    retarget(m_browser.selected_path);
+    for (std::string& f : m_browser.favorites) {
+        retarget(f);
+    }
+    for (std::string& b : m_browser.back_stack) {
+        retarget(b);
+    }
+    for (std::string& f : m_browser.forward_stack) {
+        retarget(f);
+    }
+    retarget(m_browser.current_folder);
+    invalidate_browser();
+    return true;
+}
+
+bool EditorApp::open_asset_in_ide(const std::string& logical_path, std::string& out_kind,
+                                  std::string& out_err) {
+    if (logical_path.empty()) {
+        out_err = "Asset path is empty";
+        return false;
+    }
+    auto resolved = m_vfs.resolve(logical_path);
+    if (!resolved.ok) {
+        out_err = "Cannot resolve asset path: " + resolved.error;
+        return false;
+    }
+    IdeKind kind = IdeKind::ShellDefault;
+    if (!open_file_in_ide(resolved.value, default_search_paths(), kind, out_err)) {
+        return false;
+    }
+    switch (kind) {
+        case IdeKind::VisualStudio: out_kind = "Visual Studio"; break;
+        case IdeKind::VsCode: out_kind = "VS Code"; break;
+        case IdeKind::ShellDefault: out_kind = "shell default"; break;
+    }
+    return true;
+}
+
 runtime::SaveSystem* EditorApp::save_system() {
     if (m_save_system == nullptr && m_runtime != nullptr) {
         m_save_system = std::make_unique<runtime::SaveSystem>(m_vfs, *m_runtime);
@@ -1500,6 +2281,33 @@ size_t EditorApp::process_imports() {
 }
 
 void EditorApp::watch_imported(const ImportJob& job) {
+    // A model import writes meshes, textures AND materials, so every written
+    // file is watched as whatever it landed as. Watching only the primary path
+    // would leave an imported model's textures and materials invisible to hot
+    // reload — the parts a developer edits most.
+    if (!job.written.empty()) {
+        for (const ImportWritten& written : job.written) {
+            switch (written.type) {
+                case assets::AssetType::Mesh:
+                    if (const assets::AssetMetadata* meta =
+                            m_registry.find_by_path(written.logical_path)) {
+                        m_hot.watch_mesh(meta->id, meta->logical_path);
+                    }
+                    break;
+                case assets::AssetType::Texture:
+                    m_hot.watch_texture(written.logical_path);
+                    break;
+                case assets::AssetType::Material:
+                    m_hot.watch_material(written.logical_path);
+                    break;
+                default:
+                    break;
+            }
+        }
+        return;
+    }
+    // No commit landed (a failed job): fall back to the primary destination,
+    // which is still the right guess for the single-file types.
     if (job.type == assets::AssetType::Mesh) {
         if (const assets::AssetMetadata* meta = m_registry.find_by_path(job.dst_logical)) {
             m_hot.watch_mesh(meta->id, meta->logical_path);
@@ -1960,32 +2768,217 @@ ecs::Entity EditorApp::pick(const ViewCamera& cam, float ndc_x, float ndc_y) {
         }
     }
 
-    auto bounds_of = [this, w](ecs::Entity e) -> std::optional<AABB> {
-        const auto* mc = w->get<runtime::MeshComponent>(e);
-        const auto* tr = w->get<scene::Transform>(e);
-        if (mc == nullptr || tr == nullptr || !mc->mesh_id.valid()) {
-            return std::nullopt;
+    // One bounds source: world_bounds() is what the pick ray tests against AND
+    // what frame_selection() centres on, so "what you can click" and "what
+    // Frame frames" can never describe different boxes.
+    auto bounds_of = [this](ecs::Entity e) -> std::optional<AABB> {
+        AABB b;
+        if (world_bounds(e, b)) {
+            return b;
         }
-        auto handle = m_manager.find(mc->mesh_id);
-        if (!handle || !handle->asset) {
-            return std::nullopt;
-        }
-        const auto& b = handle->asset->bounds;
-        AABB box;
-        box.min_x = b.min_x + tr->world_x;
-        box.min_y = b.min_y + tr->world_y;
-        box.min_z = b.min_z + tr->world_z;
-        box.max_x = b.max_x + tr->world_x;
-        box.max_y = b.max_y + tr->world_y;
-        box.max_z = b.max_z + tr->world_z;
-        return box;
+        return std::nullopt;
     };
     return pick_entity(*w, bounds_of, cam, ndc_x, ndc_y);
+}
+
+// --- View pivot + framing ---------------------------------------------------
+//
+// world_bounds() is deliberately the same code the picker uses (the lambda above
+// is the same body), so "what the user can click" and "what Frame centres on"
+// can never describe different boxes. It is exposed rather than inlined twice
+// because framing, the tests, and any future gizmo-scaling logic all need it.
+
+// Radius of the sphere that circumscribes a box. Framing aims the camera with
+// this rather than with the half-diagonal in a chosen plane, so a long thin
+// object and a cube of the same diagonal get the same treatment.
+static float box_radius(const AABB& b) {
+    const float rx = (b.max_x - b.min_x) * 0.5f;
+    const float ry = (b.max_y - b.min_y) * 0.5f;
+    const float rz = (b.max_z - b.min_z) * 0.5f;
+    return std::sqrt(rx * rx + ry * ry + rz * rz);
+}
+
+bool EditorApp::world_bounds(ecs::Entity e, AABB& out) const {
+    const ecs::World* w = m_runtime != nullptr ? &m_runtime->edit_scene()->world() : nullptr;
+    if (w == nullptr) {
+        return false;
+    }
+    const auto* mc = w->get<runtime::MeshComponent>(e);
+    const auto* tr = w->get<scene::Transform>(e);
+    if (mc == nullptr || tr == nullptr || !mc->mesh_id.valid()) {
+        return false;
+    }
+    const auto handle = m_manager.find(mc->mesh_id);
+    if (!handle || !handle->asset) {
+        return false;
+    }
+    // Through the FULL world matrix, not a translation. This is the same box the
+    // renderer draws and the same one the pick ray tests, which is what makes
+    // "click the object" and "Frame the object" agree. Translating only meant a
+    // scaled ground plane was clickable in a 1x1 box at its origin, and Frame
+    // centred on that phantom cube.
+    const rendering::AABB local = assets_to_render_aabb(handle->asset->bounds);
+    out = to_editor_aabb(rendering::transform_aabb(local, scene::world_matrix(*tr)));
+    return true;
+}
+
+bool EditorApp::selection_bounds(AABB& out) const {
+    const ecs::World* w = m_runtime != nullptr ? &m_runtime->edit_scene()->world() : nullptr;
+    if (w == nullptr) {
+        return false;
+    }
+    bool any = false;
+    AABB acc{};
+    for (ecs::Entity e : m_selection.all()) {
+        AABB b;
+        if (!world_bounds(e, b) || !w->is_alive(e)) {
+            continue;
+        }
+        if (!any) {
+            acc = b;
+            any = true;
+            continue;
+        }
+        acc.min_x = std::min(acc.min_x, b.min_x);
+        acc.min_y = std::min(acc.min_y, b.min_y);
+        acc.min_z = std::min(acc.min_z, b.min_z);
+        acc.max_x = std::max(acc.max_x, b.max_x);
+        acc.max_y = std::max(acc.max_y, b.max_y);
+        acc.max_z = std::max(acc.max_z, b.max_z);
+    }
+    if (any) {
+        out = acc;
+    }
+    return any;
+}
+
+bool EditorApp::scene_bounds(AABB& out) const {
+    const ecs::World* w = m_runtime != nullptr ? &m_runtime->edit_scene()->world() : nullptr;
+    if (w == nullptr) {
+        return false;
+    }
+    bool any = false;
+    AABB acc{};
+    for (auto e : w->query<runtime::MeshComponent>()) {
+        AABB b;
+        if (!world_bounds(e, b)) {
+            continue;
+        }
+        if (!any) {
+            acc = b;
+            any = true;
+            continue;
+        }
+        acc.min_x = std::min(acc.min_x, b.min_x);
+        acc.min_y = std::min(acc.min_y, b.min_y);
+        acc.min_z = std::min(acc.min_z, b.min_z);
+        acc.max_x = std::max(acc.max_x, b.max_x);
+        acc.max_y = std::max(acc.max_y, b.max_y);
+        acc.max_z = std::max(acc.max_z, b.max_z);
+    }
+    if (any) {
+        out = acc;
+    }
+    return any;
+}
+
+bool EditorApp::frame_selection(std::string& out_err) {
+    if (!m_selection.has_selection()) {
+        out_err = "Nothing selected to frame";
+        return false;
+    }
+    AABB b;
+    if (!selection_bounds(b)) {
+        // Selected, but nothing in it is a mesh: a camera or a light has no
+        // extent to frame, and centring on its origin is the next best thing.
+        // Said plainly rather than failing with "no bounds".
+        for (ecs::Entity e : m_selection.all()) {
+            const ecs::World* w =
+                m_runtime != nullptr ? &m_runtime->edit_scene()->world() : nullptr;
+            const auto* tr = w != nullptr ? w->get<scene::Transform>(e) : nullptr;
+            if (tr != nullptr && w->is_alive(e)) {
+                move_view_pivot_to(tr->world_x, tr->world_y, tr->world_z, 0.0f);
+                return true;
+            }
+        }
+        out_err = "Selection has nothing to frame";
+        return false;
+    }
+    move_view_pivot_to((b.min_x + b.max_x) * 0.5f, (b.min_y + b.max_y) * 0.5f,
+                       (b.min_z + b.max_z) * 0.5f, box_radius(b));
+    return true;
+}
+
+bool EditorApp::frame_all(std::string& out_err) {
+    AABB b;
+    if (!scene_bounds(b)) {
+        out_err = "Scene has nothing to frame";
+        return false;
+    }
+    move_view_pivot_to((b.min_x + b.max_x) * 0.5f, (b.min_y + b.max_y) * 0.5f,
+                       (b.min_z + b.max_z) * 0.5f, box_radius(b));
+    return true;
+}
+
+float EditorApp::consume_view_fit() {
+    const float r = m_view_fit_radius;
+    m_view_fit_radius = 0.0f;
+    return r;
+}
+
+float EditorApp::fit_distance_for(float radius, float fov_y_deg, float margin) {
+    // A sphere of radius R is fully inside a vertical half-angle of fov/2 only
+    // at distance R / sin(fov/2); the margin backs the camera off so the object
+    // does not sit flush against the top and bottom of the viewport. A long thin
+    // object (a 60 m ground plane) is the case that matters: using the box
+    // diagonal instead of the sphere over-zooms it by a factor of two, and the
+    // user has to wheel back out every single time.
+    const float half = fov_y_deg * 0.5f * 3.14159265359f / 180.0f;
+    const float s = std::sin(half);
+    if (s < 1e-4f) {
+        return radius * margin * 4.0f; // degenerate fov: a sane, large answer
+    }
+    return (radius / s) * margin;
+}
+
+void EditorApp::move_view_pivot_to(float x, float y, float z, float fit_radius) {
+    const float dx = x - m_view_pivot[0];
+    const float dy = y - m_view_pivot[1];
+    const float dz = z - m_view_pivot[2];
+    m_view_pivot[0] = x;
+    m_view_pivot[1] = y;
+    m_view_pivot[2] = z;
+    m_view_fit_radius = fit_radius;
+    // Carry the eye with the pivot. Without this the camera would keep its world
+    // position and the orbit would swing it to a completely different angle the
+    // moment the pivot moved — framing a selection would also rotate the user's
+    // view, which reads as the camera glitching rather than as a focus action.
+    if (dx == 0.0f && dy == 0.0f && dz == 0.0f) {
+        return;
+    }
+    ecs::World* w = m_runtime != nullptr ? &m_runtime->edit_scene()->world() : nullptr;
+    if (w == nullptr) {
+        return;
+    }
+    for (auto e : w->query<runtime::CameraComponent>()) {
+        const auto* c = w->get<runtime::CameraComponent>(e);
+        auto* tr = w->get<scene::Transform>(e);
+        if (c == nullptr || tr == nullptr || !c->is_active) {
+            continue;
+        }
+        tr->local_x += dx;
+        tr->local_y += dy;
+        tr->local_z += dz;
+        tr->dirty = true;
+        break;
+    }
+    scene::propagate_transforms(*w);
 }
 
 namespace {
 
 constexpr float kDragDeadzoneNdc = 0.004f; // clicks must not become micro-drags
+constexpr float kPi = 3.14159265358979323846f;
 
 float drag_distance_to(const ViewCamera& vc, const scene::Transform& t) {
     const float dx = t.world_x - vc.px;
@@ -1995,10 +2988,46 @@ float drag_distance_to(const ViewCamera& vc, const scene::Transform& t) {
     return len > 1e-4f ? len : 1e-4f;
 }
 
+// World point into the pointer NDC the gesture path consumes (y-up). Mirrors
+// main.cpp's world_to_pointer_ndc: look_at * perspective, then negate y for
+// the Vulkan flip — one convention shared by pick_ray and the drag math.
+Vec3 gizmo_to_pointer_ndc(const ViewCamera& vc, const Vec3& world) {
+    const Mat4 view =
+        Mat4::look_at(Vec3{vc.px, vc.py, vc.pz}, Vec3{vc.tx, vc.ty, vc.tz}, Vec3{0.0f, 1.0f, 0.0f});
+    const Mat4 proj = Mat4::perspective(vc.fov_y_deg * kPi / 180.0f, vc.aspect, vc.near_plane,
+                                        vc.far_plane);
+    const Vec3 ndc = (view * proj).transform_point(world);
+    return Vec3{ndc.x, -ndc.y, ndc.z};
+}
+
+void gizmo_frame_axes(const scene::Transform& t, GizmoSpace space, float axes[3][3]) {
+    axes[0][0] = 1.0f; axes[0][1] = 0.0f; axes[0][2] = 0.0f;
+    axes[1][0] = 0.0f; axes[1][1] = 1.0f; axes[1][2] = 0.0f;
+    axes[2][0] = 0.0f; axes[2][1] = 0.0f; axes[2][2] = 1.0f;
+    if (space != GizmoSpace::Local) {
+        return;
+    }
+    // t.world_rot, NOT a quaternion rebuilt from t.rot_*. The two agree for a
+    // root and disagree for a child of a rotated parent — and it is the DRAG
+    // mapping, not just the drawing, that depends on this. Using the local angles
+    // made a Local-space axis drag on a parented object move it along an axis it
+    // was not aligned to: the gizmo drew one thing and the drag did another.
+    // The same value the view layer draws with (TransformGizmoView.cpp), so the
+    // arrows the user aims at are the arrows the drag follows.
+    const Quat q = t.world_rot;
+    for (int a = 0; a < 3; ++a) {
+        const Vec3 w = q.rotate(Vec3{axes[a][0], axes[a][1], axes[a][2]});
+        axes[a][0] = w.x;
+        axes[a][1] = w.y;
+        axes[a][2] = w.z;
+    }
+}
+
 } // namespace
 
 bool EditorApp::viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, bool additive,
                                std::string& out_err) {
+    m_drag_handle = GizmoHandle::None; // a pick starts a camera-plane drag, never a handle one
     if (!require_editable(out_err)) {
         return false;
     }
@@ -2053,6 +3082,197 @@ bool EditorApp::viewport_press(float ndc_x, float ndc_y, const ViewCamera& vc, b
     return true;
 }
 
+bool EditorApp::viewport_gizmo_press(GizmoHandle handle, float ndc_x, float ndc_y,
+                                     const ViewCamera& vc, std::string& out_err) {
+    m_drag_handle = GizmoHandle::None;
+    if (handle == GizmoHandle::None) {
+        out_err = "No gizmo handle grabbed";
+        return false;
+    }
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    if (!m_selection.has_selection()) {
+        out_err = "Nothing selected";
+        return false;
+    }
+    // Handle/mode compatibility: planes exist only for translate, and the
+    // center box is translate (plane move) or scale (uniform) — never rotate.
+    // Axis handles exist in all three modes (arrows / rings / arms).
+    const bool is_plane = (handle == GizmoHandle::PlaneXY || handle == GizmoHandle::PlaneXZ ||
+                           handle == GizmoHandle::PlaneYZ);
+    const bool is_center = (handle == GizmoHandle::Center);
+    const bool is_axis = !is_plane && !is_center;
+    if ((is_plane && m_gizmo_mode != GizmoMode::Translate) ||
+        (is_center && m_gizmo_mode == GizmoMode::Rotate)) {
+        out_err = "Handle does not belong to the active gizmo mode";
+        m_drag.cancel();
+        return false;
+    }
+    // Geometry source: the primary when it carries a Transform, else the
+    // first selected entity that does. The drag itself still arms on the
+    // whole selection (same group rule as a pick press).
+    ecs::Entity origin_e = m_selection.primary();
+    const scene::Transform* ot = nullptr;
+    if (origin_e.valid() && w->is_alive(origin_e)) {
+        ot = w->get<scene::Transform>(origin_e);
+    }
+    if (ot == nullptr) {
+        for (ecs::Entity e : m_selection.all()) {
+            if (!e.valid() || !w->is_alive(e)) {
+                continue;
+            }
+            ot = w->get<scene::Transform>(e);
+            if (ot != nullptr) {
+                origin_e = e;
+                break;
+            }
+        }
+    }
+    if (ot == nullptr) {
+        out_err = "Selected entities have no Transform";
+        return false;
+    }
+    if (!m_drag.begin(*w, m_selection.all(), m_gizmo_mode, m_gizmo_space, m_gizmo_snap,
+                      out_err)) {
+        return false;
+    }
+    float axes[3][3]{};
+    gizmo_frame_axes(*ot, m_gizmo_space, axes);
+    m_drag_origin[0] = ot->world_x;
+    m_drag_origin[1] = ot->world_y;
+    m_drag_origin[2] = ot->world_z;
+    const Ray ray = pick_ray(vc, ndc_x, ndc_y);
+    int axis = -1;
+    (void)gizmo_handle_axis(handle, axis);
+    if (m_gizmo_mode == GizmoMode::Translate) {
+        if (is_axis && axis >= 0) {
+            m_drag_axis[0] = axes[axis][0];
+            m_drag_axis[1] = axes[axis][1];
+            m_drag_axis[2] = axes[axis][2];
+            // Edge-on axis (ray parallel to the line): press still arms, the
+            // drag events below then contribute ~nothing instead of failing
+            // a grab the view already accepted.
+            if (!gizmo_axis_param(ray, m_drag_origin[0], m_drag_origin[1], m_drag_origin[2],
+                                  m_drag_axis[0], m_drag_axis[1], m_drag_axis[2],
+                                  m_drag_tlast)) {
+                m_drag_tlast = 0.0f;
+            }
+        } else {
+            // Plane quad, or the center box (camera-plane move): the plane
+            // through the origin facing the interaction.
+            if (is_center) {
+                float fx = vc.tx - vc.px, fy = vc.ty - vc.py, fz = vc.tz - vc.pz;
+                const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+                if (fl > 1e-9f) {
+                    fx /= fl;
+                    fy /= fl;
+                    fz /= fl;
+                } else {
+                    fx = 0.0f;
+                    fy = 0.0f;
+                    fz = 1.0f;
+                }
+                m_drag_plane_n[0] = fx;
+                m_drag_plane_n[1] = fy;
+                m_drag_plane_n[2] = fz;
+            } else {
+                int aa = 0, bb = 1, nn = 2;
+                gizmo_handle_plane(handle, aa, bb, nn);
+                m_drag_plane_n[0] = axes[nn][0];
+                m_drag_plane_n[1] = axes[nn][1];
+                m_drag_plane_n[2] = axes[nn][2];
+            }
+            if (!gizmo_plane_point(ray, m_drag_origin[0], m_drag_origin[1], m_drag_origin[2],
+                                   m_drag_plane_n[0], m_drag_plane_n[1], m_drag_plane_n[2],
+                                   m_drag_plast)) {
+                m_drag.cancel();
+                out_err = "Pointer ray misses the drag plane";
+                return false;
+            }
+        }
+    } else if (m_gizmo_mode == GizmoMode::Rotate) {
+        if (!is_axis || axis < 0) {
+            m_drag.cancel();
+            out_err = "Handle does not belong to the active gizmo mode";
+            return false;
+        }
+        // Geometry normal: the drawn (world-frame) axis. Apply-frame axis:
+        // the unit axis itself — pre-multiplied for World, post-multiplied
+        // for Local, which is exactly the drawn axis in each frame.
+        m_drag_plane_n[0] = axes[axis][0];
+        m_drag_plane_n[1] = axes[axis][1];
+        m_drag_plane_n[2] = axes[axis][2];
+        m_drag_axis[0] = (axis == 0) ? 1.0f : 0.0f;
+        m_drag_axis[1] = (axis == 1) ? 1.0f : 0.0f;
+        m_drag_axis[2] = (axis == 2) ? 1.0f : 0.0f;
+        if (!gizmo_plane_point(ray, m_drag_origin[0], m_drag_origin[1], m_drag_origin[2],
+                               m_drag_plane_n[0], m_drag_plane_n[1], m_drag_plane_n[2],
+                               m_drag_plast)) {
+            m_drag.cancel();
+            out_err = "Pointer ray misses the rotation plane";
+            return false;
+        }
+    } else { // Scale
+        // Screen-space snapshot in pointer-NDC units: direction + length of
+        // the grabbed arm, or origin + radius for the uniform box. Any arm
+        // length works (only the ratio is used), so a fixed world length is
+        // fine even if the view draws a slightly different one.
+        const float dist = drag_distance_to(vc, *ot);
+        const float snap_len = dist > 1e-4f ? dist * 0.2f : 0.2f;
+        const Vec3 ondc =
+            gizmo_to_pointer_ndc(vc, Vec3{m_drag_origin[0], m_drag_origin[1], m_drag_origin[2]});
+        m_drag_sox = ondc.x;
+        m_drag_soy = ondc.y;
+        if (is_center) {
+            const float v_px =
+                static_cast<float>(m_viewport.height > 0 ? m_viewport.height : 9);
+            // Radius truthfully matches the drawn gizmo: axis px over
+            // viewport height, converted to NDC (full height = 2).
+            const float v_h = v_px > 0.0f ? v_px : 1.0f;
+            m_drag_srad = (kTransformGizmoAxisPx / v_h) * 2.0f;
+            if (m_drag_srad <= 1e-6f) {
+                m_drag_srad = 0.1f;
+            }
+        } else if (is_axis && axis >= 0) {
+            const Vec3 tndc = gizmo_to_pointer_ndc(
+                vc, Vec3{m_drag_origin[0] + axes[axis][0] * snap_len,
+                         m_drag_origin[1] + axes[axis][1] * snap_len,
+                         m_drag_origin[2] + axes[axis][2] * snap_len});
+            float dx = tndc.x - ondc.x;
+            float dy = tndc.y - ondc.y;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len <= 1e-6f) {
+                m_drag.cancel();
+                out_err = "Scale axis faces the camera";
+                return false;
+            }
+            m_drag_sdx = dx / len;
+            m_drag_sdy = dy / len;
+            m_drag_slen = len;
+        } else {
+            m_drag.cancel();
+            out_err = "Handle does not belong to the active gizmo mode";
+            return false;
+        }
+        m_drag_flast = 1.0f;
+    }
+    m_drag_handle = handle;
+    m_drag_vc = vc;
+    m_drag_ndc0x = ndc_x;
+    m_drag_ndc0y = ndc_y;
+    m_drag_lastx = ndc_x;
+    m_drag_lasty = ndc_y;
+    m_drag_distance = drag_distance_to(vc, *ot);
+    m_drag_moved = false;
+    return true;
+}
+
 bool EditorApp::viewport_drag(float ndc_x, float ndc_y, const ViewCamera& vc, std::string& out_err) {
     (void)vc; // mapping uses the press-time camera: the view must not shift under the gesture
     if (!m_drag.active()) {
@@ -2074,6 +3294,101 @@ bool EditorApp::viewport_drag(float ndc_x, float ndc_y, const ViewCamera& vc, st
         }
         m_drag_moved = true;
     }
+    if (m_drag_handle != GizmoHandle::None) {
+        // Handle drag: the mapping is frozen at press (axis line, drag plane,
+        // screen snapshot), so the object moves under the gesture without the
+        // mapping chasing it. A missed geometric query keeps the last state
+        // instead of failing the gesture (parallel ray/plane flicker).
+        const Ray ray = pick_ray(m_drag_vc, ndc_x, ndc_y);
+        GizmoDelta d;
+        bool feed = false;
+        if (m_gizmo_mode == GizmoMode::Translate) {
+            int axis = -1;
+            (void)gizmo_handle_axis(m_drag_handle, axis);
+            if (axis >= 0) {
+                float t = m_drag_tlast;
+                if (gizmo_axis_param(ray, m_drag_origin[0], m_drag_origin[1],
+                                     m_drag_origin[2], m_drag_axis[0], m_drag_axis[1],
+                                     m_drag_axis[2], t)) {
+                    const float dt = t - m_drag_tlast;
+                    d.dx = m_drag_axis[0] * dt;
+                    d.dy = m_drag_axis[1] * dt;
+                    d.dz = m_drag_axis[2] * dt;
+                    m_drag_tlast = t;
+                    feed = true;
+                }
+            } else {
+                float p[3]{m_drag_plast[0], m_drag_plast[1], m_drag_plast[2]};
+                if (gizmo_plane_point(ray, m_drag_origin[0], m_drag_origin[1],
+                                      m_drag_origin[2], m_drag_plane_n[0], m_drag_plane_n[1],
+                                      m_drag_plane_n[2], p)) {
+                    d.dx = p[0] - m_drag_plast[0];
+                    d.dy = p[1] - m_drag_plast[1];
+                    d.dz = p[2] - m_drag_plast[2];
+                    m_drag_plast[0] = p[0];
+                    m_drag_plast[1] = p[1];
+                    m_drag_plast[2] = p[2];
+                    feed = true;
+                }
+            }
+        } else if (m_gizmo_mode == GizmoMode::Rotate) {
+            float p[3]{m_drag_plast[0], m_drag_plast[1], m_drag_plast[2]};
+            if (gizmo_plane_point(ray, m_drag_origin[0], m_drag_origin[1], m_drag_origin[2],
+                                  m_drag_plane_n[0], m_drag_plane_n[1], m_drag_plane_n[2], p)) {
+                const float ang = gizmo_ring_angle(
+                    m_drag_plast[0] - m_drag_origin[0], m_drag_plast[1] - m_drag_origin[1],
+                    m_drag_plast[2] - m_drag_origin[2], p[0] - m_drag_origin[0],
+                    p[1] - m_drag_origin[1], p[2] - m_drag_origin[2], m_drag_plane_n[0],
+                    m_drag_plane_n[1], m_drag_plane_n[2]);
+                d.axis_x = m_drag_axis[0];
+                d.axis_y = m_drag_axis[1];
+                d.axis_z = m_drag_axis[2];
+                d.axis_angle_deg = ang * 180.0f / kPi;
+                m_drag_plast[0] = p[0];
+                m_drag_plast[1] = p[1];
+                m_drag_plast[2] = p[2];
+                feed = true;
+            }
+        } else { // Scale: screen-space factors against the press snapshot.
+            float f = 1.0f;
+            if (m_drag_handle == GizmoHandle::Center) {
+                f = gizmo_uniform_factor(m_drag_sox, m_drag_soy, m_drag_ndc0x, m_drag_ndc0y,
+                                         ndc_x, ndc_y, m_drag_srad);
+            } else {
+                f = gizmo_axis_factor(m_drag_ndc0x, m_drag_ndc0y, ndc_x, ndc_y, m_drag_sdx,
+                                      m_drag_sdy, m_drag_slen);
+            }
+            const float inc = f - m_drag_flast;
+            if (m_drag_handle == GizmoHandle::Center) {
+                d.dscale = inc;
+            } else {
+                int axis = -1;
+                (void)gizmo_handle_axis(m_drag_handle, axis);
+                if (axis == 0) {
+                    d.scl_x = inc;
+                } else if (axis == 1) {
+                    d.scl_y = inc;
+                } else if (axis == 2) {
+                    d.scl_z = inc;
+                }
+            }
+            m_drag_flast = f;
+            feed = true;
+        }
+        if (feed) {
+            m_drag.accumulate(d);
+        }
+        m_drag_lastx = ndc_x;
+        m_drag_lasty = ndc_y;
+        if (!m_drag.live_apply(*w)) {
+            m_drag.cancel();
+            m_drag_handle = GizmoHandle::None;
+            out_err = "Drag target lost";
+            return false;
+        }
+        after_mutation(m_drag.entity());
+        return true;
+    }
     const GizmoDelta d =
         gizmo_delta_for_drag(m_gizmo_mode, m_drag_vc, m_drag_distance, m_drag_lastx, m_drag_lasty,
                              ndc_x, ndc_y);
@@ -2091,11 +3406,13 @@ bool EditorApp::viewport_drag(float ndc_x, float ndc_y, const ViewCamera& vc, st
 
 bool EditorApp::viewport_release(std::string& out_err) {
     if (!m_drag.active()) {
+        m_drag_handle = GizmoHandle::None;
         return true;
     }
     ecs::World* w = world();
     if (w == nullptr) {
         m_drag.cancel();
+        m_drag_handle = GizmoHandle::None;
         out_err = "No scene open";
         return false;
     }
@@ -2106,11 +3423,13 @@ bool EditorApp::viewport_release(std::string& out_err) {
         m_stack.push(std::move(cmd), *w);
         after_mutation(target);
     }
+    m_drag_handle = GizmoHandle::None;
     (void)out_err;
     return true;
 }
 
 bool EditorApp::viewport_abort_drag(std::string& out_err) {
+    m_drag_handle = GizmoHandle::None;
     if (!m_drag.active()) {
         return true;
     }
@@ -2175,20 +3494,22 @@ std::vector<OutlinerRow> EditorApp::outliner_rows() const {
             m_outliner_cache_world = w;
             m_outliner_cache_count = w->alive_entity_count();
         }
-        return m_outliner_cache;
+        // The search box filters every frame over the cached rows: typing must
+        // not wait for a structural mutation to take effect.
+        return filter_outliner_rows(m_outliner_cache, m_outliner.filter_text);
     }
     return {};
 }
 
 std::vector<AssetEntry> EditorApp::browser_entries() {
-    // E3: with a project open the bottom panel shows THAT project's files, so the
-    // browser answers "what is in my game" rather than "what shipped with the
-    // engine". content:// remains the fallback when no project is mounted, which
-    // is the engine-tree mode the editor still supports.
+    // Unity-style roots: 0 lists the engine Content, 1 the open project's
+    // files. The project root with no project mounted is an empty listing
+    // (list_project_assets), never a silent fallback to engine content.
     if (m_browser_cache_dirty || m_browser_cache_age > 0.5) {
-        auto all =
-            has_project() ? list_project_assets(m_vfs) : list_content_assets(m_vfs, m_registry);
-        if (has_project()) {
+        const bool project_root = (m_browser.browser_root == 1);
+        auto all = project_root ? list_project_assets(m_vfs)
+                                : list_content_assets(m_vfs, m_registry);
+        if (project_root) {
             // The project scan lists files, not registry records, so mesh entries
             // arrive without an AssetId — and a drop without an ID is refused.
             // Resolve project://Content/... against the registry's content://...

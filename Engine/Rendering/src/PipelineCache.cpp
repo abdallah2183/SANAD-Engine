@@ -10,19 +10,20 @@ bool PipelineCache::Key::operator==(const Key& other) const {
         layout != other.layout || topology != other.topology ||
         push_constant_size != other.push_constant_size ||
         push_constant_stages != other.push_constant_stages) return false;
-    if (rasterizer.cull_mode != other.rasterizer.cull_mode ||
-        rasterizer.front_face != other.rasterizer.front_face ||
-        rasterizer.wireframe != other.rasterizer.wireframe) return false;
-    if (depth.test_enabled != other.depth.test_enabled ||
-        depth.write_enabled != other.depth.write_enabled ||
-        depth.compare != other.depth.compare) return false;
+    // Whole-struct comparison, not a field list. RasterizerState / DepthState /
+    // VertexAttrib define operator== as `= default`, so they compare EVERY field
+    // and a future field added to any of them deletes the defaulted operator and
+    // breaks THIS build. The previous field-by-field version would have compiled
+    // happily with a new state field missing from the key, and the symptom would
+    // be two visibly different pipelines sharing one object — a wrong image with
+    // no error and no crash to find it from.
+    if (rasterizer != other.rasterizer) return false;
+    if (depth != other.depth) return false;
     if (vertex_binding != other.vertex_binding ||
         vertex_stride != other.vertex_stride ||
         vertex_attribs.size() != other.vertex_attribs.size()) return false;
     for (size_t i = 0; i < vertex_attribs.size(); ++i) {
-        const auto& a = vertex_attribs[i];
-        const auto& b = other.vertex_attribs[i];
-        if (a.location != b.location || a.offset != b.offset || a.format != b.format) return false;
+        if (!(vertex_attribs[i] == other.vertex_attribs[i])) return false;
     }
     return true;
 }

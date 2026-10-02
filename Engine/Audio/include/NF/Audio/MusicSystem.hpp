@@ -32,6 +32,9 @@ struct MusicTrack {
 /// Both layers mix 2D into whatever accumulators the caller routes to the
 /// Music and Ambience buses; bus volumes (AudioVolumeSettings) are applied
 /// downstream by the BusMixer, so the sliders and the envelopes multiply.
+/// Mono is sent to both outputs; stereo keeps its independent L/R lanes.
+/// Buffers at any non-zero source rate are linearly resampled to the mix rate
+/// with an exact fractional cursor, so pitch and duration follow real time.
 /// All envelope math is a linear ramp at 1/fade_seconds gain per second —
 /// exact, deterministic, testable.
 class MusicSystem {
@@ -54,9 +57,15 @@ public:
     f32 outgoing_gain() const { return m_outgoing.gain; }
     bool has_outgoing() const { return m_outgoing.active; }
 
-    /// Mix the active music track(s) into `left`/`right` (both `frames` long).
-    /// Advances the sample cursors — call exactly once per block.
+    /// Mix at the engine's default 44.1 kHz output clock. This original
+    /// overload remains source- and binary-compatible; the four-argument form
+    /// below is the explicit-rate API.
     void mix_music(f32* left, f32* right, usize frames);
+    /// Mix the active music track(s) into `left`/`right` (both `frames` long).
+    /// `mix_sample_rate` is the output clock; zero means `kDefaultSampleRate`.
+    /// The exact resampling cursor is retained internally across calls. Call
+    /// exactly once per block.
+    void mix_music(f32* left, f32* right, usize frames, u32 mix_sample_rate);
 
     /// Set the ambience bed to `buffer` (looped) with a fade-in; use
     /// clear_ambience for a fade-OUT. Replacing a live bed is an instant swap
@@ -66,8 +75,12 @@ public:
     void clear_ambience(f32 fade_out_seconds);
     f32 ambience_gain() const { return m_ambience.gain; }
     bool has_ambience() const { return m_ambience.active; }
-    /// Mix the ambience bed into `left`/`right`. Advances its cursor.
+    /// Mix at the engine's default 44.1 kHz output clock.
     void mix_ambience(f32* left, f32* right, usize frames);
+    /// Mix the ambience bed into `left`/`right` at `mix_sample_rate`. Zero uses
+    /// 44100 Hz. Stereo channels are preserved and the exact resampling cursor
+    /// survives blocks.
+    void mix_ambience(f32* left, f32* right, usize frames, u32 mix_sample_rate);
 
 private:
     struct Slot {
@@ -77,7 +90,9 @@ private:
         f32 fade_rate = 0.0f;
         /// Envelope ceiling (1.0 for music/ambience fades in, 0 when leaving).
         f32 target = 0.0f;
-        usize cursor = 0;
+        /// Exact source-frame position, carried across blocks even when the
+        /// source and mix rates differ.
+        f64 cursor = 0.0;
         bool active = false;
     };
 
@@ -85,7 +100,8 @@ private:
     /// fade left to do) and put `next` in the current position.
     void hand_over(const MusicTrack& next, f32 fade_out_seconds,
                    f32 fade_in_seconds);
-    void mix_slot(Slot& slot, f32* left, f32* right, usize frames);
+    void mix_slot(Slot& slot, f32* left, f32* right, usize frames,
+                  u32 mix_sample_rate);
 
     Slot m_current;
     Slot m_outgoing;

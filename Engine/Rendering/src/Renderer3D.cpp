@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <string>
 
 namespace nf::rendering {
 
@@ -105,6 +106,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     // present_texture(), never the scene path.
     auto prvs = load_spirv_file(sdir / "present_vert.spv");
     auto prfs = load_spirv_file(sdir / "present_frag.spv");
+    // Bloom chain, optional on the same terms: without bloom_*.spv the stage
+    // stays off (bloom_active() reports false) and every other pass renders.
+    auto bvs = load_spirv_file(sdir / "bloom_vert.spv");
+    auto bfs = load_spirv_file(sdir / "bloom_frag.spv");
     if (dvs.empty() || gvs.empty() || lvs.empty() || tvs.empty()) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to load shaders from '{}'", sdir.string());
         return false;
@@ -123,6 +128,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     if (!prvs.empty() && !prfs.empty()) {
         m_present_vs = device.create_shader_module({prvs, rhi::ShaderStage::Vertex});
         m_present_fs = device.create_shader_module({prfs, rhi::ShaderStage::Fragment});
+    }
+    if (!bvs.empty() && !bfs.empty()) {
+        m_bloom_vs = device.create_shader_module({bvs, rhi::ShaderStage::Vertex});
+        m_bloom_fs = device.create_shader_module({bfs, rhi::ShaderStage::Fragment});
     }
     if (!m_depth_vs || !m_gbuffer_vs || !m_lighting_vs || !m_forward_vs || !m_tonemap_vs) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shader modules");
@@ -161,12 +170,31 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         lld.bindings = std::span<const rhi::DescriptorBinding>(lighting_binds);
         m_lighting_layout = device.create_descriptor_set_layout(lld);
 
-        const std::array<rhi::DescriptorBinding, 1> tonemap_binds{{
-            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+        // Binding 0 is the HDR image; 1-4 are the bloom levels. They are in
+        // ONE set rather than two because the tonemap pass is where the levels
+        // are summed, and two sets would mean the pass could be recorded with
+        // the bloom set missing — a state that renders a plausible frame with
+        // the glow silently absent.
+        const std::array<rhi::DescriptorBinding, 5> tonemap_binds{{
+            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // HDR
+            {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // bloom level 0
+            {2, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // bloom level 1
+            {3, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // bloom level 2
+            {4, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // bloom level 3
         }};
+        static_assert(tonemap_binds.size() == Renderer3D::kBloomLevels + 1,
+                      "one HDR binding plus one per bloom level");
         rhi::DescriptorSetLayoutDesc tld{};
         tld.bindings = std::span<const rhi::DescriptorBinding>(tonemap_binds);
         m_tonemap_layout = device.create_descriptor_set_layout(tld);
+
+        // The bloom chain's own set: one sampled image, the level being read.
+        const std::array<rhi::DescriptorBinding, 1> bloom_binds{{
+            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+        }};
+        rhi::DescriptorSetLayoutDesc bld{};
+        bld.bindings = std::span<const rhi::DescriptorBinding>(bloom_binds);
+        m_bloom_layout = device.create_descriptor_set_layout(bld);
 
         // The union of the lighting and material layouts in one set. Bindings
         // 4-6 are the frame UBO and the two shadow atlases, at the same indices
@@ -248,6 +276,17 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         tonemap_off_rpd.color_attachments = std::span<const rhi::ColorAttachment>(off_atts);
         tonemap_off_rpd.present_source = false;
         m_tonemap_rp_off = device.create_render_pass(tonemap_off_rpd);
+
+        // Bloom levels: same format as HDR, cleared (each level is fully
+        // written by its own fullscreen draw, so a clear is only about not
+        // depending on the previous frame's contents), no depth.
+        rhi::ColorAttachment bloom_att{};
+        bloom_att.format = rhi::Format::R16G16B16A16_SFloat;
+        const std::array<rhi::ColorAttachment, 1> bloom_atts{bloom_att};
+        rhi::RenderPassDesc bloom_rpd{};
+        bloom_rpd.color_attachments = std::span<const rhi::ColorAttachment>(bloom_atts);
+        bloom_rpd.present_source = false;
+        m_bloom_rp = device.create_render_pass(bloom_rpd);
 
         // The present variant is format-agnostic at creation (the swapchain
         // format is fixed at init time by the caller's swapchain, typically
@@ -371,9 +410,33 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         tpd.rasterizer.cull_mode = rhi::CullMode::None;
         tpd.depth.test_enabled = false;
         tpd.depth.write_enabled = false;
-        tpd.push_constant_size = 16; // exposure + vignette + saturation + pad
+        tpd.push_constant_size = 64; // 16 floats, see the tonemap push block
         tpd.push_constant_stages = rhi::ShaderStage::Fragment;
         m_tonemap_pipeline_off = m_pipeline_cache->get_or_create(tpd);
+
+        // Bloom chain (optional): one pipeline for both stages — prefilter and
+        // downsample are the same fullscreen draw and differ only in the push
+        // constant's mode flag (see bloom.frag).
+        if (m_bloom_vs && m_bloom_fs && m_bloom_layout && m_bloom_rp) {
+            rhi::PipelineDesc bpd{};
+            bpd.vs = m_bloom_vs.get();
+            bpd.fs = m_bloom_fs.get();
+            bpd.render_pass = m_bloom_rp.get();
+            bpd.descriptor_set_layout = m_bloom_layout.get();
+            bpd.rasterizer.cull_mode = rhi::CullMode::None;
+            bpd.depth.test_enabled = false;
+            bpd.depth.write_enabled = false;
+            bpd.push_constant_size = 32; // 8 floats, see BloomPush
+            bpd.push_constant_stages = rhi::ShaderStage::Fragment;
+            m_bloom_pipeline = m_pipeline_cache->get_or_create(bpd);
+            if (!m_bloom_pipeline) {
+                // Not fatal: the stage reports inactive and the frame renders
+                // without a glow. Failing init here would take the whole
+                // renderer down over one optional post stage.
+                NF_LOG_WARN(LogCategory::RHI, "Renderer3D: bloom pipeline creation failed; "
+                                              "the bloom stage is disabled");
+            }
+        }
 
         // Present passthrough (optional): same fullscreen shape, layout and
         // push-block as tonemap, but the fragment is a straight copy. Lives on
@@ -507,6 +570,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     rhi::TextureDesc hdr_desc = color_desc;
     hdr_desc.format = rhi::Format::R16G16B16A16_SFloat;
     m_hdr_handle = m_graph->create_texture("HDR", hdr_desc);
+    create_bloom_textures(width, height);
 
     rhi::TextureDesc depth_desc{};
     depth_desc.width = width;
@@ -525,6 +589,26 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
 
     NF_LOG_INFO(LogCategory::RHI, "Renderer3D initialized ({}x{})", width, height);
     return true;
+}
+
+void Renderer3D::create_bloom_textures(u32 width, u32 height) {
+    // Level i is half of level i-1, so level 0 is half the render target and
+    // the smallest level is 1/(2^kBloomLevels) of each axis. Clamped to 1 so a
+    // 4x4 render target — which the RHI tests really do use — gets four valid
+    // 1x1 levels instead of zero-sized textures.
+    rhi::TextureDesc desc{};
+    desc.format = rhi::Format::R16G16B16A16_SFloat;
+    // TransferSrc for the same reason the depth target has it: a test that
+    // wants to check the chain's output rather than only its pass list has to
+    // be able to copy it back.
+    desc.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferSrc;
+    for (u32 level = 0; level < kBloomLevels; ++level) {
+        const u32 shift = level + 1;
+        desc.width = std::max(1u, width >> shift);
+        desc.height = std::max(1u, height >> shift);
+        m_bloom_handles[level] =
+            m_graph->create_texture("Bloom" + std::to_string(level), desc);
+    }
 }
 
 bool Renderer3D::create_resolution_dependent(u32 width, u32 height) {
@@ -561,6 +645,33 @@ bool Renderer3D::create_resolution_dependent(u32 width, u32 height) {
         return false;
     }
 
+    // Bloom levels: a view each (the chain samples them and the tonemap binds
+    // them) and a framebuffer each (they share one render pass, so the
+    // framebuffer is the only per-level object).
+    for (u32 level = 0; level < kBloomLevels; ++level) {
+        rhi::Texture* tex = m_graph->get_texture(m_bloom_handles[level]);
+        if (!tex) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: bloom level {} has no texture", level);
+            return false;
+        }
+        rhi::TextureViewDesc bvd{};
+        bvd.dimension = rhi::ViewDimension::View2D;
+        bvd.aspect = rhi::ImageAspect::Color;
+        bvd.base_mip = 0;
+        bvd.mip_count = 1;
+        bvd.base_layer = 0;
+        bvd.layer_count = 1;
+        bvd.texture = tex;
+        m_bloom_views[level] = m_device->create_texture_view(bvd);
+        const std::array<rhi::Texture*, 1> level_colors{tex};
+        m_bloom_fbs[level] = m_device->create_framebuffer(
+            *m_bloom_rp, std::span<rhi::Texture* const>(level_colors), nullptr);
+        if (!m_bloom_views[level] || !m_bloom_fbs[level]) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create bloom level {}", level);
+            return false;
+        }
+    }
+
     const std::array<rhi::Texture*, 0> no_colors{};
     m_depth_fb = m_device->create_framebuffer(*m_depth_rp,
                                               std::span<rhi::Texture* const>(no_colors), depth);
@@ -595,6 +706,10 @@ void Renderer3D::destroy_resolution_dependent() {
     m_gbuffer2_view.reset();
     m_gbuffer_depth_view.reset();
     m_hdr_view.reset();
+    for (u32 level = 0; level < kBloomLevels; ++level) {
+        m_bloom_fbs[level].reset();
+        m_bloom_views[level].reset();
+    }
 }
 
 void Renderer3D::resize(u32 width, u32 height) {
@@ -616,6 +731,7 @@ void Renderer3D::resize(u32 width, u32 height) {
     rhi::TextureDesc hdr_desc = color_desc;
     hdr_desc.format = rhi::Format::R16G16B16A16_SFloat;
     m_hdr_handle = m_graph->create_texture("HDR", hdr_desc);
+    create_bloom_textures(width, height);
     rhi::TextureDesc depth_desc{};
     depth_desc.width = width;
     depth_desc.height = height;
@@ -651,6 +767,9 @@ void Renderer3D::shutdown() {
     m_forward_pipeline = nullptr;
     m_tonemap_pipeline_off = nullptr;
     m_tonemap_pipeline_present = nullptr;
+    m_bloom_pipeline = nullptr;
+    m_present_pipeline_off = nullptr;
+    m_present_pipeline_present = nullptr;
     m_graph.reset();
     m_depth_vs.reset(); m_depth_fs.reset();
     m_gbuffer_vs.reset(); m_gbuffer_fs.reset();
@@ -658,17 +777,23 @@ void Renderer3D::shutdown() {
     m_forward_vs.reset(); m_forward_fs.reset();
     m_tonemap_vs.reset(); m_tonemap_fs.reset();
     m_present_vs.reset(); m_present_fs.reset();
+    m_bloom_vs.reset(); m_bloom_fs.reset();
     m_material_layout.reset();
     m_lighting_layout.reset();
     m_forward_layout.reset();
     m_tonemap_layout.reset();
+    m_bloom_layout.reset();
     m_depth_rp.reset();
     m_gbuffer_rp.reset();
     m_lighting_rp.reset();
     m_transparency_rp.reset();
     m_tonemap_rp_off.reset();
     m_tonemap_rp_present.reset();
+    m_bloom_rp.reset();
     m_tonemap_present_ready = false;
+    for (u32 level = 0; level < kBloomLevels; ++level) {
+        m_bloom_handles[level] = kInvalidRGHandle;
+    }
     m_white_view.reset();
     m_white_texture.reset();
     m_shadow_fb.reset();
@@ -838,6 +963,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     m_stats.draw_calls = 0;
     m_stats.material_sets_built = 0;
     m_stats.transparent_objects = 0;
+    m_stats.bloom_levels_recorded = 0;
 
     // --- Frame uniforms (camera + lights) ---
     FrameUniforms fu{};
@@ -1032,6 +1158,44 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: descriptor allocation failed");
         return false;
     }
+
+    // Whether the bloom chain records this frame. Decided once, here, because
+    // three separate things depend on it — the tonemap descriptor writes, the
+    // tonemap pass's read set, and the pass list itself — and a predicate
+    // recomputed in three places is a predicate that will eventually disagree
+    // with itself in one of them.
+    bool bloom_on = m_postfx.bloom.enabled && m_bloom_pipeline != nullptr;
+    if (bloom_on) {
+        for (u32 level = 0; level < kBloomLevels; ++level) {
+            if (!m_bloom_views[level] || !m_bloom_fbs[level] ||
+                m_graph->get_texture(m_bloom_handles[level]) == nullptr) {
+                bloom_on = false;
+                break;
+            }
+        }
+    }
+    // The chain's own descriptor sets (one per level: each pass reads the level
+    // above it). Held in this scope until m_graph->execute() returns, the same
+    // contract the forward sets follow.
+    std::array<std::unique_ptr<rhi::DescriptorSet>, kBloomLevels> bloom_sets{};
+    if (bloom_on) {
+        for (u32 level = 0; level < kBloomLevels; ++level) {
+            bloom_sets[level] = m_descriptor_allocators[frame_slot]->allocate(*m_bloom_layout);
+            if (!bloom_sets[level]) {
+                NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: bloom descriptor allocation failed");
+                bloom_on = false;
+                break;
+            }
+        }
+    }
+    if (m_postfx.bloom.enabled && !bloom_on) {
+        // Not an error: an optional stage whose resources are missing degrades
+        // to "no glow", the same contract present_texture follows. TRACE rather
+        // than WARN because this is a per-frame condition, and a warning here
+        // would print once per frame for the rest of the process.
+        NF_LOG_TRACE(LogCategory::RHI, "Renderer3D: bloom requested but unavailable this frame");
+    }
+
     {
         const std::array<rhi::DescriptorWrite, 7> lighting_writes{{
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer0_view.get(), m_sampler.get()},
@@ -1043,10 +1207,35 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_sampler.get()},
         }};
         m_device->update_descriptor_set(*lighting_set, std::span<const rhi::DescriptorWrite>(lighting_writes));
-        const std::array<rhi::DescriptorWrite, 1> tonemap_writes{{
-            {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_hdr_view.get(), m_sampler.get()},
-        }};
+
+        // Binding 0 is the HDR image; 1..kBloomLevels are the bloom levels.
+        // With bloom off the HDR view stands in for every level: the tonemap
+        // shader's `bloom_intensity > 0` guard means they are never read, so
+        // the substitution cannot change a pixel — but it does keep every
+        // binding a VALID image, which a set with an unwritten binding is not.
+        std::array<rhi::DescriptorWrite, 1 + kBloomLevels> tonemap_writes{};
+        tonemap_writes[0] = {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                             m_hdr_view.get(), m_sampler.get()};
+        for (u32 level = 0; level < kBloomLevels; ++level) {
+            const rhi::TextureView* view =
+                bloom_on ? m_bloom_views[level].get() : m_hdr_view.get();
+            tonemap_writes[1 + level] = {1 + level, rhi::DescriptorType::SampledImage,
+                                         nullptr, 0, 0, view, m_sampler.get()};
+        }
         m_device->update_descriptor_set(*tonemap_set, std::span<const rhi::DescriptorWrite>(tonemap_writes));
+
+        if (bloom_on) {
+            // Level i's pass reads level i-1; level 0's reads the HDR target.
+            for (u32 level = 0; level < kBloomLevels; ++level) {
+                const rhi::TextureView* src_view =
+                    (level == 0) ? m_hdr_view.get() : m_bloom_views[level - 1].get();
+                const std::array<rhi::DescriptorWrite, 1> writes{{
+                    {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, src_view, m_sampler.get()},
+                }};
+                m_device->update_descriptor_set(*bloom_sets[level],
+                                                std::span<const rhi::DescriptorWrite>(writes));
+            }
+        }
     }
 
     // --- Draw submission preparation: resolve handles, allocate per-object
@@ -1499,10 +1688,92 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     };
     m_graph->add_pass(transparency_pass);
 
-    // Tonemap: HDR → output target
+    // Bloom chain (design §206). Recorded only when the stage is on — the
+    // tonemap bindings stay valid either way (see `bloom_on` above), so a
+    // scene that never asks for bloom records the same pass list it recorded
+    // before this stage existed, plus nothing.
+    if (bloom_on) {
+        struct BloomPush {
+            float src_texel_x;
+            float src_texel_y;
+            float threshold; // prefilter only
+            float knee;      // prefilter only
+            float radius;    // downsample only
+            float mode;      // 0 = prefilter, 1 = downsample
+            float pad0;
+            float pad1;
+        };
+        static_assert(sizeof(BloomPush) == 32, "must match bloom.frag's push block");
+        constexpr float kPrefilterMode = 0.0f;
+        constexpr float kDownsampleMode = 1.0f;
+        for (u32 level = 0; level < kBloomLevels; ++level) {
+            rhi::Texture* src = (level == 0)
+                                    ? m_graph->get_texture(m_hdr_handle)
+                                    : m_graph->get_texture(m_bloom_handles[level - 1]);
+            // Validated in the `bloom_on` block above; the check here is a
+            // guard against the two blocks drifting, not a live branch.
+            if (src == nullptr) {
+                NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: bloom level {} has no source", level);
+                return false;
+            }
+            BloomPush push{};
+            push.src_texel_x = 1.0f / static_cast<float>(std::max(1u, src->width()));
+            push.src_texel_y = 1.0f / static_cast<float>(std::max(1u, src->height()));
+            push.threshold = m_postfx.bloom.threshold;
+            push.knee = m_postfx.bloom.knee;
+            push.radius = m_postfx.bloom.radius;
+            push.mode = (level == 0) ? kPrefilterMode : kDownsampleMode;
+
+            RGPassDesc bloom_pass{};
+            bloom_pass.name = (level == 0) ? "BloomPrefilter"
+                                           : ("BloomDown" + std::to_string(level));
+            bloom_pass.reads = {(level == 0) ? m_hdr_handle : m_bloom_handles[level - 1]};
+            bloom_pass.color_attachments = {m_bloom_handles[level]};
+            // Everything that varies per iteration is captured BY VALUE (`push`,
+            // `level`, the level's own size). A plain `[&]` would capture the
+            // loop variables by reference, so every recorded pass would read
+            // the LAST iteration's values at execute time — four identical
+            // passes over level 3, which renders a plausible-looking glow and
+            // is completely wrong.
+            const rhi::Texture* dst_tex = m_graph->get_texture(m_bloom_handles[level]);
+            const u32 dst_w = dst_tex ? dst_tex->width() : 1;
+            const u32 dst_h = dst_tex ? dst_tex->height() : 1;
+            bloom_pass.execute = [&, push, level, dst_w, dst_h](rhi::CommandBuffer& gcmd) {
+                const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{0.0f, 0.0f, 0.0f, 1.0f}};
+                gcmd.begin_render_pass(*m_bloom_rp, *m_bloom_fbs[level],
+                                       std::span<const rhi::ClearValue>(clears));
+                gcmd.bind_pipeline(*m_bloom_pipeline);
+                const std::array<const rhi::DescriptorSet*, 1> sets{bloom_sets[level].get()};
+                gcmd.bind_descriptor_sets(*m_bloom_layout,
+                                          std::span<const rhi::DescriptorSet* const>(sets), 0);
+                gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(push), &push);
+                // Sized to the LEVEL, not the render target: a level is a
+                // fraction of it, and a viewport left at the target's size
+                // would scale the fullscreen triangle into the wrong quadrant.
+                gcmd.set_viewport(0, 0, dst_w, dst_h);
+                gcmd.set_scissor(0, 0, dst_w, dst_h);
+                gcmd.draw(3);
+                gcmd.end_render_pass();
+            };
+            m_graph->add_pass(bloom_pass);
+            ++m_stats.bloom_levels_recorded;
+        }
+    }
+
+    // Tonemap: HDR (+ the bloom levels) → output target
     RGPassDesc tonemap_pass{};
     tonemap_pass.name = "Tonemap";
     tonemap_pass.reads = {m_hdr_handle};
+    if (bloom_on) {
+        // Declared so the graph transitions each level out of
+        // ColorAttachment into ShaderRead before the tonemap pass samples it.
+        // Without this the levels would be read in the layout they were
+        // written in, which is a validation error on one driver and a garbage
+        // glow on another.
+        for (u32 level = 0; level < kBloomLevels; ++level) {
+            tonemap_pass.reads.push_back(m_bloom_handles[level]);
+        }
+    }
     tonemap_pass.color_attachments = {rg_out};
 
     rhi::RenderPass* tonemap_rp = m_tonemap_rp_off.get();
@@ -1544,11 +1815,35 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.bind_pipeline(pipe);
         const std::array<const rhi::DescriptorSet*, 1> sets{tonemap_set.get()};
         gcmd.bind_descriptor_sets(*m_tonemap_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
-        // Must match tonemap.frag PushConstants (std140-adjacent packing).
-        const float tonemap_push[4] = {m_exposure,
-                                       m_postfx.vignette,
-                                       m_postfx.saturation,
-                                       static_cast<float>(static_cast<int>(m_tonemap_mode))};
+        // Must match tonemap.frag PushConstants (16 floats, 64 bytes).
+        //
+        // Every stage value is written even when its stage is off, and the
+        // OFF value is the stage's exact identity rather than zero for the
+        // ones whose neutral is not zero (saturation 1, grade contrast 1,
+        // grade gamma 1). A zero here would be a real grade — full desaturation
+        // and a black crush — so "off" has to mean the neutral number, with the
+        // enable flag doing the switching.
+        const float tonemap_push[16] = {
+            m_exposure,
+            m_postfx.vignette,
+            m_postfx.saturation,
+            static_cast<float>(static_cast<int>(m_tonemap_mode)),
+            bloom_on ? m_postfx.bloom.intensity : 0.0f,
+            (m_postfx.sharpen.enabled ? m_postfx.sharpen.amount : 0.0f),
+            m_postfx.grade.enabled ? 1.0f : 0.0f,
+            m_postfx.grade.contrast,
+            m_postfx.grade.pivot,
+            m_postfx.grade.temperature,
+            m_postfx.grade.tint,
+            m_postfx.grade.gamma,
+            // The sharpen taps are expressed in the OUTPUT target's texels,
+            // because the unsharp mask runs on the tonemapped image's own
+            // resolution, not on any bloom level's.
+            1.0f / static_cast<float>(std::max(1u, m_width)),
+            1.0f / static_cast<float>(std::max(1u, m_height)),
+            m_postfx.sharpen.radius,
+            0.0f,
+        };
         gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(tonemap_push), &tonemap_push);
         gcmd.set_viewport(0, 0, m_width, m_height);
         gcmd.set_scissor(0, 0, m_width, m_height);
@@ -1588,7 +1883,7 @@ bool Renderer3D::ensure_present_variants() {
     tppd.rasterizer.cull_mode = rhi::CullMode::None;
     tppd.depth.test_enabled = false;
     tppd.depth.write_enabled = false;
-    tppd.push_constant_size = 16; // exposure + vignette + saturation + pad
+    tppd.push_constant_size = 64; // the full post-stack block, see tonemap.frag
     tppd.push_constant_stages = rhi::ShaderStage::Fragment;
     m_tonemap_pipeline_present = m_pipeline_cache->get_or_create(tppd);
     if (!m_tonemap_pipeline_present) {
@@ -1653,9 +1948,15 @@ bool Renderer3D::present_texture(rhi::CommandBuffer& cmd, rhi::Texture& src,
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: present descriptor allocation failed");
         return false;
     }
-    const std::array<rhi::DescriptorWrite, 1> writes{{
-        {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, src_view, m_sampler.get()},
-    }};
+    // All five bindings, even though present.frag reads only binding 0. The set
+    // comes from m_tonemap_layout, whose other four bindings are the bloom
+    // levels, and a set with an unwritten binding is not a valid set — the
+    // source view standing in for them is harmless precisely because the
+    // passthrough shader never samples it.
+    std::array<rhi::DescriptorWrite, 1 + kBloomLevels> writes{};
+    for (u32 b = 0; b < writes.size(); ++b) {
+        writes[b] = {b, rhi::DescriptorType::SampledImage, nullptr, 0, 0, src_view, m_sampler.get()};
+    }
     m_device->update_descriptor_set(*set, std::span<const rhi::DescriptorWrite>(writes));
 
     // The graph exists purely for state transitions here: src (written by an
@@ -1747,6 +2048,151 @@ Vec3 apply_postfx(Vec3 color, Vec2 uv, const PostFxParams& params) {
     out.y *= dark;
     out.z *= dark;
     return out;
+}
+
+Vec3 bloom_prefilter(Vec3 hdr, float threshold, float knee) {
+    // Must match bloom.frag's prefilter branch exactly.
+    //
+    // Luminance is the MAX channel, not the Rec.709 dot product the saturation
+    // stage uses. A coloured highlight (a saturated red lamp, say) has a high
+    // max channel and a middling luma, and a luma threshold would refuse to
+    // bloom exactly the light sources bloom exists for.
+    const float lum = std::max(hdr.x, std::max(hdr.y, hdr.z));
+    float soft = 0.0f;
+    if (knee > 0.0f) {
+        // Quadratic ramp across the knee. The 1e-4 is not a fudge: a knee of 0
+        // reaches the else-branch above, but a knee of 1e-6 from a slider does
+        // not, and 4*knee alone would divide by ~0.
+        soft = std::clamp(lum - threshold + knee, 0.0f, 2.0f * knee);
+        soft = soft * soft / (4.0f * knee + 1e-4f);
+    }
+    // max(soft, lum - threshold) keeps the ramp from REDUCING a pixel that is
+    // already past the knee: the two curves meet at lum == threshold + knee.
+    const float contrib = std::max(soft, lum - threshold) / std::max(lum, 1e-4f);
+    return {hdr.x * contrib, hdr.y * contrib, hdr.z * contrib};
+}
+
+Vec3 bloom_downsample(std::span<const Vec3> src, u32 src_w, u32 src_h,
+                      Vec2 uv, float radius) {
+    if (src.empty() || src_w == 0 || src_h == 0) return Vec3{0.0f, 0.0f, 0.0f};
+    const i32 w = static_cast<i32>(src_w);
+    const i32 h = static_cast<i32>(src_h);
+    // Nearest-texel fetch. Exact against the shader whenever a tap lands on a
+    // texel centre (which is what the tests arrange), and edge-clamped the way
+    // a clamped sampler behaves when a tap runs off the image.
+    const auto tap = [&](float ox, float oy) -> Vec3 {
+        const float tx = uv.x * static_cast<float>(src_w) + ox * radius;
+        const float ty = uv.y * static_cast<float>(src_h) + oy * radius;
+        const i32 ix = std::clamp(static_cast<i32>(std::floor(tx)), 0, w - 1);
+        const i32 iy = std::clamp(static_cast<i32>(std::floor(ty)), 0, h - 1);
+        const usize idx = static_cast<usize>(iy) * src_w + static_cast<usize>(ix);
+        return idx < src.size() ? src[idx] : Vec3{0.0f, 0.0f, 0.0f};
+    };
+    const Vec3 corner = tap(-2.0f, -2.0f);
+    const Vec3 corner2 = tap(2.0f, -2.0f);
+    const Vec3 corner3 = tap(-2.0f, 2.0f);
+    const Vec3 corner4 = tap(2.0f, 2.0f);
+    const Vec3 edge = tap(0.0f, -2.0f);
+    const Vec3 edge2 = tap(0.0f, 2.0f);
+    const Vec3 edge3 = tap(-2.0f, 0.0f);
+    const Vec3 edge4 = tap(2.0f, 0.0f);
+    const Vec3 diag = tap(-1.0f, -1.0f);
+    const Vec3 diag2 = tap(1.0f, -1.0f);
+    const Vec3 diag3 = tap(-1.0f, 1.0f);
+    const Vec3 diag4 = tap(1.0f, 1.0f);
+    const Vec3 centre = tap(0.0f, 0.0f);
+    // Weights sum to exactly 1: 0.125 centre + 4*0.125 diagonal + 4*0.0625
+    // edge + 4*0.03125 corner. A downsampled level of a flat image is that
+    // image, which is what makes the chain's overall brightness independent of
+    // the level count.
+    const float wc = 0.125f, wd = 0.125f, we = 0.0625f, wk = 0.03125f;
+    return Vec3{
+        (corner.x + corner2.x + corner3.x + corner4.x) * wk +
+            (edge.x + edge2.x + edge3.x + edge4.x) * we +
+            (diag.x + diag2.x + diag3.x + diag4.x) * wd + centre.x * wc,
+        (corner.y + corner2.y + corner3.y + corner4.y) * wk +
+            (edge.y + edge2.y + edge3.y + edge4.y) * we +
+            (diag.y + diag2.y + diag3.y + diag4.y) * wd + centre.y * wc,
+        (corner.z + corner2.z + corner3.z + corner4.z) * wk +
+            (edge.z + edge2.z + edge3.z + edge4.z) * we +
+            (diag.z + diag2.z + diag3.z + diag4.z) * wd + centre.z * wc};
+}
+
+Vec3 unsharp_hdr(Vec3 center, Vec3 blurred, float amount) {
+    return {center.x + (center.x - blurred.x) * amount,
+            center.y + (center.y - blurred.y) * amount,
+            center.z + (center.z - blurred.z) * amount};
+}
+
+Vec3 apply_color_grade(Vec3 hdr, const ColorGradeParams& params) {
+    // Must match tonemap.frag's grade branch exactly, including the 0.25 gain
+    // scale: it makes +/-1 a visibly strong correction without letting a
+    // slider at full deflection drive a channel to zero (which would be a
+    // colour shift so total it reads as a bug rather than a grade).
+    constexpr float kGain = 0.25f;
+    Vec3 c = hdr;
+    const float temp = params.temperature;
+    if (temp != 0.0f) {
+        // Warm moves red up and blue down by the same amount, which is what
+        // keeps the overall exposure roughly fixed as the balance moves.
+        c.x *= 1.0f + kGain * temp;
+        c.z *= 1.0f - kGain * temp;
+    }
+    if (params.tint != 0.0f) {
+        // Positive tint is magenta: green comes down, and only green. Scaling
+        // red and blue up instead would make "tint" a second exposure control.
+        c.y *= 1.0f - kGain * params.tint;
+    }
+    if (params.contrast != 1.0f) {
+        c.x = (c.x - params.pivot) * params.contrast + params.pivot;
+        c.y = (c.y - params.pivot) * params.contrast + params.pivot;
+        c.z = (c.z - params.pivot) * params.contrast + params.pivot;
+    }
+    if (params.gamma != 1.0f && params.gamma > 0.0f) {
+        const float inv = 1.0f / params.gamma;
+        // max(0, ...) because pow() of a negative base is undefined in GLSL and
+        // a contrast pivot below the black point can push a channel negative.
+        c.x = std::pow(std::max(c.x, 0.0f), inv);
+        c.y = std::pow(std::max(c.y, 0.0f), inv);
+        c.z = std::pow(std::max(c.z, 0.0f), inv);
+    }
+    return c;
+}
+
+Vec3 apply_post_chain(Vec3 hdr, Vec3 blurred, Vec3 bloom, Vec2 uv,
+                      float exposure, TonemapMode mode, const PostFxParams& params) {
+    // The implemented order, which is what the shader spells:
+    //   sharpen -> bloom add -> exposure -> colour grade -> tonemap operator
+    //   -> gamma -> saturation -> vignette
+    //
+    // §206 lists the stack as Exposure -> Color Grading -> Bloom -> ... ->
+    // Tonemapping. The bloom add sits before exposure here for one concrete
+    // reason: the prefilter that produced it reads the raw HDR target, so its
+    // threshold is expressed in pre-exposure units. Adding the bloom after
+    // exposure would make the glow's strength track the exposure control while
+    // its threshold did not, which is the combination that makes a bright
+    // scene bloom and the same scene at a lower exposure stop.
+    if (params.sharpen.enabled && params.sharpen.amount > 0.0f) {
+        hdr = unsharp_hdr(hdr, blurred, params.sharpen.amount);
+    }
+    if (params.bloom.enabled && params.bloom.intensity > 0.0f) {
+        const float k = params.bloom.intensity;
+        hdr = Vec3{hdr.x + bloom.x * k, hdr.y + bloom.y * k, hdr.z + bloom.z * k};
+    }
+    // Exposure is applied here and the operator is then called with a factor of
+    // 1. `tonemap()` folds exposure in for its own callers; doing it twice
+    // would square it. Splitting it out is what lets grading sit between the
+    // two, which is where §206 puts it.
+    hdr = Vec3{hdr.x * exposure, hdr.y * exposure, hdr.z * exposure};
+    if (params.grade.enabled) {
+        hdr = apply_color_grade(hdr, params.grade);
+    }
+    Vec3 mapped = tonemap(hdr, 1.0f, mode);
+    const float inv_gamma = 1.0f / 2.2f;
+    mapped = Vec3{std::pow(std::max(mapped.x, 0.0f), inv_gamma),
+                  std::pow(std::max(mapped.y, 0.0f), inv_gamma),
+                  std::pow(std::max(mapped.z, 0.0f), inv_gamma)};
+    return apply_postfx(mapped, uv, params);
 }
 
 } // namespace nf::rendering

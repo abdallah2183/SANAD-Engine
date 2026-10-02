@@ -6,7 +6,16 @@
 # A row tagged 'any' is enforced on every machine; 'any' rows are the
 # deterministic counters and the scene-attributable memory delta.
 #
+# mesh_law_* are the A/B that isolates the "frame time tracks DISTINCT MESHES,
+# not entity count" claim (see perf_frame_time_tracks_distinct_meshes_not_
+# entity_count). Recorded 2026-10-01 at 240 entities: 1 mesh = 3.20 ms,
+# 64 meshes = 4.67 ms — a ratio of ~1.46x, NOT the 5x the field report claimed.
+# The penalty is real but small; treat any future ratio as suspect until
+# re-measured here.
+#
 # metric,machine,value,tolerance_pct
+mesh_law_distinct_ms,win11-x64-dev,4.6724,25
+mesh_law_shared_ms,win11-x64-dev,3.2018,25
 draw_calls,any,3484,10
 extracted_objects,any,2050,10
 fixture_destructibles,any,24,10

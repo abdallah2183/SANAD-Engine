@@ -3,6 +3,7 @@
 #include "VulkanObjects.hpp"
 
 #include <NF/Core/Assert.hpp>
+#include <NF/RHI/RHI.hpp> // device_lost() latch
 #include <NF/Core/Logger.hpp>
 
 #include <algorithm>
@@ -771,6 +772,12 @@ bool VulkanFence::wait(u64 timeout_ns) {
         return false;
     }
     if (result != VK_SUCCESS) {
+        // A fence that fails this way is usually reporting a device that a
+        // PREVIOUS submit already lost. Latch it so the render loop can stop
+        // instead of spinning on the same failure every frame.
+        if (result == VK_ERROR_DEVICE_LOST) {
+            nf::rhi::record_device_lost();
+        }
         NF_LOG_ERROR(LogCategory::RHI, "vkWaitForFences failed: {}", vk_result_string(result));
         return false;
     }

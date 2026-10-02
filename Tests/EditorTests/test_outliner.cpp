@@ -118,3 +118,29 @@ NF_TEST(editor_outliner_cyclic_rejected) {
     const auto* ta2 = scene.world().get<scene::Transform>(a);
     NF_CHECK(ta2 != nullptr && !ta2->parent.valid());
 }
+
+NF_TEST(editor_outliner_filter_matches_case_insensitively) {
+    scene::Scene scene("Filter");
+    make_named(scene, "PlayerCube");
+    make_named(scene, "Ground");
+    make_named(scene, "player_shadow");
+
+    editor::OutlinerState state;
+    const auto rows = editor::build_outliner_rows(scene.world(), state);
+    NF_CHECK_EQ(rows.size(), 3u);
+
+    const auto all = editor::filter_outliner_rows(rows, "");
+    NF_CHECK_EQ(all.size(), 3u);
+
+    const auto hits = editor::filter_outliner_rows(rows, "player");
+    NF_CHECK_EQ(hits.size(), 2u);
+    if (hits.size() == 2) {
+        // Flattened in entity-id order: the match is reachable even nested
+        // under a collapsed parent.
+        NF_CHECK(hits[0].depth == 0 && hits[1].depth == 0);
+        NF_CHECK(hits[0].entity.id < hits[1].entity.id);
+    }
+
+    NF_CHECK_EQ(editor::filter_outliner_rows(rows, "GROUND").size(), 1u);
+    NF_CHECK(editor::filter_outliner_rows(rows, "no_such_name").empty());
+}

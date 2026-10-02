@@ -61,6 +61,28 @@ public:
     VFSResult<void> create_directories(std::string_view logical_path);
     VFSResult<bool> is_directory(std::string_view logical_path) const;
 
+    // --- Delete / rename (Phase 26: the FileSystem dock can remove and rename
+    // what it lists) ------------------------------------------------------
+    //
+    // Both refuse a MOUNT ROOT ("content://") and both refuse to leave the
+    // mount: resolve_internal() already rejects traversal, and the root check
+    // is the one case resolve cannot catch (it resolves to the mount directory
+    // itself, which is inside the mount by definition).
+    //
+    // `remove` is a FILE delete. A directory needs `remove_all`, and that one is
+    // deliberately a separate, explicitly-named call: an editor Delete key on a
+    // folder is the single most destructive thing a user can press, so the
+    // recursive variant has to be spelled out at every call site.
+    VFSResult<void> remove(std::string_view logical_path);
+    /// Recursive delete. Refuses a non-empty relative path only if the target
+    /// is not a directory; deleting a file with this is allowed and equals
+    /// remove().
+    VFSResult<void> remove_all(std::string_view logical_path);
+    /// Moves a file or directory. Refuses to overwrite an existing target (the
+    /// caller must remove it first) — a rename that silently clobbered a file
+    /// is unrecoverable.
+    VFSResult<void> rename(std::string_view from_logical, std::string_view to_logical);
+
     // For testing: list mounts
     std::vector<std::string> mounts() const;
 

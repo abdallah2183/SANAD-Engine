@@ -16,6 +16,7 @@
 #include <NF/Editor/Commands.hpp>
 #include <NF/Editor/Console.hpp>
 #include <NF/Editor/Gizmo.hpp>
+#include <NF/Editor/TransformGizmo.hpp>
 #include <NF/Editor/HotReload.hpp>
 #include <NF/Editor/ImportQueue.hpp>
 #include <NF/Editor/Inspector.hpp>
@@ -28,6 +29,8 @@
 #include <NF/Runtime/SaveSystem.hpp>
 #include <NF/Animation/Components.hpp>
 #include <NF/Audio/Components.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Vfx/Components.hpp>
 #include <NF/Runtime/Runtime.hpp>
 
 #include <cstdint>
@@ -90,6 +93,12 @@ public:
     void set_project(std::string path, std::string name) {
         m_project_path = std::move(path);
         m_project_name = std::move(name);
+        // Opening a project navigates the browser to its files (Unity shows
+        // your game, not the engine install); the user can flip back to
+        // Content with the root combo.
+        m_browser.browser_root = 1;
+        m_browser.current_folder.clear();
+        m_browser_cache_dirty = true;
     }
     const std::string& project_path() const { return m_project_path; }
     const std::string& project_name() const { return m_project_name; }
@@ -108,6 +117,15 @@ public:
     bool set_camera(ecs::Entity e, const CameraEdit& edit, std::string& out_err);
     bool set_light(ecs::Entity e, const LightEdit& edit, std::string& out_err);
     bool set_sky(ecs::Entity e, const SkyEdit& edit, std::string& out_err);
+    /// Attach or edit the entity's day/night cycle. Goes through the same
+    /// validated command path as every other Inspector edit, so the change is
+    /// undoable and cannot write a value the runtime would reject.
+    bool set_time_of_day(ecs::Entity e, const TimeOfDayEdit& edit, std::string& out_err);
+    /// Attach or edit the entity's post-processing block (design §206). Same
+    /// validated-command path as every other Inspector edit: undoable, and
+    /// unable to store a value the scene loader would then refuse to read back.
+    bool set_post_process(ecs::Entity e, const runtime::PostProcessComponent& edit,
+                          std::string& out_err);
     /// Find the scene's sky entity (the renderer takes the first) and apply
     /// `edit` to it, creating one first when the scene has none. BOTH paths end
     /// in the same edit — a caller must never have to know whether a sky already
@@ -177,6 +195,84 @@ public:
     // snapshot in at save time.
     bool attach_gameplay_module(ecs::Entity e, const std::string& module_name, std::string& out_err);
     bool detach_gameplay_module(ecs::Entity e, std::string& out_err);
+
+    // --- Lua scripts (Phase 24: file-backed ScriptComponent authoring) ------
+    // A script is a content://Scripts/*.lua file plus a component naming it.
+    // The file is the source of truth (the scene persists the path, never the
+    // source inline); the component's source is the file's bytes, loaded at
+    // attach time and re-resolved by the Runtime on scene adopt. All three
+    // are direct edits like the gameplay module attach above, not undoable
+    // commands: they are covered by save/load round-trip tests instead.
+    //
+    // create_script_file() writes a minimal update(dt) template; it refuses
+    // to clobber an existing file. attach/set read the file through the VFS
+    // immediately, so Play works without a scene reload.
+    bool create_script_file(const std::string& logical_path, std::string& out_err);
+    // Unique variant for the "New script" button: tries stem.lua, stem_02.lua,
+    // … inside dir and creates the first free one, returning its path. The
+    // fixed-name create above refuses to clobber by design, which left the
+    // button failing forever once script.lua existed — this is the button's
+    // answer (never overwrite, never fail spuriously).
+    bool create_unique_script_file(const std::string& dir_logical, const std::string& stem,
+                                   std::string& out_path, std::string& out_err);
+    bool attach_script(ecs::Entity e, const std::string& logical_path, std::string& out_err);
+    bool set_script_enabled(ecs::Entity e, bool enabled, std::string& out_err);
+    bool set_script_path(ecs::Entity e, const std::string& logical_path, std::string& out_err);
+    bool detach_script(ecs::Entity e, std::string& out_err);
+
+    // --- Destructible / particles / cloth / character (Phase 25) -----------
+    // Same direct-edit shape as the script methods above: validated at the
+    // door, add-or-replace, covered by save/load round-trip tests instead of
+    // undo commands. The setters take full components so the inspector can
+    // forward its cached fields without the App knowing widget layout.
+    bool detach_destructible(ecs::Entity e, std::string& out_err);
+    // Binds a VFS audio file to the entity (add-or-replace): reads and
+    // decodes it now, so the waveform preview and Play work without a scene
+    // reload. A file-backed buffer clears any procedural tone on the same
+    // entity — the file wins, documented, never mixed silently.
+    bool set_audio_buffer(ecs::Entity e, const std::string& logical_path, std::string& out_err);
+    bool attach_particles(ecs::Entity e, std::string& out_err);
+    bool set_particles(ecs::Entity e, const vfx::ParticleComponent& pc, std::string& out_err);
+    bool detach_particles(ecs::Entity e, std::string& out_err);
+    bool attach_cloth(ecs::Entity e, std::string& out_err);
+    bool set_cloth(ecs::Entity e, const physics::ClothComponent& cc, std::string& out_err);
+    bool detach_cloth(ecs::Entity e, std::string& out_err);
+    bool attach_character(ecs::Entity e, std::string& out_err);
+    bool set_character(ecs::Entity e, const physics::CharacterComponent& ch, std::string& out_err);
+    // Live input only (never persisted): what gameplay, AI or a debug panel
+    // writes every tick. Separated from set_character so a config edit can
+    // never wipe or invent intent.
+    bool set_character_input(ecs::Entity e, const Vec3& wish_dir, bool jump, std::string& out_err);
+    bool detach_character(ecs::Entity e, std::string& out_err);
+
+    // --- Asset folders (Unity-style Project panel) --------------------------
+    // Creates a VFS directory for the browser (content:// or project://, no
+    // spaces — script paths stop at the first space). The folder appears in
+    // the tree once it holds a file; the panel stays navigated into it so a
+    // script created right after lands where the user is looking.
+    bool create_asset_folder(const std::string& logical_dir, std::string& out_err);
+
+    // --- Asset delete / rename (the FileSystem dock's destructive verbs) ---
+    //
+    // Both validate BEFORE touching the disk and both refuse a mount root, so
+    // the panel cannot offer a Delete on "content://" that would take the tree
+    // with it. `recursive` is what a FOLDER needs; a file is deleted either
+    // way. A scene/prefab deletion additionally offers a re-open of the scene
+    // currently open if that scene is the one being removed, because leaving
+    // the editor pointed at a file that no longer exists is the confusing
+    // half of the operation.
+    bool delete_asset(const std::string& logical_path, bool recursive, std::string& out_err);
+    bool rename_asset(const std::string& from_logical, const std::string& to_logical,
+                      std::string& out_err);
+
+    // --- External IDE (Unity-style "open the script in Visual Studio") -----
+    // Resolves a logical asset (usually content://Scripts/*.lua) to its file
+    // and opens it detached in Visual Studio / VS Code / the shell default,
+    // in that order. Reports which one it picked in out_kind ("Visual
+    // Studio", "VS Code", "shell default") so the panel can say what
+    // happened instead of opening silently.
+    bool open_asset_in_ide(const std::string& logical_path, std::string& out_kind,
+                           std::string& out_err);
 
     // --- Save slots (Phase 10) ----------------------------------------------
     // Distinct from save()/open_scene(), which persist the *scene* to a path the
@@ -269,6 +365,55 @@ public:
     // --- Picking (viewport NDC -> selection) ---
     ecs::Entity pick(const ViewCamera& cam, float ndc_x, float ndc_y);
 
+    // --- View pivot + framing ---------------------------------------------
+    //
+    // The viewport camera orbits a PIVOT, not the world origin. That used to be
+    // hardcoded to (0,0,0), which made any content away from the origin
+    // unreachable: a level authored at x = 50 could not be orbited, zoomed to,
+    // or looked at, no matter how the user dragged. The pivot is the fix, and
+    // framing is how the user sets it without typing coordinates.
+    //
+    // The pivot is VIEW state, not scene state: it is never written to the
+    // scene, never undoable, and never saved. Moving it cannot dirty a scene.
+    const float* view_pivot() const { return &m_view_pivot[0]; }
+    void set_view_pivot(float x, float y, float z) {
+        m_view_pivot[0] = x;
+        m_view_pivot[1] = y;
+        m_view_pivot[2] = z;
+    }
+
+    /// World-space AABB of one entity, or false when it has no renderable mesh
+    /// (a camera, a light, a bare transform). This is the SINGLE source of
+    /// truth for "where is this entity": picking ray-tests it and framing
+    /// centres on it, so the two can never disagree about an object's extent.
+    bool world_bounds(ecs::Entity e, AABB& out) const;
+    /// Union of world_bounds over the current selection. False when nothing in
+    /// the selection is renderable.
+    bool selection_bounds(AABB& out) const;
+    /// Union over every renderable entity in the edit scene.
+    bool scene_bounds(AABB& out) const;
+
+    /// Centre the view on the selection. Moves the pivot AND carries the camera
+    /// eye along with it, so the view direction the user had is preserved
+    /// instead of swinging to a new angle. The matching distance is NOT set
+    /// here (the fov lives in the view layer); instead the framed radius is
+    /// handed to consume_view_fit() and applied by the caller on the same
+    /// frame. Fails with a reason when there is nothing to frame, so a toolbar
+    /// button can say why it did nothing.
+    bool frame_selection(std::string& out_err);
+    /// As above, over everything in the scene. The "I have lost the level"
+    /// escape hatch.
+    bool frame_all(std::string& out_err);
+    /// Takes the radius of the last frame_* call, or 0 when there was none.
+    /// The caller turns it into an eye distance (it owns the fov) and must
+    /// call this every frame — it is a one-shot queue, not a state flag.
+    float consume_view_fit();
+    /// Aiming distance for a world-space radius at the given vertical fov, with
+    /// a margin so the object is not flush against the viewport edge. Pure, so
+    /// the "does framing actually put the thing on screen" property is testable
+    /// without a window.
+    static float fit_distance_for(float radius, float fov_y_deg, float margin = 1.35f);
+
     // --- Viewport mouse drag (move/rotate/scale with the pointer) ---
     // press() hit-tests, selects, and arms a drag (no scene change yet);
     // drag() live-applies pointer movement (no undo entry yet); release()
@@ -284,6 +429,15 @@ public:
     bool viewport_release(std::string& out_err);
     bool viewport_abort_drag(std::string& out_err);
     bool viewport_dragging() const { return m_drag.active(); }
+    // --- Gizmo-handle press (the 3D arrows/rings/boxes) ---
+    // Unlike press(), this never re-picks: it arms the drag on the CURRENT
+    // selection with the grabbed handle, so grabbing an arrow moves instead
+    // of re-selecting. The drag after it is axis/plane/ring-constrained
+    // (viewport_drag branches on gizmo_drag_handle()); release/abort are the
+    // same as for a camera-plane drag — one undo step or a clean restore.
+    bool viewport_gizmo_press(GizmoHandle handle, float ndc_x, float ndc_y, const ViewCamera& vc,
+                              std::string& out_err);
+    GizmoHandle gizmo_drag_handle() const { return m_drag_handle; }
 
     // --- Frame ---
     void tick(float dt);
@@ -335,6 +489,13 @@ private:
     bool require_materials(std::string& out_err) const;
     void after_mutation(ecs::Entity touched);
     void watch_imported(const ImportJob& job);
+    // Moves the pivot to (x,y,z) and carries the active camera eye by the same
+    // delta, so a framing action changes WHERE the user is looking without
+    // changing the angle they are looking from. `fit_radius` is queued for
+    // consume_view_fit(); pass 0 for "no distance change wanted". Private
+    // because the public set_view_pivot() without the eye move leaves the
+    // camera swinging on the next orbit — not a state anything should build.
+    void move_view_pivot_to(float x, float y, float z, float fit_radius);
     // Fills a fresh scene with the default authoring content (ground, cube, sun,
     // sky, camera). Used by new_scene(); separate so tests can assert on the
     // scene it produces without going through the VFS round trip.
@@ -374,6 +535,12 @@ private:
     PlaySession m_play;
     ProfilerSession m_profiler_session;
     ViewportState m_viewport;
+    // Orbit pivot in world space. VIEW state only: not scene data, never
+    // undoable, never saved. See view_pivot() for why it is not the origin.
+    float m_view_pivot[3] = {0.0f, 0.0f, 0.0f};
+    // Radius of the last frame_* call, waiting for the view layer to turn it
+    // into an eye distance. 0 = nothing pending. One-shot, not a mode.
+    float m_view_fit_radius = 0.0f;
     GizmoMode m_gizmo_mode = GizmoMode::Translate;
     GizmoSpace m_gizmo_space = GizmoSpace::World;
     GizmoSnap m_gizmo_snap{}; // grid snapping; 0 steps = unsnapped
@@ -387,6 +554,22 @@ private:
     float m_drag_lasty = 0.0f;
     float m_drag_distance = 1.0f;
     bool m_drag_moved = false;
+    // Gizmo-handle drag snapshot (None = plain camera-plane drag). The
+    // geometry is frozen at press: an axis drag slides along a fixed line,
+    // a plane/ring drag tracks a fixed plane, and a scale drag measures
+    // screen motion against a fixed press-time layout — so the object can
+    // move under the gesture without the mapping chasing it.
+    GizmoHandle m_drag_handle = GizmoHandle::None;
+    float m_drag_origin[3] = {0.0f, 0.0f, 0.0f};
+    float m_drag_axis[3] = {1.0f, 0.0f, 0.0f}; // apply-frame axis (see press)
+    float m_drag_plane_n[3] = {0.0f, 1.0f, 0.0f}; // world plane normal / ring normal
+    float m_drag_tlast = 0.0f; // axis param at the last event
+    float m_drag_plast[3] = {0.0f, 0.0f, 0.0f}; // plane hit at the last event
+    float m_drag_flast = 1.0f; // scale factor at the last event
+    float m_drag_sox = 0.0f, m_drag_soy = 0.0f; // press-time origin, pointer NDC
+    float m_drag_sdx = 1.0f, m_drag_sdy = 0.0f; // press-time axis screen dir, NDC
+    float m_drag_slen = 1.0f; // press-time axis screen length, NDC units
+    float m_drag_srad = 1.0f; // press-time gizmo radius, NDC units
 
     double m_fps = 0.0;
     double m_frame_ms = 0.0;

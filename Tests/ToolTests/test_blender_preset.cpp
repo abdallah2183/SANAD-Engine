@@ -48,10 +48,15 @@ NF_TEST(blender_preset_passes_only_option_names_blender_declares) {
     const std::string src = read_preset();
     if (src.empty()) NF_SKIP("Blender preset not configured or missing");
 
-    // The three names the exporter actually declares.
+    // The names the exporter actually declares. The character contract is
+    // explicit about action separation, four influences, and rest-pose export
+    // where the installed Blender provides those options.
     NF_CHECK(has(src, "\"use_selection\""));
     NF_CHECK(has(src, "\"export_force_sampling\""));
     NF_CHECK(has(src, "\"export_def_bones\""));
+    NF_CHECK(has(src, "\"export_animation_mode\": \"ACTIONS\""));
+    NF_CHECK(has(src, "\"export_influence_nb\": 4"));
+    NF_CHECK(has(src, "\"export_rest_position_armature\": True"));
 
     // The three that look plausible and do not exist. Any one of them turns the
     // one-click export into a TypeError.
@@ -60,7 +65,7 @@ NF_TEST(blender_preset_passes_only_option_names_blender_declares) {
     NF_CHECK(!has(src, "\"export_def_bones_only\""));
 }
 
-NF_TEST(blender_preset_is_installable_and_reports_dropped_options) {
+NF_TEST(blender_preset_is_installable_and_names_dropped_optional_options) {
     const std::string src = read_preset();
     if (src.empty()) NF_SKIP("Blender preset not configured or missing");
 
@@ -71,12 +76,27 @@ NF_TEST(blender_preset_is_installable_and_reports_dropped_options) {
     NF_CHECK(has(src, "bpy.utils.unregister_class"));
     NF_CHECK(has(src, "TOPBAR_MT_file_export.append"));
 
-    // The version-drift guard. Blender renames exporter options between
-    // releases; the preset drops the ones the installed build does not declare
-    // and NAMES them, so a lost setting is visible instead of silent. If this
-    // guard is removed the export starts hard-failing on version drift, so pin
-    // it here.
+    // Optional version drift stays visible. Missing critical options are a hard
+    // error checked in the focused preflight test below.
     NF_CHECK(has(src, "get_rna_type()"));
     NF_CHECK(has(src, "\"WARNING\""));
-    NF_CHECK(has(src, "has no %s"));
+    NF_CHECK(has(src, "optional settings unavailable"));
+}
+
+NF_TEST(blender_preset_preflights_character_and_checks_export_result) {
+    const std::string src = read_preset();
+    if (src.empty()) NF_SKIP("Blender preset not configured or missing");
+
+    NF_CHECK(has(src, "def character_preflight"));
+    NF_CHECK(has(src, "obj.type == \"ARMATURE\""));
+    NF_CHECK(has(src, "modifier.type == \"ARMATURE\""));
+    NF_CHECK(has(src, "BSDF_PRINCIPLED"));
+    NF_CHECK(has(src, "at least two active or non-muted NLA actions"));
+    NF_CHECK(has(src, "_CRITICAL_OPTIONS"));
+    NF_CHECK(has(src, "missing_critical"));
+    NF_CHECK(has(src, "export_result = bpy.ops.export_scene.gltf(**kwargs)"));
+    NF_CHECK(has(src, "\"FINISHED\" not in export_result"));
+    NF_CHECK(has(src, "os.path.isfile(output_path)"));
+    NF_CHECK(has(src, "os.path.getsize(output_path) <= 0"));
+    NF_CHECK(has(src, "return {\"CANCELLED\"}"));
 }

@@ -1,10 +1,32 @@
 cmake_minimum_required(VERSION 3.24)
 
+# The single source of truth for the engine version. Everything that shows a
+# version derives from here and nothing keeps a second copy:
+#   * NF_VERSION_STRING           -> the launcher sidebar, project cards, hero line
+#   * Editor/resources/version.rc -> the exe's icon tooltip and Explorer
+#                                   Properties (File version / Product version)
+# A hand-maintained literal in a .cpp is what made the launcher keep advertising
+# 0.1.0 after every build; the fix is that there is nowhere left to put one.
+#
+# 0.2.0-beta.1: the first tagged beta. It carries the full transform-hierarchy
+# upgrade (world rotation and scale now propagate and reach the renderer), asset
+# delete/rename, view framing, and the Godot-style FileSystem dock.
 project(NOVAForge
-    VERSION 0.1.0
+    VERSION 0.2.0
     LANGUAGES C CXX
     DESCRIPTION "NOVAForge Engine - High-performance cross-platform game engine"
 )
+
+# project(VERSION) accepts NUMBERS only, so a pre-release tag cannot live there.
+# It gets its own line next to the version instead of being smeared into a
+# hand-copied string somewhere, and NF_VERSION_STRING composes the two. Set it
+# empty for a final release; the "-suffix" disappears with it.
+set(NF_VERSION_SUFFIX "beta.1")
+if(NF_VERSION_SUFFIX STREQUAL "")
+    set(NF_VERSION_STRING "${PROJECT_VERSION}")
+else()
+    set(NF_VERSION_STRING "${PROJECT_VERSION}-${NF_VERSION_SUFFIX}")
+endif()
 
 # ---------------------------------------------------------------------------
 # Global settings

@@ -169,7 +169,15 @@ scene::Transform apply_gizmo_delta(const scene::Transform& base, const GizmoDelt
     } else if (mode == GizmoMode::Rotate) {
         const float yaw = snap_to_grid(d.yaw_deg, snap.rotate_step_deg);
         const float pitch = snap_to_grid(d.pitch_deg, snap.rotate_step_deg);
-        if (yaw == 0.0f && pitch == 0.0f) {
+        // Ring drags arrive as an arbitrary world/local axis + angle; the
+        // yaw/pitch path above is the camera-plane fallback the viewport
+        // drag used before the 3D rings existed. Both compose as
+        // quaternions through the same canonical euler pair.
+        float ax = d.axis_x, ay = d.axis_y, az = d.axis_z;
+        float ang = snap_to_grid(d.axis_angle_deg, snap.rotate_step_deg);
+        normalize3(ax, ay, az);
+        const bool has_axis_angle = (ang != 0.0f && (ax != 0.0f || ay != 0.0f || az != 0.0f));
+        if (yaw == 0.0f && pitch == 0.0f && !has_axis_angle) {
             return out;
         }
         // Euler angles do not compose (pitch then yaw is not yaw+pitch once
@@ -181,7 +189,15 @@ scene::Transform apply_gizmo_delta(const scene::Transform& base, const GizmoDelt
         const Quat q_delta = scene::quat_from_euler_xyz_degrees(pitch, yaw, 0.0f);
         // World: the delta applies in world axes, so it pre-multiplies;
         // Local: it applies in the entity's own axes, so it post-multiplies.
-        const Quat q_new = (space == GizmoSpace::World) ? (q_delta * q_old) : (q_old * q_delta);
+        // The ring's axis-angle delta follows the same rule: the view already
+        // hands it over in the frame the space names (world axes for World,
+        // entity axes for Local), so it multiplies on the same side.
+        Quat q_new = (space == GizmoSpace::World) ? (q_delta * q_old) : (q_old * q_delta);
+        if (has_axis_angle) {
+            const Quat q_ring =
+                Quat::from_axis_angle(Vec3(ax, ay, az), ang * kPi / 180.0f);
+            q_new = (space == GizmoSpace::World) ? (q_ring * q_new) : (q_new * q_ring);
+        }
         scene::euler_xyz_degrees_from_quat(q_new, out.rot_x, out.rot_y, out.rot_z);
     } else {
         // Scale snaps on the FACTOR grid (0.25 step -> 0.25x, 0.5x, 0.75x,
@@ -189,9 +205,15 @@ scene::Transform apply_gizmo_delta(const scene::Transform& base, const GizmoDelt
         // the grid depend on where the gesture started.
         const float f = snap_to_grid(1.0f + d.dscale, snap.scale_step);
         const float nf = (f > 0.01f) ? f : 0.01f; // never collapse to zero/negative
-        out.scale_x = base.scale_x * nf;
-        out.scale_y = base.scale_y * nf;
-        out.scale_z = base.scale_z * nf;
+        const float fx = snap_to_grid(1.0f + d.scl_x, snap.scale_step);
+        const float fy = snap_to_grid(1.0f + d.scl_y, snap.scale_step);
+        const float fz = snap_to_grid(1.0f + d.scl_z, snap.scale_step);
+        const float nx = (fx > 0.01f) ? fx : 0.01f;
+        const float ny = (fy > 0.01f) ? fy : 0.01f;
+        const float nz = (fz > 0.01f) ? fz : 0.01f;
+        out.scale_x = base.scale_x * nf * nx;
+        out.scale_y = base.scale_y * nf * ny;
+        out.scale_z = base.scale_z * nf * nz;
     }
     return out;
 }
@@ -250,8 +272,21 @@ void GizmoDrag::accumulate(const GizmoDelta& d) {
     } else if (m_mode == GizmoMode::Rotate) {
         m_total.yaw_deg += d.yaw_deg;
         m_total.pitch_deg += d.pitch_deg;
+        // Ring drags carry their own axis; successive events share it (one
+        // ring grabbed per gesture), so angles accumulate onto one axis.
+        if (d.axis_angle_deg != 0.0f) {
+            if (m_total.axis_angle_deg == 0.0f) {
+                m_total.axis_x = d.axis_x;
+                m_total.axis_y = d.axis_y;
+                m_total.axis_z = d.axis_z;
+            }
+            m_total.axis_angle_deg += d.axis_angle_deg;
+        }
     } else {
         m_total.dscale += d.dscale;
+        m_total.scl_x += d.scl_x;
+        m_total.scl_y += d.scl_y;
+        m_total.scl_z += d.scl_z;
     }
 }
 

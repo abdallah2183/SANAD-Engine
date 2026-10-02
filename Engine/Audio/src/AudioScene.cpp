@@ -75,9 +75,11 @@ void AudioScene::mix_emitter(Emitter& emitter) {
     AudioSource source;
     source.buffer = emitter.buffer;
     source.volume = emitter.volume;
+    source.pitch = emitter.pitch;
     source.looping = emitter.looping;
     source.playing = emitter.playing;
     source.sample_cursor = emitter.sample_cursor;
+    source.sample_position = emitter.sample_position;
     source.spatial = emitter.spatial;
     source.position = emitter.position;
     source.spatial_settings = emitter.spatial_settings;
@@ -88,6 +90,7 @@ void AudioScene::mix_emitter(Emitter& emitter) {
                       m_scratch_right.data(), m_frames, m_sample_rate);
 
     emitter.sample_cursor = source.sample_cursor;
+    emitter.sample_position = source.sample_position;
     emitter.playing = source.playing;
 
     // 3. Muffle it. Filtering after the mix is what keeps this per source: a
@@ -155,7 +158,8 @@ void AudioScene::finalize(f32* out_left, f32* out_right) {
     // --- music: into the Music bus, so the music slider owns it -------------
     std::fill(m_scratch_left.begin(), m_scratch_left.end(), 0.0f);
     std::fill(m_scratch_right.begin(), m_scratch_right.end(), 0.0f);
-    m_music.mix_music(m_scratch_left.data(), m_scratch_right.data(), m_frames);
+    m_music.mix_music(m_scratch_left.data(), m_scratch_right.data(), m_frames,
+                      m_sample_rate);
     m_mixer.mix_buffer(m_scratch_left.data(), m_scratch_right.data(), m_frames,
                        BusId::Music);
 
@@ -163,7 +167,7 @@ void AudioScene::finalize(f32* out_left, f32* out_right) {
     std::fill(m_scratch_left.begin(), m_scratch_left.end(), 0.0f);
     std::fill(m_scratch_right.begin(), m_scratch_right.end(), 0.0f);
     m_music.mix_ambience(m_scratch_left.data(), m_scratch_right.data(),
-                         m_frames);
+                         m_frames, m_sample_rate);
     m_mixer.mix_buffer(m_scratch_left.data(), m_scratch_right.data(), m_frames,
                        BusId::Ambience);
 

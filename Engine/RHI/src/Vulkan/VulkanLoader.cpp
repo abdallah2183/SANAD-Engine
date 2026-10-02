@@ -2,6 +2,7 @@
 
 #include "VulkanLoader.hpp"
 
+#include <NF/RHI/RHI.hpp> // device_lost() latch
 #include <NF/Core/Logger.hpp>
 
 #ifdef _WIN32
@@ -346,6 +347,11 @@ bool vk_check_impl(VkResult result, const char* expr, const char* file, u32 line
         return true;
     }
 
+    // A lost device is terminal and latches: every later submit fails too, so
+    // the caller must be able to stop instead of looping on error lines.
+    if (result == VK_ERROR_DEVICE_LOST) {
+        nf::rhi::record_device_lost();
+    }
     NF_LOG_ERROR(LogCategory::RHI, "Vulkan call failed: {} returned {} ({}:{})",
                  expr, vk_result_string(result), file, line);
     return false;

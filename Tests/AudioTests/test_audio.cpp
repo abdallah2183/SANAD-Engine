@@ -243,6 +243,73 @@ NF_TEST(mixer_stereo_buffer_fills_both_channels) {
     NF_CHECK_NEAR(right[1], 0.9f, 1e-5f);
 }
 
+NF_TEST(mixer_preserves_stereo_channels_when_resampling) {
+    AudioBuffer buf;
+    buf.channels = 2;
+    buf.sample_rate = 96000;
+    buf.samples = {0.0f, 10.0f, 2.0f, 12.0f, 4.0f, 14.0f, 6.0f, 16.0f};
+
+    AudioSource src;
+    src.buffer = &buf;
+    src.playing = true;
+    src.looping = true;
+
+    f32 left[2] = {0.0f, 0.0f};
+    f32 right[2] = {0.0f, 0.0f};
+    AudioBus bus;
+    bus.mix_source(src, {0, 0, 0}, {0, 0, -1}, {0, 1, 0}, left, right, 2,
+                   48000);
+
+    NF_CHECK_NEAR(left[0], 0.0f, 1e-6f);
+    NF_CHECK_NEAR(right[0], 10.0f, 1e-6f);
+    NF_CHECK_NEAR(left[1], 4.0f, 1e-6f);
+    NF_CHECK_NEAR(right[1], 14.0f, 1e-6f);
+}
+
+NF_TEST(mixer_resampling_stays_continuous_across_blocks) {
+    AudioBuffer buf;
+    buf.channels = 1;
+    buf.sample_rate = 48000;
+    buf.samples.resize(96);
+    for (usize i = 0; i < buf.samples.size(); ++i) {
+        buf.samples[i] = static_cast<f32>(i) / 95.0f;
+    }
+
+    AudioSource whole_source;
+    whole_source.buffer = &buf;
+    whole_source.playing = true;
+    whole_source.looping = true;
+    f32 whole[22] = {};
+    f32 whole_right[22] = {};
+    AudioBus bus;
+    bus.mix_source(whole_source, {0, 0, 0}, {0, 0, -1}, {0, 1, 0}, whole,
+                   whole_right, 22, 44100);
+
+    AudioSource split_source;
+    split_source.buffer = &buf;
+    split_source.playing = true;
+    split_source.looping = true;
+    f32 split[22] = {};
+    f32 split_right[22] = {};
+    bus.mix_source(split_source, {0, 0, 0}, {0, 0, -1}, {0, 1, 0}, split,
+                   split_right, 11, 44100);
+    NF_CHECK(split_source.sample_position >
+             static_cast<f64>(split_source.sample_cursor));
+    bus.mix_source(split_source, {0, 0, 0}, {0, 0, -1}, {0, 1, 0},
+                   split + 11, split_right + 11, 11, 44100);
+
+    // Output frame 11 lands between source frames 11 and 12, proving
+    // fractional 48 kHz -> 44.1 kHz positioning rather than a one-frame-per-
+    // output approximation.
+    const f32 expected_at_11 = static_cast<f32>(
+        (11.0 * 48000.0 / 44100.0) / 95.0);
+    NF_CHECK_NEAR(whole[11], expected_at_11, 1e-6f);
+    for (usize i = 0; i < 22; ++i) {
+        NF_CHECK_NEAR(split[i], whole[i], 1e-6f);
+        NF_CHECK_NEAR(split_right[i], whole_right[i], 1e-6f);
+    }
+}
+
 NF_TEST(mixer_stops_at_end_of_non_looping_buffer) {
     AudioBuffer buf;
     buf.channels = 1;

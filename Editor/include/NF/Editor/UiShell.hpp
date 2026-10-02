@@ -23,11 +23,41 @@ struct UiInitResult {
     bool context_ok = false;
     bool win32_ok = false; // ImGui Win32 backend initialized for HWND input
     std::string font_used;
+    // Whether the Arabic companion font was merged into the atlas.
+    //
+    // This is reported rather than swallowed because the base font is loaded
+    // with no glyph ranges, which means Arabic codepoints are absent from the
+    // atlas UNLESS this merge succeeds — the failure mode is the entire UI
+    // rendering as tofu diamonds, with no other visible symptom. A caller that
+    // knows the UI language can turn a false into an on-screen banner; one that
+    // does not can ignore it (an English session is unaffected either way).
+    bool arabic_font_ok = false;
+    // The value find_bundled_font() would return, kept for the error message so
+    // a caller can show the path it looked for without duplicating the walk.
+    std::string arabic_font_searched;
+    // Set by the shell, not by ui_init: it is true only when the Arabic font is
+    // missing AND the UI language is actually Arabic, so an English session
+    // never sees the banner.
+    bool warn_arabic_font_missing = false;
 };
+
+/// True when the editor should show the "Arabic font missing" banner.
+///
+/// A setter rather than a field on UiInitResult because the panels layer has no
+/// handle on that struct (it is a main.cpp local), and a file-static here is the
+/// smallest thing that keeps the decision in one place: the SHELL decides, once,
+/// from two facts it alone has — the font failed AND the language is Arabic.
+bool ui_arabic_font_missing();
+void set_ui_arabic_font_missing(bool on);
 
 // Creates the ImGui context, enables docking, applies the graphite style and
 // loads Segoe UI (falling back to the default font). Safe to call once.
-UiInitResult ui_init(void* hwnd);
+//
+// `persist_layout` decides whether ImGui may keep a dock-layout ini. A human
+// session passes true so the arrangement the user drags survives a restart; a
+// scripted run (`--frames`) passes false so its layout is rebuilt identically
+// every time and automation screenshots stay reproducible.
+UiInitResult ui_init(void* hwnd, bool persist_layout = false);
 
 // Forwards one raw Win32 message to ImGui_ImplWin32_WndProcHandler. Always
 // returns false (that handler claims nothing), so the engine's input system
@@ -59,6 +89,13 @@ struct UiIntents {
     float drag_ndc_x = 0.0f;
     float drag_ndc_y = 0.0f;
     bool viewport_release = false;
+    // Gizmo-handle press: the pointer grabbed one of the 3D arrows/rings/
+    // boxes instead of the scene behind it. press_ndc_* carry the grab point;
+    // gizmo_handle carries the handle id (see TransformGizmo.hpp). The shell
+    // routes it to EditorApp::viewport_gizmo_press, which arms a constrained
+    // drag on the current selection without re-picking.
+    bool viewport_gizmo_press = false;
+    int gizmo_handle = 0;
     // Viewport navigation (right button held on the viewport image): orbit
     // look + WASD/QE fly + wheel zoom. Pixel deltas accumulate while held;
     // main.cpp drains them once per frame, so a slow frame never drops a
@@ -73,6 +110,11 @@ struct UiIntents {
     bool nav_r = false; // D: orbit right
     bool nav_u = false; // E: rise
     bool nav_d = false; // Q: sink
+    // Focus the view: 1 = frame the selection, 2 = frame the whole scene. 0 =
+    // not requested. Two levels rather than two booleans because they are
+    // mutually exclusive and a frame pair of flags lets both be set, which
+    // would silently run the scene framing.
+    int nav_frame = 0;
 
     // --- Project actions -----------------------------------------------------
     // Scaffolding and building happen in main.cpp, not here: this layer only

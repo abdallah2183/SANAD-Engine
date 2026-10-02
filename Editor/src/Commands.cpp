@@ -494,6 +494,67 @@ std::string SetSkyCommand::label() const {
     return "Edit sky";
 }
 
+// --- SetTimeOfDayCommand -----------------------------------------------------
+
+SetTimeOfDayCommand::SetTimeOfDayCommand(ecs::Entity e, bool had_before,
+                                         const runtime::TimeOfDayComponent& before,
+                                         const runtime::TimeOfDayComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetTimeOfDayCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::TimeOfDayComponent>(m_entity, m_after);
+}
+
+void SetTimeOfDayCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::TimeOfDayComponent>(m_entity, m_before);
+    } else {
+        // Undoing the edit that first created the cycle must remove the component
+        // entirely, not leave a clock parked at whatever hour it last reached —
+        // the entity then round-trips to a scene with no TimeOfDay line at all.
+        world.remove<runtime::TimeOfDayComponent>(m_entity);
+    }
+}
+
+std::string SetTimeOfDayCommand::label() const {
+    return "Edit day/night cycle";
+}
+
+// --- SetPostProcessCommand --------------------------------------------------
+
+SetPostProcessCommand::SetPostProcessCommand(ecs::Entity e, bool had_before,
+                                             const runtime::PostProcessComponent& before,
+                                             const runtime::PostProcessComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetPostProcessCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::PostProcessComponent>(m_entity, m_after);
+}
+
+void SetPostProcessCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::PostProcessComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::PostProcessComponent>(m_entity);
+    }
+}
+
+std::string SetPostProcessCommand::label() const {
+    return "Edit post-processing";
+}
+
 // --- SetMaterialAssignmentCommand -------------------------------------------
 
 SetMaterialAssignmentCommand::SetMaterialAssignmentCommand(ecs::Entity e, std::string before_path,

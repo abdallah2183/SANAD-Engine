@@ -1554,7 +1554,7 @@ int run_game(const Options& opt) {
         cmd[slot]->begin();
         bool frame_ok = renderer.render(*cmd[slot], render_world, cam, *backbuffer, true, slot);
         if (frame_ok) {
-            frame_ok = overlay.render(*cmd[slot], *backbuffer, image_index, window.width(),
+            frame_ok = overlay.render(*cmd[slot], *backbuffer, image_index, slot, window.width(),
                                       window.height());
         }
         cmd[slot]->end();

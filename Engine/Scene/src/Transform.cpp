@@ -88,13 +88,18 @@ void propagate_transforms(ecs::World& world) {
     std::queue<ecs::Entity> q;
     for (auto r : roots) q.push(r);
 
-    // Roots: world = local
+    // Roots: world = local. Position AND rotation AND scale — a root's world
+    // pose is its own local pose, so a rotated root is a rotated root.
     for (auto r : roots) {
         auto* t = world.get<Transform>(r);
         if (t) {
             t->world_x = t->local_x;
             t->world_y = t->local_y;
             t->world_z = t->local_z;
+            t->world_rot = quat_from_euler_xyz_degrees(t->rot_x, t->rot_y, t->rot_z);
+            t->world_scale_x = t->scale_x;
+            t->world_scale_y = t->scale_y;
+            t->world_scale_z = t->scale_z;
             t->dirty = false;
         }
     }
@@ -114,9 +119,31 @@ void propagate_transforms(ecs::World& world) {
             visited.insert(child.id);
             auto* child_t = world.get<Transform>(child);
             if (!child_t) continue;
-            child_t->world_x = cur_t->world_x + child_t->local_x;
-            child_t->world_y = cur_t->world_y + child_t->local_y;
-            child_t->world_z = cur_t->world_z + child_t->local_z;
+            // world_rot = parent.world_rot * local_rot. The order matters and is
+            // not interchangeable: a quat is applied right-to-left, so putting
+            // the parent first means "rotate into the parent's frame, then apply
+            // my own turn" — which is the only reading in which a child that
+            // inherits its parent's rotation and adds none of its own ends up
+            // with exactly the parent's rotation.
+            child_t->world_rot =
+                cur_t->world_rot * quat_from_euler_xyz_degrees(child_t->rot_x, child_t->rot_y,
+                                                               child_t->rot_z);
+            // Scale multiplies component-wise through the chain.
+            child_t->world_scale_x = cur_t->world_scale_x * child_t->scale_x;
+            child_t->world_scale_y = cur_t->world_scale_y * child_t->scale_y;
+            child_t->world_scale_z = cur_t->world_scale_z * child_t->scale_z;
+            // Position: the child's local offset is expressed in the PARENT's
+            // space, so it is scaled and then rotated before being added. Adding
+            // it raw (the previous behaviour) meant a parent rotated 90 degrees
+            // swung its children the wrong way around it, and a parent scaled
+            // 10x left them bunched at the origin.
+            const Vec3 local_scaled{child_t->local_x * cur_t->world_scale_x,
+                                    child_t->local_y * cur_t->world_scale_y,
+                                    child_t->local_z * cur_t->world_scale_z};
+            const Vec3 world_offset = cur_t->world_rot.rotate(local_scaled);
+            child_t->world_x = cur_t->world_x + world_offset.x;
+            child_t->world_y = cur_t->world_y + world_offset.y;
+            child_t->world_z = cur_t->world_z + world_offset.z;
             child_t->dirty = false;
             q.push(child);
         }
@@ -172,6 +199,37 @@ void euler_xyz_degrees_from_quat(const Quat& q, float& out_rx, float& out_ry, fl
     out_rx = rx * kRadToDeg;
     out_ry = ry * kRadToDeg;
     out_rz = rz * kRadToDeg;
+}
+
+Mat4 compose_quat_scale_mat4(const Vec3& position, const Quat& rotation, const Vec3& scale) {
+    // nf::Mat4 is ROW-VECTOR: v' = v * M, and `A * B` means "apply A, then B".
+    // So scale-then-rotate is `Mat4::scale(s) * R` — the reverse of what the
+    // column-vector reading suggests, and the exact order compose_trs_mat4
+    // produces (there, m[i][k] = R[i][k] * s_i, i.e. each ROW carries its axis's
+    // scale, which is scale applied to the LOCAL point before rotation).
+    //
+    // Getting this backwards is not a subtle shear: it makes a non-uniformly
+    // scaled object rotate about the wrong axis, and for a hierarchy it makes a
+    // child's offset scale along the wrong component.
+    Mat4 m = Mat4::scale(scale) * rotation.to_matrix();
+    m.m[3][0] = position.x;
+    m.m[3][1] = position.y;
+    m.m[3][2] = position.z;
+    m.m[0][3] = 0.0f;
+    m.m[1][3] = 0.0f;
+    m.m[2][3] = 0.0f;
+    m.m[3][3] = 1.0f;
+    return m;
+}
+
+Mat4 local_matrix(const Transform& t) {
+    return compose_trs_mat4(t.local_x, t.local_y, t.local_z, t.rot_x, t.rot_y, t.rot_z,
+                            t.scale_x, t.scale_y, t.scale_z);
+}
+
+Mat4 world_matrix(const Transform& t) {
+    return compose_quat_scale_mat4({t.world_x, t.world_y, t.world_z}, t.world_rot,
+                                   {t.world_scale_x, t.world_scale_y, t.world_scale_z});
 }
 
 void compose_trs(float px, float py, float pz,

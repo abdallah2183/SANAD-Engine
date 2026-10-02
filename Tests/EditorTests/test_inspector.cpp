@@ -297,3 +297,167 @@ NF_TEST(editor_inspector_sky_edit_add_and_undo) {
     bad2.horizon[0] = std::numeric_limits<float>::quiet_NaN();
     NF_CHECK(editor::make_sky_command(scene.world(), e, bad2, err) == nullptr);
 }
+
+NF_TEST(inspector_time_of_day_command_adds_edits_and_undoes_cleanly) {
+    // The editor path for the day/night cycle. The runtime already honours the
+    // component (RuntimeTests), but that is the *game* path — without this, the
+    // cycle is loadable from a scene file and invisible in the editor, so the only
+    // way to author one is to hand-write a line into the .nfscene.
+    scene::Scene scene("TodInspector");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+
+    // Absent component: has=false, defaults still queryable.
+    bool has = true;
+    editor::TimeOfDayEdit def = editor::read_time_of_day(scene.world(), e, has);
+    NF_CHECK(!has);
+    NF_CHECK_NEAR(def.time_hours, 12.0f, 1e-6f);
+
+    // Apply adds the component; undo removes it entirely — not leaves a clock
+    // parked at some hour, which would round-trip into a TimeOfDay line the
+    // author never asked for.
+    editor::TimeOfDayEdit edit;
+    edit.time_hours = 17.5f;
+    edit.day_length_seconds = 120.0f;
+    edit.drive_light = false;
+    std::string err;
+    auto cmd = editor::make_time_of_day_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd != nullptr);
+
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+    const auto* t = scene.world().get<runtime::TimeOfDayComponent>(e);
+    NF_CHECK(t != nullptr);
+    NF_CHECK_NEAR(t->time_hours, 17.5f, 1e-6f);
+    NF_CHECK_NEAR(t->day_length_seconds, 120.0f, 1e-6f);
+    NF_CHECK(!t->drive_light);
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(!scene.world().has<runtime::TimeOfDayComponent>(e));
+
+    // Re-apply, then read back.
+    auto cmd2 = editor::make_time_of_day_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd2 != nullptr);
+    stack.push(std::move(cmd2), scene.world());
+    bool has2 = false;
+    const editor::TimeOfDayEdit back = editor::read_time_of_day(scene.world(), e, has2);
+    NF_CHECK(has2);
+    NF_CHECK_NEAR(back.time_hours, 17.5f, 1e-6f);
+    NF_CHECK_NEAR(back.day_length_seconds, 120.0f, 1e-6f);
+    NF_CHECK(!back.drive_light);
+
+    // Hours wrap rather than clamp, matching the scene loader: 25.0 is 1am, and a
+    // clamp would silently turn "an hour later" into 24:00.
+    editor::TimeOfDayEdit wrap = edit;
+    wrap.time_hours = 25.0f;
+    auto cmd3 = editor::make_time_of_day_command(scene.world(), e, wrap, err);
+    NF_CHECK(cmd3 != nullptr);
+    stack.push(std::move(cmd3), scene.world());
+    const auto* w = scene.world().get<runtime::TimeOfDayComponent>(e);
+    NF_CHECK(w != nullptr);
+    NF_CHECK_NEAR(w->time_hours, 1.0f, 1e-5f);
+
+    // A negative day length is "freeze the clock", not an error — same rule the
+    // loader applies, so the two paths cannot disagree about the same value.
+    editor::TimeOfDayEdit frozen = edit;
+    frozen.day_length_seconds = -5.0f;
+    auto cmd4 = editor::make_time_of_day_command(scene.world(), e, frozen, err);
+    NF_CHECK(cmd4 != nullptr);
+    stack.push(std::move(cmd4), scene.world());
+    const auto* f = scene.world().get<runtime::TimeOfDayComponent>(e);
+    NF_CHECK(f != nullptr);
+    NF_CHECK_NEAR(f->day_length_seconds, 0.0f, 1e-6f);
+
+    // A non-finite hour is refused: that is a broken widget, not an author choice.
+    editor::TimeOfDayEdit bad = edit;
+    bad.time_hours = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(editor::make_time_of_day_command(scene.world(), e, bad, err) == nullptr);
+    NF_CHECK(!err.empty());
+}
+
+NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
+    // The editor path for the §206 post stack. RuntimeTests already covers the
+    // game path; without this the stack is loadable from a scene file and
+    // invisible in the editor, so authoring one means hand-writing a line.
+    scene::Scene scene("PostInspector");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+
+    // Absent component: has=false, defaults still queryable.
+    bool has = true;
+    runtime::PostProcessComponent def = editor::read_post_process(scene.world(), e, has);
+    NF_CHECK(!has);
+    NF_CHECK(!def.bloom_enabled);
+    NF_CHECK_NEAR(def.bloom_threshold, 1.0f, 1e-6f);
+    NF_CHECK_NEAR(def.saturation, 1.0f, 1e-6f);
+
+    // Apply adds the component; undo removes it entirely — not leaves a neutral
+    // block behind, which would round-trip into a PostProcess line the author
+    // never asked for.
+    runtime::PostProcessComponent edit;
+    edit.bloom_enabled = true;
+    edit.bloom_threshold = 2.5f;
+    edit.bloom_intensity = 1.5f;
+    edit.grade_enabled = true;
+    edit.grade_temperature = -0.75f;
+    edit.sharpen_enabled = true;
+    edit.sharpen_amount = 0.5f;
+    edit.vignette = 0.3f;
+    std::string err;
+    auto cmd = editor::make_post_process_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd != nullptr);
+
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+    const auto* pp = scene.world().get<runtime::PostProcessComponent>(e);
+    NF_CHECK(pp != nullptr);
+    if (pp != nullptr) {
+        NF_CHECK(pp->bloom_enabled);
+        NF_CHECK_NEAR(pp->bloom_threshold, 2.5f, 1e-6f);
+        NF_CHECK_NEAR(pp->bloom_intensity, 1.5f, 1e-6f);
+        NF_CHECK(pp->grade_enabled);
+        NF_CHECK_NEAR(pp->grade_temperature, -0.75f, 1e-6f);
+        NF_CHECK(pp->sharpen_enabled);
+        NF_CHECK_NEAR(pp->sharpen_amount, 0.5f, 1e-6f);
+        NF_CHECK_NEAR(pp->vignette, 0.3f, 1e-6f);
+    }
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(!scene.world().has<runtime::PostProcessComponent>(e));
+
+    // Re-apply, then read back through the inspector's own reader.
+    auto cmd2 = editor::make_post_process_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd2 != nullptr);
+    stack.push(std::move(cmd2), scene.world());
+    bool has2 = false;
+    const runtime::PostProcessComponent back = editor::read_post_process(scene.world(), e, has2);
+    NF_CHECK(has2);
+    NF_CHECK(back.bloom_enabled);
+    NF_CHECK_NEAR(back.bloom_threshold, 2.5f, 1e-6f);
+    NF_CHECK_NEAR(back.grade_temperature, -0.75f, 1e-6f);
+
+    // Redo restores the same block.
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(stack.redo(scene.world()));
+    NF_CHECK(scene.world().has<runtime::PostProcessComponent>(e));
+
+    // Out-of-range values are refused, and refused for the same reason the
+    // scene loader refuses them — a value the editor accepted and the loader
+    // then dropped would make the same scene load differently depending on how
+    // it was authored.
+    runtime::PostProcessComponent zero_radius = edit;
+    zero_radius.bloom_radius = 0.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, zero_radius, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent negative = edit;
+    negative.bloom_intensity = -1.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative, err) == nullptr);
+
+    runtime::PostProcessComponent nan = edit;
+    nan.grade_contrast = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, nan, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    // A dead entity is refused rather than silently editing nothing.
+    ecs::Entity dead{};
+    NF_CHECK(editor::make_post_process_command(scene.world(), dead, edit, err) == nullptr);
+}

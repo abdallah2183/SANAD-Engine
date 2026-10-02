@@ -6,6 +6,17 @@
 >
 > **الفكرة الأساسية:** لا نحاول نسخ محرك واحد. نبني Architecture جديدة تأخذ أفضل الأفكار من أنظمة متعددة، ثم توحّدها داخل منصة واحدة ذات Workflow واضح.
 
+> **قفل النطاق الحالي — Game-Ready (2026-09-23):**
+> هذه الوثيقة مرجع معماري طويل المدى، وليست وعداً بأن كل قسم فيها منفّذ الآن.
+> عقد التسليم النشط هو **Windows x64 PC فقط**، كما يثبت
+> `.workbuddy-ai/agents/agent-game-ready-program.md` ومسارات G1–G10.
+> لا يُعتبر مسار مكتملاً إلا إذا يستطيع مطور لعبة أن ينشئ المشروع ويفتحه ويعدّله
+> ويلعب ويحفظ ثم يطبخ/يحزمه ويشغله **دون لمس سورس المحرك**.
+> أقسام mobile/console/VR هنا خيارات معمارية مستقبلية، وليست نطاقاً تنفيذياً حالياً.
+> بوابة الاختبارات `Tests/**` خضراء دائماً، والعربية/RTL خط أحمر، والموبايل
+> والكونسول خارج النطاق. معيار المرحلة العملية هو vertical slice:
+> `Create → Open/Edit → Play → Save → Cook/Package → Run outside editor`.
+
 ---
 
 # 0. تنبيه هندسي مهم
@@ -9562,24 +9573,24 @@ exit "$FAILED"
 
 # 371. الخطوة التالية: أهداف المحرك (ما بعد 334)
 
-المرجع البرمجي أعلاه يغطي **الأنظمة المعمارية**. ما يليها بالأولوية:
+المرجع البرمجي أعلاه يغطي **الأنظمة المعمارية**، لكن ترتيب التسليم التشغيلي
+الحالي يحددّه برنامج Game-Ready في
+`.workbuddy-ai/agents/agent-game-ready-program.md`، لا قائمة الطموحات المعمارية:
 
 ```text
-1. شبكة: نسخ القيود والكيانات (Constraint Replication)
-   - clone_constraint عبر السلك (§349 الأساس)
-   - أولوية الجدول الهرمي للأجسام الثابتة
-
-2. C# Scripting (§6)
-   - Same VM contract as Lua (sandbox + instruction budget)
-   - Roslyn أو Mono كخلفية
-
-3. محرك 2D متكامل (§54–§56)
-   - Tilemap + 2D physics + sprites
-
-4. التدمير (§41)
-   - Destruction hooks على شبكة مثلثات
-   - Chunk-based debris
+0. G10: build كامل + sweep كامل + silent-drop/Arabic gate قبل أي ادعاء.
+1. G6 + G7: رحلة المطور Create → Open/Edit → Play → Save → Cook/Package → Run.
+2. G5: ربط AudioScene والـbuses/الإعدادات بالمشهد والـRuntime، لا demo فقط.
+3. G2 + G4: مسار Blender/import → clip/skeleton → runtime playback، ثم skinning.
+4. G3: HUD والقوائم والحوار كواجهة runtime حقيقية قابلة للربط من Lua/C#.
+5. G1: action map وXInput end-to-end، مع فحص hardware موثق.
+6. G8: عقد frame/draw/memory وbaseline آلي على Windows.
+7. G9: finishing للمحرر فقط، مع بقاء Arabic/RTL أخضر.
 ```
+
+لا نبدأ Ray Tracing أو GI أو virtualized geometry كشرط للتسليم. هذه تجارب
+مستقبلية خلف Core مستقر؛ معيار القبول الحالي لعبة PC صغيرة يستطيع المطور
+إنهاؤها وشحنها دون تعديل C++ الخاص بالمحرك.
 
 ---
 

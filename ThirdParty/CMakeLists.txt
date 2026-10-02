@@ -32,6 +32,30 @@ if(MSVC)
 endif()
 target_compile_features(imgui PUBLIC cxx_std_17)
 
+# --- ImGui duplicate-ID audit (opt-in, audit builds only) --------------------
+#
+# ImGui detects duplicate item IDs ONLY while the pointer hovers one of them —
+# ItemHoverable() says so: "this is specifically done here by comparing on
+# hover because it allows us a detection of duplicates that is algorithmically
+# extra cheap". That makes a conflict invisible to any automated run, so a
+# duplicate survives until a human happens to hover it and gets the red popup.
+#
+# IMGUI_DEBUG_HIGHLIGHT_ALL_ID_CONFLICTS makes ImGui track EVERY duplicate ID
+# per frame instead. ImGui's own comment: "THIS WILL SLOW DOWN DEAR IMGUI.
+# DON'T KEEP ACTIVATED." — hence OFF by default, and on only for an audit:
+#
+#   cmake --build build/DebugNinja --target NOVAForgeEditor  (after configuring
+#   the build dir once with -DNF_IMGUI_ID_AUDIT=ON)
+#   NOVAForgeEditor.exe --scene … --frames 125
+#
+# main.cpp then logs every conflicting ID with the window that owns it. Turn it
+# back off for normal work.
+option(NF_IMGUI_ID_AUDIT "Make ImGui track every duplicate ID per frame (slow; audit only)" OFF)
+if(NF_IMGUI_ID_AUDIT)
+    target_compile_definitions(imgui PUBLIC IMGUI_DEBUG_HIGHLIGHT_ALL_ID_CONFLICTS)
+    message(STATUS "ImGui duplicate-ID audit ENABLED (NF_IMGUI_ID_AUDIT=ON)")
+endif()
+
 # --- miniaudio (header-only audio decoding: WAV/OGG-Vorbis/MP3/FLAC) ---------
 # Used by NFAudio for the import pipeline only (decode file -> AudioBuffer);
 # output stays on the engine's AudioDevice seam (Null/WASAPI). Single header,

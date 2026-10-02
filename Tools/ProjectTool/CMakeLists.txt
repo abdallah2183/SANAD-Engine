@@ -8,6 +8,7 @@ add_library(NFProjectTool STATIC
     src/ProjectCooker.cpp
     src/ProjectScaffold.cpp
     src/ProjectPackager.cpp
+    src/WindowsProcess.cpp
 )
 
 target_include_directories(NFProjectTool

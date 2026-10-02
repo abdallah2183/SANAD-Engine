@@ -19,6 +19,47 @@ bool is_valid_name(const std::string& name) {
 
 } // namespace
 
+std::string project_template_name_list() {
+    std::string result;
+    for (std::size_t i = 0; i < kProjectTemplateNames.size(); ++i) {
+        if (i != 0) result += ", ";
+        result += kProjectTemplateNames[i];
+    }
+    return result;
+}
+
+std::filesystem::path resolve_project_template(std::string_view name,
+                                               const std::filesystem::path& templates_root,
+                                               const std::filesystem::path& default_template_dir,
+                                               std::string& out_error) {
+    out_error.clear();
+    if (name.empty()) return default_template_dir;
+
+    for (const std::string_view allowed : kProjectTemplateNames) {
+        if (name != allowed) continue;
+
+        if (templates_root.empty()) {
+            out_error = "template '" + std::string(allowed) +
+                        "' is unavailable because the templates root is not configured; valid templates: " +
+                        project_template_name_list();
+            return {};
+        }
+
+        const auto selected = (templates_root / allowed).lexically_normal();
+        std::error_code ec;
+        if (!std::filesystem::is_directory(selected, ec) || ec) {
+            out_error = "template '" + std::string(allowed) + "' is not available at '" +
+                        selected.string() + "'; valid templates: " + project_template_name_list();
+            return {};
+        }
+        return selected;
+    }
+
+    out_error = "unknown template '" + std::string(name) + "'; valid templates: " +
+                project_template_name_list();
+    return {};
+}
+
 bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
     if (!is_valid_name(opts.name)) {
         out_error = "invalid project name '" + opts.name +

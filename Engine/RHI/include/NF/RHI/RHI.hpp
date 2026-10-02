@@ -213,6 +213,12 @@ struct VertexAttrib {
     u32 location = 0;
     u32 offset = 0;
     Format format = Format::Unknown;
+
+    // Defaulted for the same reason as RasterizerState/DepthState: the pipeline
+    // cache key compares vertex attributes field by field, and a new attribute
+    // field left out of that list would make two different layouts share one
+    // pipeline. See RasterizerState's note.
+    bool operator==(const VertexAttrib&) const = default;
 };
 
 struct VertexLayout {
@@ -225,12 +231,27 @@ struct RasterizerState {
     CullMode cull_mode = CullMode::Back;
     FrontFace front_face = FrontFace::CCW;
     bool wireframe = false;
+
+    // Defaulted, NOT hand-written, on purpose.
+    //
+    // PipelineCache keys pipelines on this struct. With a field-by-field
+    // comparison, adding a state field here would leave the cache comparing the
+    // OLD field list and quietly treating two visibly-different states as one
+    // pipeline — the first draw's pipeline reused for the second, which is a
+    // wrong-image bug with no error anywhere. A defaulted operator== deletes
+    // itself the moment a field is added, so the omission becomes a COMPILE
+    // ERROR pointing at this struct instead of a silent rendering bug.
+    bool operator==(const RasterizerState&) const = default;
 };
 
 struct DepthState {
     bool test_enabled = true;
     bool write_enabled = true;
     CompareOp compare = CompareOp::Less;
+
+    // Same reason as RasterizerState: defaulted so a new depth field cannot be
+    // silently left out of the pipeline cache key. See the note above.
+    bool operator==(const DepthState&) const = default;
 };
 
 struct ColorAttachment {
@@ -369,7 +390,24 @@ struct DescriptorWrite {
 };
 
 struct PipelineDesc {
+    /// RESERVED — read by no backend, and deliberately NOT part of the pipeline
+    /// cache key.
+    ///
+    /// Written by nothing in the engine, the editor, the samples or the tests.
+    /// The stage set is implied by which of `vs` / `fs` is non-null, and every
+    /// backend derives it that way. It is documented as reserved rather than
+    /// deleted because it is part of the published struct and removing a field
+    /// from a widely-included header is a bigger change than making its status
+    /// honest.
+    ///
+    /// It is called out here rather than left as a mystery because a field that
+    /// LOOKS like it controls something, on a struct whose whole purpose is
+    /// "this is everything the pipeline needs", is the exact thing someone will
+    /// set and expect to change. If it ever becomes real, PipelineCache::Key
+    /// must gain it at the same time — the key currently ignores it, so two
+    /// descs differing only in `stages` would share one pipeline.
     ShaderStage stages = ShaderStage::Vertex;
+
     const class ShaderModule* vs = nullptr;
     const class ShaderModule* fs = nullptr;
     VertexLayout vertex_layout;
@@ -815,6 +853,20 @@ void reset_validation_error_count();
 /// an error. Declared here (rather than in a backend header) because the
 /// counter itself is backend-neutral state shared across device instances.
 void record_validation_error();
+
+/// True once ANY checked Vulkan call has returned VK_ERROR_DEVICE_LOST.
+///
+/// A lost device is terminal: every later vkQueueSubmit fails, so a render loop
+/// that ignores it spins forever writing error lines — which is exactly what a
+/// user sees as "the engine froze" (real report: resizing the window). Callers
+/// must stop the loop and exit with a message instead of submitting again.
+/// Latched until reset_device_lost(), so it survives the frame it happened on.
+bool device_lost();
+void reset_device_lost();
+
+/// Internal hook: the Vulkan backend calls this when a checked call returns
+/// VK_ERROR_DEVICE_LOST. Same rationale as record_validation_error().
+void record_device_lost();
 
 // --- Factory function ---
 std::unique_ptr<IGraphicsDevice> create_device();

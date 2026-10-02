@@ -26,7 +26,7 @@ std::string to_lower(std::string_view s) {
 // the .spv is packaging's job. Listing it here would produce a registry entry
 // pointing at a cooked file the cooker never writes.
 constexpr std::string_view kCookableExtensions[] = {
-    ".nfmesh", ".nfmat", ".nfscene", ".png", ".jpg", ".jpeg", ".bmp", ".tga",
+    ".nfmesh", ".nfmat", ".nfscene", ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".lua",
 };
 
 // The registry file itself lives under content:// and must not be cooked.
@@ -110,6 +110,7 @@ assets::AssetType asset_type_for(std::string_view extension) {
     if (ext == ".nfmesh") return assets::AssetType::Mesh;
     if (ext == ".nfscene") return assets::AssetType::Scene;
     if (ext == ".nfmat") return assets::AssetType::Material;
+    if (ext == ".lua") return assets::AssetType::Script;
     if (ext == ".spv") return assets::AssetType::Shader;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga") {
         return assets::AssetType::Texture;
@@ -124,6 +125,7 @@ std::string format_for(assets::AssetType type) {
         case assets::AssetType::Shader:   return "spv-v1";
         case assets::AssetType::Scene:    return "nfscene-v1";
         case assets::AssetType::Material: return "nfmat-v1";
+        case assets::AssetType::Script:   return "lua-v1";
         default:                          return "unknown-v1";
     }
 }

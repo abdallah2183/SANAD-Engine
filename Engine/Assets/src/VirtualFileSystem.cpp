@@ -227,6 +227,104 @@ VFSResult<bool> VirtualFileSystem::is_directory(std::string_view logical_path) c
     return VFSResult<bool>::success(is_dir);
 }
 
+// --- Delete / rename ---------------------------------------------------------
+
+namespace {
+
+// A mount root is the one path resolve_internal() cannot reject: it resolves to
+// the mount directory itself, which is trivially inside the mount. Deleting or
+// renaming it would take the whole tree with it, so every destructive call
+// refuses it up front. `mounted_root` is the PHYSICAL directory the mount maps
+// to; the caller compares the resolved path against the mount list.
+bool is_mount_root(const VirtualFileSystem& vfs, const std::filesystem::path& physical) {
+    for (const std::string& m : vfs.mounts()) {
+        auto r = vfs.resolve(m);
+        if (r.ok && std::filesystem::weakly_canonical(r.value) ==
+                       std::filesystem::weakly_canonical(physical)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+VFSResult<void> VirtualFileSystem::remove(std::string_view logical_path) {
+    auto r = resolve_internal(logical_path);
+    if (!r.ok) return VFSResult<void>::failure(r.error);
+    if (is_mount_root(*this, r.value)) {
+        return VFSResult<void>::failure("Refusing to delete a mount root: '" +
+                                        std::string(logical_path) + "'");
+    }
+    std::error_code ec;
+    if (std::filesystem::is_directory(r.value, ec)) {
+        // Not a file. Naming the two operations apart is the point: a caller
+        // that means "this one file" can never accidentally take a tree.
+        return VFSResult<void>::failure("Path is a directory (use remove_all): '" +
+                                        std::string(logical_path) + "'");
+    }
+    if (!std::filesystem::remove(r.value, ec) || ec) {
+        return VFSResult<void>::failure("Failed to delete '" + std::string(logical_path) +
+                                        "': " + (ec ? ec.message() : "not found"));
+    }
+    return VFSResult<void>::success();
+}
+
+VFSResult<void> VirtualFileSystem::remove_all(std::string_view logical_path) {
+    auto r = resolve_internal(logical_path);
+    if (!r.ok) return VFSResult<void>::failure(r.error);
+    if (is_mount_root(*this, r.value)) {
+        return VFSResult<void>::failure("Refusing to delete a mount root: '" +
+                                        std::string(logical_path) + "'");
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(r.value, ec) || ec) {
+        return VFSResult<void>::failure("Nothing to delete at '" + std::string(logical_path) + "'");
+    }
+    std::filesystem::remove_all(r.value, ec);
+    if (ec) {
+        return VFSResult<void>::failure("Failed to delete '" + std::string(logical_path) +
+                                        "': " + ec.message());
+    }
+    return VFSResult<void>::success();
+}
+
+VFSResult<void> VirtualFileSystem::rename(std::string_view from_logical,
+                                          std::string_view to_logical) {
+    auto from = resolve_internal(from_logical);
+    if (!from.ok) return VFSResult<void>::failure(from.error);
+    auto to = resolve_internal(to_logical);
+    if (!to.ok) return VFSResult<void>::failure(to.error);
+    if (is_mount_root(*this, from.value)) {
+        return VFSResult<void>::failure("Refusing to rename a mount root: '" +
+                                        std::string(from_logical) + "'");
+    }
+    // Refuse to clobber. A rename that silently overwrote a file would be
+    // unrecoverable, and the panel can offer an explicit delete first.
+    std::error_code ec;
+    if (std::filesystem::exists(to.value, ec)) {
+        return VFSResult<void>::failure("Target already exists: '" +
+                                        std::string(to_logical) + "'");
+    }
+    if (!std::filesystem::exists(from.value, ec) || ec) {
+        return VFSResult<void>::failure("Source does not exist: '" +
+                                        std::string(from_logical) + "'");
+    }
+    // The destination's parent must exist: silently creating a tree here would
+    // make a typo ("content://Meshes/Cubee") create a folder too.
+    if (!std::filesystem::is_directory(to.value.parent_path(), ec)) {
+        return VFSResult<void>::failure("Destination folder does not exist for '" +
+                                        std::string(to_logical) + "'");
+    }
+    std::filesystem::rename(from.value, to.value, ec);
+    if (ec) {
+        return VFSResult<void>::failure("Failed to rename '" + std::string(from_logical) +
+                                        "' to '" + std::string(to_logical) +
+                                        "': " + ec.message());
+    }
+    return VFSResult<void>::success();
+}
+
 std::vector<std::string> VirtualFileSystem::mounts() const {
     std::vector<std::string> out;
     for (auto& m : m_mounts) out.push_back(m.logical);

@@ -18,10 +18,10 @@
 #     animation, sampled (no curve interpolation data leaves Blender).
 #   - Material: Principled BSDF base color / metallic / roughness factors.
 #
-# No silent substitution: if the selection has no armature or no actions, the
-# export still runs (a static prop is a legitimate export), and the engine
-# reports the result explicitly — skins/animations counts are printed by
-# NFModelImporter and asserted by Tests/AssetTests.
+# No silent substitution: this operator is character-specific. It refuses a
+# selection without a deformed mesh, matching armature, Principled material, or
+# two exportable actions. The engine CLI separately retains an explicit
+# static-geometry mode; this add-on never labels a static export as a character.
 
 bl_info = {
     "name": "NOVAForge glTF Export",
@@ -34,12 +34,79 @@ bl_info = {
 }
 
 import bpy
+import os
 
 
-def is_novaforge_scene(context):
-    # A character needs at least one mesh; the armature and actions are
-    # optional (props are static). This hook exists for scripted checks.
-    return any(isinstance(o.data, bpy.types.Mesh) for o in context.selected_objects)
+def _exportable_actions(obj):
+    """Active plus non-muted NLA actions, matching Blender's ACTIONS mode."""
+    actions = set()
+    animation_data = obj.animation_data
+    if animation_data is None:
+        return actions
+    if animation_data.action is not None:
+        actions.add(animation_data.action)
+    for track in animation_data.nla_tracks:
+        if track.mute:
+            continue
+        for strip in track.strips:
+            if not strip.mute and strip.action is not None:
+                actions.add(strip.action)
+    return actions
+
+
+def _has_principled_material(mesh):
+    for material in mesh.data.materials:
+        if material is None or not material.use_nodes or material.node_tree is None:
+            continue
+        if any(node.type == "BSDF_PRINCIPLED" for node in material.node_tree.nodes):
+            return True
+    return False
+
+
+def character_preflight(context):
+    """Return (ok, precise failure) for the selected game character."""
+    meshes = [obj for obj in context.selected_objects if obj.type == "MESH"]
+    armatures = [obj for obj in context.selected_objects if obj.type == "ARMATURE"]
+    if not meshes:
+        return False, "select at least one character mesh"
+    if not armatures:
+        return False, "select the character's armature"
+
+    deformed = any(
+        modifier.type == "ARMATURE" and modifier.object == armature
+        for mesh in meshes
+        for modifier in mesh.modifiers
+        for armature in armatures
+    )
+    if not deformed:
+        return False, "a selected mesh needs an Armature modifier targeting a selected armature"
+    if not any(_has_principled_material(mesh) for mesh in meshes):
+        return False, "a selected mesh needs a material with a Principled BSDF"
+
+    actions = set()
+    for armature in armatures:
+        actions.update(_exportable_actions(armature))
+    if len(actions) < 2:
+        return False, "the armature needs at least two active or non-muted NLA actions (found %d)" % len(actions)
+    return True, "mesh + armature + deformation + material + %d actions" % len(actions)
+
+
+_CRITICAL_OPTIONS = frozenset({
+    "filepath",
+    "export_format",
+    "export_yup",
+    "export_apply",
+    "use_selection",
+    "export_animations",
+    "export_anim_single_armature",
+    "export_force_sampling",
+    "export_skins",
+    "export_def_bones",
+    "export_all_influences",
+    "export_animation_mode",
+    "export_influence_nb",
+    "export_rest_position_armature",
+})
 
 
 class NF_OT_export_gltf(bpy.types.Operator):
@@ -49,6 +116,10 @@ class NF_OT_export_gltf(bpy.types.Operator):
     bl_label = "NOVAForge glTF (.glb)"
 
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None
 
     # The settings the engine's importer needs, by the names Blender's
     # export_scene.gltf actually declares them (checked against
@@ -65,32 +136,58 @@ class NF_OT_export_gltf(bpy.types.Operator):
             "export_yup": True,             # engine is Y-up; exporter converts Z-up
             "export_apply": True,           # apply modifiers (armature deform kept)
             "use_selection": True,          # only what the developer selected
-            "export_animations": True,      # every non-muted action -> one clip
+            "export_animations": True,      # active + non-muted NLA actions
+            "export_animation_mode": "ACTIONS",
             "export_anim_single_armature": True,
-            "export_force_sampling": True,  # bake curves to keys (LINEAR, sampled)
+            "export_force_sampling": True,  # bake curves to LINEAR keys
             "export_skins": True,
             "export_def_bones": True,       # deform bones only = the game rig
             "export_all_influences": False,  # cap at 4 weights (engine vertex binding)
+            "export_influence_nb": 4,
+            "export_rest_position_armature": True,
             "export_morph": False,          # morph targets are not imported yet
             "export_cameras": False,
             "export_lights": False,
         }
 
     def execute(self, context):
+        ok, detail = character_preflight(context)
+        if not ok:
+            self.report({"ERROR"}, "NOVAForge character preflight failed: %s" % detail)
+            return {"CANCELLED"}
+
         settings = self._settings()
-        # Blender renames exporter options between releases. Passing one this
-        # build does not know raises a TypeError and kills the whole export, so
-        # drop the unknown keys — and name them in the report. Never silently:
-        # a developer has to be able to see that a setting did not apply.
         supported = set(bpy.ops.export_scene.gltf.get_rna_type().properties.keys())
+        missing_critical = sorted(_CRITICAL_OPTIONS - supported)
+        if missing_critical:
+            self.report({"ERROR"},
+                        "NOVAForge: this Blender build lacks critical export options: %s"
+                        % ", ".join(missing_critical))
+            return {"CANCELLED"}
+
+        # Optional options may drift between Blender releases, but a missing
+        # critical option aborts rather than changing what the file contains.
         dropped = sorted(k for k in settings if k not in supported)
         kwargs = {k: v for k, v in settings.items() if k in supported}
-        bpy.ops.export_scene.gltf(**kwargs)
+        export_result = bpy.ops.export_scene.gltf(**kwargs)
+        if "FINISHED" not in export_result:
+            self.report({"ERROR"},
+                        "NOVAForge: glTF exporter returned %s; no export confirmed"
+                        % sorted(export_result))
+            return {"CANCELLED"}
+
+        output_path = bpy.path.abspath(self.filepath)
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+            self.report({"ERROR"},
+                        "NOVAForge: exporter reported success but output is missing or empty: %s"
+                        % output_path)
+            return {"CANCELLED"}
+
         if dropped:
             self.report({"WARNING"},
-                        "NOVAForge: this Blender build has no %s; exported without it"
+                        "NOVAForge: optional settings unavailable on this Blender build: %s"
                         % ", ".join(dropped))
-        self.report({"INFO"}, "NOVAForge: exported %s" % self.filepath)
+        self.report({"INFO"}, "NOVAForge: exported character %s (%s)" % (output_path, detail))
         return {"FINISHED"}
 
     def invoke(self, context, _event):

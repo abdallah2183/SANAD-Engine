@@ -8,17 +8,69 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace nf::project {
 
 namespace {
+
+// Packaging deletes and replaces subtrees, so path comparisons are a safety
+// boundary rather than a convenience.  Compare path components, not raw
+// strings: on Windows drive letters and directory names are case-insensitive,
+// while separators and unrelated prefixes must not be treated as equal.
+bool path_component_equal(const std::filesystem::path& lhs,
+                          const std::filesystem::path& rhs) {
+#if defined(_WIN32)
+    const auto left = lhs.generic_string();
+    const auto right = rhs.generic_string();
+    if (left.size() != right.size()) return false;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        const auto a = static_cast<unsigned char>(left[i]);
+        const auto b = static_cast<unsigned char>(right[i]);
+        if (std::tolower(a) != std::tolower(b)) return false;
+    }
+    return true;
+#else
+    return lhs == rhs;
+#endif
+}
+
+bool path_is_within(const std::filesystem::path& child,
+                    const std::filesystem::path& parent) {
+    const auto child_normal = child.lexically_normal();
+    const auto parent_normal = parent.lexically_normal();
+    auto child_it = child_normal.begin();
+    for (auto parent_it = parent_normal.begin(); parent_it != parent_normal.end();
+         ++parent_it, ++child_it) {
+        if (child_it == child_normal.end() || !path_component_equal(*child_it, *parent_it)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool paths_overlap(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+    return path_is_within(lhs, rhs) || path_is_within(rhs, lhs);
+}
+
+std::filesystem::path normalized_absolute(const std::filesystem::path& path,
+                                          std::error_code& ec) {
+    if (path.empty()) {
+        ec = std::make_error_code(std::errc::invalid_argument);
+        return {};
+    }
+    const auto absolute = path.is_absolute() ? path : std::filesystem::absolute(path, ec);
+    if (ec) return {};
+    return std::filesystem::weakly_canonical(absolute, ec);
+}
 
 constexpr const char* kRegistryLogical = "content://AssetRegistry.nfreg";
 constexpr const char* kManifestName = "manifest.txt";
@@ -101,6 +153,15 @@ bool stage_shipping_notes(const std::filesystem::path& dir,
         "\n"
         "  Flags: --frames N (run N frames then exit), --headless (no window),\n"
         "  --validation (Vulkan validation layers), --scene <logical>.\n"
+        "\n"
+        "Deterministic input\n"
+        "  --input-log <file>  Record what the game polls each frame, so a run can\n"
+        "                      be replayed exactly. --replay <file> plays such a log\n"
+        "                      back instead of reading the keyboard, which is how a\n"
+        "                      bug is reproduced on a machine that never had it.\n"
+        "                      Add --replay-strict to fail the run if the log served\n"
+        "                      no frames, so a replay that silently did nothing cannot\n"
+        "                      pass.\n"
         "\n"
         "Crashes\n"
         "  If the game crashes, a minidump (.dmp) and a human-readable crash\n"
@@ -344,6 +405,80 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
         return false;
     }
     const auto root = desc->root();
+    const auto out_dir = opts.output_dir.empty() ? (root / "dist") : opts.output_dir;
+
+    // Validate every path that packaging will write before it cooks or removes
+    // anything.  A typo such as `--out .` must fail closed instead of deleting
+    // the project's own Content/, Cache/, or Shaders/ tree.
+    std::error_code path_ec;
+    const auto root_abs = normalized_absolute(root, path_ec);
+    if (path_ec) {
+        out_error = "failed to resolve project root '" + root.string() + "': " + path_ec.message();
+        return false;
+    }
+    const auto out_abs = normalized_absolute(out_dir, path_ec);
+    if (path_ec) {
+        out_error = "failed to resolve output directory '" + out_dir.string() + "': " +
+                    path_ec.message();
+        return false;
+    }
+
+    auto reject_overlap = [&](const std::filesystem::path& protected_path,
+                              std::string_view protected_label) {
+        path_ec.clear();
+        const auto protected_abs = normalized_absolute(protected_path, path_ec);
+        if (path_ec) {
+            out_error = "failed to resolve " + std::string(protected_label) + " '" +
+                        protected_path.string() + "': " + path_ec.message();
+            return true;
+        }
+        if (paths_overlap(out_abs, protected_abs)) {
+            out_error = "output directory '" + out_dir.string() + "' overlaps " +
+                        std::string(protected_label) + " '" + protected_path.string() +
+                        "'; choose a separate output directory";
+            return true;
+        }
+        return false;
+    };
+
+    // An output directory may be a child of the project (the default dist/ is
+    // exactly that), but it may not be the project root or an ancestor of it.
+    if (path_is_within(root_abs, out_abs)) {
+        out_error = "output directory '" + out_dir.string() +
+                    "' overlaps project root '" + root.string() +
+                    "'; choose a separate output directory";
+        return false;
+    }
+    for (const auto& mount : desc->mounts()) {
+        // The project:// mount is the root itself; it was checked above. Other
+        // mounts are source trees that must not contain the output directory.
+        path_ec.clear();
+        const auto mount_abs = normalized_absolute(mount.physical, path_ec);
+        if (path_ec) {
+            out_error = "failed to resolve project mount '" + mount.logical + "': " +
+                        path_ec.message();
+            return false;
+        }
+        if (path_component_equal(mount_abs, root_abs)) continue;
+        if (reject_overlap(mount_abs, "project mount '" + mount.logical + "'")) return false;
+    }
+    if (!opts.shader_dir.empty() && reject_overlap(opts.shader_dir, "shader source")) {
+        return false;
+    }
+    if (!opts.player_exe.empty()) {
+        path_ec.clear();
+        const auto player_abs = normalized_absolute(opts.player_exe, path_ec);
+        if (path_ec) {
+            out_error = "failed to resolve player executable '" + opts.player_exe.string() +
+                        "': " + path_ec.message();
+            return false;
+        }
+        if (reject_overlap(player_abs.parent_path(), "player executable directory")) {
+            return false;
+        }
+    }
+
+    std::error_code ec;
 
     // --- cook ---------------------------------------------------------------
     assets::VirtualFileSystem vfs;
@@ -383,7 +518,6 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
     // outside the engine tree.
     const auto project_shaders = root / "Shaders" / "Basic3D";
     if (!opts.shader_dir.empty()) {
-        std::error_code ec;
         if (std::filesystem::exists(opts.shader_dir, ec)) {
             if (!detail::copy_tree(opts.shader_dir, project_shaders, out_error)) {
                 return false;
@@ -400,8 +534,6 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
     }
 
     // --- assemble the package ----------------------------------------------
-    const auto out_dir = opts.output_dir.empty() ? (root / "dist") : opts.output_dir;
-    std::error_code ec;
     std::filesystem::create_directories(out_dir, ec);
     if (ec) {
         out_error = "failed to create '" + out_dir.string() + "': " + ec.message();

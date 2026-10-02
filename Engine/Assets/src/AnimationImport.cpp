@@ -72,6 +72,134 @@ struct BoneCurve {
 
 } // namespace
 
+CharacterImportValidation validate_character_import(const GltfImportResult& result) {
+    CharacterImportValidation validation;
+    if (!result.ok) {
+        validation.error = result.error.empty() ? "import failed" : result.error;
+        return validation;
+    }
+    if (result.meshes.empty()) {
+        validation.error = "character requires at least one triangle mesh";
+        return validation;
+    }
+    if (result.primitives_skipped != 0) {
+        validation.error = "character contains unusable/non-triangle primitives (" +
+                           std::to_string(result.primitives_skipped) + " skipped)";
+        return validation;
+    }
+    if (result.anim_channels_skipped != 0) {
+        validation.error = "character contains unsupported animation channels (" +
+                           std::to_string(result.anim_channels_skipped) + " skipped)";
+        return validation;
+    }
+    if (result.skin_bindings_rejected != 0) {
+        validation.error = "character has rejected skin bindings (" +
+                           std::to_string(result.skin_bindings_rejected) + ")";
+        return validation;
+    }
+    if (result.materials.empty()) {
+        validation.error = "character requires material data";
+        return validation;
+    }
+    for (const GltfMaterialInfo& material : result.materials) {
+        for (int c = 0; c < 4; ++c) {
+            if (!std::isfinite(material.base_color[c])) {
+                validation.error = "character material '" + material.name +
+                                   "' has a non-finite base color";
+                return validation;
+            }
+        }
+        if (!std::isfinite(material.metallic) || !std::isfinite(material.roughness)) {
+            validation.error = "character material '" + material.name +
+                               "' has non-finite metallic/roughness";
+            return validation;
+        }
+    }
+
+    int selected_skin = -1;
+    for (usize mi = 0; mi < result.mesh_skins.size(); ++mi) {
+        const GltfMeshSkin& mesh_skin = result.mesh_skins[mi];
+        if (mesh_skin.skin_index < 0) continue;
+        if (mi >= result.meshes.size()) {
+            validation.error = "mesh skin has no matching mesh";
+            return validation;
+        }
+        const int skin_index = mesh_skin.skin_index;
+        if (skin_index < 0 || static_cast<usize>(skin_index) >= result.skins.size()) {
+            validation.error = "mesh references an out-of-range skin index";
+            return validation;
+        }
+        if (selected_skin >= 0 && selected_skin != skin_index) {
+            validation.error = "character meshes bind more than one skin";
+            return validation;
+        }
+        selected_skin = skin_index;
+
+        const GltfSkinInfo& skin = result.skins[static_cast<usize>(skin_index)];
+        const usize vertex_count = result.meshes[mi]->vertices.size();
+        if (skin.joint_nodes.empty() || mesh_skin.vertex_count != vertex_count ||
+            mesh_skin.joints.size() != vertex_count * 4 ||
+            mesh_skin.weights.size() != vertex_count * 4) {
+            validation.error = "character skin binding is incomplete for mesh " +
+                               std::to_string(mi);
+            return validation;
+        }
+        for (usize v = 0; v < vertex_count; ++v) {
+            float sum = 0.0f;
+            for (usize influence = 0; influence < 4; ++influence) {
+                const usize offset = v * 4 + influence;
+                const float weight = mesh_skin.weights[offset];
+                const u16 joint = mesh_skin.joints[offset];
+                if (!std::isfinite(weight) || weight < 0.0f || joint >= skin.joint_nodes.size()) {
+                    validation.error = "character skin binding has an invalid joint or weight";
+                    return validation;
+                }
+                sum += weight;
+            }
+            if (!std::isfinite(sum) || std::fabs(sum - 1.0f) > 1e-4f) {
+                validation.error = "character skin weights are not normalized";
+                return validation;
+            }
+        }
+    }
+    if (selected_skin < 0) {
+        validation.error = "character requires a valid bound skin";
+        return validation;
+    }
+
+    nf::animation::Skeleton skeleton;
+    std::string conversion_error;
+    if (!make_skeleton(result, static_cast<usize>(selected_skin), skeleton, conversion_error)) {
+        validation.error = conversion_error;
+        return validation;
+    }
+    const std::vector<int> node_to_bone =
+        joint_node_to_bone(result, static_cast<usize>(selected_skin));
+    for (const GltfAnimationInfo& animation : result.animations) {
+        if (animation.channels.empty()) {
+            validation.error = "character animation '" + animation.name +
+                               "' has no imported channels";
+            return validation;
+        }
+        nf::animation::AnimationClip clip;
+        if (!make_clip(result, animation, skeleton, node_to_bone, clip, conversion_error)) {
+            validation.error = "character animation '" + animation.name +
+                               "' cannot target the bound skin: " + conversion_error;
+            return validation;
+        }
+        ++validation.nonempty_clips;
+    }
+    if (validation.nonempty_clips < 2) {
+        validation.error = "character requires at least two nonempty animation clips (found " +
+                           std::to_string(validation.nonempty_clips) + ")";
+        return validation;
+    }
+
+    validation.skin_index = selected_skin;
+    validation.ok = true;
+    return validation;
+}
+
 std::vector<int> joint_node_to_bone(const GltfImportResult& result, usize skin_index) {
     std::vector<int> map;
     if (skin_index >= result.skins.size()) return map;

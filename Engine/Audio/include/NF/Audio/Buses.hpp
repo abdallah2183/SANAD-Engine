@@ -50,7 +50,8 @@ struct AudioVolumeSettings {
     f32 volumes[kBusCount] = {1.0f, 0.8f, 1.0f, 0.7f, 1.0f};
 
     f32 volume(BusId id) const;
-    /// Clamp to [0, 1] and store. Returns true when the stored value changed.
+    /// Clamp a finite value to [0, 1] and store. Returns true when the stored
+    /// value changed. NaN and infinities are rejected without modification.
     bool set_volume(BusId id, f32 value);
     /// Reset every bus to its shipped default.
     void reset_to_defaults();
@@ -58,6 +59,9 @@ struct AudioVolumeSettings {
     /// Append `audio.volume.<bus>=<value>` lines (one per bus) to `out`.
     void append_settings_text(std::string& out) const;
     /// Try to consume one `key=value` pair; true = it was ours and is applied.
+    /// The value must be one complete finite decimal number: empty, embedded
+    /// NUL, leading/trailing characters (including whitespace), and non-finite
+    /// values are rejected without changing the stored setting.
     bool apply_setting(std::string_view key, std::string_view value);
 };
 

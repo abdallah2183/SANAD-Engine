@@ -14,6 +14,7 @@
 #include <NF/Project/ProjectCooker.hpp>
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
+#include <NF/Project/WindowsProcess.hpp>
 
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
@@ -29,6 +30,9 @@
 #ifndef NF_TEMPLATE_DIR
     #define NF_TEMPLATE_DIR ""
 #endif
+#ifndef NF_TEMPLATES_ROOT
+    #define NF_TEMPLATES_ROOT ""
+#endif
 #ifndef NF_BASIC3D_SHADER_DIR
     #define NF_BASIC3D_SHADER_DIR ""
 #endif
@@ -43,7 +47,9 @@ constexpr const char* kVersion = "nf 0.1 (NOVAForge Phase 7)";
 void print_help() {
     std::cout << "nf — NOVAForge project tool\n"
               << "Usage:\n"
-              << "  nf new <dir> [--name <Name>]     create a project\n"
+              << "  nf new <dir> [--name <Name>] [--template <name>]\n"
+              << "                                   create a project (Default template when omitted)\n"
+              << "                                   templates: " << project_template_name_list() << "\n"
               << "  nf cook  [--project <file>]      cook every asset\n"
               << "  nf build [--project <file>] [--out <dir>] [--shipping]\n"
               << "                                   cook and package into dist/\n"
@@ -52,6 +58,7 @@ void print_help() {
               << "                                   version stamp, redist/uninstall\n"
               << "                                   notes, and a distributable zip\n"
               << "  nf run   [--project <file>] [--frames N] [--headless] [--validation]\n"
+              << "                                   [--replay <log>] [--input-log <out>] [--replay-strict]\n"
               << "                                   build, then launch the player\n"
               << "  nf verify [--project <file>]     check every cooked asset is present\n"
               << "  nf --help | --version\n"
@@ -63,6 +70,11 @@ void print_help() {
 // The directory the running executable lives in. The player is built beside
 // `nf`, so packaging can find it without a path argument.
 std::filesystem::path executable_dir(const char* argv0) {
+    // A PATH launch supplies only argv[0] (for example, "nf"), so prefer the
+    // actual Windows module path and keep argv[0] as a portable fallback.
+    const auto module_dir = project::executable_directory();
+    if (!module_dir.empty()) return module_dir;
+
     std::error_code ec;
     auto p = std::filesystem::absolute(argv0, ec);
     if (ec || p.empty()) return std::filesystem::current_path();
@@ -124,7 +136,10 @@ bool open_project(const std::filesystem::path& project_file,
     return true;
 }
 
-int cmd_new(const std::string& dir, const std::string& name_in) {
+int cmd_new(const std::string& dir,
+            const std::string& name_in,
+            bool template_requested,
+            const std::string& template_name) {
     const std::filesystem::path root = dir.empty() ? std::filesystem::current_path()
                                                    : std::filesystem::path(dir);
     std::string name = name_in;
@@ -137,11 +152,28 @@ int cmd_new(const std::string& dir, const std::string& name_in) {
     ScaffoldOptions opts;
     opts.root = root;
     opts.name = name;
-    // An empty NF_TEMPLATE_DIR means the engine was configured without the
-    // templates directory; a bare project is still valid, just empty.
-    opts.template_dir = std::string(NF_TEMPLATE_DIR);
+
+    if (template_requested && template_name.empty()) {
+        std::cerr << "nf new: template name cannot be empty; valid templates: "
+                  << project_template_name_list() << "\n";
+        return 1;
+    }
 
     std::string err;
+    if (template_requested) {
+        opts.template_dir = resolve_project_template(
+            template_name, std::filesystem::path(NF_TEMPLATES_ROOT),
+            std::filesystem::path(NF_TEMPLATE_DIR), err);
+        if (opts.template_dir.empty()) {
+            std::cerr << "nf new: " << err << "\n";
+            return 1;
+        }
+    } else {
+        // Preserve the original no-flag path exactly. An empty configured
+        // template directory still creates a valid bare project.
+        opts.template_dir = std::string(NF_TEMPLATE_DIR);
+    }
+
     if (!scaffold_project(opts, err)) {
         std::cerr << "nf new: " << err << "\n";
         return 1;
@@ -149,7 +181,9 @@ int cmd_new(const std::string& dir, const std::string& name_in) {
     std::cout << "Created project '" << name << "' at " << root.string() << "\n";
     std::cout << "  " << name << assets::ProjectDescriptor::kExtension << "\n";
     if (!opts.template_dir.empty()) {
-        std::cout << "  Content/  (from template)\n";
+        const std::string label = template_requested ? template_name : "Default";
+        std::cout << "  Template: " << label << "\n";
+        std::cout << "  Content/  (copied from the selected template)\n";
     }
     std::cout << "\nNext: nf build --project " << (root / (name + ".nfproj")).string() << "\n";
     return 0;
@@ -265,7 +299,6 @@ int cmd_run(const std::filesystem::path& project_file,
         return rc;
     }
 
-    BuildReport report;
     std::string err;
     const auto opts = make_build_options(project_file, out_dir, argv0);
     // Re-derive the output path without rebuilding: cheap and avoids duplicating
@@ -285,14 +318,29 @@ int cmd_run(const std::filesystem::path& project_file,
         return 1;
     }
 
-    std::string cmd = "\"" + player.string() + "\" --project \"" + packaged.string() + "\"";
-    for (const auto& a : passthrough) {
-        cmd += " \"";
-        cmd += a;
-        cmd += "\"";
+    std::vector<std::string> player_arguments;
+    player_arguments.reserve(2 + passthrough.size());
+    player_arguments.emplace_back("--project");
+    player_arguments.push_back(packaged.string());
+    player_arguments.insert(player_arguments.end(), passthrough.begin(), passthrough.end());
+
+    std::cout << "Launching: " << player.string();
+    for (const std::string& argument : player_arguments) {
+        std::cout << " \"" << argument << "\"";
     }
-    std::cout << "Launching: " << cmd << "\n";
-    return std::system(cmd.c_str());
+    std::cout << "\n";
+    // The child writes to the inherited console directly. Flush first so its
+    // runtime log cannot appear ahead of nf's build/launch report when output
+    // is redirected to a file or pipe.
+    std::cout.flush();
+
+    std::string launch_error;
+    const int exit_code =
+        run_windows_process_and_wait(player, resolved_out, player_arguments, launch_error);
+    if (!launch_error.empty()) {
+        std::cerr << "nf run: " << launch_error << "\n";
+    }
+    return exit_code;
 }
 
 } // namespace
@@ -316,7 +364,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::string project_arg, out_dir, name;
+    std::string project_arg, out_dir, name, template_name;
+    bool template_requested = false;
     bool shipping = false;
     std::vector<std::string> passthrough;
     std::string positional;
@@ -330,14 +379,46 @@ int main(int argc, char** argv) {
         else if (arg.rfind("--out=", 0) == 0) out_dir = arg.substr(6);
         else if (arg == "--name") name = next();
         else if (arg.rfind("--name=", 0) == 0) name = arg.substr(7);
-        else if (arg == "--shipping") shipping = true;
-        else if (arg == "--frames" || arg == "--headless" || arg == "--validation") {
-            // Forwarded verbatim to the player.
-            passthrough.push_back(arg);
-            if (arg == "--frames") {
-                const auto v = next();
-                if (!v.empty()) passthrough.push_back(v);
+        else if (arg == "--template") {
+            template_requested = true;
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                std::cerr << "nf: --template requires a name; valid templates: "
+                          << project_template_name_list() << "\n";
+                return 1;
             }
+            template_name = argv[++i];
+        } else if (arg.rfind("--template=", 0) == 0) {
+            template_requested = true;
+            template_name = arg.substr(11);
+        } else if (arg == "--shipping") shipping = true;
+        else if (arg == "--frames") {
+            // Takes a value. It must be consumed here, not left to fall through:
+            // an unconsumed number lands on the positional branch and is read as
+            // the project name.
+            passthrough.push_back(arg);
+            const auto v = next();
+            if (v.empty()) {
+                std::cerr << "nf: --frames requires a count\n";
+                return 1;
+            }
+            passthrough.push_back(v);
+        } else if (arg == "--headless" || arg == "--validation" ||
+                   arg == "--replay-strict") {
+            // Forwarded verbatim to the player: no value follows these.
+            passthrough.push_back(arg);
+        } else if (arg == "--replay" || arg == "--input-log") {
+            // Same as --frames: the path is consumed here. Without the `next()` it
+            // would fall through to the positional branch and `nf run --replay
+            // a.nfinput` would treat the log path as the project name.
+            passthrough.push_back(arg);
+            const auto v = next();
+            if (v.empty()) {
+                std::cerr << "nf: " << arg << " requires a file path\n";
+                return 1;
+            }
+            passthrough.push_back(v);
+        } else if (arg.rfind("--replay=", 0) == 0 || arg.rfind("--input-log=", 0) == 0) {
+            passthrough.push_back(arg);
         } else if (!arg.empty() && arg[0] != '-') {
             positional = arg;
         } else {
@@ -347,7 +428,11 @@ int main(int argc, char** argv) {
     }
 
     if (command == "new") {
-        return cmd_new(positional, name);
+        return cmd_new(positional, name, template_requested, template_name);
+    }
+    if (template_requested) {
+        std::cerr << "nf " << command << ": --template is only valid for 'nf new'\n";
+        return 1;
     }
 
     std::string proj_err;

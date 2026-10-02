@@ -11,6 +11,7 @@ set(NFASSETS_SOURCES
     src/MeshAsset.cpp
     src/ProjectDescriptor.cpp
     src/GltfImport.cpp
+    src/MeshImport.cpp
     src/AnimationImport.cpp
     src/MeshExport.cpp
     src/CgltfImpl.cpp

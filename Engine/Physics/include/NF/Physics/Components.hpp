@@ -1,6 +1,8 @@
 #pragma once
 
 #include <NF/ECS/ECS.hpp>
+#include <NF/Physics/CharacterController.hpp>
+#include <NF/Physics/Cloth.hpp>
 #include <NF/Physics/JoltVehicle.hpp>
 #include <NF/Physics/PhysicsWorld.hpp>
 
@@ -69,6 +71,37 @@ struct ConstraintCloneComponent {
     JoltConstraint template_constraint;
     /// Filled in at spawn. Invalid until the runtime clones the joint.
     JoltConstraint cloned;
+};
+
+/// Marks an entity as a cloth sheet (Phase 25 wiring for the first-party PBD
+/// solver). The component holds CONFIGURATION (grid, material knobs); the
+/// live Cloth object is owned by the Runtime (one per enabled component),
+/// because Cloth is non-copyable and its lifetime is tied to the scene, not
+/// to any single view of it.
+///
+/// The sheet's world placement comes from the entity's Transform at build
+/// time (origin), so the scene persists the material spec, never positions.
+struct ClothComponent {
+    ClothConfig config;
+    bool enabled = true;
+};
+
+/// Marks an entity as a player-style character (Phase 25 wiring for the
+/// dynamic-body mover of design doc Section 39). Pairs with a
+/// scene::Transform (spawn pose). The component holds CONFIGURATION plus the
+/// per-frame INPUT (wish_dir/jump, written by gameplay, AI or a network
+/// packet); the live CharacterController is owned by the Runtime, created
+/// when the physics world rebuilds.
+///
+/// `grounded` is runtime state written back by step_physics (like
+/// RigidBodyComponent velocities): persisted never, read by gameplay to gate
+/// jumps and by the editor to show it.
+struct CharacterComponent {
+    CharacterConfig config;
+    Vec3 wish_dir{0.0f, 0.0f, 0.0f};
+    bool jump = false;
+    bool enabled = true;
+    bool grounded = false;
 };
 
 } // namespace nf::physics

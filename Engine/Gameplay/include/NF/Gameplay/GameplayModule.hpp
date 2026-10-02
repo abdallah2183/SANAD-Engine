@@ -21,7 +21,7 @@ namespace nf {
 namespace ecs     { class World; }
 namespace scene   { class Scene; }
 namespace physics { class PhysicsWorld; }
-namespace audio   { struct AudioBus; }
+namespace audio   { class AudioScene; }
 
 namespace gameplay {
 
@@ -51,7 +51,11 @@ struct GameplayContext {
     ecs::World*            world         = nullptr;
     scene::Scene*          scene         = nullptr;
     physics::PhysicsWorld* physics       = nullptr;
-    audio::AudioBus*       audio         = nullptr;
+    /// The live mixer. A module plays a sound by adding an `audio::Emitter` and
+    /// calling `mix_emitter` — the same path the runtime uses for scene
+    /// sources, so a module sound is routed, volumed and occluded identically
+    /// rather than bypassing the bus tree.
+    audio::AudioScene*      audio         = nullptr;
     IInputSource*          input         = nullptr;
     f32                    dt            = 0.0f;
     u64                    frame         = 0;

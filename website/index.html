@@ -786,8 +786,8 @@
 
             <div class="feature-card">
                 <span class="feature-tag">Pipeline</span>
-                <h3 data-i18n="feat_asset_title">استيراد glTF حقيقي</h3>
-                <p data-i18n="feat_asset_desc">مستورد glTF 2.0 (gltf/glb) إلى صيغة المحرك nfmesh. مع أداة NFModelImporter، وفك صور stb، ومعالج أعطال minidump.</p>
+                <h3 data-i18n="feat_asset_title">استيراد كل صيغ النماذج</h3>
+                <p data-i18n="feat_asset_desc">قارئ واحد يقرأ الصيغ الست التي يكتبها المحرك (gltf/glb/obj/stl/ply/nfmesh) ويجلب معها الموادّ والخامات: خامات glTF المضمّنة وملفات MTL تُكتب كأصول جاهزة في content://.</p>
             </div>
 
             <div class="feature-card">
@@ -861,7 +861,7 @@
                 <h4>Phase 14–15: الصوت وglTF والسكربت والتعريب</h4>
                 <ul>
                     <li>فك WAV وOGG وMP3 وFLAC وربط المشاهد</li>
-                    <li>مستورد glTF إلى nfmesh + سكربت Lua معزول</li>
+                    <li>قارئ نماذج موحّد للصيغ الست + الموادّ والخامات + سكربت Lua معزول</li>
                     <li>واجهة محرر عربية RTL بخط أميري</li>
                 </ul>
             </div>
@@ -1113,8 +1113,8 @@
                 feat_net_desc: "نقل UDP غير حاجب، قناة موثوقة (تسلسل/إقرار/إعادة إرسال)، لقطات حالة مُصدَرة، سيرفر Authoritative مع تنبؤ، ونسخ المركبات والقيود على الشبكة.",
                 feat_world_title: "عالم حي: شمس وتضاريس",
                 feat_world_desc: "دورة ليل ونهار تقود الشمس والسماء، وتضاريس heightfield إجرائية بضجيج حتمي، ومولد LOD شبكي.",
-                feat_asset_title: "استيراد glTF حقيقي",
-                feat_asset_desc: "مستورد glTF 2.0 (gltf/glb) إلى صيغة المحرك nfmesh. مع أداة NFModelImporter، وفك صور stb، ومعالج أعطال minidump.",
+                feat_asset_title: "استيراد كل صيغ النماذج",
+                feat_asset_desc: "قارئ واحد يقرأ الصيغ الست التي يكتبها المحرك (gltf/glb/obj/stl/ply/nfmesh) ويجلب معها الموادّ والخامات: خامات glTF المضمّنة وملفات MTL تُكتب كأصول جاهزة في content://.",
                 nav_community: "المساهمة",
                 nav_roadmap: "خارطة الطريق",
                 nav_quickstart: "البدء السريع",
@@ -1185,8 +1185,8 @@
                 feat_net_desc: "Non-blocking UDP transport, reliable channel (sequence/ack/resend), versioned state snapshots, authoritative server with prediction, and vehicle/constraint replication (drive inputs, chassis snapshots, joint events).",
                 feat_world_title: "Living World: Sun & Terrain",
                 feat_world_desc: "Day/night cycle driving sun and sky, procedural heightfield terrain on deterministic noise, and a grid LOD generator.",
-                feat_asset_title: "Real glTF Import",
-                feat_asset_desc: "glTF 2.0 (gltf/glb) importer into the .nfmesh engine format, NFModelImporter CLI, stb image decoding, and minidump crash handling.",
+                feat_asset_title: "Import Every Mesh Format",
+                feat_asset_desc: "One reader for all six formats the engine writes (gltf/glb/obj/stl/ply/nfmesh), and it brings the materials and textures with it — glTF embedded images and OBJ .mtl files land as ready assets in content://.",
                 nav_community: "Contribute",
                 nav_roadmap: "Roadmap",
                 nav_quickstart: "Quickstart",

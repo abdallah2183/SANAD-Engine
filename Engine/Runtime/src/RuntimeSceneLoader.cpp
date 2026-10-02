@@ -11,6 +11,9 @@
 #include <NF/Audio/Components.hpp>
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayState.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Vfx/Components.hpp>
+#include <cmath>
 #include <NF/Core/Logger.hpp>
 #include <fstream>
 #include <iomanip>
@@ -52,6 +55,177 @@ static bool field_float(const std::string& line, const char* key, f32& out) {
     } catch (...) {
         return false;
     }
+}
+
+// Parses `key(x,y,z)` into the outs. Returns false (leaving the outs
+// untouched) when the key is absent or malformed, so callers keep their
+// defaults instead of silently reading a zero — same contract as field_float.
+static bool field_vec3(const std::string& line, const char* key, f32& x, f32& y, f32& z) {
+    const size_t p = line.find(key);
+    if (p == std::string::npos) {
+        return false;
+    }
+    f32 vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    const std::string fmt = std::string(key) + "(%f,%f,%f)";
+    if (sscanf(line.c_str() + p, fmt.c_str(), &vx, &vy, &vz) != 3) {
+        return false;
+    }
+    x = vx;
+    y = vy;
+    z = vz;
+    return true;
+}
+
+static bool finite3(f32 x, f32 y, f32 z) {
+    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+}
+
+// --- Local light lines (Phase 26) --------------------------------------------
+//
+// The `type=Point` and `type=Spot` branches of a Light line follow the contract
+// the rest of the format already keeps: every key optional, an absent key keeps
+// the component's default, and a key that is present but impossible rejects the
+// whole line with a warning instead of writing half-trusted numbers into a light
+// the author will judge by looking at the screen.
+//
+// The bounds are not a taste. They are what the renderer, its shadow projector
+// and the GPU light block can represent — so a line that passes them cannot ask
+// for something the frame quietly ignores and the author spends an afternoon
+// chasing. `out_bad` names the key that failed so the warning can say which
+// number, not just which line.
+
+/// `color(r,g,b)` on a light line. Non-negative finite channels only: the
+/// lighting pass multiplies these by intensity, so a negative channel would
+/// subtract light from the scene, which no value on the line asks for.
+/// 100 is well past any usable lamp colour and short of an inf written by hand.
+static bool light_color(const std::string& line, f32& r, f32& g, f32& b, std::string& out_bad) {
+    f32 cr = r, cg = g, cb = b;
+    if (!field_vec3(line, "color", cr, cg, cb)) {
+        return true; // absent: the defaults stand
+    }
+    if (!finite3(cr, cg, cb) || cr < 0.0f || cr > 100.0f || cg < 0.0f || cg > 100.0f ||
+        cb < 0.0f || cb > 100.0f) {
+        out_bad = "color";
+        return false;
+    }
+    r = cr;
+    g = cg;
+    b = cb;
+    return true;
+}
+
+/// One optional float key constrained to `[lo, hi]`, defaulting to whatever `out`
+/// already holds.
+///
+/// Named for what it does rather than for its first caller: it began life
+/// serving the point/spot light lines, and the post-process line needs exactly
+/// the same contract (absent key keeps the default, a present-but-invalid one
+/// names itself so the warning can say which).
+static bool optional_float_in_range(const std::string& line, const char* key, f32 lo, f32 hi, f32& out,
+                        std::string& out_bad) {
+    f32 v = out;
+    if (!field_float(line, key, v)) {
+        return true; // absent, or not a number: not this function's call to make
+    }
+    if (!std::isfinite(v) || v < lo || v > hi) {
+        out_bad = key;
+        return false;
+    }
+    out = v;
+    return true;
+}
+
+/// The `PostProcess:` line (design §206). Every key is optional and an absent
+/// one keeps the component default, so a scene can carry just `bloom=true` and
+/// inherit everything else.
+///
+/// Ranges are deliberately loose where the renderer tolerates the extreme:
+/// a bloom threshold of 0 is "everything blooms" and a knee of 0 is a hard cut,
+/// both legitimate authoring choices. They are bounded where a value would be
+/// nonsense — a negative threshold, a negative intensity, a zero or negative
+/// radius (which would collapse every tap onto one texel), a negative contrast
+/// or gamma (which would invert the image).
+static bool parse_post_process(const std::string& line, PostProcessComponent& out,
+                               std::string& out_bad) {
+    out.bloom_enabled = line.find("bloom=true") != std::string::npos;
+    if (!optional_float_in_range(line, "bloom_threshold=", 0.0f, 1000.0f, out.bloom_threshold, out_bad)) return false;
+    if (!optional_float_in_range(line, "bloom_knee=", 0.0f, 1000.0f, out.bloom_knee, out_bad)) return false;
+    if (!optional_float_in_range(line, "bloom_intensity=", 0.0f, 100.0f, out.bloom_intensity, out_bad)) return false;
+    // A radius at or below zero collapses all thirteen taps onto the centre
+    // texel, i.e. a blur that blurs nothing.
+    if (!optional_float_in_range(line, "bloom_radius=", 0.01f, 16.0f, out.bloom_radius, out_bad)) return false;
+
+    out.grade_enabled = line.find("grade=true") != std::string::npos;
+    if (!optional_float_in_range(line, "grade_contrast=", 0.0f, 16.0f, out.grade_contrast, out_bad)) return false;
+    if (!optional_float_in_range(line, "grade_pivot=", 0.0f, 1000.0f, out.grade_pivot, out_bad)) return false;
+    if (!optional_float_in_range(line, "grade_temperature=", -1.0f, 1.0f, out.grade_temperature, out_bad)) return false;
+    if (!optional_float_in_range(line, "grade_tint=", -1.0f, 1.0f, out.grade_tint, out_bad)) return false;
+    if (!optional_float_in_range(line, "grade_gamma=", 0.05f, 8.0f, out.grade_gamma, out_bad)) return false;
+
+    out.sharpen_enabled = line.find("sharpen=true") != std::string::npos;
+    if (!optional_float_in_range(line, "sharpen_amount=", 0.0f, 8.0f, out.sharpen_amount, out_bad)) return false;
+    if (!optional_float_in_range(line, "sharpen_radius=", 0.01f, 16.0f, out.sharpen_radius, out_bad)) return false;
+
+    if (!optional_float_in_range(line, "saturation=", 0.0f, 8.0f, out.saturation, out_bad)) return false;
+    if (!optional_float_in_range(line, "vignette=", 0.0f, 1.0f, out.vignette, out_bad)) return false;
+    return true;
+}
+
+static bool parse_point_light(const std::string& line, PointLightComponent& out,
+                              std::string& out_bad) {
+    if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
+    if (!optional_float_in_range(line, "intensity=", 0.0f, 1000.0f, out.intensity, out_bad)) return false;
+    // A radius of zero is a light that illuminates nothing at any brightness;
+    // refusing it turns "why is my torch invisible" into a line in the log.
+    if (!optional_float_in_range(line, "radius=", 0.01f, 10000.0f, out.radius, out_bad)) return false;
+    if (!optional_float_in_range(line, "shadow_strength=", 0.0f, 1.0f, out.shadow_strength, out_bad)) return false;
+    if (!optional_float_in_range(line, "shadow_bias=", 0.0f, 0.01f, out.shadow_bias, out_bad)) return false;
+    if (!optional_float_in_range(line, "shadow_distance=", 0.0f, 10000.0f, out.shadow_distance, out_bad)) return false;
+    out.cast_shadows = line.find("shadows=true") != std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+static bool parse_spot_light(const std::string& line, SpotLightComponent& out,
+                             std::string& out_bad) {
+    f32 dx = out.dir_x, dy = out.dir_y, dz = out.dir_z;
+    if (field_vec3(line, "dir", dx, dy, dz)) {
+        if (!finite3(dx, dy, dz)) {
+            out_bad = "dir";
+            return false;
+        }
+        // Stored normalised. The shader and the shadow projector both treat
+        // `direction` as a unit vector, so an unnormalised one on the line would
+        // not tilt the beam, only scale the dot products the cone test reads —
+        // a lamp whose cone is the wrong width for no visible reason.
+        const f32 len = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-6f) {
+            out_bad = "dir"; // a zero vector has no direction to keep
+            return false;
+        }
+        out.dir_x = dx / len;
+        out.dir_y = dy / len;
+        out.dir_z = dz / len;
+    }
+    if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
+    if (!optional_float_in_range(line, "intensity=", 0.0f, 1000.0f, out.intensity, out_bad)) return false;
+    if (!optional_float_in_range(line, "range=", 0.01f, 10000.0f, out.range, out_bad)) return false;
+    // Half a turn is the widest cone one perspective projector can fit; beyond
+    // it the shadow map's faces stop covering the light's own reach.
+    if (!optional_float_in_range(line, "inner_rad=", 0.0f, 1.5707963f, out.inner_angle_rad, out_bad)) return false;
+    if (!optional_float_in_range(line, "outer_rad=", 0.0f, 1.5707963f, out.outer_angle_rad, out_bad)) return false;
+    if (out.inner_angle_rad > out.outer_angle_rad) {
+        // The falloff window would run backwards: the shader's smoothstep between
+        // the two angles is a division by (outer - inner).
+        out_bad = "inner_rad/outer_rad";
+        return false;
+    }
+    if (!optional_float_in_range(line, "shadow_strength=", 0.0f, 1.0f, out.shadow_strength, out_bad)) return false;
+    if (!optional_float_in_range(line, "shadow_bias=", 0.0f, 0.01f, out.shadow_bias, out_bad)) return false;
+    if (!optional_float_in_range(line, "shadow_distance=", 0.0f, 10000.0f, out.shadow_distance, out_bad)) return false;
+    out.cast_shadows = line.find("shadows=true") != std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
 }
 
 // Axis back to the single-letter form the loader reads. Only the three
@@ -193,31 +367,70 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     }
                 }
             } else if (line.rfind("  Light:",0)==0) {
-                DirectionalLight light;
-                size_t dir_pos = line.find("dir(");
-                if (dir_pos != std::string::npos) sscanf(line.c_str()+dir_pos, "dir(%f,%f,%f)", &light.dir_x, &light.dir_y, &light.dir_z);
-                size_t col_pos = line.find("color(");
-                if (col_pos != std::string::npos) sscanf(line.c_str()+col_pos, "color(%f,%f,%f)", &light.color_r, &light.color_g, &light.color_b);
-                size_t int_pos = line.find("intensity=");
-                if (int_pos != std::string::npos) sscanf(line.c_str()+int_pos, "intensity=%f", &light.intensity);
-                // Absent key keeps the default (true): old scene files load lit as before.
-                if (line.find("shadows=false") != std::string::npos) light.cast_shadows = false;
-                size_t ss_pos = line.find("shadow_strength=");
-                if (ss_pos != std::string::npos) sscanf(line.c_str()+ss_pos, "shadow_strength=%f", &light.shadow_strength);
-                size_t sb_pos = line.find("shadow_bias=");
-                if (sb_pos != std::string::npos) sscanf(line.c_str()+sb_pos, "shadow_bias=%f", &light.shadow_bias);
-                size_t sc_pos = line.find("shadow_cascades=");
-                if (sc_pos != std::string::npos) {
-                    // Scanned into an unsigned rather than a u32 directly: %u's
-                    // argument type is fixed by the C standard, and u32 is only
-                    // incidentally unsigned on this platform.
-                    unsigned cascades = light.shadow_cascades;
-                    sscanf(line.c_str()+sc_pos, "shadow_cascades=%u", &cascades);
-                    light.shadow_cascades = cascades;
+                // `type=` decides which light the numbers describe. Three shapes
+                // share one line prefix because the format's readers are humans,
+                // and a human writing a lighting block wants the sun, the torch
+                // and the searchlight in one place — splitting them into
+                // `PointLight:`/`SpotLight:` lines would add two keywords for no
+                // gain and lose the chance to reject a Light line that asks to be
+                // two things at once.
+                //
+                // The Directional branch below is deliberately untouched, key for
+                // key: scenes written three phases ago must come back with the
+                // numbers they went in with, and a Light line with no `type=` is
+                // the sun, exactly as it was before the word meant anything.
+                // An unrecognised type is refused rather than quietly promoted to
+                // a directional light — a scene whose `type=Area` loads as a
+                // bright outdoor sun is wrong in a way the author will blame on
+                // the renderer.
+                const std::string light_type = field_value(line, "type=");
+                if (light_type == "Point") {
+                    PointLightComponent pl;
+                    std::string bad;
+                    if (parse_point_light(line, pl, bad)) {
+                        scene->world().add<PointLightComponent>(e, pl);
+                    } else {
+                        result.warnings.push_back("Light line with invalid " + bad +
+                                                  " was ignored: " + line);
+                    }
+                } else if (light_type == "Spot") {
+                    SpotLightComponent sl;
+                    std::string bad;
+                    if (parse_spot_light(line, sl, bad)) {
+                        scene->world().add<SpotLightComponent>(e, sl);
+                    } else {
+                        result.warnings.push_back("Light line with invalid " + bad +
+                                                  " was ignored: " + line);
+                    }
+                } else if (!light_type.empty() && light_type != "Directional") {
+                    result.warnings.push_back("Light line with unknown type was ignored: " + line);
+                } else {
+                    DirectionalLight light;
+                    size_t dir_pos = line.find("dir(");
+                    if (dir_pos != std::string::npos) sscanf(line.c_str()+dir_pos, "dir(%f,%f,%f)", &light.dir_x, &light.dir_y, &light.dir_z);
+                    size_t col_pos = line.find("color(");
+                    if (col_pos != std::string::npos) sscanf(line.c_str()+col_pos, "color(%f,%f,%f)", &light.color_r, &light.color_g, &light.color_b);
+                    size_t int_pos = line.find("intensity=");
+                    if (int_pos != std::string::npos) sscanf(line.c_str()+int_pos, "intensity=%f", &light.intensity);
+                    // Absent key keeps the default (true): old scene files load lit as before.
+                    if (line.find("shadows=false") != std::string::npos) light.cast_shadows = false;
+                    size_t ss_pos = line.find("shadow_strength=");
+                    if (ss_pos != std::string::npos) sscanf(line.c_str()+ss_pos, "shadow_strength=%f", &light.shadow_strength);
+                    size_t sb_pos = line.find("shadow_bias=");
+                    if (sb_pos != std::string::npos) sscanf(line.c_str()+sb_pos, "shadow_bias=%f", &light.shadow_bias);
+                    size_t sc_pos = line.find("shadow_cascades=");
+                    if (sc_pos != std::string::npos) {
+                        // Scanned into an unsigned rather than a u32 directly: %u's
+                        // argument type is fixed by the C standard, and u32 is only
+                        // incidentally unsigned on this platform.
+                        unsigned cascades = light.shadow_cascades;
+                        sscanf(line.c_str()+sc_pos, "shadow_cascades=%u", &cascades);
+                        light.shadow_cascades = cascades;
+                    }
+                    size_t sd_pos = line.find("shadow_distance=");
+                    if (sd_pos != std::string::npos) sscanf(line.c_str()+sd_pos, "shadow_distance=%f", &light.shadow_distance);
+                    scene->world().add<DirectionalLight>(e, light);
                 }
-                size_t sd_pos = line.find("shadow_distance=");
-                if (sd_pos != std::string::npos) sscanf(line.c_str()+sd_pos, "shadow_distance=%f", &light.shadow_distance);
-                scene->world().add<DirectionalLight>(e, light);
             } else if (line.rfind("  Sky:",0)==0) {
                 SkyComponent sky;
                 size_t zp = line.find("zenith(");
@@ -235,6 +448,45 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 // Absent key keeps the default (true): old scene files keep the sky.
                 if (line.find("enabled=false") != std::string::npos) sky.enabled = false;
                 scene->world().add<SkyComponent>(e, sky);
+            } else if (line.rfind("  TimeOfDay:",0)==0) {
+                // Day/night clock. Every key is optional and an absent one keeps
+                // the component default, so a scene can carry just `hours=` for a
+                // frozen golden hour and nothing else.
+                TimeOfDayComponent tod;
+                if (field_float(line, "hours=", tod.time_hours) &&
+                    std::isfinite(tod.time_hours)) {
+                    // Wrap rather than reject: 25.0 is a natural way to write 1am,
+                    // and -6.0 is how someone writes "6pm yesterday". Refusing the
+                    // whole scene over either would be the bigger surprise. A
+                    // non-finite value is a different matter — it means the file is
+                    // broken, and silently keeping the default would hide it.
+                    tod.time_hours = std::fmod(tod.time_hours, 24.0f);
+                    if (tod.time_hours < 0.0f) tod.time_hours += 24.0f;
+                } else if (line.find("hours=") != std::string::npos) {
+                    result.warnings.push_back("TimeOfDay line with non-finite hours was ignored: " + line);
+                }
+                // A non-positive or non-finite day length means "frozen", which
+                // TimeOfDay::advance already defines as a no-op. Normalising here
+                // keeps an absurd value (1e30) from becoming a division by itself
+                // somewhere downstream.
+                if (field_float(line, "day_length=", tod.day_length_seconds) &&
+                    std::isfinite(tod.day_length_seconds)) {
+                    if (tod.day_length_seconds < 0.0f) tod.day_length_seconds = 0.0f;
+                } else if (line.find("day_length=") != std::string::npos) {
+                    result.warnings.push_back("TimeOfDay line with non-finite day_length was ignored: " + line);
+                }
+                tod.enabled = line.find("enabled=false") == std::string::npos;
+                tod.drive_light = line.find("drive_light=false") == std::string::npos;
+                scene->world().add<TimeOfDayComponent>(e, tod);
+            } else if (line.rfind("  PostProcess:",0)==0) {
+                PostProcessComponent pp;
+                std::string bad;
+                if (parse_post_process(line, pp, bad)) {
+                    scene->world().add<PostProcessComponent>(e, pp);
+                } else {
+                    result.warnings.push_back("PostProcess line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
             } else if (line.rfind("  Camera:",0)==0) {
                 CameraComponent cam;
                 size_t fov_pos = line.find("fov=");
@@ -416,6 +668,32 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 aud.looping = line.find("looping=true") != std::string::npos;
                 aud.spatial = line.find("spatial=true") != std::string::npos;
                 aud.autoplay = line.find("autoplay=true") != std::string::npos;
+                // Routing: which Settings slider owns this source, and whether
+                // walls muffle it. An unknown bus name is reported rather than
+                // silently defaulting, so a typo cannot route a whole level's
+                // dialogue into the world mix.
+                {
+                    audio::BusId bus_id = aud.bus;
+                    if (audio::bus_id_from_name(field_value(line, "bus="), bus_id)) {
+                        aud.bus = bus_id;
+                    } else if (line.find("bus=") != std::string::npos) {
+                        result.warnings.push_back("Audio line with unknown bus was ignored: " + line);
+                    }
+                }
+                aud.occluded = line.find("occluded=false") == std::string::npos;
+                // Attenuation range: inspector-editable data the writer below
+                // always persists, so a tuned falloff survives a save/load.
+                // Absent or non-positive keys keep the defaults (old files).
+                f32 min_dist = aud.spatial_settings.min_distance;
+                if (field_float(line, "min_distance=", min_dist) && std::isfinite(min_dist) &&
+                    min_dist > 0.0f) {
+                    aud.spatial_settings.min_distance = min_dist;
+                }
+                f32 max_dist = aud.spatial_settings.max_distance;
+                if (field_float(line, "max_distance=", max_dist) && std::isfinite(max_dist) &&
+                    max_dist > 0.0f) {
+                    aud.spatial_settings.max_distance = max_dist;
+                }
                 scene->world().add<audio::AudioComponent>(e, std::move(aud));
             } else if (line.rfind("  Module:",0)==0) {
                 gameplay::GameplayModuleComponent comp;
@@ -435,6 +713,241 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     result.warnings.push_back("Module line without a name was ignored: " + line);
                 } else {
                     scene->world().add<gameplay::GameplayModuleComponent>(e, std::move(comp));
+                }
+            } else if (line.rfind("  Script:",0)==0) {
+                // File-backed Lua only: the frame steps ScriptSystem (Lua), not
+                // the C# host, so any other lang is rejected loudly rather than
+                // stored as an entity that looks scripted but never ticks.
+                // Paths carry no spaces (field_value stops at the first one),
+                // the same constraint Module props documents.
+                const std::string lang = field_value(line, "lang=");
+                const std::string path = field_value(line, "path=");
+                if (!lang.empty() && lang != "lua") {
+                    result.warnings.push_back("Script line with unsupported lang was ignored: " + line);
+                } else if (path.empty()) {
+                    result.warnings.push_back("Script line without a path was ignored: " + line);
+                } else if (path.find(' ') != std::string::npos) {
+                    result.warnings.push_back("Script path with spaces was ignored: " + line);
+                } else {
+                    scripting::ScriptComponent comp;
+                    comp.path = path;
+                    comp.enabled = line.find("enabled=false") == std::string::npos;
+                    scene->world().add<scripting::ScriptComponent>(e, std::move(comp));
+                }
+            } else if (line.rfind("  Particles:",0)==0) {
+                // One emitter per entity; the Runtime builds the live system
+                // on adopt. Every field is optional (defaults stand in), but
+                // a non-finite or out-of-range value rejects the line: the
+                // emitter would otherwise simulate something the artist never
+                // authored.
+                vfx::ParticleComponent comp;
+                bool ok = true;
+                f32 rate = comp.config.rate;
+                if (field_float(line, "rate=", rate)) {
+                    ok = std::isfinite(rate) && rate >= 0.0f && rate <= 100000.0f;
+                    comp.config.rate = rate;
+                }
+                f32 lifetime = comp.config.lifetime;
+                if (ok && field_float(line, "lifetime=", lifetime)) {
+                    ok = std::isfinite(lifetime) && lifetime > 0.0f && lifetime <= 60.0f;
+                    comp.config.lifetime = lifetime;
+                }
+                f32 spread = comp.config.lifetime_spread;
+                if (ok && field_float(line, "lifetime_spread=", spread)) {
+                    ok = std::isfinite(spread) && spread >= 0.0f && spread <= 1.0f;
+                    comp.config.lifetime_spread = spread;
+                }
+                f32 vx = 0.0f, vy = 0.0f, vz = 0.0f;
+                if (ok && field_vec3(line, "velocity", vx, vy, vz)) {
+                    ok = finite3(vx, vy, vz);
+                    comp.config.velocity = Vec3(vx, vy, vz);
+                }
+                if (ok && field_vec3(line, "vel_spread", vx, vy, vz)) {
+                    ok = finite3(vx, vy, vz);
+                    comp.config.velocity_spread = Vec3(vx, vy, vz);
+                }
+                if (ok && field_vec3(line, "gravity", vx, vy, vz)) {
+                    ok = finite3(vx, vy, vz);
+                    comp.config.gravity = Vec3(vx, vy, vz);
+                }
+                f32 drag = comp.config.drag;
+                if (ok && field_float(line, "drag=", drag)) {
+                    ok = std::isfinite(drag) && drag >= 0.0f && drag <= 10.0f;
+                    comp.config.drag = drag;
+                }
+                f32 start_size = comp.config.start_size;
+                if (ok && field_float(line, "start_size=", start_size)) {
+                    ok = std::isfinite(start_size) && start_size >= 0.0f;
+                    comp.config.start_size = start_size;
+                }
+                f32 end_size = comp.config.end_size;
+                if (ok && field_float(line, "end_size=", end_size)) {
+                    ok = std::isfinite(end_size) && end_size >= 0.0f;
+                    comp.config.end_size = end_size;
+                }
+                if (ok && field_vec3(line, "start_color", vx, vy, vz)) {
+                    ok = finite3(vx, vy, vz);
+                    comp.config.start_color = Vec3(vx, vy, vz);
+                }
+                if (ok && field_vec3(line, "end_color", vx, vy, vz)) {
+                    ok = finite3(vx, vy, vz);
+                    comp.config.end_color = Vec3(vx, vy, vz);
+                }
+                {
+                    const std::string maxp = field_value(line, "max_particles=");
+                    if (ok && !maxp.empty()) {
+                        try {
+                            const int parsed = std::stoi(maxp);
+                            ok = parsed >= 1 && parsed <= 1048576;
+                            comp.config.max_particles = static_cast<u32>(parsed);
+                        } catch (...) {
+                            ok = false;
+                        }
+                    }
+                }
+                comp.enabled = line.find("enabled=false") == std::string::npos;
+                if (!ok) {
+                    result.warnings.push_back("Particles line with invalid values was ignored: " + line);
+                } else {
+                    scene->world().add<vfx::ParticleComponent>(e, std::move(comp));
+                }
+            } else if (line.rfind("  Cloth:",0)==0) {
+                // Same contract as Particles above: optional fields, finite
+                // checks, reject-with-warning rather than a silently different
+                // sheet. The sheet's world origin comes from the entity
+                // Transform at build time, so no origin is stored here.
+                physics::ClothComponent comp;
+                bool ok = true;
+                {
+                    const std::string rx = field_value(line, "res_x=");
+                    if (!rx.empty()) {
+                        try {
+                            const int parsed = std::stoi(rx);
+                            ok = parsed >= 2 && parsed <= 128;
+                            comp.config.res_x = parsed;
+                        } catch (...) {
+                            ok = false;
+                        }
+                    }
+                }
+                {
+                    const std::string rz = field_value(line, "res_z=");
+                    if (ok && !rz.empty()) {
+                        try {
+                            const int parsed = std::stoi(rz);
+                            ok = parsed >= 2 && parsed <= 128;
+                            comp.config.res_z = parsed;
+                        } catch (...) {
+                            ok = false;
+                        }
+                    }
+                }
+                f32 spacing = comp.config.spacing;
+                if (ok && field_float(line, "spacing=", spacing)) {
+                    ok = std::isfinite(spacing) && spacing > 0.0f && spacing <= 10.0f;
+                    comp.config.spacing = spacing;
+                }
+                f32 mass = comp.config.mass;
+                if (ok && field_float(line, "mass=", mass)) {
+                    ok = std::isfinite(mass) && mass > 0.0f && mass <= 1000.0f;
+                    comp.config.mass = mass;
+                }
+                f32 damping = comp.config.damping;
+                if (ok && field_float(line, "damping=", damping)) {
+                    ok = std::isfinite(damping) && damping >= 0.0f && damping < 1.0f;
+                    comp.config.damping = damping;
+                }
+                f32 stiffness = comp.config.stiffness;
+                if (ok && field_float(line, "stiffness=", stiffness)) {
+                    ok = std::isfinite(stiffness) && stiffness >= 0.0f && stiffness <= 1.0f;
+                    comp.config.stiffness = stiffness;
+                }
+                {
+                    const std::string it = field_value(line, "iterations=");
+                    if (ok && !it.empty()) {
+                        try {
+                            const int parsed = std::stoi(it);
+                            ok = parsed >= 1 && parsed <= 32;
+                            comp.config.iterations = parsed;
+                        } catch (...) {
+                            ok = false;
+                        }
+                    }
+                }
+                {
+                    const std::string ss = field_value(line, "substeps=");
+                    if (ok && !ss.empty()) {
+                        try {
+                            const int parsed = std::stoi(ss);
+                            ok = parsed >= 1 && parsed <= 8;
+                            comp.config.substeps = parsed;
+                        } catch (...) {
+                            ok = false;
+                        }
+                    }
+                }
+                f32 gx = 0.0f, gy = 0.0f, gz = 0.0f;
+                if (ok && field_vec3(line, "gravity", gx, gy, gz)) {
+                    ok = finite3(gx, gy, gz);
+                    comp.config.gravity = Vec3(gx, gy, gz);
+                }
+                comp.enabled = line.find("enabled=false") == std::string::npos;
+                if (!ok) {
+                    result.warnings.push_back("Cloth line with invalid values was ignored: " + line);
+                } else {
+                    scene->world().add<physics::ClothComponent>(e, std::move(comp));
+                }
+            } else if (line.rfind("  Character:",0)==0) {
+                // Player-style mover: config only. wish_dir/jump are live
+                // inputs and grounded is solver state — none of the three is
+                // scene data, so none is parsed here.
+                physics::CharacterComponent comp;
+                bool ok = true;
+                f32 radius = comp.config.radius;
+                if (field_float(line, "radius=", radius)) {
+                    ok = std::isfinite(radius) && radius > 0.0f && radius <= 5.0f;
+                    comp.config.radius = radius;
+                }
+                f32 max_speed = comp.config.max_speed;
+                if (ok && field_float(line, "max_speed=", max_speed)) {
+                    ok = std::isfinite(max_speed) && max_speed >= 0.0f && max_speed <= 100.0f;
+                    comp.config.max_speed = max_speed;
+                }
+                f32 accel = comp.config.acceleration;
+                if (ok && field_float(line, "acceleration=", accel)) {
+                    ok = std::isfinite(accel) && accel >= 0.0f && accel <= 1000.0f;
+                    comp.config.acceleration = accel;
+                }
+                f32 air = comp.config.air_control;
+                if (ok && field_float(line, "air_control=", air)) {
+                    ok = std::isfinite(air) && air >= 0.0f && air <= 1.0f;
+                    comp.config.air_control = air;
+                }
+                f32 jump_speed = comp.config.jump_speed;
+                if (ok && field_float(line, "jump_speed=", jump_speed)) {
+                    ok = std::isfinite(jump_speed) && jump_speed >= 0.0f && jump_speed <= 50.0f;
+                    comp.config.jump_speed = jump_speed;
+                }
+                f32 slope = comp.config.slope_limit_deg;
+                if (ok && field_float(line, "slope_limit=", slope)) {
+                    ok = std::isfinite(slope) && slope >= 0.0f && slope <= 90.0f;
+                    comp.config.slope_limit_deg = slope;
+                }
+                f32 mass = comp.config.mass;
+                if (ok && field_float(line, "mass=", mass)) {
+                    ok = std::isfinite(mass) && mass > 0.0f && mass <= 10000.0f;
+                    comp.config.mass = mass;
+                }
+                f32 friction = comp.config.friction;
+                if (ok && field_float(line, "friction=", friction)) {
+                    ok = std::isfinite(friction) && friction >= 0.0f && friction <= 10.0f;
+                    comp.config.friction = friction;
+                }
+                comp.enabled = line.find("enabled=false") == std::string::npos;
+                if (!ok) {
+                    result.warnings.push_back("Character line with invalid values was ignored: " + line);
+                } else {
+                    scene->world().add<physics::CharacterComponent>(e, std::move(comp));
                 }
             } else {
                 result.warnings.push_back("Unknown component line: " + line);
@@ -555,6 +1068,30 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             if (l->shadow_distance != 0.0f) out << " shadow_distance=" << l->shadow_distance;
             out << "\n";
         }
+        const auto* point = scene_obj.world().get<PointLightComponent>(e);
+        if (point) {
+            out << "  Light: type=Point color(" << point->color_r << "," << point->color_g << ","
+                << point->color_b << ") intensity=" << point->intensity << " radius=" << point->radius;
+            if (point->cast_shadows) out << " shadows=true";
+            if (point->shadow_strength != 1.0f) out << " shadow_strength=" << point->shadow_strength;
+            if (point->shadow_bias != 0.0005f) out << " shadow_bias=" << point->shadow_bias;
+            if (point->shadow_distance != 0.0f) out << " shadow_distance=" << point->shadow_distance;
+            if (!point->enabled) out << " enabled=false";
+            out << "\n";
+        }
+        const auto* slt = scene_obj.world().get<SpotLightComponent>(e);
+        if (slt) {
+            out << "  Light: type=Spot dir(" << slt->dir_x << "," << slt->dir_y << "," << slt->dir_z
+                << ") color(" << slt->color_r << "," << slt->color_g << "," << slt->color_b
+                << ") intensity=" << slt->intensity << " range=" << slt->range
+                << " inner_rad=" << slt->inner_angle_rad << " outer_rad=" << slt->outer_angle_rad;
+            if (slt->cast_shadows) out << " shadows=true";
+            if (slt->shadow_strength != 1.0f) out << " shadow_strength=" << slt->shadow_strength;
+            if (slt->shadow_bias != 0.0005f) out << " shadow_bias=" << slt->shadow_bias;
+            if (slt->shadow_distance != 0.0f) out << " shadow_distance=" << slt->shadow_distance;
+            if (!slt->enabled) out << " enabled=false";
+            out << "\n";
+        }
         const auto* sky = scene_obj.world().get<SkyComponent>(e);
         if (sky) {
             out << "  Sky: zenith(" << sky->zenith_r << "," << sky->zenith_g << "," << sky->zenith_b << ")"
@@ -563,6 +1100,40 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " clear(" << sky->clear_r << "," << sky->clear_g << "," << sky->clear_b << ")"
                 << " sun_disk=" << sky->sun_disk << " sun_glow=" << sky->sun_glow
                 << " enabled=" << (sky->enabled ? "true" : "false") << "\n";
+            // The clock is written only when the scene carries one, so a scene
+            // that has never heard of TimeOfDay round-trips to the exact bytes it
+            // was loaded from.
+            const auto* tod = scene_obj.world().get<TimeOfDayComponent>(e);
+            if (tod != nullptr) {
+                out << "  TimeOfDay: hours=" << tod->time_hours
+                    << " day_length=" << tod->day_length_seconds
+                    << " enabled=" << (tod->enabled ? "true" : "false")
+                    << " drive_light=" << (tod->drive_light ? "true" : "false") << "\n";
+            }
+        }
+        // The post stack, written only when the entity carries one — same
+        // contract as the clock above, so a scene that has never heard of
+        // PostProcess round-trips to the bytes it was loaded from. Written
+        // outside the sky block because a scene may want a glow without a
+        // procedural sky.
+        const auto* pp = scene_obj.world().get<PostProcessComponent>(e);
+        if (pp) {
+            out << "  PostProcess: bloom=" << (pp->bloom_enabled ? "true" : "false")
+                << " bloom_threshold=" << pp->bloom_threshold
+                << " bloom_knee=" << pp->bloom_knee
+                << " bloom_intensity=" << pp->bloom_intensity
+                << " bloom_radius=" << pp->bloom_radius
+                << " grade=" << (pp->grade_enabled ? "true" : "false")
+                << " grade_contrast=" << pp->grade_contrast
+                << " grade_pivot=" << pp->grade_pivot
+                << " grade_temperature=" << pp->grade_temperature
+                << " grade_tint=" << pp->grade_tint
+                << " grade_gamma=" << pp->grade_gamma
+                << " sharpen=" << (pp->sharpen_enabled ? "true" : "false")
+                << " sharpen_amount=" << pp->sharpen_amount
+                << " sharpen_radius=" << pp->sharpen_radius
+                << " saturation=" << pp->saturation
+                << " vignette=" << pp->vignette << "\n";
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {
@@ -644,7 +1215,11 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " pitch=" << aud->pitch
                 << " looping=" << (aud->looping ? "true" : "false")
                 << " spatial=" << (aud->spatial ? "true" : "false")
-                << " autoplay=" << (aud->autoplay ? "true" : "false");
+                << " autoplay=" << (aud->autoplay ? "true" : "false")
+                << " min_distance=" << aud->spatial_settings.min_distance
+                << " max_distance=" << aud->spatial_settings.max_distance
+                << " bus=" << audio::bus_name(aud->bus)
+                << " occluded=" << (aud->occluded ? "true" : "false");
             // Same as the animation spec above: the samples are generated, so
             // the spec is what makes them survive a save/load.
             if (aud->tone_hz > 0.0f) {
@@ -658,6 +1233,69 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " enabled=" << (mod->enabled ? "true" : "false")
                 << " props=" << gameplay::encode_properties(mod->properties)
                 << "\n";
+        }
+        // File-backed scripts only: an inline-only source (tests, live edits
+        // never written to a file) has no path to persist, and storing Lua
+        // inline would need an escaping scheme this line format does not have.
+        // Such components are runtime-only by design and are skipped here.
+        const auto* script = scene_obj.world().get<scripting::ScriptComponent>(e);
+        if (script && !script->path.empty()) {
+            out << "  Script: lang=lua path=" << script->path
+                << " enabled=" << (script->enabled ? "true" : "false") << "\n";
+        }
+        // Particles: the live array is never stored (like fracture assets),
+        // so every config field is written even at its default — a round
+        // trip must reproduce the exact same emission.
+        const auto* particles = scene_obj.world().get<vfx::ParticleComponent>(e);
+        if (particles) {
+            const vfx::EmitterConfig& cfg = particles->config;
+            out << "  Particles: rate=" << cfg.rate
+                << " lifetime=" << cfg.lifetime
+                << " lifetime_spread=" << cfg.lifetime_spread
+                << " velocity(" << cfg.velocity.x << "," << cfg.velocity.y << "," << cfg.velocity.z << ")"
+                << " vel_spread(" << cfg.velocity_spread.x << "," << cfg.velocity_spread.y << ","
+                << cfg.velocity_spread.z << ")"
+                << " gravity(" << cfg.gravity.x << "," << cfg.gravity.y << "," << cfg.gravity.z << ")"
+                << " drag=" << cfg.drag
+                << " start_size=" << cfg.start_size
+                << " end_size=" << cfg.end_size
+                << " start_color(" << cfg.start_color.x << "," << cfg.start_color.y << ","
+                << cfg.start_color.z << ")"
+                << " end_color(" << cfg.end_color.x << "," << cfg.end_color.y << ","
+                << cfg.end_color.z << ")"
+                << " max_particles=" << cfg.max_particles
+                << " enabled=" << (particles->enabled ? "true" : "false") << "\n";
+        }
+        // Cloth: material spec only — the sheet's world origin comes from
+        // the entity Transform at build time and is never stored here.
+        const auto* cloth = scene_obj.world().get<physics::ClothComponent>(e);
+        if (cloth) {
+            const physics::ClothConfig& cfg = cloth->config;
+            out << "  Cloth: res_x=" << cfg.res_x
+                << " res_z=" << cfg.res_z
+                << " spacing=" << cfg.spacing
+                << " mass=" << cfg.mass
+                << " damping=" << cfg.damping
+                << " stiffness=" << cfg.stiffness
+                << " iterations=" << cfg.iterations
+                << " substeps=" << cfg.substeps
+                << " gravity(" << cfg.gravity.x << "," << cfg.gravity.y << "," << cfg.gravity.z << ")"
+                << " enabled=" << (cloth->enabled ? "true" : "false") << "\n";
+        }
+        // Character: config only — wish_dir/jump are live inputs and grounded
+        // is solver state, so none of the three is scene data.
+        const auto* character = scene_obj.world().get<physics::CharacterComponent>(e);
+        if (character) {
+            const physics::CharacterConfig& cfg = character->config;
+            out << "  Character: radius=" << cfg.radius
+                << " max_speed=" << cfg.max_speed
+                << " acceleration=" << cfg.acceleration
+                << " air_control=" << cfg.air_control
+                << " jump_speed=" << cfg.jump_speed
+                << " slope_limit=" << cfg.slope_limit_deg
+                << " mass=" << cfg.mass
+                << " friction=" << cfg.friction
+                << " enabled=" << (character->enabled ? "true" : "false") << "\n";
         }
     }
     return out.str();
@@ -711,8 +1349,17 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     if (const auto* l = src.get<DirectionalLight>(se)) {
         dst.add<DirectionalLight>(de, *l);
     }
+    if (const auto* pl = src.get<PointLightComponent>(se)) {
+        dst.add<PointLightComponent>(de, *pl);
+    }
+    if (const auto* sl = src.get<SpotLightComponent>(se)) {
+        dst.add<SpotLightComponent>(de, *sl);
+    }
     if (const auto* s = src.get<SkyComponent>(se)) {
         dst.add<SkyComponent>(de, *s);
+    }
+    if (const auto* pp = src.get<PostProcessComponent>(se)) {
+        dst.add<PostProcessComponent>(de, *pp);
     }
     if (const auto* c = src.get<CameraComponent>(se)) {
         dst.add<CameraComponent>(de, *c);
@@ -739,6 +1386,24 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* g = src.get<gameplay::GameplayModuleComponent>(se)) {
         dst.add<gameplay::GameplayModuleComponent>(de, *g);
+    }
+    if (const auto* s = src.get<scripting::ScriptComponent>(se)) {
+        dst.add<scripting::ScriptComponent>(de, *s);
+    }
+    if (const auto* p = src.get<vfx::ParticleComponent>(se)) {
+        dst.add<vfx::ParticleComponent>(de, *p);
+    }
+    if (const auto* c = src.get<physics::ClothComponent>(se)) {
+        dst.add<physics::ClothComponent>(de, *c);
+    }
+    if (const auto* ch = src.get<physics::CharacterComponent>(se)) {
+        // Live input/state (wish_dir/jump/grounded) is per-session, never
+        // scene data: a merge that carried them would teleport intent.
+        physics::CharacterComponent fresh = *ch;
+        fresh.wish_dir = Vec3{0.0f, 0.0f, 0.0f};
+        fresh.jump = false;
+        fresh.grounded = false;
+        dst.add<physics::CharacterComponent>(de, fresh);
     }
 }
 

@@ -52,8 +52,149 @@ NF_TEST(transform_hierarchy_propagation_three_levels) {
     NF_CHECK(world.get<Transform>(child)->world_x == 17);
 }
 
-NF_TEST(transform_reparent) {
+// --- Full TRS propagation ---------------------------------------------------
+//
+// These pin the upgrade from "translate only" to a real transform hierarchy.
+// The old behaviour was not a simplification, it was a rendering bug: a rotated
+// object drew unrotated, a scaled object drew at 1x1, and a child's local offset
+// was added in world space so a rotated parent swung its children the wrong way.
+
+NF_TEST(transform_root_rotation_and_scale_are_world_values) {
+    // A root's world pose IS its local pose. The old code set only world_xyz
+    // and left rotation/scale at their defaults, so a root with rot_y = 45 had
+    // a world rotation of zero and rendered axis-aligned.
     World world;
+    const Entity e = world.create_entity();
+    world.add<Transform>(e, Transform{});
+    auto* t = world.get<Transform>(e);
+    t->local_x = 3.0f;
+    t->rot_y = 90.0f;
+    t->scale_x = 2.0f;
+    t->scale_y = 5.0f;
+    propagate_transforms(world);
+    NF_CHECK_NEAR(t->world_x, 3.0f, 1e-5f);
+    NF_CHECK_NEAR(t->world_scale_x, 2.0f, 1e-5f);
+    NF_CHECK_NEAR(t->world_scale_y, 5.0f, 1e-5f);
+    NF_CHECK_NEAR(t->world_scale_z, 1.0f, 1e-5f);
+    // 90 degrees on Y sends the local +X axis to world -Z. Asserted through
+    // transform_point (the row-vector convention applied to a point) rather than
+    // on raw matrix indices: an index assertion has to be re-derived every time
+    // the storage convention is questioned, and getting it wrong turns a real
+    // regression into a passing test.
+    const Vec3 turned = t->world_rot.to_matrix().transform_point({1.0f, 0.0f, 0.0f});
+    NF_CHECK_NEAR(turned.x, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(turned.y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(turned.z, -1.0f, 1e-4f);
+}
+
+NF_TEST(transform_child_position_is_in_the_parents_space) {
+    // A parent at the origin rotated 90 degrees on Y, with a child one unit
+    // along its local +X. The child's local +X points along world -Z, so its
+    // world position is (0, 0, -1) — NOT (1, 0, 0), which is what adding the
+    // local offset raw produced. This is the "drag a rotated gizmo and the child
+    // goes the wrong way" bug, at its source.
+    World world;
+    const Entity p = world.create_entity();
+    const Entity c = world.create_entity();
+    world.add<Transform>(p, Transform{});
+    world.add<Transform>(c, Transform{});
+    world.get<Transform>(p)->rot_y = 90.0f;
+    world.get<Transform>(c)->local_x = 1.0f;
+    set_parent(world, c, p);
+    propagate_transforms(world);
+    const auto* ct = world.get<Transform>(c);
+    NF_CHECK_NEAR(ct->world_x, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(ct->world_y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(ct->world_z, -1.0f, 1e-4f);
+}
+
+NF_TEST(transform_child_scale_multiplies_through_the_chain) {
+    // A parent scaled 10x with a child one unit out: the child is ten units
+    // out, and its own scale is 10x the local. The old code left
+    // world_scale at 1, so a child of a scaled parent rendered at its authored
+    // size — a prefab instance of a scaled parent came out wrong at every level.
+    World world;
+    const Entity p = world.create_entity();
+    const Entity c = world.create_entity();
+    const Entity g = world.create_entity();
+    world.add<Transform>(p, Transform{});
+    world.add<Transform>(c, Transform{});
+    world.add<Transform>(g, Transform{});
+    world.get<Transform>(p)->scale_x = 10.0f;
+    world.get<Transform>(c)->local_x = 1.0f;
+    world.get<Transform>(c)->scale_x = 3.0f;
+    world.get<Transform>(g)->local_x = 1.0f;
+    set_parent(world, c, p);
+    set_parent(world, g, c);
+    propagate_transforms(world);
+    NF_CHECK_NEAR(world.get<Transform>(c)->world_x, 10.0f, 1e-4f);
+    NF_CHECK_NEAR(world.get<Transform>(c)->world_scale_x, 30.0f, 1e-4f);
+    NF_CHECK_NEAR(world.get<Transform>(g)->world_x, 40.0f, 1e-4f);
+    NF_CHECK_NEAR(world.get<Transform>(g)->world_scale_x, 30.0f, 1e-4f);
+}
+
+NF_TEST(transform_child_rotation_inherits_then_adds) {
+    // A child with NO rotation of its own must come out with exactly the
+    // parent's rotation. A quat composes without re-deriving euler angles, so
+    // this is exact; the old euler-triple path could not express it at all
+    // (the child's stored 0,0,0 is an IDENTITY, not "inherit").
+    World world;
+    const Entity p = world.create_entity();
+    const Entity c = world.create_entity();
+    world.add<Transform>(p, Transform{});
+    world.add<Transform>(c, Transform{});
+    world.get<Transform>(p)->rot_z = 37.0f;
+    set_parent(world, c, p);
+    propagate_transforms(world);
+    const auto* pt = world.get<Transform>(p);
+    const auto* ct = world.get<Transform>(c);
+    NF_CHECK_NEAR(std::abs(ct->world_rot.dot(pt->world_rot)), 1.0f, 1e-4f);
+    // Positions still differ (the child's local is zero, the parent's is zero, so
+    // both are at the origin) — the point of the test is the orientation.
+    NF_CHECK_NEAR(ct->world_x, pt->world_x, 1e-5f);
+}
+
+NF_TEST(world_matrix_matches_compose_trs_for_a_root) {
+    // world_matrix() and compose_trs_mat4() must agree bit-for-bit in intent:
+    // extraction used to call one and bounds the other, and a mismatch showed up
+    // as a gizmo that did not sit on its mesh.
+    World world;
+    const Entity e = world.create_entity();
+    world.add<Transform>(e, Transform{});
+    auto* t = world.get<Transform>(e);
+    t->local_x = 5.0f; t->local_y = -2.0f; t->local_z = 8.0f;
+    t->rot_x = 20.0f; t->rot_y = 35.0f; t->rot_z = -50.0f;
+    t->scale_x = 2.0f; t->scale_y = 0.5f; t->scale_z = 3.0f;
+    propagate_transforms(world);
+    const Mat4 via_hierarchy = world_matrix(*t);
+    const Mat4 via_euler = compose_trs_mat4(t->world_x, t->world_y, t->world_z, t->rot_x, t->rot_y,
+                                            t->rot_z, t->world_scale_x, t->world_scale_y,
+                                            t->world_scale_z);
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            NF_CHECK_NEAR(via_hierarchy.m[r][c], via_euler.m[r][c], 1e-4f);
+        }
+    }
+}
+
+NF_TEST(local_matrix_is_the_pose_a_child_inherits) {
+    World world;
+    const Entity e = world.create_entity();
+    world.add<Transform>(e, Transform{});
+    auto* t = world.get<Transform>(e);
+    t->local_x = 1.0f; t->rot_y = 90.0f; t->scale_x = 4.0f;
+    // Scale is applied to the LOCAL point first: (4,0,0) is stretched, THEN
+    // turned 90 degrees on Y into (0,0,-4), then moved to (1,0,0). Reversing the
+    // two steps would give (-4+1, 0, 0) — the same numbers, a different object.
+    const Vec3 p = local_matrix(*t).transform_point({0.0f, 0.0f, 0.0f});
+    NF_CHECK_NEAR(p.x, 1.0f, 1e-4f);
+    const Vec3 axis = local_matrix(*t).transform_point({1.0f, 0.0f, 0.0f});
+    NF_CHECK_NEAR(axis.x, 1.0f, 1e-4f);
+    NF_CHECK_NEAR(axis.y, 0.0f, 1e-4f);
+    NF_CHECK_NEAR(axis.z, -4.0f, 1e-4f);
+}
+
+NF_TEST(transform_reparent) {    World world;
     Entity a = world.create_entity();
     Entity b = world.create_entity();
     Entity c = world.create_entity();

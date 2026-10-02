@@ -96,7 +96,7 @@ void MusicSystem::update(f32 dt) {
             m_outgoing.gain = 0.0f;
             m_outgoing.fade_rate = 0.0f;
             m_outgoing.active = false;
-            m_outgoing.cursor = 0;
+            m_outgoing.cursor = 0.0;
         }
         // Once the old track is gone a crossfade is just a fade-in.
         if (m_state == MusicState::Crossfading && !m_outgoing.active) {
@@ -124,41 +124,84 @@ void MusicSystem::update(f32 dt) {
             m_ambience.gain = 0.0f;
             m_ambience.fade_rate = 0.0f;
             m_ambience.active = false;
-            m_ambience.cursor = 0;
+            m_ambience.cursor = 0.0;
         }
     }
 }
 
-void MusicSystem::mix_slot(Slot& slot, f32* left, f32* right, usize frames) {
-    if (!slot.active || slot.track.buffer == nullptr || slot.gain <= 0.0f) {
+void MusicSystem::mix_slot(Slot& slot, f32* left, f32* right, usize frames,
+                           u32 mix_sample_rate) {
+    if (!slot.active || slot.track.buffer == nullptr || slot.gain <= 0.0f ||
+        frames == 0) {
         return;
     }
     const AudioBuffer& buf = *slot.track.buffer;
-    if (buf.samples.empty() || buf.channels == 0) {
+    if (buf.samples.empty() || buf.channels == 0 || buf.sample_rate == 0) {
         return;
     }
     const usize frame_count = buf.frame_count();
-    const f32 level = slot.track.base_volume * slot.gain;
+    if (frame_count == 0) {
+        return;
+    }
+    if (mix_sample_rate == 0) {
+        mix_sample_rate = kDefaultSampleRate;
+    }
 
+    if (!std::isfinite(slot.cursor) || slot.cursor < 0.0) {
+        slot.cursor = 0.0;
+    }
+    if (slot.cursor >= static_cast<f64>(frame_count)) {
+        slot.cursor = std::fmod(slot.cursor, static_cast<f64>(frame_count));
+    }
+
+    const f32 level = slot.track.base_volume * slot.gain;
+    const f64 source_step =
+        static_cast<f64>(buf.sample_rate) / static_cast<f64>(mix_sample_rate);
     for (usize i = 0; i < frames; ++i) {
-        if (slot.cursor >= frame_count) {
-            slot.cursor = slot.cursor % frame_count; // music/ambience loop
+        if (slot.cursor >= static_cast<f64>(frame_count)) {
+            slot.cursor = std::fmod(slot.cursor,
+                                    static_cast<f64>(frame_count)); // loop
         }
-        const usize idx = slot.cursor * buf.channels;
-        const f32 sample = buf.samples[idx];
-        left[i] += sample * level;
-        right[i] += sample * level;
-        ++slot.cursor;
+
+        const usize frame0 = static_cast<usize>(slot.cursor);
+        const f64 fraction = slot.cursor - static_cast<f64>(frame0);
+        const usize frame1 = (frame0 + 1 < frame_count) ? frame0 + 1 : 0u;
+        const usize index0 = frame0 * buf.channels;
+        const usize index1 = frame1 * buf.channels;
+        const f32 left0 = buf.samples[index0];
+        const f32 left1 = buf.samples[index1];
+        const f32 right0 = buf.channels >= 2 ? buf.samples[index0 + 1] : left0;
+        const f32 right1 = buf.channels >= 2 ? buf.samples[index1 + 1] : left1;
+        const f32 sample_left = static_cast<f32>(
+            static_cast<f64>(left0) +
+            (static_cast<f64>(left1) - static_cast<f64>(left0)) * fraction);
+        const f32 sample_right = static_cast<f32>(
+            static_cast<f64>(right0) +
+            (static_cast<f64>(right1) - static_cast<f64>(right0)) * fraction);
+
+        left[i] += sample_left * level;
+        right[i] += sample_right * level;
+        slot.cursor += source_step;
     }
 }
 
 void MusicSystem::mix_music(f32* left, f32* right, usize frames) {
-    mix_slot(m_current, left, right, frames);
-    mix_slot(m_outgoing, left, right, frames);
+    mix_music(left, right, frames, kDefaultSampleRate);
+}
+
+void MusicSystem::mix_music(f32* left, f32* right, usize frames,
+                            u32 mix_sample_rate) {
+    mix_slot(m_current, left, right, frames, mix_sample_rate);
+    mix_slot(m_outgoing, left, right, frames, mix_sample_rate);
 }
 
 void MusicSystem::mix_ambience(f32* left, f32* right, usize frames) {
-    mix_slot(m_ambience, left, right, frames);
+    mix_ambience(left, right, frames, kDefaultSampleRate);
+}
+
+void MusicSystem::mix_ambience(f32* left, f32* right, usize frames,
+                               u32 mix_sample_rate) {
+    mix_slot(m_ambience, left, right, frames, mix_sample_rate);
 }
 
 void MusicSystem::set_ambience(const AudioBuffer* buffer,

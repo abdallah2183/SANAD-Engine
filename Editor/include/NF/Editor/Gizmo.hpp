@@ -99,6 +99,15 @@ struct GizmoDelta {
     float dx = 0, dy = 0, dz = 0;
     float yaw_deg = 0, pitch_deg = 0;
     float dscale = 0;
+    // Arbitrary-axis rotation (the gizmo rings): unit axis + angle in
+    // degrees. Zero angle = no contribution, so the yaw/pitch path below
+    // behaves exactly as before when this is untouched.
+    float axis_x = 0, axis_y = 0, axis_z = 0;
+    float axis_angle_deg = 0;
+    // Per-axis scale (the gizmo arms): additive factor deltas, so axis i
+    // scales by (1 + scl_*). Zero = untouched. Combines with the uniform
+    // dscale above (uniform box handle), never replaces it.
+    float scl_x = 0, scl_y = 0, scl_z = 0;
 };
 
 // Grid snapping for a drag. A step of 0 (the default) leaves that channel

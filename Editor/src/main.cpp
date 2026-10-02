@@ -12,6 +12,7 @@
 #include <NF/Editor/ProfilerSession.hpp>
 #include <NF/Editor/ProjectLauncher.hpp>
 #include <NF/Editor/TexturePreviewCache.hpp>
+#include <NF/Editor/ToolbarUi.hpp> // ui_settings(): F1 / Ctrl+I / Ctrl+E shortcuts
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Editor/UiShell.hpp>
 #include <NF/Jobs/JobSystem.hpp>
@@ -45,6 +46,7 @@
 #include <NF/UI/Localization.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h> // ImGuiContext::DebugDrawIdConflictsId — the ID-conflict log
 
 #include <array>
 #include <chrono>
@@ -55,6 +57,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <thread>
 #include <vector>
 
@@ -86,7 +89,74 @@ struct EditorConfig {
     // Empty means "open the engine tree", which is how the editor has always
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
+    // --screenshot: where to write the last composited frame. Empty = off.
+    std::string screenshot_path;
+    // --resize-test: drive the window through a size cycle while the run is
+    // live. A resize is the one interaction that tears down and rebuilds the
+    // swapchain, its image views and the UI framebuffers — the whole class of
+    // lifetime bugs that only shows up when a human drags the window edge.
+    bool resize_test = false;
 };
+
+// Writes an RGBA8 buffer as a 24-bit BMP.
+//
+// BMP rather than PNG on purpose: the engine links stb_image (a reader) but no
+// image WRITER, and a 54-byte header beats pulling in a new third-party file for
+// a debugging aid. 24-bit because the alpha channel of a 32-bit BMP is treated
+// as transparency by some viewers, which would show the whole capture as blank.
+// Rows go bottom-up (positive height), the format's native order.
+bool write_bmp24(const std::string& path, const uint8_t* rgba, uint32_t w, uint32_t h) {
+    if (rgba == nullptr || w == 0 || h == 0) {
+        return false;
+    }
+    const uint32_t row_bytes = ((w * 3u) + 3u) & ~3u; // rows pad to 4 bytes
+    const uint32_t pixel_bytes = row_bytes * h;
+    const uint32_t file_bytes = 54u + pixel_bytes;
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        return false;
+    }
+    const auto u16 = [&](uint32_t v) {
+        const uint8_t b[2] = {static_cast<uint8_t>(v & 0xFF), static_cast<uint8_t>((v >> 8) & 0xFF)};
+        out.write(reinterpret_cast<const char*>(b), 2);
+    };
+    const auto u32 = [&](uint32_t v) {
+        const uint8_t b[4] = {static_cast<uint8_t>(v & 0xFF), static_cast<uint8_t>((v >> 8) & 0xFF),
+                              static_cast<uint8_t>((v >> 16) & 0xFF),
+                              static_cast<uint8_t>((v >> 24) & 0xFF)};
+        out.write(reinterpret_cast<const char*>(b), 4);
+    };
+    out.put('B');
+    out.put('M');
+    u32(file_bytes);
+    u16(0);
+    u16(0);
+    u32(54); // pixel data offset
+    u32(40); // BITMAPINFOHEADER size
+    u32(w);
+    u32(h); // positive = bottom-up
+    u16(1); // planes
+    u16(24); // bits per pixel
+    u32(0); // BI_RGB, no compression
+    u32(pixel_bytes);
+    u32(2835); // 72 DPI
+    u32(2835);
+    u32(0);
+    u32(0);
+
+    std::vector<uint8_t> row(row_bytes, 0);
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* src = rgba + static_cast<size_t>(h - 1u - y) * w * 4u;
+        for (uint32_t x = 0; x < w; ++x) {
+            row[x * 3u + 0u] = src[x * 4u + 2u]; // B
+            row[x * 3u + 1u] = src[x * 4u + 1u]; // G
+            row[x * 3u + 2u] = src[x * 4u + 0u]; // R
+        }
+        out.write(reinterpret_cast<const char*>(row.data()), row_bytes);
+    }
+    return out.good();
+}
 
 EditorConfig parse_args(int argc, char** argv) {
     EditorConfig c;
@@ -118,6 +188,12 @@ EditorConfig parse_args(int argc, char** argv) {
             c.arabic_ui = true;
         } else if (arg == "--headless") {
             c.headless = true;
+        } else if (arg == "--screenshot" && i + 1 < argc) {
+            c.screenshot_path = argv[++i];
+        } else if (!value_of("--screenshot=").empty()) {
+            c.screenshot_path = value_of("--screenshot=");
+        } else if (arg == "--resize-test") {
+            c.resize_test = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("NOVAForgeEditor (Phase 5)\n"
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
@@ -129,9 +205,16 @@ EditorConfig parse_args(int argc, char** argv) {
                         "  --novsync           Uncapped present (Immediate): real FPS, may\n"
                         "                      tear. Default is FIFO (tear-free, refresh-capped)\n"
                         "  --arabic            Start with the Arabic localised UI\n"
-                        "  --headless          No window (logic + offscreen viewport only)\n");
+                        "  --headless          No window (logic + offscreen viewport only)\n"
+                        "  --screenshot <file.bmp>  Write the last composited frame (scene +\n"
+                        "                      full UI) as a 24-bit BMP, then exit\n");
             std::exit(0);
         }
+    }
+    // A screenshot capture needs a bounded run to know which frame is "last";
+    // without one the editor would sit interactive and never write the file.
+    if (!c.screenshot_path.empty() && c.max_frames == 0) {
+        c.max_frames = 90;
     }
     return c;
 }
@@ -313,7 +396,7 @@ public:
 // Controls: right-drag orbits, wheel zooms, right-hold + WASD/QE flies
 // (WASD stays gizmo shortcuts when right is not held).
 void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::UiIntents& in,
-                               float dt, bool fast) {
+                               float dt, bool fast, const float* pivot) {
     nf::scene::Scene* scene = runtime.edit_scene();
     if (scene == nullptr) {
         return;
@@ -345,10 +428,22 @@ void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::
         return;
     }
     constexpr float kDeg = 3.14159265359f / 180.0f;
-    // Eye -> spherical around the origin (the look-at point, by engine contract).
-    float dx = tr->world_x, dy = tr->world_y, dz = tr->world_z;
+    // The orbit centre is the VIEW PIVOT, not the world origin. Framing sets it,
+    // so content anywhere in the level is reachable by orbit + zoom; with the
+    // origin hardcoded, a level authored at x = 50 could not be looked at at
+    // all, however the user dragged. `pivot` may be null (headless path), in
+    // which case this is the old origin-centred behaviour.
+    const float pvx = (pivot != nullptr) ? pivot[0] : 0.0f;
+    const float pvy = (pivot != nullptr) ? pivot[1] : 0.0f;
+    const float pvz = (pivot != nullptr) ? pivot[2] : 0.0f;
+    // Eye -> spherical around the pivot.
+    float dx = tr->world_x - pvx, dy = tr->world_y - pvy, dz = tr->world_z - pvz;
     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (!(dist > 1e-3f)) {
+        // The eye is exactly ON the pivot (which is what a frame on a tiny
+        // object, or a scene whose origin is its centre, produces). The
+        // direction is undefined there, so fall back to a readable default
+        // rather than dividing by zero and producing NaN transforms.
         dx = 0.0f;
         dy = 2.0f;
         dz = 5.0f;
@@ -411,9 +506,9 @@ void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::
         dist = 300.0f;
     }
     const float cp = std::cos(pitch_deg * kDeg);
-    tr->local_x = dist * cp * std::sin(yaw_deg * kDeg);
-    tr->local_y = dist * std::sin(pitch_deg * kDeg);
-    tr->local_z = dist * cp * std::cos(yaw_deg * kDeg);
+    tr->local_x = pvx + dist * cp * std::sin(yaw_deg * kDeg);
+    tr->local_y = pvy + dist * std::sin(pitch_deg * kDeg);
+    tr->local_z = pvz + dist * cp * std::cos(yaw_deg * kDeg);
     tr->dirty = true;
     nf::scene::propagate_transforms(world);
 }
@@ -773,12 +868,19 @@ int main(int argc, char** argv) {
             if (cfg.arabic_ui || launcher_arabic || nf::editor::load_settings().arabic) {
                 nf::ui::set_language(nf::ui::Language::Arabic);
             }
-            ui = nf::editor::ui_init(window.native_handle());
+            ui = nf::editor::ui_init(window.native_handle(), cfg.max_frames == 0);
             NF_LOG_INFO(nf::LogCategory::Editor, "ImGui {} win32={} font={}", ui.context_ok ? "ready" : "FAILED",
                         ui.win32_ok ? "ok" : "off", ui.font_used);
             if (!ui.context_ok) {
                 return 1;
             }
+            // Arabic UI with no Arabic font is a screen full of diamonds and no
+            // other symptom, so it gets a BANNER and not just the console line
+            // ui_init already printed. An English session never sees it: the
+            // condition requires the Arabic language to actually be active.
+            ui.warn_arabic_font_missing =
+                !ui.arabic_font_ok && nf::ui::current_language() == nf::ui::Language::Arabic;
+            nf::editor::set_ui_arabic_font_missing(ui.warn_arabic_font_missing);
             window.set_message_hook(nf::editor::ui_handle_win32_message);
             const std::filesystem::path ui_shaders = resolve_imgui_shader_dir();
             if (ui_shaders.empty() || !ui_renderer.init(*device, ui_shaders)) {
@@ -955,6 +1057,20 @@ int main(int argc, char** argv) {
                 if (window.should_close()) {
                     break;
                 }
+                // --resize-test: walk the window through a size cycle. A resize
+                // tears down and rebuilds the swapchain, its image views and the
+                // UI framebuffers, so it is the one interaction that exercises
+                // the whole resource-lifetime path — and the only way to catch a
+                // device-loss bug without a human dragging the window edge.
+                if (cfg.resize_test && frame_count > 20 && frame_count % 25 == 0) {
+                    static const uint32_t kResizeCycle[][2] = {
+                        {1100, 700}, {820, 560}, {1260, 780}, {700, 480}, {1200, 720}};
+                    constexpr size_t kCycleCount = sizeof(kResizeCycle) / sizeof(kResizeCycle[0]);
+                    const size_t step = (frame_count / 25) % kCycleCount;
+                    window.resize(kResizeCycle[step][0], kResizeCycle[step][1]);
+                    NF_LOG_INFO(nf::LogCategory::Editor, "Resize test: -> {}x{}",
+                                kResizeCycle[step][0], kResizeCycle[step][1]);
+                }
                 if (swapchain &&
                     (window.width() != swapchain->width() || window.height() != swapchain->height())) {
                     if (window.width() == 0 || window.height() == 0) {
@@ -965,6 +1081,28 @@ int main(int argc, char** argv) {
                         continue;
                     }
                     device->wait_idle();
+                    // Tear the swapchain-dependent objects down FIRST, in
+                    // dependency order, and only then create the new swapchain.
+                    //
+                    // Two swapchains on one surface is illegal unless the old one
+                    // is handed over as `oldSwapchain`, and Swapchain_Vk passes
+                    // VK_NULL_HANDLE — so the old one has to be gone before the
+                    // new one is asked for. It was not: the new swapchain was
+                    // created while the old still existed, the driver answered
+                    // VK_ERROR_NATIVE_WINDOW_IN_USE_KHR, `fresh` came back null,
+                    // the whole `if (fresh)` body was skipped, and the editor
+                    // carried on rendering into the stale handle until it
+                    // segfaulted. That is the reported "resizing the window
+                    // freezes the engine" (and on another driver the same
+                    // sequence surfaces as a stream of VK_ERROR_DEVICE_LOST).
+                    //
+                    // Framebuffers before the swapchain: they hold views OF the
+                    // swapchain images, so dropping the swapchain first would
+                    // leave them referencing freed views.
+                    ui_fbs.clear();
+                    render_finished.clear();
+                    swapchain.reset();
+
                     nf::rhi::SwapchainDesc sc{};
                     sc.width = window.width();
                     sc.height = window.height();
@@ -972,24 +1110,44 @@ int main(int argc, char** argv) {
                     sc.present = cfg.vsync ? nf::rhi::PresentMode::FIFO : nf::rhi::PresentMode::Immediate;
                     sc.image_count = cfg.vsync ? 3 : 2;
                     auto fresh = device->create_swapchain(sc);
-                    if (fresh) {
-                        swapchain = std::move(fresh);
-                        runtime.on_swapchain_resized(swapchain.get());
-                        render_finished.clear();
-                        for (uint32_t i = 0; i < swapchain->image_count(); ++i) {
-                            render_finished.push_back(device->create_semaphore());
-                        }
-                        if (!rebuild_ui_fbs()) {
-                            NF_LOG_ERROR(nf::LogCategory::Editor, "UI framebuffers lost on resize");
-                            exit_code = 1;
-                            break;
-                        }
+                    if (!fresh) {
+                        // A window with no swapchain has nothing to render into,
+                        // and retrying would just re-log. Stop with a reason
+                        // rather than spinning on a dead surface.
+                        NF_LOG_ERROR(nf::LogCategory::Editor,
+                                     "Swapchain recreation failed at {}x{} — exiting instead of "
+                                     "rendering into a dead surface",
+                                     sc.width, sc.height);
+                        exit_code = 1;
+                        break;
+                    }
+                    swapchain = std::move(fresh);
+                    runtime.on_swapchain_resized(swapchain.get());
+                    for (uint32_t i = 0; i < swapchain->image_count(); ++i) {
+                        render_finished.push_back(device->create_semaphore());
+                    }
+                    if (!rebuild_ui_fbs()) {
+                        NF_LOG_ERROR(nf::LogCategory::Editor, "UI framebuffers lost on resize");
+                        exit_code = 1;
+                        break;
                     }
                     // Window resize recreates the swapchain only. The offscreen
                     // target follows the docked panel size (reported by the
                     // panel every frame), never the window size — copying the
                     // window size here would stretch the image on the next
                     // frame whenever the panel aspect differs from it.
+                }
+
+                // A lost device never comes back: every later submit fails too,
+                // so the loop would spin writing error lines forever — which is
+                // exactly what a user sees as "the engine froze". Stop with a
+                // reason instead of submitting into a dead device again.
+                if (nf::rhi::device_lost()) {
+                    NF_LOG_ERROR(nf::LogCategory::Editor,
+                                 "GPU device lost (driver reset, or a fatal submit) — stopping. "
+                                 "Reopen the editor; anything since the last autosave is gone.");
+                    exit_code = 1;
+                    break;
                 }
             }
 
@@ -1033,6 +1191,23 @@ int main(int argc, char** argv) {
             // would fight the game — gizmo modes, delete — stay disabled; Esc
             // stops play so the user can always get back to editing.
             if (!cfg.headless && !automation) {
+                // F1 and Ctrl+P work in BOTH modes. F1 because the moment a
+                // user is hunting for a key is often while the game is running,
+                // and Ctrl+P because play/stop is one action, not two.
+                if (key_edge(VK_F1)) {
+                    nf::editor::EditorUiSettings& prefs = nf::editor::ui_settings();
+                    prefs.show_shortcuts = !prefs.show_shortcuts;
+                }
+                if (key_down(VK_CONTROL) && key_edge('P')) {
+                    std::string e;
+                    if (app.playing()) {
+                        if (!app.stop(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Stop: {}", e);
+                        }
+                    } else if (!app.launch_game(e)) {
+                        NF_LOG_WARN(nf::LogCategory::Editor, "Play: {}", e);
+                    }
+                }
                 if (app.playing()) {
                     if (key_edge(VK_ESCAPE)) {
                         std::string e;
@@ -1052,7 +1227,23 @@ int main(int argc, char** argv) {
                     if (key_edge('R')) {
                         app.set_gizmo_mode(nf::editor::GizmoMode::Scale);
                     }
-                    if (key_down(VK_CONTROL) && key_edge('Z')) {
+                    // X toggles the gizmo's transform space. The toolbar button
+                    // was the only way to reach Local/World, so the single most
+                    // repeated look-dev toggle had no key.
+                    if (key_edge('X')) {
+                        app.set_gizmo_space(app.gizmo_space() == nf::editor::GizmoSpace::Local
+                                                ? nf::editor::GizmoSpace::World
+                                                : nf::editor::GizmoSpace::Local);
+                    }
+                    // Ctrl+Shift+Z is the other redo chord every tool accepts.
+                    // Checked BEFORE plain Ctrl+Z, which would otherwise swallow
+                    // it and undo instead.
+                    if (key_down(VK_CONTROL) && key_down(VK_SHIFT) && key_edge('Z')) {
+                        std::string e;
+                        if (!app.redo(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Redo: {}", e);
+                        }
+                    } else if (key_down(VK_CONTROL) && key_edge('Z')) {
                         std::string e;
                         if (!app.undo(e)) {
                             NF_LOG_WARN(nf::LogCategory::Editor, "Undo: {}", e);
@@ -1071,6 +1262,21 @@ int main(int argc, char** argv) {
                         } else {
                             NF_LOG_INFO(nf::LogCategory::Editor, "Save: OK {}", app.scene_path());
                         }
+                    }
+                    // The File menu has always PRINTED Ctrl+N / Ctrl+I / Ctrl+E
+                    // next to these items; until now nothing listened for them,
+                    // so the menu was promising a chord the editor ignored.
+                    if (key_down(VK_CONTROL) && key_edge('N')) {
+                        std::string e;
+                        if (!app.new_scene(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "New scene: {}", e);
+                        }
+                    }
+                    if (key_down(VK_CONTROL) && key_edge('I')) {
+                        nf::editor::ui_settings().show_import = true;
+                    }
+                    if (key_down(VK_CONTROL) && key_edge('E')) {
+                        nf::editor::ui_settings().show_export = true;
                     }
                     if (key_edge(VK_DELETE) && app.selection().has_selection()) {
                         // Immediate, undoable delete (A4). This used to only ARM a
@@ -1127,6 +1333,32 @@ int main(int argc, char** argv) {
                 vp_state.width = 1280;
                 vp_state.height = 720;
                 app.viewport() = vp_state;
+            }
+            // ensure_viewport_target() destroys the old image, view and
+            // framebuffer whenever the size changed, and its header states the
+            // contract plainly: "the caller must wait_idle() first … so no
+            // in-flight command buffer ever references the destroyed texture".
+            // That contract was broken when the every-frame wait_idle() was
+            // removed for performance — the fence wait was left AFTER the call,
+            // so on a resize frame the target was torn down while the previous
+            // viewport submission and the main pass (which presents FROM this
+            // view) were still pending. That is the source of the
+            // "vkDestroyImageView / vkDestroyImage / vkDestroyFramebuffer:
+            // can't be called on … in use by VkCommandBuffer" stream, and the
+            // same lifetime hole that escalates to VK_ERROR_DEVICE_LOST on some
+            // drivers when the window is resized.
+            //
+            // Quiesce only the two submissions that can reference the target,
+            // and only on the frames that actually recreate it — the per-frame
+            // cost is unchanged. frame_fence is waited but NOT reset here: the
+            // main pass resets it right before its own submit, and resetting it
+            // now would make that later wait block forever on a fence nobody
+            // signals.
+            const bool vp_target_stale =
+                (vp_res.width != vp_state.width || vp_res.height != vp_state.height);
+            if (vp_target_stale) {
+                viewport_fence->wait();
+                frame_fence->wait();
             }
             if (!nf::editor::ensure_viewport_target(*device, vp_state, vp_res)) {
                 NF_LOG_ERROR(nf::LogCategory::Editor, "Viewport target creation failed");
@@ -1253,6 +1485,39 @@ int main(int argc, char** argv) {
                 have_ui_intents = true;
                 nf::editor::ui_end_frame();
                 ui_draw = ImGui::GetDrawData();
+                // A duplicate widget ID is a real defect that ImGui only reports
+                // by painting a red popup over the UI — easy to miss in a
+                // screenshot review, and invisible to every automated check
+                // because ImGui's detector is hover-based.
+                if (ImGuiContext* ictx = ImGui::GetCurrentContext(); ictx != nullptr) {
+#if defined(IMGUI_DEBUG_HIGHLIGHT_ALL_ID_CONFLICTS)
+                    // Audit build (ThirdParty: -DNF_IMGUI_ID_AUDIT=ON). ImGui
+                    // tracks every duplicate ID per frame here, so report each
+                    // one once for the WHOLE run — a conflict can appear on any
+                    // frame, and a panel only draws while its tab is active.
+                    static std::unordered_set<unsigned> reported_ids;
+                    for (const ImGuiStoragePair& kv :
+                         ictx->DebugDrawIdConflictsHighlightSet.Data) {
+                        if (kv.val_i >= ictx->FrameCount - 1 &&
+                            reported_ids.insert(kv.key).second) {
+                            NF_LOG_ERROR(nf::LogCategory::Editor,
+                                         "ImGui ID AUDIT: duplicate ID 0x{:08X}",
+                                         static_cast<unsigned>(kv.key));
+                        }
+                    }
+#endif
+                    // Normal builds: the hover-based signal is all ImGui gives us.
+                    if (ictx->DebugDrawIdConflictsId != 0) {
+                        static bool id_conflict_logged = false;
+                        if (!id_conflict_logged) {
+                            id_conflict_logged = true;
+                            NF_LOG_ERROR(nf::LogCategory::Editor,
+                                         "ImGui ID conflict: two visible items share ID 0x{:08X} "
+                                         "(add PushID or a ##suffix)",
+                                         static_cast<unsigned>(ictx->DebugDrawIdConflictsId));
+                        }
+                    }
+                }
                 // Hand the shell's preview views to the renderer after the panels
                 // have requested them this frame. Draining (not clearing) keeps
                 // entries alive; only ids the draw data references get a set.
@@ -1356,8 +1621,28 @@ int main(int argc, char** argv) {
                     // offscreen target (never touching the presented image) and
                     // require it to differ from the pure scene render. Same
                     // format on both sides, so the comparison is exact.
-                    if (automation && frame_count == 10 && ui_draw != nullptr && !ui_draw_failed &&
+                    //
+                    // The same composite is what --screenshot writes out: it is
+                    // the only place in the frame that holds scene AND full UI
+                    // in one image, which is exactly what a documentation
+                    // capture needs. Run on the LAST frame so every panel has
+                    // settled (autosave ticks, hot reload lands, stats fill in).
+                    const bool want_proof = automation && frame_count == 10;
+                    const bool want_shot = !cfg.screenshot_path.empty() && cfg.max_frames > 0 &&
+                                           frame_count + 1 == cfg.max_frames;
+                    if ((want_proof || want_shot) && ui_draw != nullptr && !ui_draw_failed &&
                         readback) {
+                        // Quiesce the frame we just submitted FIRST. This block
+                        // records a second command buffer and calls
+                        // UiRenderer::render(), which resets the UI descriptor
+                        // pool that the main pass's draw commands are still
+                        // referencing — hence
+                        // "vkResetDescriptorPool(): descriptorPool can't be
+                        // called on … in use by VkCommandBuffer", plus a
+                        // framebuffer destroyed under the same pending
+                        // submission. Not reset: the main pass resets
+                        // frame_fence right before its own submit.
+                        frame_fence->wait();
                         const uint32_t pw = swapchain->width();
                         const uint32_t ph = swapchain->height();
                         auto pf_cmd = device->create_command_buffer();
@@ -1410,7 +1695,7 @@ int main(int argc, char** argv) {
                                         (readback->size() >= static_cast<nf::usize>(pw) * ph * 4)
                                             ? static_cast<const uint8_t*>(readback->map())
                                             : nullptr;
-                                    if (sp != nullptr && vp != nullptr) {
+                                    if (want_proof && sp != nullptr && vp != nullptr) {
                                         const size_t n =
                                             static_cast<size_t>(pw) * static_cast<size_t>(ph);
                                         for (size_t i = 0; i < n; ++i) {
@@ -1427,6 +1712,16 @@ int main(int argc, char** argv) {
                                         }
                                     }
                                     if (sp != nullptr) {
+                                        if (want_shot &&
+                                            write_bmp24(cfg.screenshot_path, sp, pw, ph)) {
+                                            NF_LOG_INFO(nf::LogCategory::Editor,
+                                                        "Screenshot: {} ({}x{})",
+                                                        cfg.screenshot_path, pw, ph);
+                                        } else if (want_shot) {
+                                            NF_LOG_ERROR(nf::LogCategory::Editor,
+                                                         "Screenshot: could not write '{}'",
+                                                         cfg.screenshot_path);
+                                        }
                                         pf_rb->unmap();
                                     }
                                     if (vp != nullptr) {
@@ -1436,9 +1731,12 @@ int main(int argc, char** argv) {
                             }
                         }
                         device->wait_idle();
-                        NF_LOG_INFO(nf::LogCategory::Editor,
-                                    "Editor UI overlay: {} pixels differ from scene-only", proof_diff);
-                        auto_check(proof_ok && proof_diff > 5000, "UI overlay drew over scene");
+                        if (want_proof) {
+                            NF_LOG_INFO(nf::LogCategory::Editor,
+                                        "Editor UI overlay: {} pixels differ from scene-only",
+                                        proof_diff);
+                            auto_check(proof_ok && proof_diff > 5000, "UI overlay drew over scene");
+                        }
                     }
                 }
             }
@@ -1530,15 +1828,90 @@ int main(int argc, char** argv) {
                 // the game view, and gizmo drags are ignored (structural edits
                 // are already locked by require_editable).
                 if (!app.playing()) {
-                    apply_viewport_navigation(runtime, ui_in, dt, key_down(VK_SHIFT));
+                    // Frame first, then navigate: the framing moves the pivot
+                    // and the eye, and navigation on the same frame reads the
+                    // NEW pivot — so a frame combined with a wheel notch pulls
+                    // toward the object the user just asked to look at.
+                    if (ui_in.nav_frame != 0) {
+                        std::string ferr;
+                        const bool framed = (ui_in.nav_frame == 1)
+                                                ? app.frame_selection(ferr)
+                                                : app.frame_all(ferr);
+                        if (!framed) {
+                            // Said out loud rather than ignored: a Frame button
+                            // that silently does nothing is indistinguishable
+                            // from a broken one.
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Frame: {}", ferr);
+                        }
+                    }
+                    apply_viewport_navigation(runtime, ui_in, dt, key_down(VK_SHIFT),
+                                              app.view_pivot());
+                    // The framed radius becomes an eye distance here, because the
+                    // fov lives in the view layer. Aiming at the sphere that
+                    // circumscribes the object is what puts it on screen at any
+                    // aspect ratio without a per-frame fit.
+                    const float fit_r = app.consume_view_fit();
+                    if (fit_r > 0.0f) {
+                        const float aspect = (vp_state.height != 0)
+                                                  ? (static_cast<float>(vp_state.width) /
+                                                     static_cast<float>(vp_state.height))
+                                                  : 16.0f / 9.0f;
+                        const nf::editor::ViewCamera vc =
+                            view_camera_from_scene(runtime.scene(), aspect);
+                        const float d = nf::editor::EditorApp::fit_distance_for(
+                            fit_r, vc.fov_y_deg);
+                        if (d > 1e-3f) {
+                            // Re-aim from the pivot at the same angle the user
+                            // was already at: framing should change the
+                            // distance and nothing else.
+                            const float* pv = app.view_pivot();
+                            float ex = vc.px - pv[0], ey = vc.py - pv[1], ez = vc.pz - pv[2];
+                            const float len = std::sqrt(ex * ex + ey * ey + ez * ez);
+                            if (len > 1e-3f) {
+                                const float s = d / len;
+                                nf::scene::Scene* sc = runtime.edit_scene();
+                                if (sc != nullptr) {
+                                    for (auto ce :
+                                         sc->world().query<nf::runtime::CameraComponent>()) {
+                                        const auto* cc =
+                                            sc->world().get<nf::runtime::CameraComponent>(ce);
+                                        auto* ctr =
+                                            sc->world().get<nf::scene::Transform>(ce);
+                                        if (cc == nullptr || ctr == nullptr || !cc->is_active) {
+                                            continue;
+                                        }
+                                        ctr->local_x = pv[0] + ex * s;
+                                        ctr->local_y = pv[1] + ey * s;
+                                        ctr->local_z = pv[2] + ez * s;
+                                        ctr->dirty = true;
+                                        break;
+                                    }
+                                    nf::scene::propagate_transforms(sc->world());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Playing: drop any queued fit rather than applying it to a
+                    // camera the game owns.
+                    (void)app.consume_view_fit();
                 }
-                if ((ui_in.viewport_press || ui_in.viewport_drag) && !app.playing()) {
+                if ((ui_in.viewport_press || ui_in.viewport_drag || ui_in.viewport_gizmo_press) &&
+                    !app.playing()) {
                     const float aspect = (vp_state.height != 0)
                                               ? (static_cast<float>(vp_state.width) /
                                                  static_cast<float>(vp_state.height))
                                               : 16.0f / 9.0f;
                     const nf::editor::ViewCamera vc =
                         view_camera_from_scene(runtime.scene(), aspect);
+                    if (ui_in.viewport_gizmo_press) {
+                        std::string e;
+                        if (!app.viewport_gizmo_press(
+                                static_cast<nf::editor::GizmoHandle>(ui_in.gizmo_handle),
+                                ui_in.press_ndc_x, ui_in.press_ndc_y, vc, e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Viewport gizmo press: {}", e);
+                        }
+                    }
                     if (ui_in.viewport_press) {
                         std::string e;
                         if (!app.viewport_press(ui_in.press_ndc_x, ui_in.press_ndc_y, vc,
@@ -1577,6 +1950,7 @@ int main(int argc, char** argv) {
             if (automation) {
                 const uint32_t f = frame_count;
                 static float automation_drag_start_x = 0.0f;
+static nf::ecs::Entity automation_drag_entity{};
                 // P2 automation: the dragged group and its start local_x,
                 // snapshotted at press time (see the f==118 block for why the
                 // selection cannot be re-read at release).
@@ -1628,6 +2002,7 @@ int main(int argc, char** argv) {
                     bool ok = false;
                     if (auto hit = find_first_mesh(app.world())) {
                         const auto* t = app.world()->get<nf::scene::Transform>(*hit);
+                        automation_drag_entity = *hit;
                         const float aspect = (vp_state.height != 0)
                                                   ? (static_cast<float>(vp_state.width) /
                                                      static_cast<float>(vp_state.height))
@@ -1636,10 +2011,24 @@ int main(int argc, char** argv) {
                             view_camera_from_scene(runtime.scene(), aspect);
                         const nf::Vec3 ndc = world_to_pointer_ndc(
                             vc, nf::Vec3{t->world_x, t->world_y, t->world_z});
+                        // The baseline must come from the entity the press actually PICKED, not
+                        // from the mesh the NDC was computed from. `pick()` resolves
+                        // whatever is under the cursor and that is not always
+                        // `find_first_mesh()`: measured in this scene it returned
+                        // entity 3 while the baseline entity was 2. Undoing the drag
+                        // restores the PICKED entity's start, so sampling the other
+                        // one compares two different objects and fails forever.
                         automation_drag_start_x = t->local_x;
-                        ok = app.viewport_press(ndc.x, ndc.y, vc, false, e) &&
-                             app.viewport_drag(ndc.x + 0.15f, ndc.y, vc, e) &&
-                             app.viewport_dragging();
+                        ok = app.viewport_press(ndc.x, ndc.y, vc, false, e);
+                        if (ok) {
+                            const auto picked = app.selection().primary();
+                            if (const auto* pt =
+                                    app.world()->get<nf::scene::Transform>(picked)) {
+                                automation_drag_start_x = pt->local_x;
+                            }
+                            ok = app.viewport_drag(ndc.x + 0.15f, ndc.y, vc, e) &&
+                                 app.viewport_dragging();
+                        }
                     } else {
                         e = "no mesh entity";
                     }
@@ -1647,6 +2036,26 @@ int main(int argc, char** argv) {
                 }
                 if (f == 11) {
                     std::string e;
+                    // Root cause, established by measurement rather than assumed.
+                    //
+                    // The undo stack is SHARED across this whole automation run, and
+                    // the frames above this one (rename, +0.5 on X, undo, redo) leave
+                    // commands on it. So undoing the drag pops one step PAST where the
+                    // drag began and lands on the frame-4 position instead. Measured
+                    // values: "undo -> 0.0000, drag began at 0.5000".
+                    //
+                    // The editor is not at fault: `GizmoDrag::begin()` captures the
+                    // start transform it is handed, and
+                    // `Tests/EditorTests/test_viewport_drag.cpp` proves an undo
+                    // restores it. Emptying the stack before the drag does make this
+                    // check pass — and it was tried — but it also discards the history
+                    // that the Play/Stop snapshot (f==15/25) and the Save/Load
+                    // comparison (f==30) read, so those fail instead. Trading two
+                    // green checks for one is not a fix, so the drain is not there.
+                    //
+                    // What this keeps is the assertion and adds the numbers to the
+                    // message, so the next reader sees the two positions immediately
+                    // instead of auditing GizmoDrag and the command stack first.
                     const size_t before = app.stack().undo_size();
                     bool ok = app.viewport_release(e);
                     const auto sel = app.selection().primary();
@@ -1657,11 +2066,29 @@ int main(int argc, char** argv) {
                          app.stack().undo_size() == before + 1;
                     auto_check(ok, "Viewport release folds one undo step");
                     if (ok) {
+                        const float dragged_to = t->local_x;
+                        // Names the baseline entity, the one the pointer pick
+                        // resolved to, and the one the drag command recorded a
+                        // start for. Verified to be the same in the shipped run;
+                        // printing all three keeps that assumption checkable.
+                        const auto drag_target = app.selection().primary();
                         ok = app.undo(e);
                         const auto* rt = app.world()->get<nf::scene::Transform>(sel);
                         ok = ok && rt != nullptr &&
                              std::abs(rt->local_x - automation_drag_start_x) < 1e-4f;
-                        auto_check(ok, "Viewport drag undoes cleanly");
+                        char msg[352];
+                        std::snprintf(msg, sizeof(msg),
+                                      "Viewport drag undoes cleanly (dragged to %.4f, "
+                                      "undo -> %.4f, drag began at %.4f; baseline "
+                                      "entity %u, picked entity %u, undone entity %u, "
+                                      "%zu earlier command(s) on the stack)",
+                                      static_cast<double>(dragged_to),
+                                      rt != nullptr ? static_cast<double>(rt->local_x)
+                                                    : 0.0,
+                                      static_cast<double>(automation_drag_start_x),
+                                      automation_drag_entity.id, drag_target.id, sel.id,
+                                      app.stack().undo_size());
+                        auto_check(ok, msg);
                     }
                 }
                 if (f == 15) {
@@ -1681,9 +2108,9 @@ int main(int argc, char** argv) {
                         auto_check(lr.success, "Reload saved copy");
                         if (lr.success) {
                             std::string diff;
-                            auto_check(nf::editor::scenes_equal_structure(
-                                           *runtime.scene(), *lr.scene, diff),
-                                       "Save/Load structure round-trip");
+                            const bool eq = nf::editor::scenes_equal_structure(
+                                *runtime.scene(), *lr.scene, diff);
+                            auto_check(eq, ("Save/Load structure round-trip: " + diff).c_str());
                         }
                     }
                 }
@@ -1700,7 +2127,19 @@ int main(int argc, char** argv) {
                     }
                     std::string e;
                     bool ok = (mesh != nullptr) && app.drop_mesh_asset(*mesh, e);
-                    auto_check(ok, "Drag mesh to viewport (create entity)");
+                    // `e` carries why the drop was refused; without it a failure
+                    // here is indistinguishable from "the filter matched nothing".
+                    if (mesh == nullptr) {
+                        e = "no Mesh entry survived the 'cube' filter";
+                    } else if (!mesh->has_id) {
+                        // Name the entry: a filtered listing can hand back a mesh
+                        // the registry never resolved, and that is invisible
+                        // unless the path is in the message.
+                        e = "entry '" + mesh->logical_path +
+                            "' has no AssetId (browser_root=" +
+                            std::to_string(app.browser().browser_root) + ")";
+                    }
+                    auto_check(ok, ("Drag mesh to viewport (create entity): " + e).c_str());
                     if (ok) {
                         const size_t n = app.status().entity_count;
                         std::string ue;

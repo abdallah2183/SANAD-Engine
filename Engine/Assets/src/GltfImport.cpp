@@ -5,14 +5,153 @@
 
 #include <cgltf.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <vector>
 
 namespace nf::assets {
 
 namespace {
+
+std::string lowercase_gltf_extension(const std::string& path) {
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return ext;
+}
+
+bool has_glb_magic(const std::vector<unsigned char>& bytes) {
+    return bytes.size() >= 4 && std::memcmp(bytes.data(), "glTF", 4) == 0;
+}
+
+bool has_gltf_json_prefix(const std::vector<unsigned char>& bytes) {
+    usize i = 0;
+    if (bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        i = 3;
+    }
+    while (i < bytes.size() && std::isspace(static_cast<unsigned char>(bytes[i]))) ++i;
+    return i < bytes.size() && bytes[i] == '{';
+}
+
+// --- image extraction helpers ----------------------------------------------
+
+std::string lowercase_ascii(const std::string& s) {
+    std::string out = s;
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return out;
+}
+
+/// glTF uris are percent-encoded; a plain filename usually survives untouched,
+/// but "Hero%20Base.png" would otherwise be looked for with the escape in it.
+std::string percent_decode(const std::string& uri) {
+    std::string out;
+    out.reserve(uri.size());
+    for (usize i = 0; i < uri.size(); ++i) {
+        if (uri[i] == '%' && i + 2 < uri.size()) {
+            const auto hex_value = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int hi = hex_value(uri[i + 1]);
+            const int lo = hex_value(uri[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>(hi * 16 + lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(uri[i]);
+    }
+    return out;
+}
+
+int base64_value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+/// Decodes "data:image/png;base64,<payload>". Returns false for a data URI that
+/// is not base64, or that carries no payload — the percent-encoded text form
+/// exists in the spec but no image uses it.
+bool decode_data_uri_image(const std::string& uri, std::vector<u8>& out) {
+    const usize comma = uri.find(',');
+    if (comma == std::string::npos) return false;
+    if (lowercase_ascii(uri.substr(0, comma)).find(";base64") == std::string::npos) return false;
+
+    out.clear();
+    out.reserve((uri.size() - comma) / 4 * 3);
+    u32 accumulator = 0;
+    int bits = 0;
+    for (usize i = comma + 1; i < uri.size(); ++i) {
+        const char c = uri[i];
+        if (c == '=') break; // padding: the payload is complete
+        const int value = base64_value(c);
+        if (value < 0) continue; // whitespace and newlines are legal padding
+        accumulator = (accumulator << 6) | static_cast<u32>(value);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<u8>((accumulator >> bits) & 0xFFu));
+        }
+    }
+    return !out.empty();
+}
+
+/// Extension for a glTF mime type, or empty when it names something this engine
+/// does not decode. Only a FALLBACK: the bytes are sniffed first.
+std::string image_extension_for_mime(const char* mime) {
+    if (mime == nullptr) return {};
+    const std::string m = lowercase_ascii(mime);
+    if (m == "image/png") return ".png";
+    if (m == "image/jpeg" || m == "image/jpg") return ".jpg";
+    if (m == "image/bmp") return ".bmp";
+    if (m == "image/gif") return ".gif";
+    if (m == "image/webp") return ".webp";
+    if (m == "image/tga" || m == "image/x-tga") return ".tga";
+    return {};
+}
+
+bool read_file_bytes_at(const std::string& path, std::vector<u8>& out, std::string& error) {
+    std::FILE* f = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&f, path.c_str(), "rb") != 0) f = nullptr;
+#else
+    f = std::fopen(path.c_str(), "rb");
+#endif
+    if (f == nullptr) {
+        error = "cannot open '" + path + "'";
+        return false;
+    }
+    std::fseek(f, 0, SEEK_END);
+    const long len = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (len <= 0) {
+        std::fclose(f);
+        error = "empty file '" + path + "'";
+        return false;
+    }
+    out.resize(static_cast<usize>(len));
+    const usize got = std::fread(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    if (got != out.size()) {
+        error = "short read on '" + path + "'";
+        return false;
+    }
+    return true;
+}
 
 // Reads one vertex element (handles stride/offset, normalization and
 // component conversion via cgltf). Returns false on out-of-range access.
@@ -29,76 +168,47 @@ bool read_index(const cgltf_accessor* acc, usize i, u32& out) {
     return true;
 }
 
-void compute_mesh_bounds(MeshAsset& mesh) {
-    if (mesh.vertices.empty()) return;
-    AssetAABB box;
-    box.min_x = box.max_x = mesh.vertices[0].position[0];
-    box.min_y = box.max_y = mesh.vertices[0].position[1];
-    box.min_z = box.max_z = mesh.vertices[0].position[2];
-    for (const auto& v : mesh.vertices) {
-        if (v.position[0] < box.min_x) box.min_x = v.position[0];
-        if (v.position[0] > box.max_x) box.max_x = v.position[0];
-        if (v.position[1] < box.min_y) box.min_y = v.position[1];
-        if (v.position[1] > box.max_y) box.max_y = v.position[1];
-        if (v.position[2] < box.min_z) box.min_z = v.position[2];
-        if (v.position[2] > box.max_z) box.max_z = v.position[2];
-    }
-    mesh.bounds = box;
-    const float cx = (box.min_x + box.max_x) * 0.5f;
-    const float cy = (box.min_y + box.max_y) * 0.5f;
-    const float cz = (box.min_z + box.max_z) * 0.5f;
-    float r2 = 0.0f;
-    for (const auto& v : mesh.vertices) {
-        const float dx = v.position[0] - cx;
-        const float dy = v.position[1] - cy;
-        const float dz = v.position[2] - cz;
-        const float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 > r2) r2 = d2;
-    }
-    mesh.sphere = AssetSphere{cx, cy, cz, std::sqrt(r2)};
-}
+// Bounds and smooth normals used to be local here. They are now
+// recompute_mesh_bounds() / compute_smooth_normals() in MeshImport.cpp, shared
+// with the OBJ/STL/PLY readers so no two formats can disagree about what "the
+// bounds" or "a smooth normal" means. Two things changed when the local copies
+// went away, both fixes:
+//   - submesh bounds are now filled in (they used to stay zero, while
+//     MeshExport and Runtime::update already set them);
+//   - the smooth-normal helper takes ABSOLUTE indices. The local version added
+//     `base_vertex` to indices that already carried it (convert_mesh pushes
+//     `base_vertex + idx`), so every primitive after the first computed its
+//     normals from the wrong triangles.
 
-// Smooth (angle-averaged) normals for primitives that ship without NORMAL.
-void compute_smooth_normals(std::vector<AssetVertex>& verts, const std::vector<u32>& indices,
-                            usize base_vertex, usize index_start, usize index_count) {
-    for (usize i = index_start; i + 2 < index_start + index_count; i += 3) {
-        const u32 a = indices[i] + static_cast<u32>(base_vertex);
-        const u32 b = indices[i + 1] + static_cast<u32>(base_vertex);
-        const u32 c = indices[i + 2] + static_cast<u32>(base_vertex);
-        if (a >= verts.size() || b >= verts.size() || c >= verts.size()) continue;
-        const float* pa = verts[a].position;
-        const float* pb = verts[b].position;
-        const float* pc = verts[c].position;
-        const float ux = pb[0] - pa[0], uy = pb[1] - pa[1], uz = pb[2] - pa[2];
-        const float vx = pc[0] - pa[0], vy = pc[1] - pa[1], vz = pc[2] - pa[2];
-        float nx = uy * vz - uz * vy;
-        float ny = uz * vx - ux * vz;
-        float nz = ux * vy - uy * vx;
-        verts[a].normal[0] += nx; verts[a].normal[1] += ny; verts[a].normal[2] += nz;
-        verts[b].normal[0] += nx; verts[b].normal[1] += ny; verts[b].normal[2] += nz;
-        verts[c].normal[0] += nx; verts[c].normal[1] += ny; verts[c].normal[2] += nz;
-    }
-    for (usize i = base_vertex; i < verts.size(); ++i) {
-        float* n = verts[i].normal;
-        const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-        if (len > 1e-12f) {
-            n[0] /= len; n[1] /= len; n[2] /= len;
-        } else {
-            n[0] = 0; n[1] = 0; n[2] = 1;
+// The importer associates a mesh with the first node that binds a skin. Find
+// that skin's joint count before converting primitives so JOINTS_0 values can
+// be checked against the real destination range, not just u16's storage range.
+const cgltf_skin* bound_skin_for_mesh(const cgltf_data* data, const cgltf_mesh& mesh) {
+    for (usize ni = 0; ni < data->nodes_count; ++ni) {
+        const cgltf_node& node = data->nodes[ni];
+        if (node.mesh == &mesh && node.skin) {
+            return node.skin;
         }
     }
+    return nullptr;
 }
 
 // Converts one glTF mesh (all triangle primitives merged, one submesh each).
 // Returns false when nothing convertible was found (caller counts the skip).
-// Skinned primitives fill `skin_out` (parallel to the mesh in the result);
-// malformed JOINTS_0/WEIGHTS_0 pairs count in `skin_rejected` and leave the
-// mesh static — never half-skinned.
+// Skin bindings are assembled transactionally for the whole mesh: if any
+// convertible triangle primitive is unskinned or malformed, no partial binding
+// is published and the rejection is counted.
 bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_index,
                   const std::string& logical_path, MeshAsset& out, GltfMeshSkin& skin_out,
-                  u32& skipped, u32& skin_rejected) {
+                  u32& skipped, u32& skin_rejected, const cgltf_skin* bound_skin) {
     out.logical_path = logical_path + "#mesh" + std::to_string(mesh_index);
     out.format_version = 1;
+
+    std::vector<u16> mesh_joints;
+    std::vector<float> mesh_weights;
+    bool saw_skin_attributes = false;
+    u32 malformed_skin_primitives = 0;
+    u32 unskinned_primitives = 0;
 
     for (usize pi = 0; pi < mesh.primitives_count; ++pi) {
         const cgltf_primitive& prim = mesh.primitives[pi];
@@ -165,51 +275,53 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
 
         // Per-vertex skin binding: JOINTS_0 (raw u8/u16 joint indices) plus
         // WEIGHTS_0 (normalized u8/u16 or float — cgltf resolves both to
-        // [0, 1] floats). Both must be VEC4 covering every vertex; anything
-        // else rejects the binding loudly instead of mis-binding.
+        // [0, 1] floats). Stage this primitive's arrays; nothing is published
+        // until the complete mesh has been validated below.
+        std::vector<u16> primitive_joints;
+        std::vector<float> primitive_weights;
+        bool primitive_bind_ok = true;
         if (joints || weights) {
             const bool shape_ok = joints && weights &&
                                   joints->type == cgltf_type_vec4 &&
                                   weights->type == cgltf_type_vec4 &&
                                   joints->count == pos->count &&
                                   weights->count == pos->count;
-            if (!shape_ok || (skin_out.vertex_count != 0 &&
-                              skin_out.vertex_count != base_vertex)) {
-                ++skin_rejected;
-            } else {
-                bool bind_ok = true;
-                std::vector<u16> j(static_cast<usize>(pos->count) * 4);
-                std::vector<float> w(static_cast<usize>(pos->count) * 4);
-                for (usize vi = 0; vi < pos->count && bind_ok; ++vi) {
+            primitive_bind_ok = shape_ok;
+            if (primitive_bind_ok) {
+                primitive_joints.resize(static_cast<usize>(pos->count) * 4);
+                primitive_weights.resize(static_cast<usize>(pos->count) * 4);
+                for (usize vi = 0; vi < pos->count && primitive_bind_ok; ++vi) {
                     float jr[4] = {0, 0, 0, 0};
                     float wr[4] = {0, 0, 0, 0};
                     if (!read_attrib_floats(joints, vi, jr, 4) ||
                         !read_attrib_floats(weights, vi, wr, 4)) {
-                        bind_ok = false;
+                        primitive_bind_ok = false;
                         break;
                     }
                     float sum = 0.0f;
                     for (int c = 0; c < 4; ++c) {
-                        if (jr[c] < 0.0f || jr[c] > 65535.0f ||
-                            jr[c] != std::floor(jr[c])) {
-                            bind_ok = false;
+                        if (!std::isfinite(jr[c]) || !std::isfinite(wr[c]) ||
+                            jr[c] < 0.0f || jr[c] > 65535.0f ||
+                            jr[c] != std::floor(jr[c]) || wr[c] < 0.0f) {
+                            primitive_bind_ok = false;
                             break;
                         }
-                        sum += wr[c] > 0.0f ? wr[c] : 0.0f;
+                        if (bound_skin &&
+                            static_cast<usize>(jr[c]) >= bound_skin->joints_count) {
+                            primitive_bind_ok = false;
+                            break;
+                        }
+                        sum += wr[c];
                     }
-                    if (!bind_ok) break;
-                    const float inv = sum > 1e-8f ? 1.0f / sum : 0.0f;
+                    if (!primitive_bind_ok || !std::isfinite(sum) || sum <= 1e-8f) {
+                        primitive_bind_ok = false;
+                        break;
+                    }
+                    const float inv = 1.0f / sum;
                     for (int c = 0; c < 4; ++c) {
-                        j[vi * 4 + c] = static_cast<u16>(jr[c]);
-                        w[vi * 4 + c] = (wr[c] > 0.0f ? wr[c] : 0.0f) * inv;
+                        primitive_joints[vi * 4 + c] = static_cast<u16>(jr[c]);
+                        primitive_weights[vi * 4 + c] = wr[c] * inv;
                     }
-                }
-                if (!bind_ok) {
-                    ++skin_rejected;
-                } else {
-                    skin_out.vertex_count = static_cast<u32>(base_vertex + pos->count);
-                    skin_out.joints.insert(skin_out.joints.end(), j.begin(), j.end());
-                    skin_out.weights.insert(skin_out.weights.end(), w.begin(), w.end());
                 }
             }
         }
@@ -252,8 +364,23 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
         }
 
         if (!nrm) {
+            // Absolute indices, matching how convert_mesh stores them.
             compute_smooth_normals(out.vertices, out.indices, base_vertex, base_index,
                                    prim_index_count);
+        }
+
+        if (joints || weights) {
+            saw_skin_attributes = true;
+            if (primitive_bind_ok) {
+                mesh_joints.insert(mesh_joints.end(), primitive_joints.begin(),
+                                   primitive_joints.end());
+                mesh_weights.insert(mesh_weights.end(), primitive_weights.begin(),
+                                    primitive_weights.end());
+            } else {
+                ++malformed_skin_primitives;
+            }
+        } else {
+            ++unskinned_primitives;
         }
 
         AssetSubMesh sub;
@@ -270,8 +397,19 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
     }
 
     if (out.submeshes.empty()) return false;
+    if (saw_skin_attributes) {
+        const u32 rejected = malformed_skin_primitives + unskinned_primitives;
+        if (rejected == 0 && mesh_joints.size() == out.vertices.size() * 4 &&
+            mesh_weights.size() == out.vertices.size() * 4) {
+            skin_out.vertex_count = static_cast<u32>(out.vertices.size());
+            skin_out.joints = std::move(mesh_joints);
+            skin_out.weights = std::move(mesh_weights);
+        } else {
+            skin_rejected += rejected != 0 ? rejected : 1u;
+        }
+    }
     if (mesh.name) out.logical_path = std::string(logical_path) + "#" + mesh.name;
-    compute_mesh_bounds(out);
+    recompute_mesh_bounds(out);
     return true;
 }
 
@@ -301,6 +439,70 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
     GltfImportResult result;
     u32 skipped = 0;
 
+    // --- images, before materials -------------------------------------------
+    // A material's `albedo_image` indexes this list, so the list has to exist
+    // first. Images are kept in their ORIGINAL encoded bytes: re-encoding would
+    // lose data, and the bytes are what a texture asset needs on disk.
+    std::vector<int> image_index_of(data->images_count, -1);
+    const std::filesystem::path base_dir = std::filesystem::path(logical_path).parent_path();
+    for (usize ii = 0; ii < data->images_count; ++ii) {
+        const cgltf_image& img = data->images[ii];
+        MeshImportImage out;
+        out.name = img.name ? img.name : ("image" + std::to_string(ii));
+        bool extracted = false;
+
+        if (img.buffer_view != nullptr && img.buffer_view->buffer != nullptr &&
+            img.buffer_view->buffer->data != nullptr) {
+            // Embedded: a GLB BIN chunk, or a base64 buffer the loader resolved.
+            const cgltf_buffer* buffer = img.buffer_view->buffer;
+            const usize offset = img.buffer_view->offset;
+            const usize length = img.buffer_view->size;
+            if (offset <= buffer->size && length <= buffer->size - offset) {
+                const u8* base = static_cast<const u8*>(buffer->data);
+                out.bytes.assign(base + offset, base + offset + length);
+                out.source = "bufferView " + std::to_string(ii);
+                extracted = !out.bytes.empty();
+            }
+        } else if (img.uri != nullptr) {
+            const std::string uri = percent_decode(img.uri);
+            const std::string lower = lowercase_ascii(uri);
+            if (lower.rfind("data:", 0) == 0) {
+                // A self-contained .gltf may inline the image as a data URI.
+                if (!decode_data_uri_image(uri, out.bytes)) out.bytes.clear();
+                out.source = "data URI";
+                extracted = !out.bytes.empty();
+            } else {
+                // External file beside the .gltf/.glb. Only the file-based entry
+                // point can resolve this; a memory import reports the loss.
+                std::vector<u8> file_bytes;
+                std::string read_error;
+                const std::string file_path = (base_dir / uri).string();
+                if (read_file_bytes_at(file_path, file_bytes, read_error)) {
+                    out.bytes = std::move(file_bytes);
+                    out.source = "uri " + uri;
+                    extracted = !out.bytes.empty();
+                }
+            }
+        }
+
+        if (!extracted) {
+            ++result.images_skipped;
+            result.warnings.push_back("image '" + out.name +
+                                      "' could not be read out of the source and was skipped");
+            continue;
+        }
+        const char* sniffed = image_extension_for_bytes(out.bytes);
+        std::string fallback;
+        if (img.uri != nullptr) {
+            fallback = lowercase_ascii(std::filesystem::path(percent_decode(img.uri)).extension().string());
+        } else if (img.mime_type != nullptr) {
+            fallback = image_extension_for_mime(img.mime_type);
+        }
+        out.extension = sniffed[0] != '\0' ? std::string(sniffed) : fallback;
+        image_index_of[ii] = static_cast<int>(result.images.size());
+        result.images.push_back(std::move(out));
+    }
+
     for (usize mi = 0; mi < data->materials_count; ++mi) {
         const cgltf_material& m = data->materials[mi];
         GltfMaterialInfo info;
@@ -311,17 +513,68 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
             }
             info.metallic = m.pbr_metallic_roughness.metallic_factor;
             info.roughness = m.pbr_metallic_roughness.roughness_factor;
+
+            // The base-colour map is the one texture this pipeline carries; the
+            // engine's MaterialAsset stores exactly one albedo image.
+            const cgltf_texture* albedo = m.pbr_metallic_roughness.base_color_texture.texture;
+            if (albedo != nullptr && albedo->image != nullptr) {
+                const usize image_index = static_cast<usize>(albedo->image - data->images);
+                if (image_index < image_index_of.size() && image_index_of[image_index] >= 0) {
+                    info.albedo_image = image_index_of[image_index];
+                }
+            }
         }
-        result.materials.push_back(info);
+        for (int c = 0; c < 3; ++c) {
+            info.emissive[c] = m.emissive_factor[c];
+        }
+        if (m.has_emissive_strength) {
+            info.emissive_strength = m.emissive_strength.emissive_strength;
+        }
+
+        // Everything else the material declares, named so the loss is visible
+        // instead of implied. These are real slots an artist authored; the
+        // engine's 12-float material block simply has nowhere to put them.
+        if (m.has_pbr_metallic_roughness &&
+            m.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr) {
+            info.dropped.push_back("metallic_roughness map (only the base-colour map is carried)");
+        }
+        if (m.normal_texture.texture != nullptr) {
+            info.dropped.push_back("normal map (only the base-colour map is carried)");
+        }
+        if (m.occlusion_texture.texture != nullptr) {
+            info.dropped.push_back("occlusion map (only the base-colour map is carried)");
+        }
+        if (m.emissive_texture.texture != nullptr) {
+            info.dropped.push_back("emissive map (only the base-colour map is carried)");
+        }
+        if (m.has_pbr_specular_glossiness) {
+            info.dropped.push_back("specular_glossiness (no equivalent in this pipeline)");
+        }
+        if (m.has_clearcoat) info.dropped.push_back("clearcoat (no equivalent in this pipeline)");
+        if (m.has_transmission) info.dropped.push_back("transmission (no equivalent in this pipeline)");
+        if (m.has_sheen) info.dropped.push_back("sheen (no equivalent in this pipeline)");
+        if (m.has_iridescence) info.dropped.push_back("iridescence (no equivalent in this pipeline)");
+        if (m.alpha_mode != cgltf_alpha_mode_opaque) {
+            info.dropped.push_back(m.alpha_mode == cgltf_alpha_mode_mask
+                                       ? "alpha mode MASK (imported as blended alpha)"
+                                       : "alpha mode BLEND (imported as blended alpha)");
+        }
+        result.materials.push_back(std::move(info));
     }
 
     for (usize mi = 0; mi < data->meshes_count; ++mi) {
         auto mesh = std::make_unique<MeshAsset>();
         GltfMeshSkin skin;
         if (convert_mesh(data, data->meshes[mi], mi, logical_path, *mesh, skin,
-                         skipped, result.skin_bindings_rejected)) {
+                         skipped, result.skin_bindings_rejected,
+                         bound_skin_for_mesh(data, data->meshes[mi]))) {
             result.meshes.push_back(std::move(mesh));
             result.mesh_skins.push_back(std::move(skin));
+            // The name the source gave this mesh, so an importer that has to
+            // invent a file name can prefer the author's word over an index.
+            result.mesh_names.push_back(data->meshes[mi].name
+                                            ? std::string(data->meshes[mi].name)
+                                            : "mesh" + std::to_string(mi));
         }
     }
     result.primitives_skipped = skipped;
@@ -412,9 +665,9 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
         }
     }
 
-    // Animations: LINEAR/STEP channels for translation/rotation/scale.
-    // CUBICSPLINE and morph-weight channels are counted in
-    // anim_channels_skipped — visible, never silently dropped.
+    // Animations: LINEAR channels for translation/rotation/scale. STEP and
+    // CUBICSPLINE are explicitly rejected and counted: converting STEP to the
+    // engine's linear/slerp sampler would silently change the motion.
     for (usize ai = 0; ai < data->animations_count; ++ai) {
         const cgltf_animation& a = data->animations[ai];
         GltfAnimationInfo info;
@@ -425,7 +678,7 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
                 ++result.anim_channels_skipped;
                 continue;
             }
-            if (ch.sampler->interpolation == cgltf_interpolation_type_cubic_spline) {
+            if (ch.sampler->interpolation != cgltf_interpolation_type_linear) {
                 ++result.anim_channels_skipped;
                 continue;
             }
@@ -469,6 +722,11 @@ GltfImportResult import_gltf_memory(const void* data, usize size, const std::str
         result.error = "import_gltf_memory: empty input";
         return result;
     }
+    // The bytes decide, not the caller: a memory import that holds a GLB
+    // container says so, so a report can name the container it actually read.
+    // Checked straight off the pointer — copying the buffer to look at four
+    // bytes would double a model's peak memory for nothing.
+    const bool glb_container = size >= 4 && std::memcmp(data, "glTF", 4) == 0;
     cgltf_options options{};
     cgltf_data* parsed = nullptr;
     if (cgltf_parse(&options, data, size, &parsed) != cgltf_result_success || !parsed) {
@@ -488,6 +746,9 @@ GltfImportResult import_gltf_memory(const void* data, usize size, const std::str
         return result;
     }
     result = convert_parsed(parsed, logical_path);
+    // Set AFTER the conversion: convert_parsed() returns a whole fresh result,
+    // so anything written before this line would be overwritten by it.
+    result.format = glb_container ? MeshImportFormat::Glb : MeshImportFormat::Gltf;
     cgltf_free(parsed);
     return result;
 }
@@ -496,6 +757,17 @@ GltfImportResult import_gltf_file(const std::string& path) {
     GltfImportResult result;
     if (path.empty()) {
         result.error = "import_gltf_file: empty path";
+        return result;
+    }
+    const std::string extension = lowercase_gltf_extension(path);
+    if (extension != ".gltf" && extension != ".glb") {
+        // Still refused here — this entry point reads glTF and nothing else.
+        // The other formats have their own readers; import_mesh_file() (see
+        // MeshImport.hpp) dispatches to all of them, and is what a caller who
+        // does not know the format ahead of time should use.
+        result.error = "unsupported model extension '" + extension +
+                       "' (this entry point reads .gltf/.glb only; use import_mesh_file for "
+                       "OBJ/STL/PLY/NFMesh)";
         return result;
     }
     std::FILE* f = nullptr;
@@ -524,6 +796,21 @@ GltfImportResult import_gltf_file(const std::string& path) {
         return result;
     }
 
+    const bool glb_content = has_glb_magic(bytes);
+    const bool gltf_json_content = has_gltf_json_prefix(bytes);
+    if ((extension == ".glb" && !glb_content) ||
+        (extension == ".gltf" && !gltf_json_content)) {
+        result.error = "extension/content mismatch for '" + path + "': expected " +
+                       extension + " but detected " +
+                       (glb_content ? "glTF binary (GLB)" :
+                        gltf_json_content ? "glTF JSON" : "neither glTF JSON nor GLB");
+        return result;
+    }
+    // Which container the bytes actually are. Assigned to `result` only AFTER
+    // convert_parsed(), because that call returns a whole fresh result and
+    // would overwrite anything set here.
+    const bool glb_container = glb_content;
+
     cgltf_options options{};
     cgltf_data* parsed = nullptr;
     if (cgltf_parse(&options, bytes.data(), bytes.size(), &parsed) != cgltf_result_success ||
@@ -543,6 +830,7 @@ GltfImportResult import_gltf_file(const std::string& path) {
     }
     result = convert_parsed(parsed, path);
     if (!result.ok) result.error += std::string(" [") + path + "]";
+    result.format = glb_container ? MeshImportFormat::Glb : MeshImportFormat::Gltf;
     cgltf_free(parsed);
     return result;
 }

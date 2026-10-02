@@ -1,9 +1,11 @@
 #include <NF/Editor/Outliner.hpp>
+#include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -79,9 +81,21 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
         stack.pop_back();
         auto cit = children.find(f.e.id);
         const bool has_children = (cit != children.end() && !cit->second.empty());
+        // Type glyph: most specific first, so an entity that is both a camera
+        // and a mesh still reads as a camera in the tree.
+        OutlinerKind kind = OutlinerKind::Empty;
+        if (world.has<runtime::CameraComponent>(f.e)) {
+            kind = OutlinerKind::Camera;
+        } else if (world.has<runtime::DirectionalLight>(f.e)) {
+            kind = OutlinerKind::Light;
+        } else if (world.has<runtime::SkyComponent>(f.e)) {
+            kind = OutlinerKind::Sky;
+        } else if (world.has<runtime::MeshComponent>(f.e)) {
+            kind = OutlinerKind::Mesh;
+        }
         rows.push_back(OutlinerRow{f.e, f.depth, has_children,
                                   world.has<scene::PrefabLinkComponent>(f.e),
-                                  entity_label(world, f.e)});
+                                  entity_label(world, f.e), kind});
         if (has_children && state.is_expanded(f.e)) {
             for (auto it = cit->second.rbegin(); it != cit->second.rend(); ++it) {
                 stack.push_back(Frame{*it, f.depth + 1});
@@ -89,6 +103,30 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
         }
     }
     return rows;
+}
+
+std::vector<OutlinerRow> filter_outliner_rows(const std::vector<OutlinerRow>& rows,
+                                              const std::string& filter) {
+    if (filter.empty()) {
+        return rows;
+    }
+    std::string needle = filter;
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::vector<OutlinerRow> out;
+    for (const OutlinerRow& row : rows) {
+        std::string hay = row.label;
+        std::transform(hay.begin(), hay.end(), hay.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (hay.find(needle) != std::string::npos) {
+            OutlinerRow flat = row;
+            flat.depth = 0;
+            out.push_back(flat);
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const OutlinerRow& a, const OutlinerRow& b) { return a.entity.id < b.entity.id; });
+    return out;
 }
 
 } // namespace nf::editor

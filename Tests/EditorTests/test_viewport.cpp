@@ -200,3 +200,70 @@ NF_TEST(editor_grid_thins_only_beyond_the_dense_radius) {
     NF_CHECK(editor::grid_line_visible(20, 20.0f));
     NF_CHECK(!editor::grid_line_visible(21, 20.5f));
 }
+
+NF_TEST(editor_grid_window_follows_the_view_pivot) {
+    // The regression this pins: the draw window used to be -half..+half off the
+    // WORLD ORIGIN, so framing a level at x = 50 produced a viewport with no
+    // floor reference at all — the one thing the grid is for.
+    constexpr int kHalf = 50;
+    const auto at_origin = editor::grid_cell_range_around(0.0f, 1.0f, kHalf);
+    NF_CHECK(!at_origin.empty());
+    NF_CHECK(at_origin.lo <= 0);
+    NF_CHECK(at_origin.hi >= 0);
+
+    const auto at_50 = editor::grid_cell_range_around(50.0f, 1.0f, kHalf);
+    NF_CHECK(at_50.lo <= 50);
+    NF_CHECK(at_50.hi >= 50);
+    // ...and it moved, rather than being the same window as at the origin.
+    NF_CHECK(at_50.lo > at_origin.lo);
+    NF_CHECK(at_50.hi > at_origin.hi);
+    NF_CHECK_EQ(at_50.count(), at_origin.count());
+
+    // Negative and fractional pivots land on a real cell: floor/ceil, never a
+    // truncating cast that would drop the cell the camera is standing on.
+    const auto at_frac = editor::grid_cell_range_around(50.7f, 1.0f, kHalf);
+    NF_CHECK(at_frac.lo <= 50);
+    NF_CHECK(at_frac.hi >= 51);
+    const auto at_neg = editor::grid_cell_range_around(-17.3f, 1.0f, kHalf);
+    NF_CHECK(at_neg.lo <= -18);
+    NF_CHECK(at_neg.hi >= -17);
+
+    // Non-positive spacing or extent draws nothing rather than looping forever.
+    NF_CHECK(editor::grid_cell_range_around(10.0f, 0.0f, kHalf).empty());
+    NF_CHECK(editor::grid_cell_range_around(10.0f, -1.0f, kHalf).empty());
+    NF_CHECK(editor::grid_cell_range_around(10.0f, 1.0f, 0).empty());
+    NF_CHECK(editor::grid_cell_range_around(10.0f, 1.0f, -3).empty());
+
+    // The budget shrinks the window rather than clamping its index: a far pivot
+    // must still be COVERED, or the grid appears to float in empty space
+    // hundreds of metres from the user.
+    const auto capped = editor::grid_cell_range_around(100000.0f, 0.1f, kHalf, 16);
+    NF_CHECK(!capped.empty());
+    NF_CHECK(capped.count() <= 16);
+    NF_CHECK(capped.lo <= 1000000);
+    NF_CHECK(capped.hi >= 1000000);
+    // The budget never drops below the centre's own cell.
+    const auto tiny = editor::grid_cell_range_around(100000.0f, 0.1f, kHalf, 1);
+    NF_CHECK_EQ(tiny.count(), 1);
+    NF_CHECK(tiny.lo <= 1000000);
+    NF_CHECK(tiny.hi >= 1000000);
+    // A non-positive budget is empty, not a runaway loop.
+    NF_CHECK(editor::grid_cell_range_around(10.0f, 1.0f, kHalf, 0).empty());
+    NF_CHECK(editor::grid_cell_range_around(10.0f, 1.0f, kHalf, -4).empty());
+}
+
+NF_TEST(editor_grid_axis_colour_tracks_the_origin_not_the_pivot) {
+    // The colour rule is "this line passes through x = 0", independent of where
+    // the view pivot is. Conflating the two makes the origin cross appear to
+    // move every time the user frames something.
+    NF_CHECK(editor::grid_cell_is_world_axis(0, 1.0f));
+    NF_CHECK(!editor::grid_cell_is_world_axis(1, 1.0f));
+    NF_CHECK(!editor::grid_cell_is_world_axis(-1, 1.0f));
+    NF_CHECK(!editor::grid_cell_is_world_axis(50, 1.0f));
+    // Spacing-independent: the lattice is anchored at 0 whatever the step, so
+    // cell 0 is the axis for a fine step too.
+    NF_CHECK(editor::grid_cell_is_world_axis(0, 0.25f));
+    NF_CHECK(!editor::grid_cell_is_world_axis(1, 0.25f));
+    // A non-positive step has no lattice, so nothing is an axis.
+    NF_CHECK(!editor::grid_cell_is_world_axis(0, 0.0f));
+}

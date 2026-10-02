@@ -3,6 +3,7 @@
 #include <NF/Runtime/BuiltinModules.hpp>
 #include <NF/Runtime/KeyboardInput.hpp>
 #include <NF/Runtime/RunConfigResolver.hpp>
+#include <NF/Runtime/InputLog.hpp>
 #include <NF/Platform/Platform.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/Core/Logger.hpp>
@@ -18,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <span>
 #include <thread>
 #include <vector>
@@ -60,6 +62,28 @@ int Application::run() {
     const std::string& resolved_title = run_cfg.title;
     const uint32_t resolved_width = run_cfg.width;
     const uint32_t resolved_height = run_cfg.height;
+
+    // --- Input record/replay validation -------------------------------------
+    // Before any expensive setup: a mistyped --replay path should cost a
+    // second, not a window and a device.
+    //
+    // `replay_log` is declared out here, not inside the probe scope, because
+    // it is the object `play_input_log()` is later handed. Loading it into a
+    // local that then went out of scope — and replaying a second, still-empty
+    // log — is the exact bug this shape invites: the run reports success while
+    // replaying nothing at all, which is the failure the whole flag exists to
+    // prevent.
+    InputLog replay_log;
+    ReplayProbe replay_probe = ReplayProbe::NotConfigured;
+    {
+        std::string input_err;
+        if (!prepare_input_replay(m_config, replay_log, replay_probe, input_err)) {
+            NF_LOG_ERROR(LogCategory::Core, "{}", input_err);
+            JobSystem::instance().shutdown();
+            platform_shutdown();
+            return 1;
+        }
+    }
 
     // Asset Registry
     assets::AssetRegistry registry;
@@ -233,6 +257,33 @@ int Application::run() {
             NF_LOG_INFO(LogCategory::Core, "Gameplay modules registered: {} (input: {})",
                         runtime.gameplay_module_count(),
                         runtime.input_source() != nullptr ? "keyboard" : "none");
+        }
+
+        // --- Deterministic input ------------------------------------------------
+        // Prepared before the loop so a bad flag fails the run at startup with a
+        // message, instead of producing a "successful" run in which nothing was
+        // ever replayed and the entity stood still for reasons nobody can see.
+        // Both `replay_log` and `replay_probe` come from the validation above.
+        const bool replaying = !m_config.input_replay_path.empty();
+        if (replaying) {
+            // A replay replaces the keyboard outright, including in a headless
+            // run where no keyboard was ever installed. That is the whole point:
+            // `PlayerController` polls an action, and without a source it polls
+            // nothing and does nothing — so before this route existed, a
+            // headless run could not demonstrate input-driven gameplay at all.
+            runtime.set_playing(true);
+            runtime.play_input_log(replay_log);
+            NF_LOG_INFO(LogCategory::Core,
+                        "Replaying input log: {} frames from '{}' ({})",
+                        replay_log.frame_count(), m_config.input_replay_path,
+                        to_string(replay_probe));
+        } else if (!m_config.input_log_path.empty()) {
+            // Capture wraps whatever source is live. With a keyboard installed it
+            // records real play; headless it records the "no source" stream, which
+            // is still a replayable history of a run that polled nothing.
+            runtime.begin_input_capture();
+            NF_LOG_INFO(LogCategory::Core, "Recording input log to '{}'",
+                        m_config.input_log_path);
         }
 
         // Two frames in flight: while the GPU executes frame N the CPU records
@@ -469,7 +520,56 @@ int Application::run() {
         asset_manager.clear();
         device->wait_idle();
         NF_LOG_INFO(LogCategory::Core, "Shutting down runtime after {} frames", frame_count);
+
+        // --- Write the recording, if one was asked for -----------------------
+        // After the frame loop and before the runtime dies, because
+        // end_input_capture() hands back the log the loop filled.
+        //
+        // A failed write is reported and fails the run: an `--input-log` that
+        // silently writes nothing is the exact failure this flag exists to
+        // prevent — a recording step that appears to work and leaves no evidence.
+        if (!m_config.input_log_path.empty()) {
+            const InputLog recorded = runtime.end_input_capture();
+            std::error_code write_ec;
+            const std::filesystem::path out_path(m_config.input_log_path);
+            if (out_path.has_parent_path()) {
+                std::filesystem::create_directories(out_path.parent_path(), write_ec);
+            }
+            std::ofstream log_file(out_path, std::ios::binary | std::ios::trunc);
+            if (log_file) {
+                log_file << recorded.serialize();
+                log_file.close();
+                NF_LOG_INFO(LogCategory::Core, "Wrote input log: {} frames to '{}'",
+                            recorded.frame_count(), out_path.string());
+            } else {
+                // Reported, not fatal: the simulation ran and its result is
+                // valid, so refusing to exit cleanly would throw away a
+                // successful run over a sidecar file. The log is gone either
+                // way, so the message says exactly that.
+                NF_LOG_ERROR(LogCategory::Core,
+                             "--input-log: could not open '{}' for writing — the "
+                             "recording of this run was lost",
+                             out_path.string());
+            }
+        }
     }
+
+    // --replay-strict turns "the flag was accepted" into "the flag did something".
+    // Checked here, outside the runtime's lifetime, so the guarantee does not
+    // depend on GPU teardown having succeeded first.
+    if (m_config.input_replay_strict && replay_log.frame_count() == 0) {
+        NF_LOG_ERROR(LogCategory::Core,
+                     "--replay-strict: --replay was given but served no frames, "
+                     "so this run proved nothing.");
+        swapchain.reset();
+        device->wait_idle();
+        device->shutdown();
+        if (!m_config.headless) window.destroy();
+        JobSystem::instance().shutdown();
+        platform_shutdown();
+        return 1;
+    }
+
     // All GPU objects from the scope above are gone (Runtime, AssetManager,
     // per-frame cmd/semaphores). Only the swapchain remains.
     swapchain.reset();

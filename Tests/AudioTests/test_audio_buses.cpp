@@ -10,6 +10,7 @@
 #include <NF/Audio/AudioEngine.hpp>
 #include <NF/Audio/Buses.hpp>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -107,6 +108,18 @@ NF_TEST(volume_setter_clamps_and_reports_a_real_change) {
     NF_CHECK_NEAR(s.volume(bogus), 1.0f, 1e-6f);
 }
 
+NF_TEST(volume_setter_rejects_non_finite_values) {
+    AudioVolumeSettings settings;
+    const f32 before = settings.volume(BusId::Music);
+    const f32 nan = std::numeric_limits<f32>::quiet_NaN();
+    const f32 infinity = std::numeric_limits<f32>::infinity();
+
+    NF_CHECK(!settings.set_volume(BusId::Music, nan));
+    NF_CHECK(!settings.set_volume(BusId::Music, infinity));
+    NF_CHECK(!settings.set_volume(BusId::Music, -infinity));
+    NF_CHECK_NEAR(settings.volume(BusId::Music), before, 1e-6f);
+}
+
 // ---------------------------------------------------------------------------
 // Persistence — the settings-file half of the Settings contract
 // ---------------------------------------------------------------------------
@@ -177,6 +190,24 @@ NF_TEST(volume_settings_refuse_keys_they_do_not_own) {
     NF_CHECK_NEAR(s.volume(BusId::Music), 1.0f, 1e-6f);
     NF_CHECK(s.apply_setting("audio.volume.music", "0.25"));
     NF_CHECK_NEAR(s.volume(BusId::Music), 0.25f, 1e-6f);
+}
+
+NF_TEST(volume_settings_reject_malformed_and_trailing_values) {
+    AudioVolumeSettings settings;
+    NF_CHECK(settings.set_volume(BusId::Music, 0.33f));
+    const std::string embedded_nul("0.5\0x", 5);
+    const std::string too_long(63, '1');
+
+    NF_CHECK(!settings.apply_setting("audio.volume.music", ""));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", " 0.5"));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", "0.5 "));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", "0.5x"));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", "nan"));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", "inf"));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", "1e999"));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", embedded_nul));
+    NF_CHECK(!settings.apply_setting("audio.volume.music", too_long));
+    NF_CHECK_NEAR(settings.volume(BusId::Music), 0.33f, 1e-6f);
 }
 
 // ---------------------------------------------------------------------------

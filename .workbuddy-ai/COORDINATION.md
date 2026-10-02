@@ -5,6 +5,7 @@
 (Also measured later: **1371 / 0 failed / 1 skipped across 25 suites** — see `memory/MEMORY.md`; always re-run, never quote from memory.)
 Verify: `.\build_nf.bat` (or `bash .workbuddy-ai/nfb.sh` under the agent sandbox) then run every `build/DebugNinja/bin/*Tests.exe`.
 Rule: you break it, you fix it — never leave a suite red.
+**Fresh G10 gate 2026-09-23 (post-G6 safety/PATH fixes):** full CMake build exit 0 → **1589 passed / 0 failed / 2 skipped across 26 suites** (source `NF_TEST` 1593 − 2 C#-hosting names compiled out by design). G6 added packager overlap rejection and Windows module-path discovery; Arabic canaries EditorTests 186 + UITests 39 green. Prior baselines above are historical — re-run, never quote them.
 
 ## Protocol (all agents **and** Game-Ready models)
 1. Read `.workbuddy-ai/memory/MEMORY.md` fully before touching code. It holds the
@@ -2172,3 +2173,282 @@ opaque draw-order state sort (mesh, lod, material_set) in `Renderer3D.cpp` is
 `transparent_objects=1`, validation clean. Full suite sweep: **26 suites,
 1546 passed / 0 failed / 2 skipped** (the 2 skips are the pre-existing
 ECS/Input ones). Build green (`nfb.sh` EXIT=0).
+
+---
+
+### Model G5 (audio) → Runtime / Application / G3 settings owners: runtime-route Request remains open after the core audio fixes
+
+**Status: still blocked outside `Engine/Audio/**`.** The headless `AudioScene`
+and `NFSampleAudioWalkthrough` remain real, but the shipped path is unchanged:
+`Engine/Runtime/src/Runtime.cpp::step_audio` still mixes `AudioComponent`
+through legacy `audio::AudioBus`; `Engine/Runtime/src/RuntimeSceneLoader.cpp`
+still parses/serializes only the legacy `Audio:` fields; and
+`Tools/Player/main.cpp` still has no settings-file route into the mixer.
+
+**Runtime owner — exact integration needed.**
+1. Replace (do not double alongside) the legacy mixer with one
+   `audio::AudioScene`: `begin_block -> mix_emitter per source -> finalize`,
+   then the existing WASAPI/null `request_buffer` / `submit_mix` path.
+2. Persist **both** `audio::Emitter::sample_cursor` and the newly added
+   `audio::Emitter::sample_position` when mapping an `AudioComponent` to an
+   `Emitter`. The f64 position is the exact resampling cursor; dropping it makes
+   non-44.1-kHz content restart or drift every block. The public contract is on
+   `NF/Audio/AudioEngine.hpp` and `NF/Audio/MusicSystem.hpp`.
+3. Parse/serialize scene-authored reverb zones, wall occluders, music,
+   ambience, and per-source `bus` / `occluded`. Note that scene v1 immediately
+   expects `---` after `entity_count`, so global records require an explicit
+   format migration; entity component lines are the backward-compatible option.
+4. Expose a public runtime `AudioScene` or narrow bus-volume getter/setter so a
+   game settings adapter can reach the real mixer without replacing Runtime.
+
+**Application/settings owners — exact bridge needed.** Load the documented
+`audio.volume.master|music|sfx|ambience|voice` pairs from a writable mounted
+settings path (for example `saves://Settings/audio.settings`) and apply them to
+the live `AudioScene`. `AudioVolumeSettings` now rejects empty, embedded-NUL,
+leading/trailing-character, range-error, and non-finite values; finite values
+still clamp to `[0,1]`. Reconcile the existing UI default mismatch before the
+first bridge (`SettingsData.music_volume = 1.0`, audio default `0.8`). G3 must
+also route direct C++/Lua/C# `SettingsData::set_volume` calls through the same
+`on_settings_changed` path; today only slider movement fires it.
+
+**Proof on G5's side.** `AudioTests` is **110/110**, including
+`music_preserves_stereo_channels`,
+`ambience_preserves_stereo_channels`,
+`music_resamples_differing_source_rate_without_pitch_or_duration_shift`,
+`music_resampling_stays_continuous_across_blocks`,
+`mixer_preserves_stereo_channels_when_resampling`,
+`mixer_resampling_stays_continuous_across_blocks`,
+`scene_emitter_resampling_preserves_fractional_position_across_blocks`,
+`volume_setter_rejects_non_finite_values`, and
+`volume_settings_reject_malformed_and_trailing_values`. No Runtime/UI/Player
+files were edited by G5.
+
+---
+
+### G10 (stability) — GATE RUN 2026-09-23: full build + full sweep GREEN (1571 / 0 / 2, 26 suites)
+
+**These are the fresh numbers — quote only these.** `.\build_nf.bat` exit 0, then every `build/DebugNinja/bin/*Tests.exe` run with per-suite logs in `.workbuddy-ai/gate_sweep/` (table: `summary.txt`).
+
+- **Suites:** 26/26 green, every process rc=0, every footer parsed (no NO_FOOTER).
+- **Totals: 1571 passed / 0 failed / 2 skipped (sum 1573).** Source `NF_TEST` count = **1575**; the −2 are `csharp_host_reports_unconfigured` + `ui_csharp_ui_host_api_reports_unconfigured` — the `#else // !NF_CSHARP_HOSTING` pair, compiled out by design on this configuration (a conditional pair, not a silent drop).
+- **Silent-drop audit:** `Tests/**/*.cpp` = 151 files ↔ `Tests/CMakeLists.txt` = 151 entries; unregistered 0, ghosts 0.
+- **New-test manifests:** ToolTests `test_build_tool` 6/6 names in output; AudioTests 110/110 names; AssetTests 62/62 (expanded suite).
+- **Arabic red line:** EditorTests 186/186, UITests 39/39 green.
+- **RHITests:** 207/207 rc=0 on first pass (no 139 flake this run — nothing needed the re-run protocol). PhysicsTests 217 and EditorTests 186 baselines held.
+
+**Gate fix (G10 green-only remit, test-side, smallest diff):** `Tests/AssetTests/test_gltf_character_import.cpp` — `make_skin_fixture_json`'s single-primitive branch built `{"attributes":{…` + `index_field` **without the primitive's closing `}`** (the two-primitive branch had it) → `cgltf_parse` rejected the generated JSON → 2 red (`gltf_character_rejects_negative_and_zero_weights`, `gltf_character_rejects_out_of_range_joints`). One-character fix; temporary JSON-dump scaffolding removed → **AssetTests 60/2 → 62/62**. The engine importer correctly rejected invalid JSON — no engine change.
+
+**G7 tutorial top-fix — verified in place:** `Docs/Tutorial_Ar.md` is a full Arabic walkthrough (requirements → launcher → project → editor → play → package → troubleshooting table → glossary → acceptance evidence) with **5/5 screenshots present** (`Docs/images/tut_0*.png`). `Docs/Blender_Pipeline.md` is linked from `README.md:211` (closes G2's link request for English). Fixed this run: `README.md` pointed at nonexistent `Docs/Tutorial.ar.md` → corrected to `Docs/Tutorial_Ar.md`; `README.ar.md` had **no docs links at all** → added «التوثيق ومسار العمل» (tutorial + Blender). → G7: keep these links alive.
+
+### Requests — coordinator triage & classification 2026-09-23 (G9 top-fix; owners reclassify by replying)
+
+Evidence = each entry's own heading marker + today's green sweep. Three buckets:
+
+**CLOSED — no action** (proof = today's sweep or the entry's RESOLVED/CLOSED marker):
+- All BUILD-BREAK entries (Agent 2 ×3, Destruction, SaveSystem, Renderer3D, NuGet/nfb) — tree builds; 26/26 green.
+- RHITests segfault/bisect trio (Agent 1 14:45, G9, G6) — environmental + coplanar test fix; today 207/207 rc=0.
+- G2→G7 `test_templates.cpp` unregistered — silent-drop audit now 151/151.
+- G6→G10 ToolTests stall — ToolTests 45/45 rc=0.
+- Already marked RESOLVED/CLOSED (do not reopen): damage_falloff, water `cross`, C2676, GPU pick ×2, fog, R1, E1–E4, G1 input, G4 retarget break, G9 launcher + finishing STATUS, G2 round-trip + preset fix, G8 perf contract, G7 break #2, G10 transparency final, G2 environment observations, dotnet-shell note, dual `main.cpp` note, coordinator grant + natural-sky notes.
+
+**OPEN — assigned, none gate-blocking:**
+1. **G5→Runtime/Application/G3 audio route** (G5 «runtime-route Request remains open») — owners **Agent 6 / G3**: `Runtime.cpp::step_audio` still legacy `AudioBus`; scene loader parses only legacy `Audio:` fields; Player has no settings route into the mixer. G5's side is proven (AudioTests 110/110).
+2. **G3↔G5 volume-contract bridge** — contract answered (fourth-bus reply filed); bridge code still to land — owners **G3 + G5 + Agent 6**.
+3. **G9→Runtime/.nfproj: last two Settings items** («not reachable from `Editor/**`») — owner **Agent 6**; G9 cannot fix inside its subset.
+4. **G6→G9/Agent 1: Build button must produce a SHIPPING package** — owners **G9 / Agent 1**.
+5. **G7→G6: `nf run` rc=1 quoting bug on Windows** — owner **G6**; tutorial already documents the `nf build` + `dist\NFPlayer.exe` workaround.
+6. **G7→G6/G9: three templates unreachable from «Create project»** — launcher gallery now lists template cards (tutorial step 2); owner **G7** to verify against current UI and close or restate.
+7. **G4→Agent 2 GPU skinning render path**; **G4→Agent 6 retarget/locomotion from `.nfscene`** — owners **Agent 2 / Agent 6**.
+8. **`uv1` protocol collision (water vs terrain)** — needs a **lead** decision.
+9. **day/night `TimeOfDay` `.nfscene` keys** — deferred debt (MEMORY), owners **Agent 5 / Agent 6**.
+10. **Older P2–P4 asks with no RESOLVED marker** (terrain splat, vehicles mirror, scene-material presets, water uv1 extension, sky/weather remainder beyond fog, palette in Basic3D demo) — **OPEN-backlog**: owners reclassify or close.
+
+**G9-specific closeout:** G9's own rows — launcher ✓ (1356), finishing subset ✓ (1433), RHITests ✓ (1418 → environmental); G9's outbound items sit in OPEN #3 and #4 above. G9 classification task = done.
+
+### Mesh import pipeline (2026-09-23, session 3) — engine-wide, and one RHITests fix outside my column
+
+**Why:** the engine could WRITE six mesh formats (`MeshExport`) and READ one
+(`GltfImport`), and the editor's Import dialog offered `*.gltf;*.glb` while
+`ImportQueue::submit()` answered *"Unsupported extension"* for both. Exporting to
+OBJ produced a file the engine could not open again.
+
+**Landed (all verified green):**
+- **New:** `Engine/Assets/{include/NF/Assets/MeshImport.hpp,src/MeshImport.cpp}` —
+  one read path for `.nfmesh/.gltf/.glb/.obj/.stl/.ply` (OBJ groups + `usemtl`
+  slots + negative indices + n-gons; STL binary **and** ASCII; PLY ASCII **and**
+  binary LE/BE). Extension wins, content sniffing is the fallback, and a
+  contradiction fails with `extension/content mismatch`. `MeshImportResult` now
+  OWNS the payload; `GltfImportResult` is an alias, so every existing caller and
+  test is untouched.
+- **Editor:** `ImportQueue` accepts every model extension, cooks to `.nfmesh`
+  (one file per mesh in the source), and surfaces the reader's `warnings` +
+  `written_paths`. The dialog's filter is now built from the reader's format
+  table (`ImportQueue::accepted_extension_glob`), so the two can no longer drift.
+- **CLI:** `NFModelImporter` goes through `import_mesh_file`; every pinned report
+  line and exit code is unchanged, plus a `format:` line and the two new skip
+  counters.
+- **Two latent bugs fixed in `GltfImport.cpp`:** (1) `import_gltf_memory/file`
+  set `result.format` before `convert_parsed()` returned a whole fresh result,
+  which discarded it; (2) the local smooth-normal helper added `base_vertex` to
+  indices that already carried it, so every glTF primitive after the first
+  computed its normals from the wrong triangles. Both are now covered by the
+  round-trip tests in `Tests/AssetTests/test_mesh_import.cpp`.
+
+**Requests (outside my column — filed, not owned):**
+1. **`Tests/RHITests/test_rendering_pipeline.cpp::shader_async_compile_via_job_system`
+   — fixed here, please review.** It slept a fixed 300 ms for the async compile
+   and then asserted `updated==1`. That job shells out to `glslc`, measured at
+   **~550 ms per invocation** on this box, so the test was a clock race: it
+   passed in the morning gate and fails deterministically now, with no source
+   change anywhere in `Engine/Rendering`, `Engine/Jobs`, or `Tests/RHITests`
+   (all unmodified vs HEAD, and RHITests does not link NFAssets). The wait is now
+   a bounded poll of `update()`; the assertion is unchanged. RHITests 206/1 → 207/0.
+2. **Audio is still not importable.** The old filter advertised
+   `*.wav;*.ogg;*.mp3` and `ImportQueue` never accepted them, so the group was
+   removed rather than left as a lie. A real audio import needs an `AssetType`
+   and registry/browser support — owner: whoever holds the asset-type table.
+
+**Addendum (same session): materials and textures on import.** An imported model
+arrived as grey geometry, so the reader now carries materials and textures too:
+`MeshImportImage` + `MeshImportResult::images`; glTF images extracted from a GLB
+BIN chunk / base64 `bufferView` / `data:` URI / external file, with the
+base-colour map resolved to an image index; a real OBJ `.mtl` reader (`Kd`,
+`Ke`, `d`/`Tr`, `map_Kd`) with `material_slot` now indexing a real material in
+first-use order. The editor writes each image as a registered texture under
+`content://Textures` and one `.nfmat` per material under `content://Materials`
+with `albedo:` already pointing at it — which needed **no engine change**, since
+`MaterialAsset::albedo` and `Runtime`'s texture binding already existed. Anything
+the engine's material block has no room for (`Ks`, `Ns`, normal/metallicRoughness/
+occlusion/emissive maps, clearcoat, sheen, transmission) is named per material in
+`GltfMaterialInfo::dropped` and shown in the import row — never approximated.
+`ImportJob::written_paths` became `written` (path + `AssetType`);
+`EditorApp::watch_imported` dispatches per type. Docs synced in `README.md`
+(whose "glTF + FBX" claim was **false** — FBX is not supported — now the six real
+formats), `README.ar.md`, `website/index.html`, `index.html`, `ROADMAP.md`,
+`Docs/Asset_Import.md`. Sweep 1596 → **1607/0/2 across 26 suites**; editor
+headless exit 0, `Validation errors: 0`.
+
+### Requests — the scripting system is unreachable from a scene (2026-09-23, session 3c)
+
+Found while building a complete game (`SanadArena`, outside the repo) with the engine's own tools.
+Two gaps, both blocking "a developer can build a real game without touching engine source":
+
+1. **No `Script:` component in `.nfscene`.** `RuntimeSceneLoader.cpp` accepts exactly 13 component
+   lines and `Script` is not one of them, so `ScriptComponent` (`Engine/Scripting/…/ScriptEngine.hpp`)
+   can never be attached by a scene — the Lua VM, the entity bindings (`nf.self`, `nf.entity_pos`,
+   `nf.set_entity_pos`) and the instruction budget all exist and are tested, but nothing a game
+   author can write reaches them. Owner: **scripting + runtime**. A `Script:` line
+   (`path=content://Scripts/foo.lua`) in the loader plus a `ScriptComponent` binding is the whole ask.
+2. **No CLI/data route into `Runtime::begin_input_replay()`.** `InputLog` / `InputRecorder` /
+   `InputReplay` exist and `Application.cpp` wires only `KeyboardInputSource`, so a headless run can
+   never demonstrate input-driven gameplay (the `PlayerController` module does nothing without a
+   keyboard) and no automated test can assert "the player moved". Owner: **runtime/tools**. A
+   `--input-log <file>` / `--replay <file>` flag on the player and `nf run` closes it.
+
+Neither is a defect in what exists — both are wiring that was never done, and both are cheap. Until
+they land, a game built purely from data is limited to the two built-in gameplay modules
+(`PlayerController`, `OrbitCamera`) plus physics impact damage (`step_impact_damage`).
+
+### Request — frame time scales with the number of DISTINCT MESHES (2026-09-23, session 3d)
+
+Found while building a town from a real modular kit (176 pieces) and measuring it. Owner:
+**rendering**. Not a build break, not a crash — a scaling law that makes kit-based levels
+disproportionately expensive.
+
+Measured on `win11-x64-dev` (RTX 5060 Ti), shipped debug `NFPlayer.exe`, 1280×720, 100–200 frames
+per configuration:
+
+| Scene | distinct meshes | draws | visible | fps | ms/frame |
+|---|---|---|---|---|---|
+| 522 entities from 54 distinct kit pieces | 56 | 474 | 122 | 4.3 | 233 |
+| **the same 522 entities and the same 222 static bodies**, all → 1 mesh + 1 material | 1 | 228 | 114 | **21.4** | **46.6** |
+| no scene loaded | — | — | — | 75.6 | 13.2 |
+| engine's own perf fixture (`perf_gate.sh`) | few | 3490 | 1745 | 17.5 | 57.1 |
+
+Changing **only** the mesh/material set made the identical scene **5× faster**. Ruled out by A/B on
+the same scene, one variable at a time:
+
+- **shadow cascades** — `shadows=false`, and `shadow_cascades=1 shadow_distance=25`: 232.8 / 235.0 /
+  235.7 ms. No effect.
+- **textures** — all materials → the texture-less `Default.nfmat`: 277 ms. No effect (slightly worse).
+  The kit's ten 2048² BaseColor maps (118 MB) are not the cost.
+- **geometry** — the whole town is **124,165 triangles**. Far too few to matter.
+- **physics** — 222 bodies in *both* rows 1 and 2, so not the differentiator.
+- The engine's own contract **passes** on this machine: `perf_gate.sh` → 3490 draws, 57.1 ms, every
+  metric within 10% of baseline. The engine is not slow in general.
+
+Leading hypothesis, from `Renderer3D.cpp`: the opaque path caches a descriptor set per
+`MaterialEntry` (~line 1140) while the transparent path allocates one per object per frame, and the
+per-frame descriptor allocators are created with only **32** slots
+(`create_descriptor_allocator(32)`, line 407). Something in the per-object path is doing work
+proportional to the distinct-mesh/material count rather than being cached per mesh. Worth a profile
+before a fix — the numbers above are the reproduction, not the diagnosis.
+
+**Practical consequence to state in any perf claim:** "the engine handles N entities" is
+incomplete without "as M distinct meshes". A scene of 2000 copies of one mesh and a scene of 2000
+different meshes are not the same measurement.
+
+
+### Finding (render core) — `.nfmat` `emission:` colour is never read by the lighting pass (2026-10-02)
+
+Found while building a demo scene for Phase 27's bloom. The material asset carries
+`emission: r g b` and `emission_strength`, and both round-trip through
+`MaterialAsset.cpp` (parse at `:82`/`:89`, write at `:127`/`:130`). The shader
+does not use the colour:
+
+```
+Samples/Basic3D/shaders/lighting.frag:100    vec3 emissive = albedo * emission_strength;
+```
+
+`gbuffer.frag:25` documents its `misc` attachment as `emission.rgb, useBaseColorTex`, and
+`misc.w` (useBaseColorTex) is read at `gbuffer.frag:42` — but `misc.rgb` is written and
+then never sampled by anything.
+
+**Reproduced:** a `.nfmat` with `base_color: 0.06 0.06 0.07` + `emission: 1 0.82 0.45`
++ `emission_strength: 7` renders as a **near-black cube**, not a glow — the emissive term
+is `0.06 * 7 = 0.42`, and the intended colour is discarded. Raising `base_color` to
+`1 0.82 0.45` makes it glow, i.e. the colour has to be smuggled in through the albedo.
+
+**Why it matters:** "make this object a light source" is the standard way an author
+creates a bloom highlight, and the field that is supposed to express it is inert. The
+workaround (put the colour in `base_color`) also tints the diffuse response, so it is
+not an equivalent substitute.
+
+**Owner:** render core. The fix is one line in `lighting.frag` (read the emission colour
+from the gbuffer's `misc` attachment instead of multiplying albedo) plus the matching
+`forward.frag` change for the transparency path — but it changes the brightness of every
+existing scene whose material has `emission_strength > 0`, so it needs a golden-pixel
+pass, not a drive-by edit. **Do not "fix" it without re-shooting the editor acceptance**
+(`cube lit pixels = 229149`).
+
+### Finding (editor / runtime) — `scenes_equal_structure` compares the wrong pair when two entities share a synthesized name (2026-10-02)
+
+Found the same session, on the demo scene above. `Editor/src/PlayMode.cpp:156` says it
+indexes by name because *"names are unique in editor-managed scenes"*. That is not true
+for a scene authored **without `Name:` lines**: `Runtime.cpp:385-410` synthesizes one from
+the entity's KIND, so every mesh entity in the scene is named `"Mesh"`, every camera
+`"Camera"`, and so on. `by_name_b[key] = e` then keeps only the LAST one, and the loop
+compares live-entity-N against whichever saved entity won that key.
+
+**Reproduced:** a 6-entity scene with two mesh entities and no `Name:` lines, opened in the
+editor with `--frames 90`:
+
+```
+WARN [Editor] Automation: Save/Load structure round-trip: transform values differ for
+     'Mesh' live=(0.000000,-0.050000,0.000000) saved=(2.100000,0.350000,0.800000) FAILED
+INFO [Editor] Editor ran 90 frames (entities=7, dirty=yes, automation=FAILED)   exit 1
+```
+
+Adding a unique `Name:` line per entity gives `automation=OK`, exit 0 — with no other
+change. So the round trip is fine and the CHECK is what is wrong.
+
+**Why it matters:** the editor exits 1 on a scene that saved and reloaded correctly, and
+the message sends the reader to the serializer to hunt a corruption that is not there.
+The default scene does not trip it only because `Panels.cpp:688` already works around the
+same collision for its ground-plane glyph ("Ground and Cube would share the cube") — the
+underlying non-uniqueness was known and handled in the display layer, not here.
+
+**Owner:** editor (the comparison) or runtime (the name synthesis). Either the comparison
+should fall back to a stable key when a name repeats, or the synthesized names should be
+made unique per scene. Note that `#<id>` is not a safe fallback either: the live and
+reloaded scenes do not have to agree on ids.

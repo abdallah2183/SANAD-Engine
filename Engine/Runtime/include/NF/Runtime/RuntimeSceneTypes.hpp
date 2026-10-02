@@ -51,6 +51,180 @@ struct SkyComponent {
     bool enabled = true;
 };
 
+/// A day/night cycle driven by one clock (design doc §64).
+///
+/// `rendering::TimeOfDay` already derives a sun direction, a sun colour/intensity
+/// and a matching sky palette from an hour-of-day — but it was reachable only
+/// from the hand-written samples (Basic3D, MedievalVillage). A scene could not
+/// carry one, so "the sun moves and the sky follows" was a C++ edit, not an
+/// authoring decision. This component is that decision, as data.
+///
+/// It attaches to the SAME entity as a `SkyComponent` and drives it: while it
+/// is present the Runtime advances the clock each frame and overrides the sky
+/// palette and the entity's directional light with the computed values. The
+/// authored `Sky:` palette stays the fallback for the frames before the first
+/// advance and for a scene that disables the cycle.
+///
+/// Why the component holds the clock state rather than the rendering class: the
+/// clock is authored data that a save must round-trip, and `TimeOfDay` is pure
+/// math over it with no device behind it. Keeping the two apart means the
+/// component can be asserted without a GPU.
+struct TimeOfDayComponent {
+    /// Hour of day in [0, 24). The loader wraps out-of-range values rather than
+    /// rejecting the line, because 25.0 is an obvious way to write "1am" and
+    /// refusing the whole scene over it would be the larger surprise.
+    float time_hours = 12.0f;
+    /// Real seconds for one full 24h cycle. <= 0 freezes the clock: the frame
+    /// still renders, it just stops advancing. Frozen is a legitimate authoring
+    /// choice (a fixed golden hour), so it is not an error.
+    float day_length_seconds = 240.0f;
+    /// false = keep the authored Sky palette and directional light untouched.
+    /// A scene with the component but this off is a way to author the settings
+    /// without letting them drive anything.
+    bool enabled = true;
+    /// Drive the entity's directional light from the computed sun as well as the
+    /// sky. A scene whose sun is hand-posed (a stylized fixed key light) can take
+    /// the moving sky without having its lighting swung around underneath it.
+    bool drive_light = true;
+};
+
+/// The post-processing stack (design §206) as scene data.
+///
+/// The renderer has owned a post block since the tonemap pass existed, but a
+/// scene could not reach any of it: exposure and the tonemap operator were
+/// `Renderer3D` setters, so "give this level a glow" was a C++ edit. This is
+/// that decision, as data — the same move `SkyComponent` and `TimeOfDayComponent`
+/// made for the sky.
+///
+/// Flat floats rather than `rendering::PostFxParams`, following `SkyComponent`:
+/// this header is included by the editor and by the tools, and pulling
+/// `NF/Rendering/Renderer3D.hpp` (and through it the RHI) into all of them to
+/// carry fifteen numbers would be the wrong trade.
+///
+/// Every field defaults to the renderer's own neutral value, so a scene that
+/// carries the component with nothing set renders exactly as a scene that has
+/// never heard of it. That is the same "absent means unchanged" contract the
+/// scene writer relies on to keep old files byte-identical.
+struct PostProcessComponent {
+    // Bloom (§206). The chain is a real multi-pass blur; `enabled` is the only
+    // field that costs anything, because with it false the renderer records no
+    // bloom pass at all.
+    bool bloom_enabled = false;
+    /// Luminance above which a pixel blooms. In raw HDR units, before exposure.
+    float bloom_threshold = 1.0f;
+    /// Width of the soft ramp across the threshold. 0 is a hard cut, which makes
+    /// the glow pop as a surface crosses the threshold.
+    float bloom_knee = 0.5f;
+    /// Multiplier on the summed levels. 0 is exactly "off" regardless of
+    /// `bloom_enabled`, so a slider at zero and an unchecked box agree.
+    float bloom_intensity = 1.0f;
+    /// Blur spread, as a multiplier on the kernel's tap spacing.
+    float bloom_radius = 1.0f;
+
+    // Colour grading, applied in HDR before the tonemap operator.
+    bool grade_enabled = false;
+    float grade_contrast = 1.0f;
+    /// HDR luminance the contrast scale leaves fixed.
+    float grade_pivot = 1.0f;
+    /// -1 cool .. +1 warm.
+    float grade_temperature = 0.0f;
+    /// -1 green .. +1 magenta.
+    float grade_tint = 0.0f;
+    float grade_gamma = 1.0f;
+
+    // Unsharp mask on the linear HDR image, before the bloom add.
+    bool sharpen_enabled = false;
+    float sharpen_amount = 0.0f;
+    float sharpen_radius = 1.0f;
+
+    // The two stages that predate the rest of the stack, in the order
+    // PostFxParams declares them so the two structs read the same way.
+    float saturation = 1.0f;
+    float vignette = 0.0f;
+};
+
+// Local lights (Phase 26). A scene until now could only carry one directional
+// light, which is the light of an outdoor day: the renderer has accepted point
+// and spot lights since Phase 21 and the deferred path lights and shadows them
+// properly, but only a hand-written sample could place one. A torch, a ceiling
+// lamp and a lighthouse beam are the common case of every indoor and night
+// scene, and "author the lighting" without them meant editing a C++ file.
+//
+// Position is NOT a field here: it is the entity's world Transform, the same
+// rule the audio emitter follows. Moving the lamp in the viewport moves the
+// light with it, and no second copy of the position exists to drift out of
+// agreement with the one the gizmo drags.
+//
+// Direction, unlike position, IS a field — for the same reason the directional
+// light stores `dir()` instead of reading a Transform rotation: a lamp's mesh
+// can be posed to sit on a table while its beam aims elsewhere, so deriving the
+// aim from the entity rotation would swing the beam every time a prop was
+// rotated.
+//
+// Angles are stored in radians and the key names say so (`inner_rad=`,
+// `outer_rad=`). Degrees read better to a human and cost a conversion in the
+// loader, the serializer, the inspector and the tests — four places where a
+// radian/degree mix-up hides as "my spotlight is a floodlight". The renderer's
+// defaults (0.35 / 0.6 rad) survive here untouched, so a spot authored with
+// defaults lights exactly like the renderer's default spot.
+
+/// A point light authored in the scene.
+struct PointLightComponent {
+    float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
+    float intensity = 1.0f;
+    /// Distance past which the light contributes nothing; feeds
+    /// `rendering::PointLight::radius`, and the default far plane of its six
+    /// shadow projectors when `shadow_distance` is 0.
+    float radius = 10.0f;
+    /// Six depth renders per frame — six times the price of the spot below, so
+    /// a torch that never visibly casts a shadow should not pay for one. The
+    /// first `kMaxShadowPointLights` shadow-casting point lights of the scene
+    /// (entity order) get maps; the rest light the scene unshadowed whatever
+    /// this says.
+    bool cast_shadows = false;
+    float shadow_strength = 1.0f; // 0 = no darkening .. 1 = full shadow
+    float shadow_bias = 0.0005f;
+    /// Farthest distance the six face projectors cover; 0 means `radius`.
+    /// Spending precision past the radius only blurs the shadow.
+    float shadow_distance = 0.0f;
+    /// Off: the entity, its Transform and its name survive, it just throws no
+    /// light — the "switch it off, keep it placed" state a level author needs.
+    bool enabled = true;
+};
+
+/// A spot light authored in the scene: a point light with a cone.
+struct SpotLightComponent {
+    /// Direction the light TRAVELS, normalised on load. Same convention as
+    /// `rendering::SpotLight::direction` and `DirectionalLight::dir_x/y/z`.
+    float dir_x = 0.0f, dir_y = -1.0f, dir_z = 0.0f;
+    float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
+    /// The renderer's own spot default, so an unset spot behaves like a default
+    /// `rendering::SpotLight`.
+    float intensity = 2.0f;
+    /// Fully lit core of the cone, radians from the axis. May not exceed
+    /// `outer_angle_rad`; the falloff between the two is the soft edge.
+    float inner_angle_rad = 0.35f;
+    /// Edge of the cone, radians from the axis. Capped at pi/2: the shadow
+    /// projector is a perspective frustum and no single frustum fits a wider
+    /// cone than that.
+    float outer_angle_rad = 0.6f;
+    /// The cone's reach. The default is the 25.0 that was hard-coded in
+    /// lighting.frag before `SpotLight::range` existed (the renderer's
+    /// `kLocalShadowSpotDefaultFar` — pinned equal by a static_assert in
+    /// SceneExtraction.cpp), so a spot authored with defaults behaves exactly
+    /// like the old hard-coded one.
+    float range = 25.0f;
+    /// One depth render per light — cheap beside a point light's six. Only the
+    /// first `kMaxShadowSpotLights` shadow-casting spots get a map.
+    bool cast_shadows = false;
+    float shadow_strength = 1.0f;
+    float shadow_bias = 0.0005f;
+    /// Farthest distance the cone projector covers; 0 means `range`.
+    float shadow_distance = 0.0f;
+    /// See `PointLightComponent::enabled`.
+    bool enabled = true;
+};
+
 struct CameraComponent {
     float fov_y = 60.0f; // degrees
     float aspect = 16.0f/9.0f;

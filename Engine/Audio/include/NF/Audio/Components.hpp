@@ -28,6 +28,20 @@ struct AudioComponent {
     /// frame.
     usize sample_cursor = 0;
 
+    /// Exact fractional playback position, the resampling cursor. Both this and
+    /// `sample_cursor` must survive the frame: `sample_cursor` alone is the
+    /// integral part, so a buffer whose rate differs from the mix rate would be
+    /// re-seeked to a truncated position every block and drift. -1 means "adopt
+    /// sample_cursor on the next mix", which is the correct initial value.
+    f64 sample_position = -1.0;
+
+    // Routing (AudioScene, Buses.hpp). Every source feeds exactly one bus, and
+    // each bus is a Settings slider. Defaults match the shipped world mix.
+    audio::BusId bus = audio::BusId::Sfx;
+    /// Run the wall test between the listener and this source. False for sounds
+    /// meant to ignore geometry (a UI blip, narration).
+    bool occluded = true;
+
     // 3D spatial
     bool spatial = false;
     SpatialSettings spatial_settings;

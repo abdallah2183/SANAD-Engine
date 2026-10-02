@@ -276,6 +276,120 @@ struct CharacterFixture {
     }
 };
 
+enum class SkinFixtureDefect {
+    Valid,
+    NegativeWeight,
+    ZeroWeight,
+    OutOfRangeJoint,
+    UnskinnedFirstPrimitive,
+};
+
+std::string make_skin_fixture_json(SkinFixtureDefect defect) {
+    GltfDoc d;
+    const int pos_view = d.add_view(36, [](u8* p) {
+        const float v[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+        for (int i = 0; i < 9; ++i) push_f32(p + i * 4, v[i]);
+    });
+    const int joint_view = d.add_view(12, [&](u8* p) {
+        const u8 joint = defect == SkinFixtureDefect::OutOfRangeJoint
+                             ? static_cast<u8>(1)
+                             : static_cast<u8>(0);
+        for (int i = 0; i < 12; ++i) p[i] = (i % 4 == 0) ? joint : 0u;
+    });
+    int weight_view = -1;
+    u32 weight_component = 5121;
+    if (defect == SkinFixtureDefect::NegativeWeight) {
+        weight_component = 5126;
+        weight_view = d.add_view(48, [](u8* p) {
+            const float w[12] = {-0.25f, 1.25f, 0, 0,
+                                 1,     0,     0, 0,
+                                 0,     1,     0, 0};
+            for (int i = 0; i < 12; ++i) push_f32(p + i * 4, w[i]);
+        });
+    } else {
+        weight_view = d.add_view(12, [&](u8* p) {
+            const u8 zero[12] = {0};
+            std::memcpy(p, zero, sizeof(zero));
+            if (defect != SkinFixtureDefect::ZeroWeight) {
+                p[0] = 255;
+                p[4] = 128;
+                p[5] = 128;
+                p[8] = 255;
+            }
+        });
+    }
+    const int index_view = d.add_view(3, [](u8* p) {
+        p[0] = 0;
+        p[1] = 1;
+        p[2] = 2;
+    });
+
+    const int pos_acc = d.add_accessor(pos_view, 5126, 3, "VEC3");
+    const int joint_acc = d.add_accessor(joint_view, 5121, 3, "VEC4");
+    const int weight_acc = d.add_accessor(
+        weight_view, weight_component, 3, "VEC4",
+        defect != SkinFixtureDefect::NegativeWeight);
+    const int index_acc = d.add_accessor(index_view, 5121, 3, "SCALAR");
+
+    const std::string skinned_attrs =
+        "\"POSITION\":" + std::to_string(pos_acc) +
+        ",\"JOINTS_0\":" + std::to_string(joint_acc) +
+        ",\"WEIGHTS_0\":" + std::to_string(weight_acc);
+    const std::string static_attrs = "\"POSITION\":" + std::to_string(pos_acc);
+    const std::string index_field = ",\"indices\":" + std::to_string(index_acc) + ",\"mode\":4";
+    const std::string primitives =
+        defect == SkinFixtureDefect::UnskinnedFirstPrimitive
+            ? "{\"attributes\":{" + static_attrs + "}" + index_field + "},"
+              "{\"attributes\":{" + skinned_attrs + "}" + index_field + "}"
+            : "{\"attributes\":{" + skinned_attrs + "}" + index_field + "}";
+
+    d.json =
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"buffers\":[{\"byteLength\":" + std::to_string(d.buffer.size()) +
+        ",\"uri\":\"data:application/octet-stream;base64," + base64_encode(d.buffer) + "\"}],"
+        "\"bufferViews\":[" + d.views + "],\"accessors\":[" + d.accessors + "],"
+        "\"meshes\":[{\"name\":\"SkinMesh\",\"primitives\":[" + primitives + "]}],"
+        "\"skins\":[{\"name\":\"Skin\",\"skeleton\":1,\"joints\":[1]}],"
+        "\"nodes\":[{\"name\":\"Body\",\"mesh\":0,\"skin\":0},"
+        "{\"name\":\"Bone\",\"translation\":[0,1,0]}],"
+        "\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+    return d.json;
+}
+
+std::string make_step_animation_fixture_json() {
+    GltfDoc d;
+    const int pos_view = d.add_view(36, [](u8* p) {
+        const float v[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+        for (int i = 0; i < 9; ++i) push_f32(p + i * 4, v[i]);
+    });
+    const int time_view = d.add_view(8, [](u8* p) {
+        push_f32(p, 0.0f);
+        push_f32(p + 4, 1.0f);
+    });
+    const int value_view = d.add_view(24, [](u8* p) {
+        const float v[6] = {0, 0, 0, 1, 0, 0};
+        for (int i = 0; i < 6; ++i) push_f32(p + i * 4, v[i]);
+    });
+    const int pos_acc = d.add_accessor(pos_view, 5126, 3, "VEC3");
+    const int time_acc = d.add_accessor(time_view, 5126, 2, "SCALAR");
+    const int value_acc = d.add_accessor(value_view, 5126, 2, "VEC3");
+    d.json =
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"buffers\":[{\"byteLength\":" + std::to_string(d.buffer.size()) +
+        ",\"uri\":\"data:application/octet-stream;base64," + base64_encode(d.buffer) + "\"}],"
+        "\"bufferViews\":[" + d.views + "],\"accessors\":[" + d.accessors + "],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":" +
+        std::to_string(pos_acc) + "},\"mode\":4}]}],"
+        "\"nodes\":[{\"name\":\"Node\"}],"
+        "\"animations\":[{\"name\":\"Stepped\",\"samplers\":[{"
+        "\"interpolation\":\"STEP\",\"input\":" + std::to_string(time_acc) +
+        ",\"output\":" + std::to_string(value_acc) +
+        "}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":0,"
+        "\"path\":\"translation\"}}]}],"
+        "\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+    return d.json;
+}
+
 GltfImportResult import_fixture(const CharacterFixture& f) {
     GltfImportResult r = import_gltf_memory(f.json.data(), f.json.size(), "character.glb");
     // An import failure with no reason is the opacity this track exists to
@@ -349,6 +463,18 @@ NF_TEST(gltf_character_imports_skin_clips_material) {
     NF_CHECK(r.animations[2].channels.empty());
     NF_CHECK(r.anim_channels_skipped == 1); // counted, not silent
     NF_CHECK(r.skin_bindings_rejected == 0);
+}
+
+NF_TEST(gltf_character_strict_validation_accepts_complete_source) {
+    // No unsupported extra clip: the strict contract requires every declared
+    // animation to convert, and at least two of them to be playable.
+    GltfImportResult r = import_fixture(CharacterFixture::make(
+        /*with_weights=*/true, /*with_splined_clip=*/false));
+    const CharacterImportValidation validation = validate_character_import(r);
+    NF_CHECK(validation.ok);
+    NF_CHECK(validation.error.empty());
+    NF_CHECK(validation.skin_index == 0);
+    NF_CHECK(validation.nonempty_clips == 2);
 }
 
 NF_TEST(gltf_character_skeleton_matches_rig) {
@@ -482,6 +608,11 @@ NF_TEST(gltf_static_document_reports_no_skin_no_substitution) {
     std::string err;
     NF_CHECK(!make_skeleton(r, 0, skel, err)); // no skin -> no skeleton, loudly
     NF_CHECK(!err.empty());
+
+    const CharacterImportValidation validation = validate_character_import(r);
+    NF_CHECK(!validation.ok);
+    NF_CHECK(validation.error.find("material") != std::string::npos ||
+             validation.error.find("skin") != std::string::npos);
 }
 
 NF_TEST(gltf_character_malformed_weights_rejected_loudly) {
@@ -495,6 +626,53 @@ NF_TEST(gltf_character_malformed_weights_rejected_loudly) {
     NF_CHECK(r.mesh_skins[0].skin_index == 0); // the node still binds the skin
     NF_CHECK(r.mesh_skins[0].vertex_count == 0);
     NF_CHECK(r.mesh_skins[0].joints.empty());
+}
+
+NF_TEST(gltf_character_rejects_negative_and_zero_weights) {
+    const std::string negative = make_skin_fixture_json(SkinFixtureDefect::NegativeWeight);
+    GltfImportResult negative_result =
+        import_gltf_memory(negative.data(), negative.size(), "negative-weights.glb");
+    NF_CHECK(negative_result.ok);
+    NF_CHECK(negative_result.skin_bindings_rejected == 1);
+    NF_CHECK(negative_result.mesh_skins[0].vertex_count == 0);
+    NF_CHECK(negative_result.mesh_skins[0].weights.empty());
+
+    const std::string zero = make_skin_fixture_json(SkinFixtureDefect::ZeroWeight);
+    GltfImportResult zero_result = import_gltf_memory(zero.data(), zero.size(), "zero-weights.glb");
+    NF_CHECK(zero_result.ok);
+    NF_CHECK(zero_result.skin_bindings_rejected == 1);
+    NF_CHECK(zero_result.mesh_skins[0].vertex_count == 0);
+    NF_CHECK(zero_result.mesh_skins[0].weights.empty());
+}
+
+NF_TEST(gltf_character_rejects_out_of_range_joints) {
+    const std::string json = make_skin_fixture_json(SkinFixtureDefect::OutOfRangeJoint);
+    GltfImportResult r = import_gltf_memory(json.data(), json.size(), "bad-joints.glb");
+    NF_CHECK(r.ok);
+    NF_CHECK(r.skin_bindings_rejected == 1);
+    NF_CHECK(r.mesh_skins[0].vertex_count == 0);
+    NF_CHECK(r.mesh_skins[0].joints.empty());
+}
+
+NF_TEST(gltf_character_rejects_mixed_primitive_skin_state) {
+    const std::string json = make_skin_fixture_json(SkinFixtureDefect::UnskinnedFirstPrimitive);
+    GltfImportResult r = import_gltf_memory(json.data(), json.size(), "mixed-skin.glb");
+    NF_CHECK(r.ok);
+    NF_CHECK(r.meshes.size() == 1);
+    NF_CHECK(r.meshes[0]->vertices.size() == 6);
+    NF_CHECK(r.skin_bindings_rejected == 1);
+    NF_CHECK(r.mesh_skins[0].vertex_count == 0);
+    NF_CHECK(r.mesh_skins[0].joints.empty());
+    NF_CHECK(r.mesh_skins[0].weights.empty());
+}
+
+NF_TEST(gltf_character_rejects_step_interpolation) {
+    const std::string json = make_step_animation_fixture_json();
+    GltfImportResult r = import_gltf_memory(json.data(), json.size(), "step.glb");
+    NF_CHECK(r.ok);
+    NF_CHECK(r.anim_channels_skipped == 1);
+    NF_CHECK(r.animations.size() == 1);
+    NF_CHECK(r.animations[0].channels.empty());
 }
 
 NF_TEST(gltf_clip_channels_outside_skin_fail_loudly) {

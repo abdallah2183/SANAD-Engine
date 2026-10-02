@@ -24,6 +24,7 @@
 #include <NF/Animation/Components.hpp>
 #include <NF/Animation/Skeleton.hpp>
 #include <NF/Audio/AudioEngine.hpp>
+#include <NF/Audio/AudioScene.hpp>
 #include <NF/Audio/Components.hpp>
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayModule.hpp>
@@ -32,6 +33,10 @@
 #include <NF/Runtime/InputLog.hpp>
 #include <NF/Runtime/WorldStreamer.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Vfx/Particles.hpp>
+#include <NF/Vfx/Components.hpp>
+#include <NF/AI/AIWorld.hpp>
 
 #include <filesystem>
 #include <map>
@@ -234,7 +239,13 @@ public:
     //
     // Builds the listener from the active camera, starts autoplay sources, takes
     // each source's world position from its entity transform, and mixes every
-    // playing source through the master bus.
+    // playing source through one `audio::AudioScene`.
+    //
+    // The scene is the whole mix, not just a router: buses and their Settings
+    // volumes, the music/ambience layers and the reverb tail all run inside
+    // `finalize`. Mixing component-by-component straight into the output buffers
+    // (the old path) left every one of those systems built, tested and
+    // unreachable from a shipped game.
     //
     // The device's own output is the base of the mix: the null backend
     // contributes silence, so a non-zero peak is the scene's audio and not the
@@ -252,6 +263,14 @@ public:
     const audio::AudioListener& audio_listener() const { return m_audio_listener; }
     /// The audio backend. Never null; a NullAudioDevice until one is installed.
     audio::AudioDevice* audio_device() const { return m_audio_device.get(); }
+    /// The live mixer — the one object a Settings window binds to.
+    ///
+    /// This is the seam a game needs in order to ship its own audio settings
+    /// without replacing the runtime: read/write `audio_scene().settings()` and
+    /// the change applies to the next block. Also the way in to the music and
+    /// ambience layers (`music()`) and the reverb zones.
+    audio::AudioScene& audio_scene() { return m_audio_scene; }
+    const audio::AudioScene& audio_scene() const { return m_audio_scene; }
 
     // --- Gameplay modules (Phase 10) ----------------------------------------
     //
@@ -302,6 +321,63 @@ public:
     /// loading. A component naming a module this build does not have is left
     /// alone rather than dropped, so the scene keeps its data.
     void apply_gameplay_state();
+
+    // --- Lua scripting (Phase 15 wired into the frame, Phase 24 editor) -----
+    //
+    // ScriptSystem owns one LuaVM and ticks every enabled
+    // scripting::ScriptComponent in the scene. Placement is deliberate:
+    // scripts run after gameplay and before destruction, so a script observes
+    // this frame's simulation results (like a module) and damage it applies
+    // still spawns shards in the same frame. Like gameplay, scripts only
+    // advance on dt > 0 — the editor's edit-mode freeze (dt = 0) shows a
+    // frozen authoring world, never a self-playing one.
+    u32 step_script(f32 dt);
+    /// Entities carrying a scripting::ScriptComponent right now.
+    [[nodiscard]] size_t script_count() const;
+    /// Enabled scripts with a non-empty source (the ones step_script ticks).
+    [[nodiscard]] size_t scripts_runnable_count() const;
+    /// Total script-entity ticks across all frames. The observable that
+    /// separates "scripts exist" from "scripts are actually being driven".
+    [[nodiscard]] size_t script_updates() const { return m_script_updates; }
+    /// Forgets cached Lua environments (sources recompile lazily). Called on
+    /// scene adopt so a previous scene's bytecode never serves the next one.
+    void clear_script_cache();
+    /// Loads every ScriptComponent path through the VFS into its source.
+    /// Unresolvable paths keep an empty source with a warning — the scene
+    /// keeps its path so a later save round-trips instead of dropping it.
+    void resolve_scene_scripts();
+
+    // --- Particles / cloth / AI (Phase 25 wiring) --------------------------
+    //
+    // Each owns live simulation objects for the scene's components and steps
+    // them after scripts (they observe the same post-simulation world) and
+    // before destruction (a script-triggered burst still spawns this frame).
+    // Like scripts, all three only advance on dt > 0.
+    u32 step_particles(f32 dt);
+    u32 step_cloth(f32 dt);
+    u32 step_ai_world(f32 dt);
+    /// Live emitter/cloth/character counts (enabled components bound now).
+    [[nodiscard]] size_t particle_emitter_count() const { return m_particles.size(); }
+    /// Particles alive across every bound emitter.
+    [[nodiscard]] size_t particles_alive() const;
+    [[nodiscard]] size_t cloth_count() const { return m_cloths.size(); }
+    [[nodiscard]] size_t character_count() const { return m_characters.size(); }
+    /// Last grounded state written back by step_physics; false for unknown
+    /// entities. Gameplay gates jumps on this instead of re-reading manifolds.
+    [[nodiscard]] bool character_grounded(ecs::Entity e) const;
+    /// The world-scale AI budget. Never null after construction; cleared on
+    /// every scene adopt.
+    ai::AIWorld* ai_world() { return m_ai_world.get(); }
+    const ai::AIWorld* ai_world() const { return m_ai_world.get(); }
+    /// Live simulation objects for gameplay/debug reads (dust effects, debug
+    /// draws). Null when the entity has no bound object.
+    const vfx::ParticleSystem* particle_system(ecs::Entity e) const;
+    const physics::Cloth* cloth(ecs::Entity e) const;
+    /// (Re)builds the live particle/cloth objects from the scene's enabled
+    /// components. Called on scene adopt; characters are built separately in
+    /// rebuild_physics_from_scene because they need the fresh physics world.
+    void build_scene_particles();
+    void build_scene_cloths();
 
     /// The input source handed to modules. Non-owning; null means no input, and
     /// modules are expected to check.
@@ -676,6 +752,23 @@ private:
 
     u64 m_gameplay_frame = 0;
     size_t m_gameplay_updates = 0;
+    // Lua scripts (Phase 15 engine, Phase 24 frame wiring). One VM for the
+    // whole scene, matching ScriptSystem's own design (per-source sandboxed
+    // environments inside, not one VM per entity).
+    std::unique_ptr<scripting::ScriptSystem> m_scripts;
+    size_t m_script_updates = 0;
+    // Particles / cloth / characters (Phase 25 wiring). One live simulation
+    // object per enabled scene component, built on scene adopt and stepped
+    // every frame; the scene persists configs, never live state. Characters
+    // additionally need the physics world, so their controllers are (re)built
+    // inside rebuild_physics_from_scene rather than on adopt.
+    std::unordered_map<ecs::Entity, vfx::ParticleSystem> m_particles;
+    std::unordered_map<ecs::Entity, std::unique_ptr<physics::Cloth>> m_cloths;
+    std::unordered_map<ecs::Entity, std::unique_ptr<physics::CharacterController>> m_characters;
+    // World-scale AI budget (Phase 25): stepped every frame via plan(). Games
+    // register actors and foci through ai_world(); the population is cleared
+    // on scene adopt so a previous scene's crowd never governs the next one.
+    std::unique_ptr<ai::AIWorld> m_ai_world;
     /// Edit-vs-play mode, mirrored into GameplayContext::playing (see
     /// set_playing). Defaults to editing so a harness that never sets it gets
     /// the editor-safe behaviour, not gameplay driving the scene.
@@ -700,7 +793,21 @@ private:
     // installed behind the seam, which keeps headless runs and CI silent but
     // still exercises the whole mixing path.
     std::unique_ptr<audio::AudioDevice> m_audio_device;
-    audio::AudioBus m_audio_bus;
+    /// The one mixer. Owns the bus tree, the Settings volumes, the music and
+    /// ambience layers and the reverb tail — everything a shipped level needs.
+    audio::AudioScene m_audio_scene;
+    /// Live emitters, one per playing source, kept between frames so the
+    /// playback cursors and the occlusion filter's state survive the frame.
+    ///
+    /// The state cannot live in a stack temporary inside step_audio: the filter
+    /// is what makes a wall's muffle continuous, and a per-frame reset would
+    /// click on every block boundary. Keyed by entity, so a source that is
+    /// removed from the scene drops out on the next rebuild.
+    std::unordered_map<ecs::Entity, audio::Emitter> m_audio_emitters;
+    /// Entities seen in the last step_audio(). Compared against the emitter map
+    /// each block to retire sources whose entity no longer carries audio,
+    /// instead of leaking one entry per despawned emitter.
+    std::vector<ecs::Entity> m_audio_emitter_seen;
     audio::AudioListener m_audio_listener;
     std::vector<f32> m_audio_left;
     std::vector<f32> m_audio_right;
@@ -786,9 +893,40 @@ private:
     void sync_meshes_from_assets();
     void ensure_default_material();
     void extract_light();
+    /// Advance the scene's TimeOfDay clock by `dt` and write the new hour back
+    /// into the component. A scene with no component, or one with `enabled=false`
+    /// or `day_length_seconds <= 0` (frozen), leaves the authored state alone.
+    void advance_time_of_day(f32 dt);
+    /// The scene's enabled TimeOfDay, or nullptr. Shared by extract_light and
+    /// extract_sky so the sun and the sky can never be driven by two different
+    /// hours.
+    static const TimeOfDayComponent* find_time_of_day(const ecs::World& world);
+    /// The mutable twin of the above, for the one caller that advances the clock.
+    static TimeOfDayComponent* find_time_of_day_mutable(ecs::World& world);
+    /// Pushes the scene's point/spot lights into the renderer (Phase 26).
+    /// Rebuilt every frame, like the directional light: a lamp destroyed by
+    /// gameplay has to stop lighting the scene this frame, and the renderer's
+    /// lights are an array indexed by slot, which cannot express "removed".
+    void extract_local_lights();
     void extract_sky();
+    /// Pushes the scene's post-processing block (design §206) into the renderer.
+    ///
+    /// Separate from extract_sky even though both walk the world once per frame:
+    /// a scene may want a glow without a procedural sky (an interior), and a
+    /// scene may want a sky with no post at all. Folding them together would make
+    /// the sky's presence a precondition for the post stack, which is a coupling
+    /// nothing in the design asks for.
+    ///
+    /// With no component in the scene the renderer keeps its own defaults, so a
+    /// level authored before this existed renders identically.
+    void extract_post_process();
     void build_render_world(rendering::RenderWorld& out);
     void fallback_clear(rhi::Texture& target, rhi::CommandBuffer& cmd, bool present_source);
+
+    // One-shot latch for the "the scene asked for more lights than the frame can
+    // draw" warning. It re-arms on scene load, because the next scene is a
+    // different question.
+    bool m_local_light_warning_shown = false;
 };
 
 } // namespace nf::runtime

@@ -513,6 +513,58 @@ NF_TEST(scene_walking_into_the_cave_grows_the_echo_and_the_tail_survives) {
     }
 }
 
+NF_TEST(scene_emitter_resampling_preserves_fractional_position_across_blocks) {
+    AudioBuffer buffer;
+    buffer.channels = 1;
+    buffer.sample_rate = 48000;
+    buffer.samples.resize(96);
+    for (usize i = 0; i < buffer.samples.size(); ++i) {
+        buffer.samples[i] = static_cast<f32>(i) / 95.0f;
+    }
+
+    AudioScene scene;
+    scene.set_listener(listener_at({0, 0, 0}));
+    Emitter source;
+    source.buffer = &buffer;
+    source.playing = true;
+
+    std::vector<f32> first_left(11, 0.0f);
+    std::vector<f32> first_right(11, 0.0f);
+    scene.begin_block(11, 44100);
+    scene.mix_emitter(source);
+    scene.finalize(first_left.data(), first_right.data());
+    NF_CHECK(source.sample_position >
+             static_cast<f64>(source.sample_cursor));
+
+    std::vector<f32> second_left(11, 0.0f);
+    std::vector<f32> second_right(11, 0.0f);
+    scene.begin_block(11, 44100);
+    scene.mix_emitter(source);
+    scene.finalize(second_left.data(), second_right.data());
+
+    AudioScene one_block;
+    one_block.set_listener(listener_at({0, 0, 0}));
+    Emitter whole_source = source;
+    whole_source.sample_cursor = 0;
+    whole_source.sample_position = -1.0;
+    whole_source.playing = true;
+    std::vector<f32> whole_left(22, 0.0f);
+    std::vector<f32> whole_right(22, 0.0f);
+    one_block.begin_block(22, 44100);
+    one_block.mix_emitter(whole_source);
+    one_block.finalize(whole_left.data(), whole_right.data());
+
+    const f32 expected_at_11 = static_cast<f32>(
+        (11.0 * 48000.0 / 44100.0) / 95.0);
+    NF_CHECK_NEAR(second_left[0], expected_at_11, 1e-6f);
+    for (usize i = 0; i < second_left.size(); ++i) {
+        NF_CHECK_NEAR(first_left[i], whole_left[i], 1e-6f);
+        NF_CHECK_NEAR(first_right[i], whole_right[i], 1e-6f);
+        NF_CHECK_NEAR(second_left[i], whole_left[i + second_left.size()], 1e-6f);
+        NF_CHECK_NEAR(second_right[i], whole_right[i + second_right.size()], 1e-6f);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Degenerate input
 // ---------------------------------------------------------------------------

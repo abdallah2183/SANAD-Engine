@@ -282,6 +282,47 @@ private:
     runtime::SkyComponent m_after{};
 };
 
+// Sets (or adds) the day/night clock of an existing entity.
+class SetTimeOfDayCommand : public ICommand {
+public:
+    SetTimeOfDayCommand(ecs::Entity e, bool had_before,
+                        const runtime::TimeOfDayComponent& before,
+                        const runtime::TimeOfDayComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::TimeOfDayComponent m_before{};
+    runtime::TimeOfDayComponent m_after{};
+};
+
+// Sets (or adds) the post-processing block of an existing entity (design §206).
+//
+// Undo of the edit that FIRST created the block removes the component, so a
+// scene that had no `PostProcess:` line round-trips to a file with no
+// `PostProcess:` line — the same rule SetTimeOfDayCommand follows, and the
+// reason the writer can keep "absent means unchanged" honest.
+class SetPostProcessCommand : public ICommand {
+public:
+    SetPostProcessCommand(ecs::Entity e, bool had_before,
+                          const runtime::PostProcessComponent& before,
+                          const runtime::PostProcessComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::PostProcessComponent m_before{};
+    runtime::PostProcessComponent m_after{};
+};
+
 // Reassigns an entity's mesh material path (shared asset, not a copy).
 // The entity must carry a MeshComponent; validated by the factory.
 class SetMaterialAssignmentCommand : public ICommand {

@@ -85,10 +85,24 @@ AudioBuffer make_tone_buffer(f32 frequency_hz, f32 duration_seconds,
 struct AudioSource {
     const AudioBuffer* buffer = nullptr;
     f32 volume = 1.0f;
+    /// Playback rate multiplier. 1.0 is the authored rate, 2.0 finishes a clip
+    /// in half the time and sounds an octave up, 0.5 takes twice as long. The
+    /// value is applied to the resampling step, so it stays correct for buffers
+    /// whose rate already differs from the mix rate (the two multiply). A
+    /// non-finite or non-positive pitch is ignored as 1.0 rather than stalling
+    /// the cursor, so a bad authored value cannot silence a source forever.
     f32 pitch = 1.0f;
     bool looping = false;
     bool playing = false;
+    /// Integral source-frame cursor kept for the existing seek/state API.
     usize sample_cursor = 0;
+    /// Exact fractional source position used when the source rate differs from
+    /// the mix rate. -1 adopts `sample_cursor` on the next block; after mixing,
+    /// this is the authoritative playback position. Copy both fields across
+    /// blocks. Assigning a different `sample_cursor` still seeks as before; to
+    /// seek to the cursor's current value, set `sample_position = -1` before the
+    /// next block.
+    f64 sample_position = -1.0;
 
     // 3D
     bool spatial = false;
@@ -101,7 +115,11 @@ struct AudioSource {
 
     void play() { playing = true; }
     void pause() { playing = false; }
-    void stop() { playing = false; sample_cursor = 0; }
+    void stop() {
+        playing = false;
+        sample_cursor = 0;
+        sample_position = 0.0;
+    }
 };
 
 /// Audio bus: a mixer that sums sources, applies a master volume, and
@@ -113,6 +131,13 @@ struct AudioBus {
     /// Mix `source` into `out_left` and `out_right` for `num_frames` frames.
     /// `out_left` and `out_right` are pre-sized to `num_frames`.
     /// `listener_*` are used only if the source is spatial.
+    ///
+    /// `sample_rate` is the output/mix rate; zero means `kDefaultSampleRate`.
+    /// Buffers at any non-zero source rate are linearly resampled to that clock.
+    /// Resampling is deterministic across blocks: the exact fractional position
+    /// lives in `AudioSource::sample_position`, so callers persist that field
+    /// together with `sample_cursor`. Mono is sent to both outputs; stereo keeps
+    /// its two independent lanes.
     void mix_source(AudioSource& source,
                     const Vec3& listener_pos,
                     const Vec3& listener_forward,

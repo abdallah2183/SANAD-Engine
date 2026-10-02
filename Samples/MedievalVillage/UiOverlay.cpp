@@ -295,10 +295,14 @@ void UiOverlay::shutdown() {
     }
     m_font_set.reset();
     m_allocator.reset();
-    m_vb.reset();
-    m_ib.reset();
-    m_vb_cap = 0;
-    m_ib_cap = 0;
+    for (auto& buffer : m_vb) {
+        buffer.reset();
+    }
+    for (auto& buffer : m_ib) {
+        buffer.reset();
+    }
+    m_vb_cap.fill(0);
+    m_ib_cap.fill(0);
     m_font_view.reset();
     m_font_texture.reset();
     m_sampler.reset();
@@ -470,12 +474,12 @@ rhi::Pipeline* UiOverlay::pipeline() {
     return m_pipeline.get();
 }
 
-bool UiOverlay::ensure_buffers(usize vtx_count, usize idx_count) {
-    if (m_device == nullptr) {
+bool UiOverlay::ensure_buffers(u32 frame_slot, usize vtx_count, usize idx_count) {
+    if (m_device == nullptr || frame_slot >= kFramesInFlight) {
         return false;
     }
-    if (vtx_count > m_vb_cap) {
-        usize cap = (m_vb_cap == 0) ? vtx_count : m_vb_cap;
+    if (vtx_count > m_vb_cap[frame_slot]) {
+        usize cap = (m_vb_cap[frame_slot] == 0) ? vtx_count : m_vb_cap[frame_slot];
         while (cap < vtx_count) {
             cap *= 2;
         }
@@ -487,11 +491,15 @@ bool UiOverlay::ensure_buffers(usize vtx_count, usize idx_count) {
         if (!nb) {
             return false;
         }
-        m_vb = std::move(nb); // the caller has already waited on the frame fence
-        m_vb_cap = cap;
+        // Growing a slot's buffer is safe mid-loop: the caller waited this
+        // slot's frame fence before recording, so nothing references the old
+        // buffer. (The fence wait gates THIS slot only — which is precisely
+        // why the buffers must be per-slot; see render().)
+        m_vb[frame_slot] = std::move(nb);
+        m_vb_cap[frame_slot] = cap;
     }
-    if (idx_count > m_ib_cap) {
-        usize cap = (m_ib_cap == 0) ? idx_count : m_ib_cap;
+    if (idx_count > m_ib_cap[frame_slot]) {
+        usize cap = (m_ib_cap[frame_slot] == 0) ? idx_count : m_ib_cap[frame_slot];
         while (cap < idx_count) {
             cap *= 2;
         }
@@ -503,16 +511,17 @@ bool UiOverlay::ensure_buffers(usize vtx_count, usize idx_count) {
         if (!nb) {
             return false;
         }
-        m_ib = std::move(nb);
-        m_ib_cap = cap;
+        m_ib[frame_slot] = std::move(nb);
+        m_ib_cap[frame_slot] = cap;
     }
-    return m_vb != nullptr && m_ib != nullptr;
+    return m_vb[frame_slot] != nullptr && m_ib[frame_slot] != nullptr;
 }
 
-bool UiOverlay::render(rhi::CommandBuffer& cmd, rhi::Texture& target, u32 image_index, u32 width,
-                       u32 height) {
+bool UiOverlay::render(rhi::CommandBuffer& cmd, rhi::Texture& target, u32 image_index,
+                       u32 frame_slot, u32 width, u32 height) {
     const ImDrawData* draw_data = m_draw_data;
-    if (!valid() || !m_pass || image_index >= m_framebuffers.size()) {
+    if (!valid() || !m_pass || image_index >= m_framebuffers.size() ||
+        frame_slot >= kFramesInFlight) {
         return false;
     }
     if (draw_data == nullptr || draw_data->CmdListsCount == 0 || width == 0 || height == 0) {
@@ -532,7 +541,7 @@ bool UiOverlay::render(rhi::CommandBuffer& cmd, rhi::Texture& target, u32 image_
     if (vtx_total == 0 || idx_total == 0) {
         return true;
     }
-    if (!ensure_buffers(vtx_total, idx_total)) {
+    if (!ensure_buffers(frame_slot, vtx_total, idx_total)) {
         return false;
     }
 
@@ -548,8 +557,13 @@ bool UiOverlay::render(rhi::CommandBuffer& cmd, rhi::Texture& target, u32 image_
             idx.push_back(static_cast<u32>(list->IdxBuffer.Data[i]));
         }
     }
-    m_vb->update(vtx.data(), 0, vtx.size() * sizeof(ImDrawVert));
-    m_ib->update(idx.data(), 0, idx.size() * sizeof(u32));
+    // The immediate CPU update below is the reason these buffers are
+    // per-slot: it lands in mapped memory *now*, while the previous frame
+    // (the other slot) may still be fetching vertices on the GPU. One shared
+    // pair here was a write/read race and the GPU answered with
+    // VK_ERROR_DEVICE_LOST after a nondeterministic number of frames.
+    m_vb[frame_slot]->update(vtx.data(), 0, vtx.size() * sizeof(ImDrawVert));
+    m_ib[frame_slot]->update(idx.data(), 0, idx.size() * sizeof(u32));
 
     // The scene wrote this image as a color attachment; the Load pass reads it
     // back as one, so the layout stays ColorAtt and only a barrier is needed.
@@ -557,9 +571,9 @@ bool UiOverlay::render(rhi::CommandBuffer& cmd, rhi::Texture& target, u32 image_
     cmd.begin_render_pass(*m_pass, *m_framebuffers[image_index],
                           std::span<const rhi::ClearValue>{});
     cmd.bind_pipeline(*pipe);
-    const std::array<const rhi::Buffer*, 1> vbs{m_vb.get()};
+    const std::array<const rhi::Buffer*, 1> vbs{m_vb[frame_slot].get()};
     cmd.bind_vertex_buffers(std::span<const rhi::Buffer* const>(vbs));
-    cmd.bind_index_buffer(*m_ib, 0);
+    cmd.bind_index_buffer(*m_ib[frame_slot], 0);
     const std::array<const rhi::DescriptorSet*, 1> sets{m_font_set.get()};
     cmd.bind_descriptor_sets(*m_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
     cmd.set_viewport(0, 0, width, height);

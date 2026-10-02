@@ -59,9 +59,25 @@ struct SkyEdit {
     float zenith[3] = {0.20f, 0.42f, 0.85f};
     float horizon[3] = {0.62f, 0.72f, 0.82f};
     float ground[3] = {0.09f, 0.09f, 0.11f};
+    float clear[3] = {0.03f, 0.03f, 0.07f};
     float sun_disk = 1.0f;
     float sun_glow = 1.0f;
     bool enabled = true;
+};
+
+// Day/night cycle for the selected entity (design doc §64). Mirrors
+// runtime::TimeOfDayComponent, which the Runtime reads each frame to drive the
+// sun and the sky. Editing it here is what makes a cycle an authoring decision
+// rather than a hand-written scene line.
+struct TimeOfDayEdit {
+    /// Hour of day, 0..24. The widget offers 0..24 and the command normalises,
+    /// so a value that arrives at 24.5 is stored as 0.5 rather than rejected —
+    /// the same wrapping rule the scene loader applies, for the same reason.
+    float time_hours = 12.0f;
+    /// Real seconds for a full 24h cycle. 0 means frozen (a fixed golden hour).
+    float day_length_seconds = 240.0f;
+    bool enabled = true;
+    bool drive_light = true;
 };
 
 struct MaterialEdit {
@@ -77,6 +93,18 @@ TransformEdit read_transform(const ecs::World& world, ecs::Entity e);
 CameraEdit read_camera(const ecs::World& world, ecs::Entity e, bool& out_has);
 LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has);
 SkyEdit read_sky(const ecs::World& world, ecs::Entity e, bool& out_has);
+TimeOfDayEdit read_time_of_day(const ecs::World& world, ecs::Entity e, bool& out_has);
+/// The entity's post-processing block (design §206).
+///
+/// Deliberately NOT a parallel `PostProcessEdit` struct: every other edit type
+/// here exists because the widget wants a different shape from the component
+/// (an array instead of three floats, degrees instead of radians, a normalised
+/// hour). The post component is already a flat bag of floats that the widget
+/// edits one-to-one, so a mirror struct would be fifteen fields of pure
+/// translation — two places to add a stage to, and one of them would be
+/// forgotten.
+runtime::PostProcessComponent read_post_process(const ecs::World& world, ecs::Entity e,
+                                                bool& out_has);
 
 // All factories return nullptr + err on invalid entity or invalid values.
 std::unique_ptr<ICommand> make_transform_command(ecs::World& world, ecs::Entity e,
@@ -87,6 +115,12 @@ std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,
                                               const LightEdit& edit, std::string& out_err);
 std::unique_ptr<ICommand> make_sky_command(ecs::World& world, ecs::Entity e,
                                            const SkyEdit& edit, std::string& out_err);
+std::unique_ptr<ICommand> make_time_of_day_command(ecs::World& world, ecs::Entity e,
+                                                   const TimeOfDayEdit& edit,
+                                                   std::string& out_err);
+std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Entity e,
+                                                    const runtime::PostProcessComponent& edit,
+                                                    std::string& out_err);
 std::unique_ptr<ICommand> make_mesh_command(ecs::World& world, ecs::Entity e,
                                             const std::string& asset_id_text,
                                             const std::string& material, std::string& out_err);

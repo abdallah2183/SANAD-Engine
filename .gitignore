@@ -71,13 +71,16 @@ __pycache__/
 Samples/MedievalVillage/Content/Medieval/Meshes/
 Samples/MedievalVillage/Content/Medieval/Textures/
 
-# Session scratch: build logs, probes, ad-hoc screenshots
+# Session scratch: build logs, probes
 build_out.txt
 editor_tests_out.txt
 eng_build.txt
 probe_nav.ps1
-shots/
-.workbuddy-ai/g10_*.log
+.workbuddy-ai/*.log
 .workbuddy-ai/tmp/
 .workbuddy-ai/tmp_build.sh
 .workbuddy-ai/agents/
+.workbuddy-ai/gate/
+.workbuddy-ai/gate_sweep/
+.workbuddy-ai/run_sweep.ps1
+

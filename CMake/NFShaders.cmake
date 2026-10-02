@@ -105,6 +105,10 @@ if(NF_GLSLC_EXECUTABLE)
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "forward")
     nf_compile_shaders(NFBasic3DTonemapShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "tonemap")
+    # The bloom chain (§206). One shader pair serves both the prefilter and the
+    # downsample; the kernel rides a push-constant mode flag (see bloom.frag).
+    nf_compile_shaders(NFBasic3DBloomShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "bloom")
     # GPU picking id pass (GpuPicker). Deliberately lives beside the other
     # renderer shaders: it reuses their vertex layout and transform path, and
     # picking is only correct if the id image lines up with the rendered one.

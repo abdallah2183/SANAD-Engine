@@ -17,6 +17,7 @@
 #include <NF/Test/TestFramework.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -120,6 +121,42 @@ const char* kCharacterJson = R"JSON({"asset":{"version":"2.0"},
 {"name":"Idle","samplers":[{"input":4,"output":5}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]},
 {"name":"Wave","samplers":[{"input":6,"output":7}],"channels":[{"sampler":0,"target":{"node":1,"path":"rotation"}}]},
 {"name":"Splined","samplers":[{"interpolation":"CUBICSPLINE","input":8,"output":9}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]}],
+"scenes":[{"nodes":[0]}],"scene":0})JSON";
+
+// The strict-validation fixture is the same character with no extra unsupported
+// clip. Unused buffer views/accessors are legal and keep the binary layout
+// shared with the report fixture above.
+const char* kStrictCharacterJson = R"JSON({"asset":{"version":"2.0"},
+"buffers":[{"byteLength":216}],
+"bufferViews":[
+{"buffer":0,"byteOffset":0,"byteLength":36},
+{"buffer":0,"byteOffset":36,"byteLength":12},
+{"buffer":0,"byteOffset":48,"byteLength":12},
+{"buffer":0,"byteOffset":60,"byteLength":3},
+{"buffer":0,"byteOffset":64,"byteLength":8},
+{"buffer":0,"byteOffset":72,"byteLength":24},
+{"buffer":0,"byteOffset":96,"byteLength":8},
+{"buffer":0,"byteOffset":104,"byteLength":32},
+{"buffer":0,"byteOffset":136,"byteLength":8},
+{"buffer":0,"byteOffset":144,"byteLength":72}],
+"accessors":[
+{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+{"bufferView":1,"componentType":5121,"count":3,"type":"VEC4"},
+{"bufferView":2,"componentType":5121,"count":3,"type":"VEC4","normalized":true},
+{"bufferView":3,"componentType":5121,"count":3,"type":"SCALAR"},
+{"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR"},
+{"bufferView":5,"componentType":5126,"count":2,"type":"VEC3"},
+{"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"},
+{"bufferView":7,"componentType":5126,"count":2,"type":"VEC4"},
+{"bufferView":8,"componentType":5126,"count":2,"type":"SCALAR"},
+{"bufferView":9,"componentType":5126,"count":6,"type":"VEC3"}],
+"materials":[{"name":"HeroMat","pbrMetallicRoughness":{"baseColorFactor":[0.8,0.4,0.2,1.0],"metallicFactor":0.1,"roughnessFactor":0.7}}],
+"meshes":[{"name":"HeroMesh","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0,"mode":4}]}],
+"skins":[{"name":"HeroRig","joints":[1]}],
+"nodes":[{"name":"Body","mesh":0,"skin":0,"children":[1]},{"name":"Bone0","translation":[0,0.5,0]}],
+"animations":[
+{"name":"Idle","samplers":[{"input":4,"output":5}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]},
+{"name":"Wave","samplers":[{"input":6,"output":7}],"channels":[{"sampler":0,"target":{"node":1,"path":"rotation"}}]}],
 "scenes":[{"nodes":[0]}],"scene":0})JSON";
 
 std::vector<u8> character_bin() {
@@ -282,7 +319,7 @@ NF_TEST(model_importer_info_reports_a_skinned_character) {
 
     // The no-silent-substitution ledger.
     NF_CHECK(contains(r.log, "primitives (non-triangle / unusable): 0"));
-    NF_CHECK(contains(r.log, "animation channels (CUBICSPLINE / morph / unsupported): 1"));
+    NF_CHECK(contains(r.log, "animation channels (STEP / CUBICSPLINE / morph / unsupported): 1"));
     NF_CHECK(contains(r.log, "skin bindings rejected (malformed JOINTS_0/WEIGHTS_0): 0"));
 }
 
@@ -306,12 +343,12 @@ NF_TEST(model_importer_info_writes_nothing_to_disk) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. the cook half still works, and produces a loadable mesh
+// 3. character sources are never cooked as geometry-only static meshes
 // ---------------------------------------------------------------------------
 
-NF_TEST(model_importer_cooks_a_skinned_glb_to_nfmesh) {
+NF_TEST(model_importer_refuses_character_geometry_cook) {
     if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
-    CliSandbox sb("nf_importer_cli_cook");
+    CliSandbox sb("nf_importer_cli_character_refusal");
     if (!sb.ok) NF_SKIP("no scratch directory");
     const auto glb = sb.root / "Hero.glb";
     const auto nfmesh = sb.root / "Hero.nfmesh";
@@ -319,25 +356,97 @@ NF_TEST(model_importer_cooks_a_skinned_glb_to_nfmesh) {
 
     const RunResult r =
         run_importer(sb.root, "--input " + quoted(glb) + " --output " + quoted(nfmesh));
+    NF_CHECK(r.exit_code == 3);
+    NF_CHECK(contains(r.log, "refusing geometry-only cook"));
+    NF_CHECK(contains(r.log, "no output was written"));
+    NF_CHECK(!std::filesystem::exists(nfmesh));
+}
+
+// ---------------------------------------------------------------------------
+// 4. strict mode validates a complete character but writes no fake cook
+// ---------------------------------------------------------------------------
+
+NF_TEST(model_importer_strict_character_validation_is_read_only) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_strict_character");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+    const auto glb = sb.root / "Hero.glb";
+    if (!write_glb(glb, kStrictCharacterJson, character_bin())) NF_SKIP("cannot write fixture");
+
+    const std::vector<std::string> before = listing(sb.root);
+    const RunResult r = run_importer(sb.root, "--input " + quoted(glb) + " --character");
     NF_CHECK(r.exit_code == 0);
+    NF_CHECK(contains(r.log, "strict character validation passed"));
+    NF_CHECK(contains(r.log, "no files written (validation-only mode)"));
+    NF_CHECK(listing(sb.root) == before);
+}
+
+NF_TEST(model_importer_strict_character_rejects_static_prop_with_ledger) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_strict_static");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+    const auto glb = sb.root / "Prop.glb";
+    if (!write_glb(glb, kStaticJson, static_bin())) NF_SKIP("cannot write fixture");
+
+    const RunResult r = run_importer(sb.root, "--input " + quoted(glb) + " --character");
+    NF_CHECK(r.exit_code == 1);
+    NF_CHECK(contains(r.log, "skins: 0"));
+    NF_CHECK(contains(r.log, "animations: 0"));
+    NF_CHECK(contains(r.log, "strict character validation failed"));
+    NF_CHECK(listing(sb.root).size() == 1);
+}
+
+// ---------------------------------------------------------------------------
+// 5. a static source keeps the non-strict geometry cook
+// ---------------------------------------------------------------------------
+
+NF_TEST(model_importer_non_strict_static_prop_cooks_geometry) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_static_cook");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+    const auto glb = sb.root / "Prop.glb";
+    const auto nfmesh = sb.root / "Prop.nfmesh";
+    if (!write_glb(glb, kStaticJson, static_bin())) NF_SKIP("cannot write fixture");
+
+    const RunResult r =
+        run_importer(sb.root, "--input " + quoted(glb) + " --output " + quoted(nfmesh));
+    NF_CHECK(r.exit_code == 0);
+    NF_CHECK(contains(r.log, "writing geometry-only .nfmesh for a static source"));
     NF_CHECK(contains(r.log, "wrote"));
     NF_CHECK(std::filesystem::exists(nfmesh));
-    NF_CHECK(std::filesystem::file_size(nfmesh) > 0);
 
-    // The cooked file must load back — a written-but-unreadable asset is the
-    // kind of silent failure this track exists to remove.
     std::string err;
     std::unique_ptr<assets::MeshAsset> mesh = assets::MeshAsset::load_from_file(nfmesh.string(), err);
     NF_CHECK(mesh != nullptr);
     if (mesh) {
         NF_CHECK(mesh->vertices.size() == 3);
         NF_CHECK(mesh->indices.size() == 3);
-        NF_CHECK(mesh->submeshes.size() == 1);
     }
 }
 
 // ---------------------------------------------------------------------------
-// 4. a prop with no rig says so; it is never given a fake skeleton
+// 6. extension/content mismatches are never interpreted by content alone
+// ---------------------------------------------------------------------------
+
+NF_TEST(model_importer_rejects_extension_content_mismatch) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_extension_mismatch");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+    const auto misnamed_glb = sb.root / "Hero.gltf";
+    const auto nfmesh = sb.root / "Hero.nfmesh";
+    if (!write_glb(misnamed_glb, kStrictCharacterJson, character_bin())) {
+        NF_SKIP("cannot write fixture");
+    }
+
+    const RunResult r = run_importer(
+        sb.root, "--input " + quoted(misnamed_glb) + " --output " + quoted(nfmesh));
+    NF_CHECK(r.exit_code == 1);
+    NF_CHECK(contains(r.log, "extension/content mismatch"));
+    NF_CHECK(!std::filesystem::exists(nfmesh));
+}
+
+// ---------------------------------------------------------------------------
+// 7. a prop with no rig says so; it is never given a fake skeleton
 // ---------------------------------------------------------------------------
 
 NF_TEST(model_importer_info_calls_a_static_prop_static) {
@@ -356,7 +465,7 @@ NF_TEST(model_importer_info_calls_a_static_prop_static) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. bad invocation is refused, not guessed at
+// 8. bad invocation is refused, not guessed at
 // ---------------------------------------------------------------------------
 
 NF_TEST(model_importer_refuses_an_incomplete_invocation) {
@@ -381,4 +490,151 @@ NF_TEST(model_importer_refuses_an_incomplete_invocation) {
         run_importer(sb.root, "--input " + quoted(sb.root / "nope.glb") + " --info");
     NF_CHECK(missing.exit_code == 1);
     NF_CHECK(contains(missing.log, "import failed"));
+}
+
+// ---------------------------------------------------------------------------
+// 9. the CLI reads every format the engine's mesh reader does
+//
+// Before MeshImport existed the CLI was glTF-only and the engine could write
+// six formats it could not read back. This pins the other direction of that
+// fix: the shipped tool accepts an OBJ, reports what it is, and cooks it.
+// ---------------------------------------------------------------------------
+
+NF_TEST(model_importer_accepts_obj_and_cooks_it) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_obj");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+
+    const auto obj = sb.root / "Tri.obj";
+    {
+        const std::string text =
+            "# hand-written\n"
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+            "vt 0 0\nvt 1 0\nvt 0 1\n"
+            "vn 0 0 1\n"
+            "f 1/1/1 2/2/1 3/3/1\n";
+        std::ofstream out(obj, std::ios::binary | std::ios::trunc);
+        if (!out) NF_SKIP("cannot write fixture");
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    }
+
+    // --info names the format it read, and stays read-only.
+    const RunResult info = run_importer(sb.root, "--input " + quoted(obj) + " --info");
+    NF_CHECK(info.exit_code == 0);
+    NF_CHECK(contains(info.log, "format: Wavefront OBJ"));
+    NF_CHECK(contains(info.log, "meshes: 1"));
+    NF_CHECK(contains(info.log, "static mesh (skin_index = -1)"));
+    NF_CHECK(contains(info.log, "warnings: 0"));
+    NF_CHECK(listing(sb.root).size() == 1); // the fixture, nothing else
+
+    // The cook writes a real .nfmesh the engine can load.
+    const auto nfmesh = sb.root / "Tri.nfmesh";
+    const RunResult cook =
+        run_importer(sb.root, "--input " + quoted(obj) + " --output " + quoted(nfmesh));
+    NF_CHECK(cook.exit_code == 0);
+    NF_CHECK(contains(cook.log, "writing geometry-only .nfmesh for a static source"));
+    NF_CHECK(contains(cook.log, "wrote"));
+    NF_CHECK(std::filesystem::exists(nfmesh));
+
+    std::string err;
+    std::unique_ptr<assets::MeshAsset> mesh = assets::MeshAsset::load_from_file(nfmesh.string(), err);
+    NF_CHECK(mesh != nullptr);
+    if (mesh) {
+        NF_CHECK(mesh->vertices.size() == 3);
+        NF_CHECK(mesh->indices.size() == 3);
+        // The normals came from the file, so they are the file's +Z.
+        NF_CHECK_NEAR(mesh->vertices[0].normal[2], 1.0f, 1e-5f);
+    }
+}
+
+NF_TEST(model_importer_accepts_stl_and_reports_its_losses) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_stl");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+
+    const auto stl = sb.root / "Tri.stl";
+    {
+        const std::string text =
+            "solid tri\n"
+            "  facet normal 0 0 1\n"
+            "    outer loop\n"
+            "      vertex 0 0 0\n"
+            "      vertex 1 0 0\n"
+            "      vertex 0 1 0\n"
+            "    endloop\n"
+            "  endfacet\n"
+            "endsolid tri\n";
+        std::ofstream out(stl, std::ios::binary | std::ios::trunc);
+        if (!out) NF_SKIP("cannot write fixture");
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    }
+
+    const RunResult r = run_importer(sb.root, "--input " + quoted(stl) + " --info");
+    NF_CHECK(r.exit_code == 0);
+    NF_CHECK(contains(r.log, "format: STL (binary or ASCII)"));
+    // STL's losses are named, not implied: no UVs, no vertex normals.
+    NF_CHECK(contains(r.log, "warnings: 1"));
+    NF_CHECK(contains(r.log, "no UVs"));
+}
+
+// ---------------------------------------------------------------------------
+// 10. materials and textures are reported, and their loss is named
+// ---------------------------------------------------------------------------
+
+NF_TEST(model_importer_reports_obj_materials_and_texture_loss) {
+    if (std::string(NF_MODEL_IMPORTER_EXE).empty()) NF_SKIP("tools not configured");
+    CliSandbox sb("nf_importer_cli_obj_material");
+    if (!sb.ok) NF_SKIP("no scratch directory");
+
+    const auto obj = sb.root / "Panel.obj";
+    const auto mtl = sb.root / "Panel.mtl";
+    const auto png = sb.root / "wood.png";
+    {
+        const std::string obj_text =
+            "mtllib Panel.mtl\n"
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+            "vt 0 0\nvt 1 0\nvt 0 1\n"
+            "vn 0 0 1\n"
+            "usemtl wood\n"
+            "f 1/1/1 2/2/1 3/3/1\n";
+        std::ofstream out(obj, std::ios::binary | std::ios::trunc);
+        if (!out) NF_SKIP("cannot write fixture");
+        out.write(obj_text.data(), static_cast<std::streamsize>(obj_text.size()));
+    }
+    {
+        const std::string mtl_text = "newmtl wood\nKd 0.55 0.35 0.15\nKs 1 1 1\nNs 32\n"
+                                     "map_Kd wood.png\n";
+        std::ofstream out(mtl, std::ios::binary | std::ios::trunc);
+        if (!out) NF_SKIP("cannot write fixture");
+        out.write(mtl_text.data(), static_cast<std::streamsize>(mtl_text.size()));
+    }
+    {
+        const std::vector<u8> png_bytes = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
+                                           0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R'};
+        std::ofstream out(png, std::ios::binary | std::ios::trunc);
+        if (!out) NF_SKIP("cannot write fixture");
+        out.write(reinterpret_cast<const char*>(png_bytes.data()),
+                  static_cast<std::streamsize>(png_bytes.size()));
+    }
+
+    // --info: the material, its factors, its texture, and the fields the
+    // pipeline has no room for — all named.
+    const RunResult info = run_importer(sb.root, "--input " + quoted(obj) + " --info");
+    NF_CHECK(info.exit_code == 0);
+    NF_CHECK(contains(info.log, "materials: 1"));
+    NF_CHECK(contains(info.log, "wood"));
+    NF_CHECK(contains(info.log, "albedo image 0"));
+    NF_CHECK(contains(info.log, "images: 1"));
+    NF_CHECK(contains(info.log, "wood.png"));
+    NF_CHECK(contains(info.log, "dropped: Ks "));
+    NF_CHECK(contains(info.log, "dropped: Ns "));
+
+    // The cook writes geometry only, and says exactly what it could not carry
+    // rather than leaving a grey model and no explanation.
+    const auto nfmesh = sb.root / "Panel.nfmesh";
+    const RunResult cook =
+        run_importer(sb.root, "--input " + quoted(obj) + " --output " + quoted(nfmesh));
+    NF_CHECK(cook.exit_code == 0);
+    NF_CHECK(contains(cook.log, "1 material(s) and 1 image(s) are NOT written"));
+    NF_CHECK(std::filesystem::exists(nfmesh));
 }

@@ -16,6 +16,7 @@
 // console or editor that mangles UTF-8 cannot corrupt the source.
 
 #include <NF/Editor/ToolbarUi.hpp>
+#include <NF/Editor/UiTheme.hpp>
 #include <NF/Editor/ProjectLauncher.hpp> // save_language() for the live toggles
 
 #include <NF/Assets/MeshExport.hpp>
@@ -456,7 +457,27 @@ void create_menu_contents(EditorApp& app) {
     }
 }
 /// A panel-section header used by the settings window.
-bool settings_section(const std::string& label, bool default_open = false) {
+///
+/// Takes the KEY, not the translated text, and appends `###sec_<key>`.
+///
+/// Both halves of that are fixes, not decoration:
+///
+///  * A section header and the first control inside it very often carry the SAME
+///    label - "Snap" section, "Snap" checkbox; "Theme accent" section, "Theme
+///    accent" colour picker. ImGui derives a widget's ID from its label, so that
+///    pair is a duplicate-ID conflict, and it surfaces as a modal "MESSAGE FROM
+///    DEAR IMGUI Programmer error" the user must dismiss before the editor is
+///    usable again. Anchoring the ID to the key makes every header unique by
+///    construction, no matter what the labels inside it turn out to be, so the
+///    class of bug cannot come back through a new section.
+///  * Deriving the ID from the TRANSLATED text would give one control two
+///    different IDs across the two languages, so the open/closed state stored in
+///    editor_layout.ini would silently not apply after a language switch.
+///
+/// Guarded by tests/EditorTests/test_imgui_id_uniqueness.cpp, because the failure
+/// mode is invisible to every test that does not open this window with a GPU.
+bool settings_section(const char* key, bool default_open = false) {
+    const std::string label = AV(key) + "###sec_" + key;
     return ImGui::CollapsingHeader(label.c_str(),
                                    default_open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
 }
@@ -532,6 +553,21 @@ void game_menu_contents(EditorApp& app) {
 EditorUiSettings& ui_settings() {
     static EditorUiSettings settings;
     return settings;
+}
+
+// The live accent colour, read by every panel that draws an accent-coloured
+// element. It lives here, next to the settings object it reads, because
+// UiTheme.hpp is included by files that must not depend on the settings at all
+// — and this is the one function in that header that genuinely needs them.
+//
+// (This definition was destroyed by a `git checkout` of this file while chasing
+// an unrelated UTF-8 corruption, and the link error it caused was masked by a
+// stale-object link failure reporting exit 1120. Recorded here so the next
+// person who reverts a file knows the settings-dependent definitions live in it,
+// and so nobody "fixes" the link error by deleting the declaration.)
+ImVec4 theme::accent() {
+    const EditorUiSettings& s = ui_settings();
+    return ImVec4(s.accent_r, s.accent_g, s.accent_b, 1.0f);
 }
 
 void apply_ui_accent(const EditorUiSettings& settings) {
@@ -967,7 +1003,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     if (st.show_settings) {
         ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin((AV("settings") + "###NFSettings").c_str(), &st.show_settings)) {
-            if (settings_section(AV("viewport"), true)) {
+            if (settings_section("viewport", true)) {
                 ImGui::Checkbox(AV("grid_step").c_str(), &st.show_grid);
                 ImGui::SetNextItemWidth(150.0f);
                 // "label###id": the visible label the slider never had, with the
@@ -984,7 +1020,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 ImGui::Checkbox(AV("profiler").c_str(), &st.show_profiler);
             }
 
-            if (settings_section(AV("snap"))) {
+            if (settings_section("snap")) {
                 if (ImGui::Checkbox(AV("snap").c_str(), &st.snap_enabled)) {
                     sync_snap_from_settings(app, st);
                 }
@@ -1006,7 +1042,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section(AV("sky_preset"))) {
+            if (settings_section("sky_preset")) {
                 // The labels must OUTLIVE the Combo call. AV() returns a
                 // std::string by value, so taking .c_str() of the temporary left
                 // all three pointers dangling at the end of that same statement
@@ -1024,7 +1060,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section(AV("rendering"))) {
+            if (settings_section("rendering")) {
                 // Render preferences are COMPONENT state, not renderer state:
                 // Runtime::renderer() is const, so the editor cannot write global
                 // renderer settings. What it can write is the same values the
@@ -1062,7 +1098,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section(AV("language"))) {
+            if (settings_section("language")) {
                 // Same flip as the Settings menu item: the label names the
                 // language NOT active, because that is what the click does. The
                 // language's own name is deliberate Latin where it is "English"
@@ -1081,7 +1117,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section(AV("autosave"))) {
+            if (settings_section("autosave")) {
                 // The same session value the Game menu edits (autosave_interval()),
                 // so flipping it in either place is visible in both.
                 bool autosave = app.autosave_enabled();
@@ -1097,7 +1133,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section(AV("theme_accent"))) {
+            if (settings_section("theme_accent")) {
                 float col[3] = {st.accent_r, st.accent_g, st.accent_b};
                 if (ImGui::ColorEdit3(AV("theme_accent").c_str(), col)) {
                     st.accent_r = col[0];

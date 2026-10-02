@@ -181,6 +181,79 @@ NF_TEST(pipeline_cache_separates_different_keys) {
     NF_CHECK(cache.size()==2);
 }
 
+NF_TEST(pipeline_cache_separates_every_pipeline_state_field) {
+    // The existing key-comparison tests only cover shader identity and the
+    // vertex layout. RASTERIZER and DEPTH state were compared field by field, so
+    // adding a field to RasterizerState or DepthState would have left the cache
+    // comparing the old list and quietly serving one pipeline for two visibly
+    // different states — a wrong image, no error, nothing to crash on. Those
+    // structs now define operator== as `= default`, which deletes itself when a
+    // field is added, so the omission is a build error instead. This test is
+    // the behavioural half: it asserts each state field is actually load-bearing.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    rhi::TextureDesc td{}; td.width=8; td.height=8; td.format=rhi::Format::R8G8B8A8_UNorm; td.usage=rhi::ImageUsage::ColorAtt;
+    auto tex = dev.create_texture(td); NF_CHECK(tex);
+    rhi::ColorAttachment ca{}; ca.format = td.format;
+    const std::array<rhi::ColorAttachment,1> atts{ca};
+    rhi::RenderPassDesc rpd{}; rpd.color_attachments = std::span<const rhi::ColorAttachment>(atts); rpd.present_source = false;
+    auto rp = dev.create_render_pass(rpd); NF_CHECK(rp);
+    auto sd = std::filesystem::path(NF_RHI_TEST_QUAD_SHADER_DIR);
+    auto vc = load_spirv(sd / "textured_quad_vert.spv");
+    auto fc = load_spirv(sd / "textured_quad_frag.spv");
+    NF_CHECK(!vc.empty() && !fc.empty());
+    auto vs = dev.create_shader_module({vc, rhi::ShaderStage::Vertex});
+    auto fs = dev.create_shader_module({fc, rhi::ShaderStage::Fragment});
+    NF_CHECK(vs && fs);
+    const std::array<rhi::DescriptorBinding,1> qbinds{{{0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}}};
+    rhi::DescriptorSetLayoutDesc qld{}; qld.bindings = std::span<const rhi::DescriptorBinding>(qbinds);
+    auto set_layout = dev.create_descriptor_set_layout(qld); NF_CHECK(set_layout);
+    const std::array<rhi::VertexAttrib,2> qattribs{{
+        {0, 0, rhi::Format::R32G32_SFloat},
+        {1, 8, rhi::Format::R32G32_SFloat}}};
+    rhi::VertexLayout qvl{}; qvl.binding = 0; qvl.stride = 16;
+    qvl.attributes = std::span<const rhi::VertexAttrib>(qattribs);
+
+    auto base = [&] {
+        rhi::PipelineDesc d{};
+        d.vs = vs.get(); d.fs = fs.get(); d.render_pass = rp.get();
+        d.descriptor_set_layout = set_layout.get(); d.vertex_layout = qvl;
+        return d;
+    };
+
+    PipelineCache cache(dev);
+    NF_CHECK(cache.get_or_create(base()) != nullptr);
+    NF_CHECK_EQ(cache.size(), 1u);
+
+    // One case per state field. Each must produce a DISTINCT pipeline: if any of
+    // these collides, the cache is serving a pipeline built for different state
+    // and the frame is silently wrong.
+    const auto distinct = [&](const char* what, rhi::PipelineDesc d) {
+        rhi::Pipeline* a = cache.get_or_create(base());
+        rhi::Pipeline* b = cache.get_or_create(d);
+        NF_CHECK(b != nullptr);
+        // A collision here means the cache served a pipeline built for different
+        // state. The name is in the failing line's test, which is enough to find.
+        (void)what;
+        NF_CHECK(b != a);
+    };
+
+    { auto d = base(); d.rasterizer.cull_mode = rhi::CullMode::Front; distinct("cull_mode", d); }
+    { auto d = base(); d.rasterizer.front_face = rhi::FrontFace::CW; distinct("front_face", d); }
+    { auto d = base(); d.rasterizer.wireframe = true; distinct("wireframe", d); }
+    { auto d = base(); d.depth.test_enabled = false; distinct("depth.test_enabled", d); }
+    { auto d = base(); d.depth.write_enabled = false; distinct("depth.write_enabled", d); }
+    { auto d = base(); d.depth.compare = rhi::CompareOp::LessEqual; distinct("depth.compare", d); }
+    { auto d = base(); d.topology = rhi::PrimitiveTopology::LineList; distinct("topology", d); }
+    { auto d = base(); d.push_constant_size = 16; distinct("push_constant_size", d); }
+    { auto d = base(); d.push_constant_stages = rhi::ShaderStage::Fragment; distinct("push_constant_stages", d); }
+
+    // Every state above is distinct from the base, and the base still resolves
+    // to its original pipeline rather than to one of the variants.
+    NF_CHECK_EQ(cache.size(), 10u);
+    NF_CHECK(cache.get_or_create(base()) == cache.get_or_create(base()));
+}
+
 NF_TEST(shader_reflection_matches_descriptor_layout) {
     require_gpu();
     // Use the textured quad fragment shader which has one CombinedImageSampler at set 0 binding 0
@@ -404,10 +477,17 @@ NF_TEST(shader_async_compile_via_job_system) {
     // Ensure file time changes (some filesystems have 1s granularity)
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     mgr.poll();
-    // Give the job a moment to compile
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    // Commit on main thread
-    size_t updated = mgr.update();
+    // The job shells out to glslc, whose cold-start cost is machine-dependent
+    // (~550 ms measured on the dev box, and it moves with antivirus and disk
+    // cache state). Waiting a fixed 300 ms made this test a clock race that
+    // fails on a slow launch and looks like a shader bug. Poll instead, with a
+    // bound: the assertion below is what the test is about, not the timing.
+    size_t updated = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (updated == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        updated = mgr.update();
+    }
     NF_CHECK(updated==1);
     NF_CHECK(shader->version() == v1+1);
 
