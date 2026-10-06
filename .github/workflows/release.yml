@@ -1,0 +1,84 @@
+name: Release Beta (Windows x64)
+
+# Publishes the downloadable beta: a Windows installer EXE + a portable zip.
+# Trigger: push a version tag (v0.2.0-beta.1) or run manually from the Actions tab.
+# Windows-only by design — the job runs on windows-latest and the installer
+# declares ArchitecturesAllowed=x64compatible, MinVersion=10.0.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build, package, publish (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Release preset)
+        shell: pwsh
+        run: cmake --preset release
+
+      - name: Build (Release, all)
+        shell: pwsh
+        run: cmake --build build/release
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Stage + package (installer EXE + portable zip)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File packaging/windows/build_installer.ps1 -SkipBuild
+
+      - name: List artifacts
+        shell: pwsh
+        run: Get-ChildItem dist/*.exe, dist/*.zip | Format-Table Name, Length
+
+      - name: Publish GitHub Release (prerelease beta)
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/*-Setup.exe
+            dist/*-Portable.zip
+          body: |
+            NOVAForge Engine beta — Windows 10+ x64 only.
+
+            نسخة البيتا — ويندوز 64-بت فقط (ويندوز 10 فأحدث).
+
+            INSTALLER (recommended) / المثبت (مُستحسن)
+            - Download `NOVAForge-*-Setup.exe`, double-click, follow the wizard (English / العربية).
+            - حمّل ملف الـ Setup ونقرة مزدوجة ثم اتبع الخطوات.
+
+            PORTABLE / نسخة محمولة
+            - Download `NOVAForge-*-Portable.zip`, extract anywhere, run `NOVAForgeEditor.exe`.
+            - حمّل الـ zip وفك الضغط في أي مكان وشغّل `NOVAForgeEditor.exe`.
+
+            REQUIREMENTS / المتطلبات
+            - Windows 10+ x64. No other Windows versions, no Linux/macOS in this beta.
+            - A Vulkan-capable GPU driver. `vulkan-1.dll` ships with the driver and is
+              intentionally NOT bundled; the installer warns and the editor reports
+              plainly if it is missing.
+            - تعريف GPU يدعم Vulkan. ملف vulkan-1.dll يأتي مع التعريف وليس مع الحزمة.
