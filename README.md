@@ -1,106 +1,109 @@
 <p align="center">
-  <img src="Docs/images/novaforge_logo.jpg" alt="شعار محرك سند" width="200" style="border-radius: 20px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);" />
+  <img src="Docs/images/novaforge_logo.jpg" alt="NOVAForge Engine logo" width="160" />
 </p>
 
-<h1 align="center">محرك سَنَد | SANAD Engine</h1>
+<h1 align="center">NOVAForge Engine | محرك سَنَد</h1>
 
 <p align="center">
-  <strong>محرك ألعاب ثلاثي الأبعاد حديث ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan</strong><br>
-  <em>Modern, High-Performance C++23 & Vulkan 3D Game Engine</em>
-</p>
-
-<p align="center">
-  <strong>المؤسس والقائم على العمل:</strong> <a href="https://github.com/abdallah2183"><strong>عبدالله (Abdallah)</strong></a>
+  <strong>Modern, high-performance C++23 &amp; Vulkan 3D game engine with an Arabic-first editor.</strong><br>
+  محرك ألعاب ثلاثي الأبعاد حديث ومفتوح المصدر — بلغة C++23 ومكتبة Vulkan، وبمحرر يتكلم العربية.
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Language-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%20%7C%20English-blue.svg" alt="اللغة" /></a>
+  <strong>Founder &amp; Project Lead:</strong> <a href="https://github.com/abdallah2183">Abdallah (عبدالله)</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/abdallah2183/SANAD-Engine/releases"><img src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?include_prereleases&label=beta%20Windows%20x64" alt="Beta release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Platform-Windows%2010%2B%20x64-0078D4.svg" alt="Windows x64" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Standard-C%2B%2B23-00599C.svg?logo=c%2B%2B" alt="C++23" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Graphics-Vulkan%201.2%2B-red.svg?logo=vulkan" alt="Vulkan 1.2+" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-1284%20Passed-brightgreen.svg" alt="Tests" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Validation-0%20Errors-success.svg" alt="Validation" /></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-Welcome-orange.svg" alt="Contributions welcome" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/abdallah2183/SANAD-Engine/releases"><strong>⬇ Download Beta (Windows x64)</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://abdallah2183.github.io/SANAD-Engine/">🌐 Live showcase</a>
+  &nbsp;·&nbsp;
+  <a href="README.ar.md">📖 النسخة العربية</a>
 </p>
 
 ---
 
-## الواجهة التفاعلية والموقع التعريفي
+## Contents
 
-يتوفر للمحرك موقع تفاعلي متكامل يعرض إمكانيات المحرك ومجسماً ثلاثي الأبعاد تفاعلياً:
-- **الموقع المباشر:** [https://abdallah2183.github.io/SANAD-Engine/](https://abdallah2183.github.io/SANAD-Engine/)
-- **الملف المحلي:** [`index.html`](index.html)
+- [Screenshots](#screenshots)
+- [Download &amp; Run](#download--run)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Build from Source](#build-from-source)
+- [Make a Game](#make-a-game)
+- [Samples](#samples)
+- [Project Structure](#project-structure)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## لقطات حقيقية (Real Screenshots)
+## Screenshots
 
-صور ملتقطة مباشرة من المحرر واللعبة العاملة — بدون فوتوشوب:
+Real captures from the editor and running games — no Photoshop:
 
-| محرر سند (إنجليزي) | محرر سند (عربي RTL) | لعبة جامع المكعبات | ديمو قيادة المركبة |
+| Editor (English) | Editor (Arabic RTL) | Cube Collector | Vehicle Demo |
 | :---: | :---: | :---: | :---: |
-| ![SANAD Editor](Docs/images/shot_editor_en.png) | ![Arabic UI](Docs/images/shot_editor_ar.png) | ![Cube Collector](Docs/images/shot_game.png) | ![Vehicle Demo](Docs/images/shot_vehicle.png) |
+| ![Editor EN](Docs/images/shot_editor_en.png) | ![Editor AR](Docs/images/shot_editor_ar.png) | ![Cube game](Docs/images/shot_game.png) | ![Vehicle](Docs/images/shot_vehicle.png) |
 
 ---
 
-<div dir="rtl">
+## Download &amp; Run
 
-## نبذة عن المشروع والرؤية
+Latest beta: [**v0.2.0-beta.1 → Releases page**](https://github.com/abdallah2183/SANAD-Engine/releases).
+Windows 10+ **x64 only** — no Linux/macOS in this beta.
 
-**محرك سَنَد (SANAD Engine)** هو مشروع محرك ألعاب ثلاثي الأبعاد متكامل، أسسه ويقوده **عبدالله**، بهدف إرساء بنية هندسية عربية متطورة ومنافسة في مجال محركات الألعاب. تم بناء المحرك من الصفر بالاعتماد على معيار **C++23** ومكتبة الرسوميات **Vulkan 1.2+** ومعمارية الكيانات والمكونات الموجهة للبيانات (**Data-Oriented ECS**).
+| File | How to use |
+| :--- | :--- |
+| `NOVAForge-*-Setup.exe` (recommended) | Double-click → wizard (English / العربية) → Start Menu shortcut |
+| `NOVAForge-*-Portable.zip` | Extract anywhere → run `NOVAForgeEditor.exe` |
 
-### نداء للمطورين والمبدعين العرب
+Requirements:
 
-المحرك صُمم من اليوم الأول ليكون قابلاً للتوسع والتطوير المستمر بنظام معماري منفصل الطبقات. نرحب بانضمام كافة الكفاءات العربية لبناء هذا المشروع معاً:
-- مبرمجو C++ وهندسة النظم.
-- مبرمجو الرسوميات ومظللات Vulkan / Direct3D.
-- مهندسو الصوتيات ومعالجة الإشارات.
-- مطورو المحاكاة الفيزيائية والرياضيات التطبيقية.
-- مطورو واجهات المستخدم وأدوات المحرر.
-- كتاب التوثيق والمصممون وصناع المحتوى.
-
-### مجالات المساهمة والتطوير المطلوبة
-
-1. **الرسوميات والتظليل (Vulkan & Shaders):**
-   - ظلال الأضواء النقطية والكاشفة (Point/Spot Shadows)، والظلال الافتراضية (Virtual Shadow Maps).
-   - نظام السماء الإجرائية وتأثيرات الإضاءة الجوية.
-   - تأثيرات ما بعد المعالجة (Bloom, Tonemapping, SSAO).
-
-2. **محرك الصوتيات (Audio Engine):**
-   - استكمال دمج مكتبة MiniAudio لدعم ملفات WAV و OGG.
-   - مؤثرات معالجة الصوت الموقعي ثلاثي الأبعاد.
-
-3. **لغات البرمجة والسكربت (Scripting):**
-   - دمج لغة C# أو Lua لبرمجة منطق الألعاب بسلاسة.
-
-4. **واجهة المحرر والتعريب (Editor & UI):**
-   - دعم التخطيط العربي (RTL) وتشكيل الحروف في واجهة ImGui.
-   - تحسين أدوات المعاينة والمقابض الحركية (Gizmos).
-
-5. **المحاكاة الفيزيائية المتقدمة (Physics):**
-   - دمج محرك Jolt Physics لدعم تصادمات الأجسام والشبكات المعقدة.
-
-6. **إدارة واستيراد الأصول (Asset Pipelines):**
-   - قارئ نماذج موحّد يقرأ الصيغ الست التي يكتبها المحرك نفسه
-     (`.gltf` / `.glb` / `.obj` / `.stl` / `.ply` / `.nfmesh`) ويحوّلها إلى صيغة
-     المحرك، مع **موادّها وخاماتها**: يُستخرج الـ MTL من ملفات OBJ، وخامات glTF
-     المضمّنة، ويُكتب كل ذلك كأصول في `content://`. (FBX غير مدعوم — المسار
-     المعتمد هو glTF عبر إضافة Blender المرافقة.)
-
-للتفاصيل الكاملة، يرجى مراجعة [دليل المساهمة (CONTRIBUTING.md)](CONTRIBUTING.md) و[خارطة الطريق (ROADMAP.md)](ROADMAP.md).
-
-</div>
+- A Vulkan-capable GPU driver. `vulkan-1.dll` ships **with the driver, not the package** (deliberately — a bundled loader older than the driver causes black screens). The installer warns, and the editor reports plainly, if it is missing.
+- Nothing else — the MSVC runtime is linked statically.
 
 ---
 
-## Architecture Overview
+## Features
 
-SANAD Engine is built on a modular, decoupled architecture with a multi-threaded job scheduler and strict layering enforcement.
+| Subsystem | What it does |
+| :--- | :--- |
+| **Vulkan RHI &amp; Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, deferred PBR (GBuffer, GGX, cascaded shadows, procedural sky), post stack (bloom, grading, tonemap, vignette), GPU picking, LOD |
+| **Data-Oriented ECS** | Cache-friendly sparse-set ECS with hierarchical transform propagation |
+| **2D Layer (`NFScene2D`)** | CPU-only 2D: cameras, sprite batcher, tile chunks, 2D physics, A\* |
+| **Destruction** | Fracture assets, damage world with budgets, Jolt debris sink |
+| **Physics** | Deterministic solver (impulses, SAT, friction) + Jolt 5.6 backend (vehicles, ragdolls, queries, CCD) + PBD cloth |
+| **Animation** | Clips, state machine with cross-fade, procedural clips, two-bone IK |
+| **Audio** | 3D spatial audio (WASAPI), WAV/OGG/MP3/FLAC import |
+| **Assets** | One reader for `.gltf/.glb/.obj/.stl/.ply/.nfmesh` → `.nfmesh`, with materials &amp; textures ([details](Docs/Asset_Import.md)) |
+| **Scripting** | Sandboxed Lua 5.4 + C# via .NET hosting |
+| **Gameplay** | Tags, quests, inventory, dialogue, input replays, profiler |
+| **Game AI** | Grid A\* + behavior trees with blackboard |
+| **Networking** | UDP + reliable channel, snapshots, authoritative server, prediction |
+| **Arabic UI** | UCD-verified shaper (forms, lam-alef, bidi), Amiri font, full EN/AR localisation |
+| **Editor** | ImGui docking shell, outliner, reflected inspector, gizmos, undo/redo, save manager |
+| **CLI (`nf`)** | `nf new / build / verify / run` — scaffold, cook, package, run |
+
+Quality gates: clean `/W4 /WX` build, 0 Vulkan validation errors, 0 RHI leaks, end-to-end project test (create → build → package → run standalone).
+
+---
+
+## Architecture
 
 ```
-SANAD Engine Architecture
 ┌─────────────────────────────────────────────────────────────────┐
-│               SANAD Editor (ImGui + Win32 Docking)              │
+│               NOVAForge Editor (ImGui + Win32 Docking)          │
 ├───────────────────────────────┬─────────────────────────────────┤
 │    Gameplay Module Registry   │      NFPlayer Standalone        │
 ├───────────────────────────────┴─────────────────────────────────┤
@@ -118,184 +121,102 @@ SANAD Engine Architecture
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Current Status (Phase 12–20 Verification)
-
-- **1284 Automated Tests Passed** across 24 test suites (0 failed, 1 benchmark skipped). Verified by a full clean build + run, not a doc estimate.
-- **0 Vulkan Validation Layer Errors** and zero memory leaks.
-- Clean compilation under `/W4 /WX` with MSVC.
-- End-to-end deterministic frame loop stepping physics, skeletal animation, 3D spatial audio, gameplay modules, Lua scripts, input replays, and scene transform hierarchies in lockstep.
-- Native dockable **ImGui Editor** with Outliner, Reflected Inspector, Asset Browser, Undo/Redo, 3D Viewport, Sky/Shadow environment editing, live Profiler, and full Arabic RTL localisation.
-- Virtual File System (`content://`, `cache://`, `project://`, `saves://`) and standalone CLI project tooling (`nf new`, `nf build`, `nf run`).
+Strict layering is enforced by `Scripts/check_layering.sh` in CI.
 
 ---
 
-## Implemented Subsystems
+## Build from Source
 
-| Subsystem | Description and Capabilities |
-| :--- | :--- |
-| **Vulkan RHI & Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, Multi-pass Deferred PBR Pipeline (GBuffer, Cook-Torrance GGX, Directional/Point/Spot lights, **cascaded shadows** — 4 camera-fitted cascades tiled into a 2048 atlas with texel snapping, per-cascade derived bias and cross-fade blending — procedural sky, **post-processing stack**: a real 4-level bloom chain, HDR colour grading, unsharp-mask sharpening, 4 tonemap operators, saturation and vignette, each stage individually switchable and authorable from a `.nfscene` `PostProcess:` line, GPU Picking, distance LOD + LOD generator). |
-| **Data-Oriented ECS** | Cache-friendly sparse-set Entity-Component-System with high memory locality and hierarchical transform propagation. |
-| **2D Scene (`NFScene2D`)** | CPU-only, Jolt-independent: y-down cameras with pixel snap, shelf atlas, sprite batcher, 16×16 signed tile chunks (auto-tile / greedy collision / octile A* / streaming), sequential-impulse 2D world (spatial hash, SAT, generation handles, distance + revolute). |
-| **Destruction (`NFDestruction`)** | Fracture assets (convex-hull chunk tree, plane cuts), damage world with linear falloff and accumulated bond stress, shard emission whose volumes partition the detached region exactly, and a performance budget enforced inside `apply_damage` (per-frame break allowance, live-shard cap retiring oldest-first, lifetime expiry). Arithmetic-only behind an `IDebrisSink` seam, so the suite runs with no physics backend and no GPU; `JoltDebrisSink` implements it in `NFPhysics`. |
-| **Physics Solver** | Fully deterministic rigid-body solver (Sequential Impulses, Warm Starting, Baumgarte position correction, SAT narrowphase, Coulomb friction) + dynamic-body character controller + **Jolt v5.6 advanced backend** (vehicles with per-wheel state readback and reset/respawn, ragdolls, constraints with cross-body cloning, scene queries — ray casts, sphere sweeps, sphere/box overlaps — sensor triggers, continuous collision detection, and complex colliders: capsule, convex hull, static triangle mesh) + **cloth / soft body** (first-party deterministic PBD grid: structural/shear/bend constraints, pins, wind, and sphere/box/plane collision — independent of Jolt, which has no deformable solver). |
-| **Skeletal Animation** | Bone hierarchy evaluation, animation clips with slerp/lerp keyframe sampling, state machine with transitions and cross-fading, procedural clip generator, analytic two-bone IK. |
-| **3D Spatial Audio** | 3D audio listener with attenuation models (Linear, Inverse, Exponential), stereo panning, WASAPI shared-mode backend, WAV/OGG/MP3/FLAC import pipeline, and headless test driver. |
-| **Asset Pipeline** | One mesh reader for every format the engine writes — `.gltf`/`.glb`/`.obj`/`.stl`/`.ply`/`.nfmesh` → `.nfmesh` — carrying **materials and textures** with it (OBJ `.mtl`, glTF embedded/base64/external images) as registered texture assets and `.nfmat` files. Extension-first with content sniffing as the fallback, and an explicit failure on a mismatch instead of a guess. Shared by the editor's `File > Import`, the `NFModelImporter` CLI, and the API; plus mesh cooking and asset registry management. |
-| **Lua + C# Scripting** | Sandboxed Lua 5.4 VM with `nf.*` host library, entity bindings, per-entity `ScriptComponent` ticking, and instruction budgets — plus .NET 10 hosting for C# (UnmanagedCallersOnly sandbox, per-entity Start/Update/Counter, host callbacks). |
-| **Gameplay Framework** | Hierarchical gameplay tags + queries, staged quest log, stacked inventory, dialogue trees, deterministic input replays, and CPU profiler with Chrome-trace export. |
-| **Game AI** | Deterministic grid A* pathfinding (no corner cutting, LOS smoothing) + reactive behavior trees with blackboard. |
-| **VFX** | Deterministic CPU particle simulation (emission, gravity/drag, grading). |
-| **Arabic UI & Localization** | UCD-verified Arabic shaper (contextual forms, lam-alef, bidi), Amiri font pipeline, and EN/AR editor localisation. |
-| **World & Time** | Day/night cycle driver, procedural heightfield terrain, and multiplayer: UDP + reliable channel + snapshots + authoritative server with client prediction, plus vehicle drive-input/chassis replication and ordered constraint spawn/clone/remove events. |
-| **Reflection & Serialization** | Zero-codegen reflection macros (`NF_CLASS`, `NF_PROPERTY`, `NF_ENUM`), bidirectional text serialization, and automated inspector panels. |
-| **Native Editor** | Dear ImGui docking shell, scene outliner, entity inspector, live viewport gizmos, undo/redo command history, and game save manager. |
-| **Build & Packaging CLI** | `nf` CLI tool supporting project templating, cooking, asset registry management, and single-directory relocatable standalone distribution. |
+Prerequisites: Windows 10/11 x64 · Visual Studio 2022/2026 (MSVC + C++23) · CMake 3.25+ · Ninja · Vulkan SDK 1.3+ (`glslc` on `PATH`).
 
----
-
-## Quick Start and Build Instructions
-
-### Prerequisites
-- **Operating System:** Windows 10 / 11 (64-bit)
-- **Compiler:** Visual Studio 2022 / 2026 (MSVC 19.40+) with C++23 support
-- **Build Tools:** CMake 3.25+ and Ninja
-- **Graphics SDK:** Vulkan SDK 1.3+ with `glslc` on your `PATH`
-
-### 1. Clone the Repository
-```bash
+```bat
 git clone https://github.com/abdallah2183/SANAD-Engine.git
 cd SANAD-Engine
-```
-
-### 2. Build the Engine
-Run the automated build script:
-```cmd
 build_nf.bat
 ```
 
-Or configure and build directly via CMake:
+Or manually:
+
 ```bash
 cmake -S . -B build/DebugNinja -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNF_BUILD_TESTS=ON -DNF_BUILD_SAMPLES=ON -DNF_BUILD_TOOLS=ON -DNF_BUILD_EDITOR=ON
 cmake --build build/DebugNinja --parallel
 ```
 
-### 3. Run the Editor
-```cmd
+Run / test:
+
+```bat
 .\build\DebugNinja\bin\NOVAForgeEditor.exe
-```
-
-### 4. Run Automated Tests
-```cmd
 .\build\DebugNinja\bin\EditorTests.exe
-.\build\DebugNinja\bin\RHITests.exe
-.\build\DebugNinja\bin\RuntimeTests.exe
 ```
 
-### 5. Create and Package a Project
-```cmd
-# Create a new project from a starter template
+Release + installer EXE (what the GitHub Release ships):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging/windows/build_installer.ps1
+```
+
+---
+
+## Make a Game
+
+```bat
 .\build\DebugNinja\bin\nf.exe new MyGame --name MyGame --template ThirdPerson
-
-# Cook assets and package standalone binary
 .\build\DebugNinja\bin\nf.exe build --project MyGame/MyGame.nfproj
-
-# Run standalone game player
 cd MyGame/dist && .\NFPlayer.exe
 ```
 
-### 6. Import a model (any format the engine can read)
-`File > Import` in the editor, or the CLI for a one-off cook:
-```cmd
-.\build\DebugNinja\bin\NFModelImporter.exe --input props\Crate.obj --output Content\Meshes\Crate.nfmesh
-.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --info
-```
-Accepted inputs are `.gltf`, `.glb`, `.obj`, `.stl`, `.ply` and `.nfmesh` — the
-same six the engine's exporter writes, so a round trip is a test rather than a
-hope. The editor's import also brings **materials and textures**: each extracted
-image lands as a registered texture asset under `content://Textures` and each
-material as a `.nfmat` under `content://Materials` with its `albedo` already
-pointing at that texture. Whatever the source declared and the engine's material
-block has no room for is reported in the import row, never silently dropped.
-Full format table, rules and troubleshooting:
-[`Docs/Asset_Import.md`](Docs/Asset_Import.md)
-
-### 7. Inspect or validate a Blender character
-Export from Blender with the shipped add-on, then inspect the glTF document:
-```cmd
-.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --info
-.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --character
-```
-`--character` is strict validation-only today: it requires a bound skin, at least
-two usable clips, and material data, but `.nfmesh` still carries geometry only.
-Do not treat a geometry-only `.nfmesh` as a playable skinned character.
-Full walkthrough (add-on install, export settings, round trip, current gaps):
-[`Docs/Blender_Pipeline.md`](Docs/Blender_Pipeline.md)
-
-### First time here?
-- **New to the engine?** [`Docs/Tutorial_Ar.md`](Docs/Tutorial_Ar.md) — a 20-minute
-  Arabic walkthrough from an empty machine to a built, runnable game, with
-  screenshots.
-- **Starting a game?** `Templates/` ships four project trees — `Default`,
-  `ThirdPerson`, `FPSStarter`, `Platformer2D`. Each can be selected with
-  `nf new --template <name>` and is tested through scaffold → cook → package → run;
-  the genre scenes are starter demos, not yet complete interactive games.
+- Import models via `File > Import`, or `NFModelImporter.exe` ([format table &amp; rules](Docs/Asset_Import.md)).
+- Blender characters: export with the shipped add-on, validate with `--character` ([pipeline walkthrough](Docs/Blender_Pipeline.md)).
+- New here? [20-minute Arabic tutorial](Docs/Tutorial_Ar.md) — empty machine → runnable game.
+- Templates: `Default`, `ThirdPerson`, `FPSStarter`, `Platformer2D` (`nf new --template <name>`).
 
 ---
 
 ## Samples
 
-`Samples/` holds the engine's own demos. Two of them are worth calling out
-because they are the closest thing in the tree to a finished game:
+Run from `build/*/bin/`; most accept `--frames N` for bounded runs.
 
-| Sample | What it shows |
-|---|---|
-| `NFSampleCliffStory` — **حكاية الجرف / The Cliff's Tale** | A complete 2D story-climb rendered through `NFScene2D`. 65 ledges, 32 flames, bats, spikes and lanterns; the background runs dusk → night as you climb; the story text is shaped Arabic. This is the only sample with a GPU path for the 2D layer (`Samples/CliffStory/Render2D.cpp`). See its own [`README.md`](Samples/CliffStory/README.md). |
-| `NFSampleVehicleDemo` | A real Jolt vehicle with visible wheels, a chase camera, golden gates and destructible crates. |
-
-Run any of them directly from `build/DebugNinja/bin/`; most accept `--frames N`
-to run a bounded number of frames and exit.
+| Sample | Shows |
+| :--- | :--- |
+| `NFSampleCliffStory` — حكاية الجرف | Complete 2D story-climb on `NFScene2D` (65 ledges, dusk→night, shaped Arabic text). [Its README](Samples/CliffStory/README.md) |
+| `NFSampleVehicleDemo` | Jolt vehicle, chase camera, destructible crates |
+| Others | Triangle, Basic3D, Water, Audio, Animation, GameUI, RuntimeScene, … |
 
 ---
 
-## Project Roadmap
+## Project Structure
 
-- **Phase 1–11:** Core Engine Foundation (Completed)
-- **Phase 12:** Dynamic Mesh LOD Generation & Model Importer (Completed)
-- **Phase 13:** Directional Shadow Mapping (PCF 3x3) & Procedural Sky Atmosphere (Completed)
-- **Phase 14:** Compressed Audio Import (WAV/OGG/MP3/FLAC) & glTF 2.0 Asset Importer (Completed)
-- **Phase 15:** Lua Scripting Integration (Completed) + C# Scripting via .NET 10 Hosting (Completed) & Arabic RTL Editor Localisation (Completed)
-- **Phase 16:** Jolt Physics Backend (Completed) + UDP/Reliable/Snapshots + Authoritative Server & Prediction (Completed) — vehicle wheel-state readback/reset and cross-body constraint cloning (Completed) — vehicle/constraint network replication: drive inputs, chassis snapshots, joint events (Completed) — C# bindings (Completed)
-- **Phase 17:** Body & joint replication over the wire (vehicle orientation snapshots, body registry, constraint applier) (Completed)
-- **Phase 18:** Independent 2D layer (`NFScene2D`) — deterministic atlas/batcher, signed-chunk tilemaps, sequential-impulse 2D physics (circle/box, distance/revolute), `Scene2DTests` 37/37 (Completed)
-- **Phase 19:** Destruction — fracture geometry & chunk assets, damage world, debris budgets, `IDebrisSink` seam with a Jolt implementation, and a `Destructible:` component in `.nfscene` that cooks, binds and shatters from impact with no game code (Completed)
-- **Phase 20:** Cascaded Shadow Maps — camera-fitted shadow cascades in a 2x2 atlas, per-cascade derived bias, texel snapping, cross-fade blending (Completed)
-
-Full details are documented in [ROADMAP.md](ROADMAP.md).
+```
+Engine/        Core, RHI (Vulkan), Rendering, ECS, Scene, Physics, Audio, …
+Editor/        ImGui editor + project launcher
+Tools/         nf CLI, AssetCooker, ModelImporter, Player
+Samples/       Playable demos (CliffStory, VehicleDemo, …)
+Templates/     Starter projects (Default, ThirdPerson, FPSStarter, Platformer2D)
+Tests/         24 suites, run via Scripts/run_tests.sh
+Docs/          Guides, plans, full design doc
+Shaders→build/ SPIR-V compiled at build time, shipped beside the exe
+packaging/     Windows installer (Inno Setup) + portable zip builder
+website/ + index.html   Interactive showcase site
+```
 
 ---
 
-## المساهمة في التطوير
+## Roadmap
 
-نرحب بكافة المساهمات وفق الخطوات التالية:
-1. عمل **Fork** للمستودع.
-2. إنشاء فرع عمل جديد (`git checkout -b feature/your-feature`).
-3. بناء المشروع والتأكد من نجاح جميع الاختبارات (`build_nf.bat`).
-4. التأكد من خلو تشغيل Vulkan من أي أخطاء في طبقات الفحص (Zero Validation Errors).
-5. فتح **Pull Request** مع توضيح مفصل للتغييرات.
+Phases 1–20 complete (foundation → LOD → shadows/sky → audio/glTF → Lua+C# → Jolt+netcode → 2D layer → destruction → cascades).
+Full history and next phases: [ROADMAP.md](ROADMAP.md) · full design: [Docs/NOVAForge_Engine_Complete_Design.md](Docs/NOVAForge_Engine_Complete_Design.md).
 
-للمزيد من الإرشادات، يرجى قراءة [دليل المساهمة (CONTRIBUTING.md)](CONTRIBUTING.md).
+---
+
+## Contributing
+
+Fork → branch → build → zero validation errors → pull request.
+Details: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+**نداء للمبدعين العرب:** نرحب بمبرمجي C++ والرسوميات والفيزياء والصوتيات وواجهات المحرر وكتّاب التوثيق — المشروع مصمم طبقياً ليتسع للجميع.
 
 ---
 
 ## License
 
-This project is licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file for details.
-
----
-
-<p align="center">
-  <strong>المؤسس والقائم على العمل:</strong> <a href="https://github.com/abdallah2183"><strong>عبدالله (Abdallah)</strong></a><br>
-  <em>Founder & Project Lead: Abdallah (@abdallah2183) & Community Contributors</em>
-</p>
+Apache License 2.0 — see [LICENSE](LICENSE).

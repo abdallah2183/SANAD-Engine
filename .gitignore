@@ -77,6 +77,7 @@ build_out.txt
 editor_tests_out.txt
 eng_build.txt
 probe_nav.ps1
+.workbuddy-ai/
 .workbuddy-ai/*.log
 .workbuddy-ai/tmp/
 .workbuddy-ai/tmp_build.sh
