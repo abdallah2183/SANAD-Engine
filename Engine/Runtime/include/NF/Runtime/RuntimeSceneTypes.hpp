@@ -141,6 +141,55 @@ struct PostProcessComponent {
     // PostFxParams declares them so the two structs read the same way.
     float saturation = 1.0f;
     float vignette = 0.0f;
+
+    // Lens effects (§206): the two UV-space warps a real lens imposes. Both
+    // neutral at zero, and zero is exactly identity — a scene that never
+    // touches these renders the frame it rendered before the stage existed.
+    bool lens_enabled = false;
+    /// Barrel (+) / pincushion (-), as a coefficient on r². 0 = none.
+    float lens_distortion = 0.0f;
+    /// Red/blue radial split, as a fraction of r. 0 = none.
+    float lens_chromatic_aberration = 0.0f;
+
+    // Depth of field (§206). `dof_max_radius` at 0 is exactly "off".
+    bool dof_enabled = false;
+    /// World-space distance from the camera that stays in focus.
+    float dof_focus_distance = 10.0f;
+    /// Distance over which the blur ramps from zero to the full radius.
+    float dof_focus_range = 2.0f;
+    /// Blur radius in output texels at full confusion.
+    float dof_max_radius = 6.0f;
+
+    // Motion blur (§206), from depth reprojection. `motion_intensity` at 0 is
+    // exactly "off".
+    bool motion_enabled = false;
+    /// Multiplier on the reprojected velocity.
+    float motion_intensity = 1.0f;
+    /// Cap on the smear, in uv units.
+    float motion_max_length = 0.05f;
+
+    // Exposure and the tonemap operator (§206).
+    //
+    // Both are OPT-IN, and their sentinels are what makes them safe to add:
+    // 0 exposure and -1 operator mean "the scene says nothing", so the
+    // renderer's own setting survives — which is what the editor's acceptance
+    // run depends on, its golden pixel count being pinned to the defaults.
+    // Exposure is otherwise a DISPLAY preference rather than scene data (it is
+    // the author's chosen key for the frame), so it is written to the file only
+    // when a scene actually names it.
+    /// 0 = not authored; otherwise the renderer's exposure (must be > 0).
+    float exposure = 0.0f;
+    /// -1 = not authored; otherwise a `rendering::TonemapMode` value.
+    int tonemap = -1;
+
+    // Colour-grading LUT (§206). `lut_path` is a logical IMAGE path the runtime
+    // resolves through the VFS into a `kLutSize^3` strip; `lut_strength` at 0
+    // is exactly "off", so a scene with no LUT is the frame it was before the
+    // stage existed.
+    /// Empty = no LUT.
+    std::string lut_path;
+    /// 0 = off .. 1 = the LUT fully replaces the graded colour.
+    float lut_strength = 0.0f;
 };
 
 // Local lights (Phase 26). A scene until now could only carry one directional

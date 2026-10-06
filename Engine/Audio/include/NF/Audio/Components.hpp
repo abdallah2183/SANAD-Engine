@@ -74,4 +74,69 @@ struct AudioComponent {
     }
 };
 
+/// A reverb zone authored on an entity. The zone's POSITION is the entity's
+/// world transform, so moving the entity moves the echo with it.
+///
+/// Why an entity component and not a scene-level record: the `.nfscene` format
+/// has no place for a global list — scene v1 expects `---` immediately after
+/// `entity_count`, so a scene-wide block would be a format migration. Placing
+/// the echo by placing an object is also what an author wants: "this cave
+/// echoes" is a fact about a place.
+///
+/// `inner_radius <= radius` is the contract `audio::ReverbZone` documents:
+/// full effect inside the inner radius, fading to nothing at the outer one.
+struct ReverbZoneComponent {
+    f32 radius = 10.0f;
+    f32 inner_radius = 2.0f;
+    /// Wet level (0..1) of the echo at full effect.
+    f32 wet_gain = 0.35f;
+    /// Seconds for the tail to fall 60 dB.
+    f32 decay_seconds = 1.5f;
+    /// Seconds of silence before the first echo returns.
+    f32 pre_delay_seconds = 0.03f;
+    /// Seconds between successive echoes.
+    f32 echo_spacing_seconds = 0.11f;
+    bool enabled = true;
+};
+
+/// Level music — the track a scene starts on load, faded in.
+///
+/// `buffer_name` is a logical path (e.g. `content://Audio/theme.ogg`) resolved
+/// through the VFS by `resolve_scene_audio`, exactly like AudioComponent's; the
+/// decoded samples land in `owned_buffer` and are what the runtime hands the
+/// mixer.
+struct MusicComponent {
+    std::string buffer_name;
+    /// Passed to the mixer as the track's base volume.
+    f32 volume = 1.0f;
+    f32 fade_in_seconds = 0.0f;
+    bool enabled = true;
+
+    /// Decoded at load. Not serialized — the path is.
+    AudioBuffer owned_buffer;
+
+    const AudioBuffer* resolved_buffer() const {
+        return owned_buffer.samples.empty() ? nullptr : &owned_buffer;
+    }
+};
+
+/// The ambience bed (wind, crowd, room tone) a scene starts on load.
+///
+/// Deliberately has no volume field: `MusicSystem::set_ambience` takes a buffer
+/// and a fade and nothing else, so a volume here would be parsed, saved and
+/// round-tripped while never reaching the mixer — the exact "field with no
+/// reader" defect this engine has shipped before. Ambience level is the
+/// `ambience` bus slider's job.
+struct AmbienceComponent {
+    std::string buffer_name;
+    f32 fade_in_seconds = 0.0f;
+    bool enabled = true;
+
+    AudioBuffer owned_buffer;
+
+    const AudioBuffer* resolved_buffer() const {
+        return owned_buffer.samples.empty() ? nullptr : &owned_buffer;
+    }
+};
+
 } // namespace nf::audio

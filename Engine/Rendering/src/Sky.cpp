@@ -73,4 +73,80 @@ Vec3 compute_sky_color(const SkyParams& sky, Vec3 ray_dir, Vec3 sun_dir,
     return col;
 }
 
+// --- Procedural clouds (the P4 "weather" half) -------------------------------
+
+namespace {
+
+/// The integer hash the shader uses: same constants, same u32 wrapping, so the
+/// two agree bit for bit. An integer hash rather than the usual
+/// `fract(sin(dot(...)))` trick precisely because `sin` is not required to agree
+/// between a driver and the C++ runtime — a sin-based hash could not be
+/// mirrored, and an unmirrorable sky is one no test can pin.
+u32 cloud_hash_u32(u32 x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+/// A lattice cell's value in [0, 1). 24 bits of the hash, so the float
+/// conversion is exact on both sides.
+float cloud_hash_cell(int cx, int cy) {
+    const u32 h = cloud_hash_u32(static_cast<u32>(cx) * 0x9e3779b9u ^
+                                 cloud_hash_u32(static_cast<u32>(cy) * 0x85ebca6bu));
+    return static_cast<float>(h & 0x00ffffffu) * (1.0f / 16777216.0f);
+}
+
+float cloud_value_noise(Vec2 uv) {
+    const float fx = std::floor(uv.x);
+    const float fy = std::floor(uv.y);
+    const float tx = uv.x - fx;
+    const float ty = uv.y - fy;
+    const float ux = tx * tx * (3.0f - 2.0f * tx);
+    const float uy = ty * ty * (3.0f - 2.0f * ty);
+    const int ix = static_cast<int>(fx);
+    const int iy = static_cast<int>(fy);
+    const float a = cloud_hash_cell(ix, iy);
+    const float b = cloud_hash_cell(ix + 1, iy);
+    const float c = cloud_hash_cell(ix, iy + 1);
+    const float d = cloud_hash_cell(ix + 1, iy + 1);
+    const float p = a + (b - a) * ux;
+    const float q = c + (d - c) * ux;
+    return p + (q - p) * uy;
+}
+
+} // namespace
+
+float cloud_density(Vec2 uv) {
+    float sum = 0.0f;
+    float amp = 0.5f;
+    float freq = 1.0f;
+    for (int i = 0; i < kCloudOctaves; ++i) {
+        sum += cloud_value_noise(Vec2{uv.x * freq, uv.y * freq}) * amp;
+        freq *= 2.0f;
+        amp *= 0.5f;
+    }
+    return sum / kCloudFbmNorm;
+}
+
+float compute_cloud_alpha(const SkyParams& sky, Vec3 ray_dir, Vec3 cam_pos) {
+    if (!sky.enabled || sky.cloud_coverage <= 0.0f || ray_dir.y <= 1.0e-4f) {
+        return 0.0f;
+    }
+    // The plane sits `cloud_altitude` above the CAMERA, so a ray that points up
+    // at all reaches it: t is positive by construction.
+    const float t = sky.cloud_altitude / ray_dir.y;
+    const float inv = 1.0f / std::max(sky.cloud_scale, 1.0e-3f);
+    const Vec2 uv{(cam_pos.x + ray_dir.x * t) * inv + sky.cloud_time * 0.05f,
+                  (cam_pos.z + ray_dir.z * t) * inv};
+    const float d = clamp01(cloud_density(uv));
+    // Coverage is a threshold with a soft edge: at coverage 0 nothing passes,
+    // and the ramp is normalised so coverage 1 is fully overcast.
+    const float e = std::max(1.0f - sky.cloud_coverage, 1.0e-3f);
+    const float x = clamp01((d - sky.cloud_coverage) / e);
+    return x * x * (3.0f - 2.0f * x);
+}
+
 } // namespace nf::rendering

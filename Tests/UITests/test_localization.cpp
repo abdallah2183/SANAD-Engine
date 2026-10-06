@@ -75,7 +75,15 @@ bool same_in_both_languages(const std::string& key) {
            // through a key is what makes ONE string the product name; the value
            // is identical in both languages because a product name is not
            // translated.
-           key == "sh_brand";
+           key == "sh_brand" ||
+           // The tonemap operator names are the operators' OWN names (ACES,
+           // Narkowicz's fitted curve; Reinhard's photographic operator). A
+           // transliteration would be less recognisable than the name every
+           // graphics reference uses, and "Exponential"/"Linear" — the two that
+           // do have Arabic words — are translated normally. Listed here rather
+           // than in latin_allowed_in_arabic because the values are IDENTICAL in
+           // both languages, not Arabic-with-a-Latin-token.
+           key == "tonemap_aces" || key == "tonemap_reinhard";
 }
 
 // Keys whose Arabic value legitimately keeps Latin letters (physical key

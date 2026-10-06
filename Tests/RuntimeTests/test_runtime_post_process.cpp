@@ -73,6 +73,20 @@ NF_TEST(scene_post_process_round_trip) {
     pp.sharpen_radius = 2.5f;
     pp.saturation = 1.5f;
     pp.vignette = 0.5f;
+    pp.lens_enabled = true;
+    pp.lens_distortion = 0.25f;
+    pp.lens_chromatic_aberration = 0.015f;
+    pp.dof_enabled = true;
+    pp.dof_focus_distance = 22.5f;
+    pp.dof_focus_range = 4.5f;
+    pp.dof_max_radius = 9.0f;
+    pp.motion_enabled = true;
+    pp.motion_intensity = 1.75f;
+    pp.motion_max_length = 0.08f;
+    pp.exposure = 2.5f;
+    pp.tonemap = 1; // ACES
+    pp.lut_path = "content://LUTs/teal_orange.png";
+    pp.lut_strength = 0.75f;
     w.add<PostProcessComponent>(e, pp);
 
     std::string err;
@@ -102,6 +116,20 @@ NF_TEST(scene_post_process_round_trip) {
         NF_CHECK_NEAR(loaded->sharpen_radius, 2.5f, 1e-5f);
         NF_CHECK_NEAR(loaded->saturation, 1.5f, 1e-5f);
         NF_CHECK_NEAR(loaded->vignette, 0.5f, 1e-5f);
+        NF_CHECK(loaded->lens_enabled);
+        NF_CHECK_NEAR(loaded->lens_distortion, 0.25f, 1e-5f);
+        NF_CHECK_NEAR(loaded->lens_chromatic_aberration, 0.015f, 1e-6f);
+        NF_CHECK(loaded->dof_enabled);
+        NF_CHECK_NEAR(loaded->dof_focus_distance, 22.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->dof_focus_range, 4.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->dof_max_radius, 9.0f, 1e-5f);
+        NF_CHECK(loaded->motion_enabled);
+        NF_CHECK_NEAR(loaded->motion_intensity, 1.75f, 1e-5f);
+        NF_CHECK_NEAR(loaded->motion_max_length, 0.08f, 1e-6f);
+        NF_CHECK_NEAR(loaded->exposure, 2.5f, 1e-5f);
+        NF_CHECK(loaded->tonemap == 1);
+        NF_CHECK(loaded->lut_path == "content://LUTs/teal_orange.png");
+        NF_CHECK_NEAR(loaded->lut_strength, 0.75f, 1e-5f);
     }
 
     std::filesystem::remove_all(tmp);
@@ -213,7 +241,10 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
         std::string(kSceneHeader) +
         "  PostProcess: bloom=true bloom_threshold=2.0 bloom_intensity=3.0"
         " grade=true grade_temperature=-0.5 sharpen=true sharpen_amount=1.5"
-        " saturation=1.5 vignette=0.25\n";
+        " saturation=1.5 vignette=0.25 lens=true lens_distortion=0.3 lens_chroma=0.02"
+        " dof=true dof_focus=18 dof_range=3.5 dof_radius=7"
+        " motion=true motion_intensity=2.5 motion_length=0.07"
+        " exposure=2.25 tonemap=aces lut=content://LUTs/grade.png lut_strength=0.6\n";
     NF_CHECK(vfs.write_text("content://Scenes/Post.nfscene", text).ok);
 
     auto device = rhi::create_device();
@@ -281,6 +312,21 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
                 NF_CHECK_NEAR(seen.sharpen.amount, 1.5f, 1e-5f);
                 NF_CHECK_NEAR(seen.saturation, 1.5f, 1e-5f);
                 NF_CHECK_NEAR(seen.vignette, 0.25f, 1e-5f);
+                NF_CHECK(seen.lens.enabled);
+                NF_CHECK_NEAR(seen.lens.distortion, 0.3f, 1e-5f);
+                NF_CHECK_NEAR(seen.lens.chromatic_aberration, 0.02f, 1e-6f);
+                NF_CHECK(seen.dof.enabled);
+                NF_CHECK_NEAR(seen.dof.focus_distance, 18.0f, 1e-5f);
+                NF_CHECK_NEAR(seen.dof.focus_range, 3.5f, 1e-5f);
+                NF_CHECK_NEAR(seen.dof.max_radius, 7.0f, 1e-5f);
+                NF_CHECK(seen.motion.enabled);
+                NF_CHECK_NEAR(seen.motion.intensity, 2.5f, 1e-5f);
+                NF_CHECK_NEAR(seen.motion.max_length, 0.07f, 1e-6f);
+                // Exposure and the tonemap operator live on the renderer
+                // rather than in PostFxParams, so they are read back from it.
+                NF_CHECK_NEAR(renderer->exposure(), 2.25f, 1e-5f);
+                NF_CHECK(renderer->tonemap_mode() == rendering::TonemapMode::ACES);
+                NF_CHECK_NEAR(seen.lut_strength, 0.6f, 1e-5f);
                 // The keys the line did not mention kept the component defaults,
                 // which are the renderer's neutral values.
                 NF_CHECK_NEAR(seen.bloom.knee, 0.5f, 1e-5f);
@@ -298,6 +344,12 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
             NF_CHECK(ok);
             if (rt.renderer() != nullptr) {
                 NF_CHECK_NEAR(rt.renderer()->postfx().bloom.intensity, 3.0f, 1e-5f);
+                // And the OPT-IN pair survives too: a scene that says nothing
+                // about exposure or the operator must not reset them to the
+                // renderer's defaults, or loading any level would undo a
+                // display preference the author set.
+                NF_CHECK_NEAR(rt.renderer()->exposure(), 2.25f, 1e-5f);
+                NF_CHECK(rt.renderer()->tonemap_mode() == rendering::TonemapMode::ACES);
             }
         }
         device->wait_idle();

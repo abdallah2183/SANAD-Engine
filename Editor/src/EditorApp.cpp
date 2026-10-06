@@ -1231,6 +1231,125 @@ bool EditorApp::set_audio(ecs::Entity e, const audio::AudioComponent& aud, std::
     return true;
 }
 
+// Reads and decodes one logical audio path, so the scene's music/ambience is
+// audible the moment it is authored rather than after a save and reload. Same
+// route `set_audio_buffer` takes for a per-entity source.
+static bool resolve_audio_buffer(assets::VirtualFileSystem& vfs, const std::string& logical_path,
+                                 audio::AudioBuffer& out, std::string& out_err) {
+    auto bytes = vfs.read_bytes(logical_path);
+    if (!bytes.ok) {
+        out_err = "Audio file not found: " + logical_path;
+        return false;
+    }
+    audio::DecodeOptions options;
+    options.target_sample_rate = audio::kDefaultSampleRate;
+    audio::DecodeResult decoded =
+        audio::decode_audio_memory(bytes.value.data(), bytes.value.size(), options);
+    if (!decoded.ok) {
+        out_err = "Audio file could not be decoded (" + decoded.error + "): " + logical_path;
+        return false;
+    }
+    out = std::move(decoded.buffer);
+    return true;
+}
+
+bool EditorApp::set_reverb_zone(ecs::Entity e, const audio::ReverbZoneComponent& zone,
+                                std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_reverb_zone_command(*w, e, zone, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_music(ecs::Entity e, const MusicEdit& edit, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    if (!e.valid() || !w->is_alive(e)) {
+        out_err = "Entity is not alive";
+        return false;
+    }
+
+    audio::MusicComponent after;
+    const std::string path = edit.buffer;
+    after.buffer_name = path;
+    after.volume = edit.volume;
+    after.fade_in_seconds = edit.fade_in_seconds;
+    after.enabled = edit.enabled;
+
+    const auto* cur = w->get<audio::MusicComponent>(e);
+    if (cur != nullptr && cur->buffer_name == path) {
+        // The path did not change, so the samples already decoded are still the
+        // right ones — carry them over instead of re-reading the file.
+        after.owned_buffer = cur->owned_buffer;
+    } else if (!resolve_audio_buffer(m_vfs, path, after.owned_buffer, out_err)) {
+        // A path that cannot be read is REFUSED rather than stored: a component
+        // naming a file nothing can decode is silent, and the author is standing
+        // right here to be told. The same rule set_audio_buffer follows.
+        return false;
+    }
+
+    auto cmd = make_music_command(*w, e, after, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_ambience(ecs::Entity e, const AmbienceEdit& edit, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    if (!e.valid() || !w->is_alive(e)) {
+        out_err = "Entity is not alive";
+        return false;
+    }
+
+    audio::AmbienceComponent after;
+    const std::string path = edit.buffer;
+    after.buffer_name = path;
+    after.fade_in_seconds = edit.fade_in_seconds;
+    after.enabled = edit.enabled;
+
+    const auto* cur = w->get<audio::AmbienceComponent>(e);
+    if (cur != nullptr && cur->buffer_name == path) {
+        after.owned_buffer = cur->owned_buffer;
+    } else if (!resolve_audio_buffer(m_vfs, path, after.owned_buffer, out_err)) {
+        return false;
+    }
+
+    auto cmd = make_ambience_command(*w, e, after, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::attach_gameplay_module(ecs::Entity e, const std::string& module_name,
                                        std::string& out_err) {
     if (!require_editable(out_err)) {

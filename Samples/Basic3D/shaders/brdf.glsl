@@ -32,6 +32,14 @@ struct SpotLight {
 layout(set = 0, binding = 4) uniform FrameUniforms {
     mat4 invViewProj;             // world reconstruction from depth
     vec4 camPos_ambient;          // xyz = camera world position, w = ambient
+    // The PREVIOUS frame's view-projection, for the depth-reprojection motion
+    // blur. It sits next to the other per-frame camera data so the tonemap pass
+    // can declare a PREFIX of this block; a field at the far end would force it
+    // to redeclare everything above.
+    //
+    // ⚠️ Must match Renderer3D::FrameUniforms exactly — every member after it
+    // moves, on BOTH sides.
+    mat4 prevViewProj;
     vec4 dirLight_dir_enable;     // xyz = light direction (travels this way), w = enabled
     vec4 dirLight_color_int;      // rgb = color, a = intensity
     mat4 lightViewProj[4];        // world -> shadow clip, one per cascade
@@ -60,6 +68,11 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
     // "fog is off" into "fog is everywhere".
     vec4 fog_color;               // rgb haze tint, w unused
     vec4 fog_params;              // x enabled, y start, z end, w unused
+    // Procedural clouds (P4 weather): x = coverage, y = altitude, z = scale,
+    // w = time. APPENDED after the fog block, matching FrameUniforms — a std140
+    // block's member ORDER is its layout, so inserting this above fog_params
+    // would silently misread the fog range as a cloud altitude.
+    vec4 skyCloud;
 } frame;
 
 layout(set = 0, binding = 5) uniform sampler2D shadow_map;

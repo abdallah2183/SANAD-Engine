@@ -12,6 +12,7 @@
 // callers must re-resolve identity via Selection::prune() after structural ops.
 
 #include <NF/Assets/AssetId.hpp>
+#include <NF/Audio/Components.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
@@ -321,6 +322,67 @@ private:
     bool m_had_before = false;
     runtime::PostProcessComponent m_before{};
     runtime::PostProcessComponent m_after{};
+};
+
+// --- Scene audio environment (reverb zones, music, ambience) -----------------
+//
+// Three commands rather than one, because they are three independent
+// components: a scene can have a cave that echoes and no music, or music and no
+// zone. Undo of the edit that FIRST created the component removes it, so a
+// scene that never had the line round-trips to a file with no line — the rule
+// every scene-authored component here follows.
+
+class SetReverbZoneCommand : public ICommand {
+public:
+    SetReverbZoneCommand(ecs::Entity e, bool had_before,
+                         const audio::ReverbZoneComponent& before,
+                         const audio::ReverbZoneComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    audio::ReverbZoneComponent m_before{};
+    audio::ReverbZoneComponent m_after{};
+};
+
+// Music/ambience carry DECODED samples (`owned_buffer`). The factory preserves
+// them when the path did not change — see make_music_command — because the
+// editor does not re-run the VFS import on an edit and dropping them would
+// silence the track until the scene is reloaded.
+class SetMusicCommand : public ICommand {
+public:
+    SetMusicCommand(ecs::Entity e, bool had_before, const audio::MusicComponent& before,
+                    const audio::MusicComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    audio::MusicComponent m_before{};
+    audio::MusicComponent m_after{};
+};
+
+class SetAmbienceCommand : public ICommand {
+public:
+    SetAmbienceCommand(ecs::Entity e, bool had_before, const audio::AmbienceComponent& before,
+                       const audio::AmbienceComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    audio::AmbienceComponent m_before{};
+    audio::AmbienceComponent m_after{};
 };
 
 // Reassigns an entity's mesh material path (shared asset, not a copy).

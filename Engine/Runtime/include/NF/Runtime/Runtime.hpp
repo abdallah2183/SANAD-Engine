@@ -38,6 +38,7 @@
 #include <NF/Vfx/Components.hpp>
 #include <NF/AI/AIWorld.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -378,6 +379,17 @@ public:
     /// rebuild_physics_from_scene because they need the fresh physics world.
     void build_scene_particles();
     void build_scene_cloths();
+    /// (Re)builds the scene's audio ENVIRONMENT — reverb zones, the music track
+    /// and the ambience bed — into the live `AudioScene`. Called on scene adopt,
+    /// like the particle and cloth builders above.
+    ///
+    /// The scene owns its environment, so this REPLACES the previous one: zones
+    /// are cleared, and a theme or bed the new scene does not name is stopped.
+    /// That is the same rule the particle and destructible builders follow, and
+    /// the opposite of the post-process rule ("absent means unchanged") — the
+    /// difference is that these are per-scene artefacts, not renderer state a
+    /// caller might have configured directly.
+    void build_scene_audio();
 
     /// The input source handed to modules. Non-owning; null means no input, and
     /// modules are expected to check.
@@ -520,6 +532,66 @@ public:
     // re-inserting an existing id does not grow the set.
     size_t failed_mesh_reports() const { return m_failed_mesh_reports; }
     const rendering::Renderer3D* renderer() const { return m_renderer.get(); }
+
+    /// The renderer's exposure — the one renderer setting the editor is allowed
+    /// to write, and the reason this exists.
+    ///
+    /// `renderer()` is const on purpose: a caller must not be able to reach into
+    /// arbitrary renderer state from outside. That left the editor able to READ
+    /// exposure and unable to write it, which is why the Settings > Rendering
+    /// section shipped with shadows and no exposure, and why the localization key
+    /// `exposure` has sat unused since Phase 15. A narrow pair rather than a
+    /// mutable `renderer()` gives the editor exactly the control it needs and
+    /// nothing more.
+    ///
+    /// Exposure is a DISPLAY preference, not scene data — deliberately not
+    /// persisted per scene, because the editor's acceptance run pins its golden
+    /// pixel count to the default. Setting it here therefore changes no scene and
+    /// is not an undoable edit.
+    ///
+    /// A non-finite or non-positive value is REFUSED and the previous exposure
+    /// kept: the renderer's own setter stores whatever it is handed, and a NaN
+    /// exposure propagates through the tonemap to black or white every pixel of
+    /// the frame. The editor's slider cannot produce one, but a game's settings
+    /// screen is a caller too, and a bad value there must not be a frame-wide
+    /// failure. Returns true when the value was applied.
+    bool set_exposure(float exposure) {
+        if (m_renderer == nullptr || !std::isfinite(exposure) || exposure <= 0.0f) {
+            return false;
+        }
+        m_renderer->set_exposure(exposure);
+        return true;
+    }
+    float exposure() const { return m_renderer != nullptr ? m_renderer->exposure() : 1.0f; }
+
+    /// The renderer's tonemap operator, exposed for the same reason
+    /// `set_exposure` is: `renderer()` is const by design, and a scene may
+    /// author the operator per level (a stylized level wants ACES, a
+    /// diagnostic capture wants Linear).
+    ///
+    /// The operator is a closed set, so anything outside it is refused rather
+    /// than clamped: `TonemapMode` has no "next" to fall back to, and silently
+    /// picking one would make a typo look like a working setting.
+    bool set_tonemap_mode(rendering::TonemapMode mode) {
+        if (m_renderer == nullptr) {
+            return false;
+        }
+        switch (mode) {
+            case rendering::TonemapMode::Exponential:
+            case rendering::TonemapMode::ACES:
+            case rendering::TonemapMode::Reinhard:
+            case rendering::TonemapMode::Linear:
+                break;
+            default:
+                return false;
+        }
+        m_renderer->set_tonemap_mode(mode);
+        return true;
+    }
+    rendering::TonemapMode tonemap_mode() const {
+        return m_renderer != nullptr ? m_renderer->tonemap_mode()
+                                     : rendering::TonemapMode::Exponential;
+    }
 
     // --- GPU picking ---
     //
@@ -765,6 +837,13 @@ private:
     std::unordered_map<ecs::Entity, vfx::ParticleSystem> m_particles;
     std::unordered_map<ecs::Entity, std::unique_ptr<physics::Cloth>> m_cloths;
     std::unordered_map<ecs::Entity, std::unique_ptr<physics::CharacterController>> m_characters;
+    // The scene's music and ambience samples, OWNED BY THE RUNTIME rather than
+    // pointed at inside the ECS world. `MusicSystem` holds the buffer pointer
+    // across frames, and the editor creates entities between them — a world
+    // reallocation would leave it pointing at freed memory. One buffer each
+    // because a level has one theme and one bed.
+    audio::AudioBuffer m_scene_music_buffer;
+    audio::AudioBuffer m_scene_ambience_buffer;
     // World-scale AI budget (Phase 25): stepped every frame via plan(). Games
     // register actors and foci through ai_world(); the population is cleared
     // on scene adopt so a previous scene's crowd never governs the next one.
@@ -865,6 +944,11 @@ private:
         std::unique_ptr<rhi::Sampler> samplers[3];
     };
     std::unordered_map<std::string, std::unique_ptr<TextureObjects>> m_textures;
+    // The colour-grading LUT the scene currently names, and the VIEW into the
+    // cached texture above. The path is what makes the resolve once-per-change;
+    // the view is what the renderer binds.
+    std::string m_lut_path;
+    const rhi::TextureView* m_lut_view = nullptr;
     // Sampler for (texture entry, mode), creating and caching on demand.
     // max_lod follows the texture's real chain (or 0 when mode is None).
     rhi::Sampler* sampler_for_mode(TextureObjects& entry, rhi::MipMapMode mode);

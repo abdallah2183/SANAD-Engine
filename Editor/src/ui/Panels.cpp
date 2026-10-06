@@ -102,6 +102,42 @@ struct InspectorCache {
     float pp_sharpen_radius = 1.0f;
     float pp_saturation = 1.0f;
     float pp_vignette = 0.0f;
+    bool pp_lens_enabled = false;
+    float pp_lens_distortion = 0.0f;
+    float pp_lens_chroma = 0.0f;
+    bool pp_dof_enabled = false;
+    float pp_dof_focus = 10.0f;
+    float pp_dof_range = 2.0f;
+    float pp_dof_radius = 6.0f;
+    bool pp_motion_enabled = false;
+    float pp_motion_intensity = 1.0f;
+    float pp_motion_length = 0.05f;
+    // Opt-in: 0 exposure and -1 operator mean "the renderer's own", so a scene
+    // that never authored them keeps whatever the renderer already had.
+    float pp_exposure = 0.0f;
+    int pp_tonemap = -1;
+    char pp_lut_path[256]{};
+    float pp_lut_strength = 0.0f;
+    // Scene audio environment (reverb zone / music / ambience bed). Same "has"
+    // pattern as the sky and post-processing above: the component is absent
+    // until the author asks for it, and an absent component is what keeps the
+    // scene's line out of the saved file.
+    //
+    // The reverb zone is cached as the component itself (six floats and a bool,
+    // so a mirror struct would be pure translation). Music and ambience cache
+    // only the fields the widget shows — their components own decoded samples,
+    // and copying megabytes into a per-frame cache is the wrong trade.
+    bool rz_has = false;
+    audio::ReverbZoneComponent rz_edit{};
+    bool mus_has = false;
+    char mus_buffer[256]{};
+    float mus_volume = 1.0f;
+    float mus_fade = 0.0f;
+    bool mus_enabled = true;
+    bool amb_has = false;
+    char amb_buffer[256]{};
+    float amb_fade = 0.0f;
+    bool amb_enabled = true;
     char mesh_id[64]{};
     char mesh_mat[192]{};
     char mat_path[256]{};
@@ -1649,6 +1685,46 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.pp_sharpen_radius = pp.sharpen_radius;
                     ic.pp_saturation = pp.saturation;
                     ic.pp_vignette = pp.vignette;
+                    ic.pp_lens_enabled = pp.lens_enabled;
+                    ic.pp_lens_distortion = pp.lens_distortion;
+                    ic.pp_lens_chroma = pp.lens_chromatic_aberration;
+                    ic.pp_dof_enabled = pp.dof_enabled;
+                    ic.pp_dof_focus = pp.dof_focus_distance;
+                    ic.pp_dof_range = pp.dof_focus_range;
+                    ic.pp_dof_radius = pp.dof_max_radius;
+                    ic.pp_motion_enabled = pp.motion_enabled;
+                    ic.pp_motion_intensity = pp.motion_intensity;
+                    ic.pp_motion_length = pp.motion_max_length;
+                    ic.pp_exposure = pp.exposure;
+                    ic.pp_tonemap = pp.tonemap;
+                    std::strncpy(ic.pp_lut_path, pp.lut_path.c_str(), sizeof(ic.pp_lut_path) - 1);
+                    ic.pp_lut_path[sizeof(ic.pp_lut_path) - 1] = '\0';
+                    ic.pp_lut_strength = pp.lut_strength;
+                }
+                if (const auto* rz = w->get<audio::ReverbZoneComponent>(sel)) {
+                    ic.rz_has = true;
+                    ic.rz_edit = *rz;
+                } else {
+                    ic.rz_has = false;
+                }
+                if (const auto* mus = w->get<audio::MusicComponent>(sel)) {
+                    ic.mus_has = true;
+                    std::strncpy(ic.mus_buffer, mus->buffer_name.c_str(), sizeof(ic.mus_buffer) - 1);
+                    ic.mus_buffer[sizeof(ic.mus_buffer) - 1] = '\0';
+                    ic.mus_volume = mus->volume;
+                    ic.mus_fade = mus->fade_in_seconds;
+                    ic.mus_enabled = mus->enabled;
+                } else {
+                    ic.mus_has = false;
+                }
+                if (const auto* amb = w->get<audio::AmbienceComponent>(sel)) {
+                    ic.amb_has = true;
+                    std::strncpy(ic.amb_buffer, amb->buffer_name.c_str(), sizeof(ic.amb_buffer) - 1);
+                    ic.amb_buffer[sizeof(ic.amb_buffer) - 1] = '\0';
+                    ic.amb_fade = amb->fade_in_seconds;
+                    ic.amb_enabled = amb->enabled;
+                } else {
+                    ic.amb_has = false;
                 }
                 if (const auto* m = w->get<runtime::MeshComponent>(sel)) {
                     const std::string id = m->mesh_id.to_string();
@@ -1844,6 +1920,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     added = app.apply_sky_edit(SkyEdit{}, add_err);
                 } else if (!ic.pp_has && ImGui::MenuItem(AV("post_process").c_str())) {
                     added = app.set_post_process(sel, runtime::PostProcessComponent{}, add_err);
+                } else if (!ic.rz_has && ImGui::MenuItem(AV("reverb_zone").c_str())) {
+                    // Music and ambience are deliberately NOT in this menu: both
+                    // need a buffer path, and a component naming no file is
+                    // refused by the setter (and warned about by the loader).
+                    // Their sections carry the path field and the add button.
+                    added = app.set_reverb_zone(sel, audio::ReverbZoneComponent{}, add_err);
                 } else if (!w->has<physics::RigidBodyComponent>(sel) &&
                            ImGui::MenuItem(AV("rigid_body").c_str())) {
                     added = app.set_rigid_body(sel, physics::RigidBodyComponent{}, add_err);
@@ -2370,6 +2452,82 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                                        4.0f);
                     ImGui::SliderFloat((AV("vignette") + "##pp_vignette").c_str(), &ic.pp_vignette, 0.0f, 1.0f);
 
+                    ImGui::Separator();
+                    ImGui::Checkbox((AV("enabled") + "##pp_lens").c_str(), &ic.pp_lens_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("lens_effects").c_str());
+                    // Symmetric: barrel and pincushion are both legitimate, and
+                    // the sign is what picks between them.
+                    ImGui::SliderFloat((AV("distortion") + "##pp_lens_distortion").c_str(),
+                                       &ic.pp_lens_distortion, -0.5f, 0.5f);
+                    // Three decimals: a subtle fringe is around 0.01, so a
+                    // two-decimal display would quantise the useful range away.
+                    ImGui::SliderFloat((AV("chromatic_aberration") + "##pp_lens_chroma").c_str(),
+                                       &ic.pp_lens_chroma, 0.0f, 0.1f, "%.3f");
+
+                    ImGui::Separator();
+                    ImGui::Checkbox((AV("enabled") + "##pp_dof").c_str(), &ic.pp_dof_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("depth_of_field").c_str());
+                    // The focus distance reaches far on purpose: focusing on the
+                    // far plane is how an author says "nothing is out of focus".
+                    ImGui::SliderFloat((AV("focus_distance") + "##pp_dof_focus").c_str(),
+                                       &ic.pp_dof_focus, 0.1f, 500.0f);
+                    // A range at or below zero divides by zero in the ramp, so
+                    // the slider's floor is a real bound, not a preference.
+                    ImGui::SliderFloat((AV("focus_range") + "##pp_dof_range").c_str(),
+                                       &ic.pp_dof_range, 0.01f, 50.0f);
+                    ImGui::SliderFloat((AV("blur_radius") + "##pp_dof_radius").c_str(),
+                                       &ic.pp_dof_radius, 0.0f, 24.0f);
+
+                    ImGui::Separator();
+                    ImGui::Checkbox((AV("enabled") + "##pp_motion").c_str(), &ic.pp_motion_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("motion_blur").c_str());
+                    ImGui::SliderFloat((AV("intensity") + "##pp_motion_intensity").c_str(),
+                                       &ic.pp_motion_intensity, 0.0f, 4.0f);
+                    // In uv units, so the useful range is small: 0.05 is a
+                    // smear across a twentieth of the frame.
+                    ImGui::SliderFloat((AV("max_length") + "##pp_motion_length").c_str(),
+                                       &ic.pp_motion_length, 0.001f, 0.3f, "%.3f");
+
+                    ImGui::Separator();
+                    // Exposure and the tonemap operator are OPT-IN, and their
+                    // sentinels are the UI: a slider at 0 means "the renderer's
+                    // own exposure", and the combo's first entry is "Not set".
+                    // An unconditional write would make every scene claim an
+                    // exposure and an operator it never chose.
+                    ImGui::SliderFloat((AV("exposure") + "##pp_exposure").c_str(),
+                                       &ic.pp_exposure, 0.0f, 8.0f);
+                    if (ic.pp_exposure <= 0.0f) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%s", AV("renderer_default").c_str());
+                    }
+                    {
+                        const std::string t0 = AV("tonemap_not_set");
+                        const std::string t1 = AV("tonemap_exponential");
+                        const std::string t2 = AV("tonemap_aces");
+                        const std::string t3 = AV("tonemap_reinhard");
+                        const std::string t4 = AV("tonemap_linear");
+                        const char* names[] = {t0.c_str(), t1.c_str(), t2.c_str(), t3.c_str(),
+                                               t4.c_str()};
+                        int combo = ic.pp_tonemap + 1; // -1 -> index 0
+                        ImGui::SetNextItemWidth(200.0f);
+                        if (ImGui::Combo((AV("tonemap") + "##pp_tonemap").c_str(), &combo, names,
+                                         5)) {
+                            ic.pp_tonemap = combo - 1;
+                        }
+                    }
+                    // The LUT is a kLutSize^3 cube laid out as a strip image.
+                    // The path is not validated in the panel: the runtime
+                    // resolves it through the VFS and says so when it cannot,
+                    // which is the only place that knows whether it exists.
+                    ImGui::SetNextItemWidth(280.0f);
+                    ImGui::InputText((AV("color_lut") + "##pp_lut_path").c_str(), ic.pp_lut_path,
+                                     sizeof(ic.pp_lut_path));
+                    ImGui::SliderFloat((AV("lut_strength") + "##pp_lut_strength").c_str(),
+                                       &ic.pp_lut_strength, 0.0f, 1.0f);
+
                     ImGui::TextDisabled("%s", AV("post_process_hint").c_str());
                     if (ImGui::Button((AV("apply") + "##pp_apply").c_str())) {
                         runtime::PostProcessComponent e{};
@@ -2389,10 +2547,161 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         e.sharpen_radius = ic.pp_sharpen_radius;
                         e.saturation = ic.pp_saturation;
                         e.vignette = ic.pp_vignette;
+                        e.lens_enabled = ic.pp_lens_enabled;
+                        e.lens_distortion = ic.pp_lens_distortion;
+                        e.lens_chromatic_aberration = ic.pp_lens_chroma;
+                        e.dof_enabled = ic.pp_dof_enabled;
+                        e.dof_focus_distance = ic.pp_dof_focus;
+                        e.dof_focus_range = ic.pp_dof_range;
+                        e.dof_max_radius = ic.pp_dof_radius;
+                        e.motion_enabled = ic.pp_motion_enabled;
+                        e.motion_intensity = ic.pp_motion_intensity;
+                        e.motion_max_length = ic.pp_motion_length;
+                        e.exposure = ic.pp_exposure;
+                        e.tonemap = ic.pp_tonemap;
+                        e.lut_path = ic.pp_lut_path;
+                        e.lut_strength = ic.pp_lut_strength;
                         std::string err;
                         if (!app.set_post_process(sel, e, err)) {
                             ic.error = err;
                             push_error(app.console(), "Post-processing edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Scene audio environment: reverb zone / music / ambience ------
+            // Three sections rather than one: a scene can have a cave that
+            // echoes and no music, or music and no zone. Each component is
+            // absent until the author asks for it, which is what keeps its line
+            // out of the saved file — the same contract the Sky and
+            // PostProcess sections above follow.
+            if (ImGui::CollapsingHeader((AV("reverb_zone") + "###ReverbZone").c_str())) {
+                if (!ic.rz_has) {
+                    ImGui::TextDisabled("%s", AV("no_reverb_zone").c_str());
+                    if (ImGui::Button((AV("add_reverb_zone") + "##addrz").c_str())) {
+                        std::string err;
+                        if (!app.set_reverb_zone(sel, audio::ReverbZoneComponent{}, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Add reverb zone failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##rz_enabled").c_str(), &ic.rz_edit.enabled);
+                    ImGui::SliderFloat((AV("radius") + "##rz_radius").c_str(), &ic.rz_edit.radius,
+                                       0.1f, 200.0f);
+                    // The inner radius is bounded by the outer one, so its
+                    // ceiling follows the slider above rather than a constant:
+                    // an inner radius past the outer inverts the falloff, and
+                    // the setter refuses it rather than silently clamping.
+                    ImGui::SliderFloat((AV("inner_radius") + "##rz_inner").c_str(),
+                                       &ic.rz_edit.inner_radius, 0.0f, ic.rz_edit.radius);
+                    ImGui::SliderFloat((AV("wet_gain") + "##rz_wet").c_str(), &ic.rz_edit.wet_gain,
+                                       0.0f, 1.0f);
+                    ImGui::SliderFloat((AV("decay") + "##rz_decay").c_str(),
+                                       &ic.rz_edit.decay_seconds, 0.0f, 10.0f);
+                    ImGui::SliderFloat((AV("predelay") + "##rz_predelay").c_str(),
+                                       &ic.rz_edit.pre_delay_seconds, 0.0f, 0.5f);
+                    ImGui::SliderFloat((AV("echo_spacing") + "##rz_spacing").c_str(),
+                                       &ic.rz_edit.echo_spacing_seconds, 0.0f, 1.0f);
+                    if (ImGui::Button((AV("apply") + "##rz_apply").c_str())) {
+                        std::string err;
+                        if (!app.set_reverb_zone(sel, ic.rz_edit, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Reverb zone edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // Music and ambience need a buffer path, so their empty state offers
+            // the path field rather than an add button that could only fail.
+            if (ImGui::CollapsingHeader((AV("music") + "###Music").c_str())) {
+                if (!ic.mus_has) {
+                    ImGui::TextDisabled("%s", AV("no_music").c_str());
+                    ImGui::SetNextItemWidth(280.0f);
+                    ImGui::InputText((AV("music_buffer") + "##mus_add_path").c_str(), ic.mus_buffer,
+                                     sizeof(ic.mus_buffer));
+                    if (ImGui::Button((AV("add_music") + "##addmus").c_str())) {
+                        MusicEdit e{};
+                        std::strncpy(e.buffer, ic.mus_buffer, sizeof(e.buffer) - 1);
+                        e.buffer[sizeof(e.buffer) - 1] = '\0';
+                        e.volume = ic.mus_volume;
+                        e.fade_in_seconds = ic.mus_fade;
+                        std::string err;
+                        if (!app.set_music(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Add music failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##mus_enabled").c_str(), &ic.mus_enabled);
+                    ImGui::SetNextItemWidth(280.0f);
+                    ImGui::InputText((AV("music_buffer") + "##mus_path").c_str(), ic.mus_buffer,
+                                     sizeof(ic.mus_buffer));
+                    ImGui::SliderFloat((AV("volume") + "##mus_volume").c_str(), &ic.mus_volume, 0.0f,
+                                       1.0f);
+                    ImGui::SliderFloat((AV("fade_in") + "##mus_fade").c_str(), &ic.mus_fade, 0.0f,
+                                       10.0f);
+                    if (ImGui::Button((AV("apply") + "##mus_apply").c_str())) {
+                        MusicEdit e{};
+                        std::strncpy(e.buffer, ic.mus_buffer, sizeof(e.buffer) - 1);
+                        e.buffer[sizeof(e.buffer) - 1] = '\0';
+                        e.volume = ic.mus_volume;
+                        e.fade_in_seconds = ic.mus_fade;
+                        e.enabled = ic.mus_enabled;
+                        std::string err;
+                        if (!app.set_music(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Music edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            if (ImGui::CollapsingHeader((AV("ambience") + "###Ambience").c_str())) {
+                if (!ic.amb_has) {
+                    ImGui::TextDisabled("%s", AV("no_ambience").c_str());
+                    ImGui::SetNextItemWidth(280.0f);
+                    ImGui::InputText((AV("ambience_buffer") + "##amb_add_path").c_str(),
+                                     ic.amb_buffer, sizeof(ic.amb_buffer));
+                    if (ImGui::Button((AV("add_ambience") + "##addamb").c_str())) {
+                        AmbienceEdit e{};
+                        std::strncpy(e.buffer, ic.amb_buffer, sizeof(e.buffer) - 1);
+                        e.buffer[sizeof(e.buffer) - 1] = '\0';
+                        e.fade_in_seconds = ic.amb_fade;
+                        std::string err;
+                        if (!app.set_ambience(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Add ambience failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##amb_enabled").c_str(), &ic.amb_enabled);
+                    ImGui::SetNextItemWidth(280.0f);
+                    ImGui::InputText((AV("ambience_buffer") + "##amb_path").c_str(), ic.amb_buffer,
+                                     sizeof(ic.amb_buffer));
+                    ImGui::SliderFloat((AV("fade_in") + "##amb_fade").c_str(), &ic.amb_fade, 0.0f,
+                                       10.0f);
+                    if (ImGui::Button((AV("apply") + "##amb_apply").c_str())) {
+                        AmbienceEdit e{};
+                        std::strncpy(e.buffer, ic.amb_buffer, sizeof(e.buffer) - 1);
+                        e.buffer[sizeof(e.buffer) - 1] = '\0';
+                        e.fade_in_seconds = ic.amb_fade;
+                        e.enabled = ic.amb_enabled;
+                        std::string err;
+                        if (!app.set_ambience(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Ambience edit failed", err);
                         } else {
                             ic.error.clear();
                         }

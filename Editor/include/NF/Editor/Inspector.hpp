@@ -8,6 +8,7 @@
 // command without touching the world. Invalid input yields an error string
 // and leaves the scene untouched.
 
+#include <NF/Audio/Components.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
@@ -80,6 +81,28 @@ struct TimeOfDayEdit {
     bool drive_light = true;
 };
 
+/// Editable view of the scene audio environment.
+///
+/// The reverb zone is edited through `audio::ReverbZoneComponent` directly: it
+/// is six floats and a bool, so a mirror struct would be seven fields of pure
+/// translation with two places to add a knob to. Music and ambience are edited
+/// through their components too, but the INSPECTOR CACHE holds only the fields
+/// the widget shows — those components own DECODED SAMPLES (`owned_buffer`), and
+/// copying megabytes into a per-frame UI cache for a value the widget never
+/// shows is the wrong trade.
+struct MusicEdit {
+    char buffer[256] = {0};
+    float volume = 1.0f;
+    float fade_in_seconds = 0.0f;
+    bool enabled = true;
+};
+
+struct AmbienceEdit {
+    char buffer[256] = {0};
+    float fade_in_seconds = 0.0f;
+    bool enabled = true;
+};
+
 struct MaterialEdit {
     float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
     float metallic = 0.0f;
@@ -121,6 +144,24 @@ std::unique_ptr<ICommand> make_time_of_day_command(ecs::World& world, ecs::Entit
 std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Entity e,
                                                     const runtime::PostProcessComponent& edit,
                                                     std::string& out_err);
+// Scene audio environment. The reverb zone's bounds match the scene loader's
+// (radius > 0, inner <= radius, wet in [0,1]); music/ambience refuse an empty
+// buffer path, because a component that names no file is silent and would look
+// like a broken feature rather than an unfinished edit.
+//
+// The music/ambience factories take the FINISHED component, not the UI's light
+// edit struct: `owned_buffer` is resolved by the caller (EditorApp, which owns
+// the VFS) and must survive into the command unchanged, or an edit would
+// silence a track that is already decoded.
+std::unique_ptr<ICommand> make_reverb_zone_command(ecs::World& world, ecs::Entity e,
+                                                   const audio::ReverbZoneComponent& edit,
+                                                   std::string& out_err);
+std::unique_ptr<ICommand> make_music_command(ecs::World& world, ecs::Entity e,
+                                             const audio::MusicComponent& after,
+                                             std::string& out_err);
+std::unique_ptr<ICommand> make_ambience_command(ecs::World& world, ecs::Entity e,
+                                                const audio::AmbienceComponent& after,
+                                                std::string& out_err);
 std::unique_ptr<ICommand> make_mesh_command(ecs::World& world, ecs::Entity e,
                                             const std::string& asset_id_text,
                                             const std::string& material, std::string& out_err);

@@ -413,12 +413,131 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
     if (!in_range("sharpen radius", edit.sharpen_radius, 0.01f, 16.0f)) return nullptr;
     if (!in_range("saturation", edit.saturation, 0.0f, 8.0f)) return nullptr;
     if (!in_range("vignette", edit.vignette, 0.0f, 1.0f)) return nullptr;
+    // Lens effects. Symmetric on distortion because barrel and pincushion are
+    // both legitimate, and bounded at +/-0.5 because past that the warp folds
+    // the corners over themselves. The bounds match the scene loader's.
+    if (!in_range("lens distortion", edit.lens_distortion, -0.5f, 0.5f)) return nullptr;
+    if (!in_range("lens chromatic aberration", edit.lens_chromatic_aberration, 0.0f, 0.1f)) {
+        return nullptr;
+    }
+    // Depth of field. A focus distance is unbounded above on purpose (focusing
+    // on the sky is "nothing is out of focus"), and the range has a real floor
+    // because the ramp divides by it. The bounds match the scene loader's.
+    if (!in_range("dof focus distance", edit.dof_focus_distance, 0.0f, 1.0e30f)) return nullptr;
+    if (!in_range("dof focus range", edit.dof_focus_range, 0.01f, 1.0e6f)) return nullptr;
+    if (!in_range("dof radius", edit.dof_max_radius, 0.0f, 64.0f)) return nullptr;
+    // Motion blur. A negative intensity is not "blur the other way" and a zero
+    // cap would mean the same thing as a zero intensity, so both have floors.
+    if (!in_range("motion intensity", edit.motion_intensity, 0.0f, 16.0f)) return nullptr;
+    if (!in_range("motion max length", edit.motion_max_length, 0.001f, 1.0f)) return nullptr;
+    // Exposure is opt-in (0 = the renderer's own), and the tonemap operator is
+    // a closed set whose -1 means "not authored". Bounds match the scene
+    // loader's, so the editor and the loader agree on what a scene may say.
+    if (!in_range("exposure", edit.exposure, 0.0f, 1000.0f)) return nullptr;
+    if (edit.tonemap < -1 || edit.tonemap > 3) {
+        out_err = "tonemap must be -1 (not set) or a known operator";
+        return nullptr;
+    }
+    // The LUT strength is a blend weight, so it is bounded by definition. The
+    // path itself is not validated here: the runtime resolves it through the
+    // VFS and warns when it is unusable, which is the only place that knows
+    // whether the file exists.
+    if (!in_range("lut strength", edit.lut_strength, 0.0f, 1.0f)) return nullptr;
 
     const auto* cur = world.get<runtime::PostProcessComponent>(e);
     const bool had = (cur != nullptr);
     const runtime::PostProcessComponent before = had ? *cur : runtime::PostProcessComponent{};
     runtime::PostProcessComponent after = edit;
     return std::make_unique<SetPostProcessCommand>(e, had, before, after);
+}
+
+std::unique_ptr<ICommand> make_reverb_zone_command(ecs::World& world, ecs::Entity e,
+                                                   const audio::ReverbZoneComponent& edit,
+                                                   std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.radius, edit.inner_radius, edit.wet_gain, edit.decay_seconds,
+                     edit.pre_delay_seconds, edit.echo_spacing_seconds})) {
+        out_err = "Reverb zone values must be finite numbers";
+        return nullptr;
+    }
+    // The bounds mirror the scene loader's, deliberately: a value the editor
+    // accepts and the loader then refuses would make the same scene load
+    // differently depending on how it was authored.
+    //
+    // A radius at or below zero is REFUSED rather than clamped: the loader
+    // drops such a line with a warning, so clamping here would turn a mistake
+    // into a silent, differently-authored scene.
+    if (edit.radius <= 0.0f) {
+        out_err = "Reverb zone radius must be greater than zero";
+        return nullptr;
+    }
+    if (edit.inner_radius < 0.0f || edit.inner_radius > edit.radius) {
+        out_err = "Reverb zone inner radius must be within [0, radius]";
+        return nullptr;
+    }
+    if (edit.wet_gain < 0.0f || edit.wet_gain > 1.0f) {
+        out_err = "Reverb zone wet gain must be within [0, 1]";
+        return nullptr;
+    }
+    if (edit.decay_seconds < 0.0f || edit.pre_delay_seconds < 0.0f ||
+        edit.echo_spacing_seconds < 0.0f) {
+        out_err = "Reverb zone times must not be negative";
+        return nullptr;
+    }
+
+    const auto* cur = world.get<audio::ReverbZoneComponent>(e);
+    const bool had = (cur != nullptr);
+    const audio::ReverbZoneComponent before = had ? *cur : audio::ReverbZoneComponent{};
+    return std::make_unique<SetReverbZoneCommand>(e, had, before, edit);
+}
+
+std::unique_ptr<ICommand> make_music_command(ecs::World& world, ecs::Entity e,
+                                             const audio::MusicComponent& after,
+                                             std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (after.buffer_name.empty()) {
+        out_err = "Music needs a buffer path";
+        return nullptr;
+    }
+    if (!all_finite({after.volume, after.fade_in_seconds}) || after.volume < 0.0f ||
+        after.volume > 1.0f || after.fade_in_seconds < 0.0f) {
+        out_err = "Music volume must be within [0, 1] and the fade must not be negative";
+        return nullptr;
+    }
+    // `owned_buffer` is taken as given: the caller resolved it (EditorApp, which
+    // owns the VFS) or carried it over from the live component. Clearing it here
+    // would silence a track that is already decoded.
+    const auto* cur = world.get<audio::MusicComponent>(e);
+    const bool had = (cur != nullptr);
+    const audio::MusicComponent before = had ? *cur : audio::MusicComponent{};
+    return std::make_unique<SetMusicCommand>(e, had, before, after);
+}
+
+std::unique_ptr<ICommand> make_ambience_command(ecs::World& world, ecs::Entity e,
+                                                const audio::AmbienceComponent& after,
+                                                std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (after.buffer_name.empty()) {
+        out_err = "Ambience needs a buffer path";
+        return nullptr;
+    }
+    if (!all_finite({after.fade_in_seconds}) || after.fade_in_seconds < 0.0f) {
+        out_err = "Ambience fade must not be negative";
+        return nullptr;
+    }
+    const auto* cur = world.get<audio::AmbienceComponent>(e);
+    const bool had = (cur != nullptr);
+    const audio::AmbienceComponent before = had ? *cur : audio::AmbienceComponent{};
+    return std::make_unique<SetAmbienceCommand>(e, had, before, after);
 }
 
 std::unique_ptr<ICommand> make_mesh_command(ecs::World& world, ecs::Entity e,

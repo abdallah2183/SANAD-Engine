@@ -402,6 +402,20 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     edit.sharpen_enabled = true;
     edit.sharpen_amount = 0.5f;
     edit.vignette = 0.3f;
+    edit.lens_enabled = true;
+    edit.lens_distortion = -0.2f; // pincushion: the sign is part of the edit
+    edit.lens_chromatic_aberration = 0.012f;
+    edit.dof_enabled = true;
+    edit.dof_focus_distance = 15.0f;
+    edit.dof_focus_range = 3.0f;
+    edit.dof_max_radius = 7.5f;
+    edit.motion_enabled = true;
+    edit.motion_intensity = 2.0f;
+    edit.motion_max_length = 0.06f;
+    edit.exposure = 1.75f;
+    edit.tonemap = 2; // Reinhard
+    edit.lut_path = "content://LUTs/grade.png";
+    edit.lut_strength = 0.4f;
     std::string err;
     auto cmd = editor::make_post_process_command(scene.world(), e, edit, err);
     NF_CHECK(cmd != nullptr);
@@ -419,6 +433,20 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
         NF_CHECK(pp->sharpen_enabled);
         NF_CHECK_NEAR(pp->sharpen_amount, 0.5f, 1e-6f);
         NF_CHECK_NEAR(pp->vignette, 0.3f, 1e-6f);
+        NF_CHECK(pp->lens_enabled);
+        NF_CHECK_NEAR(pp->lens_distortion, -0.2f, 1e-6f);
+        NF_CHECK_NEAR(pp->lens_chromatic_aberration, 0.012f, 1e-6f);
+        NF_CHECK(pp->dof_enabled);
+        NF_CHECK_NEAR(pp->dof_focus_distance, 15.0f, 1e-6f);
+        NF_CHECK_NEAR(pp->dof_focus_range, 3.0f, 1e-6f);
+        NF_CHECK_NEAR(pp->dof_max_radius, 7.5f, 1e-6f);
+        NF_CHECK(pp->motion_enabled);
+        NF_CHECK_NEAR(pp->motion_intensity, 2.0f, 1e-6f);
+        NF_CHECK_NEAR(pp->motion_max_length, 0.06f, 1e-6f);
+        NF_CHECK_NEAR(pp->exposure, 1.75f, 1e-6f);
+        NF_CHECK(pp->tonemap == 2);
+        NF_CHECK(pp->lut_path == "content://LUTs/grade.png");
+        NF_CHECK_NEAR(pp->lut_strength, 0.4f, 1e-6f);
     }
     NF_CHECK(stack.undo(scene.world()));
     NF_CHECK(!scene.world().has<runtime::PostProcessComponent>(e));
@@ -456,6 +484,65 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     nan.grade_contrast = std::numeric_limits<float>::quiet_NaN();
     NF_CHECK(editor::make_post_process_command(scene.world(), e, nan, err) == nullptr);
     NF_CHECK(!err.empty());
+
+    // Lens bounds match the scene loader's: past +/-0.5 the warp folds the
+    // corners over themselves, and a negative chromatic aberration would swap
+    // which end of the spectrum fringes outward.
+    runtime::PostProcessComponent folded = edit;
+    folded.lens_distortion = 0.9f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, folded, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent negative_chroma = edit;
+    negative_chroma.lens_chromatic_aberration = -0.01f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative_chroma, err) == nullptr);
+
+    // Depth of field: the focus RANGE has a real floor because the ramp divides
+    // by it, and a negative radius is not a blur in the other direction.
+    runtime::PostProcessComponent zero_range = edit;
+    zero_range.dof_focus_range = 0.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, zero_range, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent negative_radius = edit;
+    negative_radius.dof_max_radius = -3.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative_radius, err) == nullptr);
+
+    runtime::PostProcessComponent negative_focus = edit;
+    negative_focus.dof_focus_distance = -1.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative_focus, err) == nullptr);
+
+    // Motion blur: a negative intensity is not "blur the other way", and a
+    // zero cap would mean the same thing a zero intensity already says.
+    runtime::PostProcessComponent negative_intensity = edit;
+    negative_intensity.motion_intensity = -1.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative_intensity, err) == nullptr);
+
+    runtime::PostProcessComponent zero_cap = edit;
+    zero_cap.motion_max_length = 0.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, zero_cap, err) == nullptr);
+
+    // The tonemap operator is a closed set: -1 (not authored) and 0..3 are the
+    // only values, so anything else is refused rather than mapped to one.
+    runtime::PostProcessComponent bad_tonemap = edit;
+    bad_tonemap.tonemap = 4;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, bad_tonemap, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent negative_exposure = edit;
+    negative_exposure.exposure = -1.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative_exposure, err) == nullptr);
+
+    // The LUT strength is a blend weight, so it is bounded by definition. The
+    // path is deliberately NOT validated here: the runtime resolves it through
+    // the VFS and warns, which is the only place that knows whether it exists.
+    runtime::PostProcessComponent lut_over = edit;
+    lut_over.lut_strength = 1.5f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, lut_over, err) == nullptr);
+
+    runtime::PostProcessComponent lut_missing_path = edit;
+    lut_missing_path.lut_path = "content://LUTs/nope.png";
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, lut_missing_path, err) != nullptr);
 
     // A dead entity is refused rather than silently editing nothing.
     ecs::Entity dead{};

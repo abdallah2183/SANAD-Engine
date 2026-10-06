@@ -24,7 +24,50 @@ struct SkyParams {
     float sun_disk = 1.0f;              // sun disk intensity multiplier
     float sun_glow = 1.0f;              // halo + forward-scatter multiplier
     bool enabled = true;
+
+    // Procedural cloud layer (the P4 "weather" half).
+    //
+    // SAMPLING SPACE — the decision the world agent asked for: the view ray is
+    // intersected with a horizontal plane `cloud_altitude` units ABOVE THE
+    // CAMERA, and the world XZ of that intersection, divided by `cloud_scale`,
+    // is the noise coordinate. Drift is `cloud_time` along +X. So the layer is
+    // infinite, camera-relative in altitude and world-anchored in XZ, which is
+    // what makes it stay put as the camera moves.
+    //
+    /// 0 = exactly "no clouds": the layer is skipped entirely and the sky is the
+    /// gradient it was before this existed.
+    float cloud_coverage = 0.0f;
+    /// World units above the camera. Higher = the layer reads flatter and its
+    /// cells get larger for the same `cloud_scale`.
+    float cloud_altitude = 300.0f;
+    /// World units per noise unit. Larger = bigger, fewer clouds.
+    float cloud_scale = 900.0f;
+    /// Drift, in the same hours the day/night clock uses. The ONLY time input:
+    /// there is no clock and no RNG, so the same scene time draws the same sky.
+    float cloud_time = 0.0f;
 };
+
+/// Octaves of the cloud FBM. Must match lighting.frag's kCloudOctaves.
+inline constexpr int kCloudOctaves = 4;
+/// Sum of the FBM's amplitudes (0.5 + 0.25 + 0.125 + 0.0625), so the density
+/// lands in [0, 1] without a per-sample accumulation. Must match the shader.
+inline constexpr float kCloudFbmNorm = 0.9375f;
+
+/// The cloud noise, exactly as lighting.frag computes it: an integer hash per
+/// lattice cell, bilinear with a smoothstep fade, summed over kCloudOctaves
+/// octaves and normalised to [0, 1].
+///
+/// An INTEGER hash rather than the usual `fract(sin(dot(...)))` trick, and that
+/// is the whole point: `sin` is not required to agree between a GPU driver and
+/// the C++ runtime, so a sin-based hash could not be mirrored, and an
+/// unmirrorable sky is one no test can pin.
+float cloud_density(Vec2 uv);
+
+/// The cloud layer's alpha over the sky at a normalized view ray, in [0, 1].
+/// `cam_pos` is the camera's world position. Returns exactly 0 for a ray that
+/// never reaches the plane (at or below the horizon) and when the layer is off,
+/// so a clear sky is bit-for-bit the sky it was.
+float compute_cloud_alpha(const SkyParams& sky, Vec3 ray_dir, Vec3 cam_pos);
 
 // Sky shape constants. lighting.frag spells the same numbers out (GLSL has no
 // way to include this header), so a change here is a change there; the tests in

@@ -145,6 +145,18 @@ static bool optional_float_in_range(const std::string& line, const char* key, f3
 /// nonsense — a negative threshold, a negative intensity, a zero or negative
 /// radius (which would collapse every tap onto one texel), a negative contrast
 /// or gamma (which would invert the image).
+/// The `tonemap=` name for a `rendering::TonemapMode` value. The inverse of the
+/// parse table above; an unknown value writes "exponential" so a hand-edited
+/// file with a nonsense number round-trips to something loadable.
+static const char* post_process_tonemap_name(int mode) {
+    switch (mode) {
+        case 1: return "aces";
+        case 2: return "reinhard";
+        case 3: return "linear";
+        default: return "exponential";
+    }
+}
+
 static bool parse_post_process(const std::string& line, PostProcessComponent& out,
                                std::string& out_bad) {
     out.bloom_enabled = line.find("bloom=true") != std::string::npos;
@@ -168,6 +180,60 @@ static bool parse_post_process(const std::string& line, PostProcessComponent& ou
 
     if (!optional_float_in_range(line, "saturation=", 0.0f, 8.0f, out.saturation, out_bad)) return false;
     if (!optional_float_in_range(line, "vignette=", 0.0f, 1.0f, out.vignette, out_bad)) return false;
+
+    out.lens_enabled = line.find("lens=true") != std::string::npos;
+    // Distortion is a signed coefficient and both signs are legitimate (barrel
+    // and pincushion), so the range is symmetric. Past roughly +/-0.5 the warp
+    // folds the corners over themselves, which is a stylization rather than a
+    // lens; the bound refuses the fold rather than letting a typo produce one.
+    if (!optional_float_in_range(line, "lens_distortion=", -0.5f, 0.5f, out.lens_distortion, out_bad)) return false;
+    if (!optional_float_in_range(line, "lens_chroma=", 0.0f, 0.1f, out.lens_chromatic_aberration, out_bad)) return false;
+
+    out.dof_enabled = line.find("dof=true") != std::string::npos;
+    // A focus distance is unbounded above on purpose: focusing on the far plane
+    // (the sky) is a legitimate way to say "nothing is out of focus".
+    if (!optional_float_in_range(line, "dof_focus=", 0.0f, 1.0e30f, out.dof_focus_distance, out_bad)) return false;
+    // A zero range would divide by zero in the ramp, so the floor is a real
+    // bound rather than a stylistic one.
+    if (!optional_float_in_range(line, "dof_range=", 0.01f, 1.0e6f, out.dof_focus_range, out_bad)) return false;
+    if (!optional_float_in_range(line, "dof_radius=", 0.0f, 64.0f, out.dof_max_radius, out_bad)) return false;
+
+    out.motion_enabled = line.find("motion=true") != std::string::npos;
+    // A non-positive intensity is "off", not "blur in the other direction", so
+    // the floor is zero and the value is the stage's own switch.
+    if (!optional_float_in_range(line, "motion_intensity=", 0.0f, 16.0f, out.motion_intensity, out_bad)) return false;
+    // A zero cap would mean "never smear", which is what a zero intensity
+    // already says; the floor keeps the two from meaning the same thing.
+    if (!optional_float_in_range(line, "motion_length=", 0.001f, 1.0f, out.motion_max_length, out_bad)) return false;
+
+    // Exposure and the tonemap operator, both OPT-IN. The sentinels (0 and -1)
+    // mean "the scene says nothing", so an absent key leaves the renderer's own
+    // setting alone — which is what the acceptance run's golden pixels need.
+    if (!optional_float_in_range(line, "exposure=", 0.0f, 1000.0f, out.exposure, out_bad)) return false;
+    {
+        const std::string name = field_value(line, "tonemap=");
+        if (!name.empty()) {
+            if (name == "exponential") {
+                out.tonemap = 0;
+            } else if (name == "aces") {
+                out.tonemap = 1;
+            } else if (name == "reinhard") {
+                out.tonemap = 2;
+            } else if (name == "linear") {
+                out.tonemap = 3;
+            } else {
+                // A closed set, so an unknown name is refused rather than
+                // defaulted: silently picking Exponential would make a typo
+                // look like a working setting.
+                out_bad = "tonemap";
+                return false;
+            }
+        }
+    }
+    // The colour LUT: a logical image path, resolved by the runtime. A strength
+    // with no path does nothing, which the writer keeps out of the file.
+    out.lut_path = field_value(line, "lut=");
+    if (!optional_float_in_range(line, "lut_strength=", 0.0f, 1.0f, out.lut_strength, out_bad)) return false;
     return true;
 }
 
@@ -695,6 +761,47 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     aud.spatial_settings.max_distance = max_dist;
                 }
                 scene->world().add<audio::AudioComponent>(e, std::move(aud));
+            } else if (line.rfind("  ReverbZone:",0)==0) {
+                // A cave, a tunnel, a hall. The zone's position comes from the
+                // entity's transform at adopt time, not from this line, so the
+                // author places the echo by placing the object.
+                audio::ReverbZoneComponent rz;
+                (void)field_float(line, "radius=", rz.radius);
+                (void)field_float(line, "inner=", rz.inner_radius);
+                (void)field_float(line, "wet=", rz.wet_gain);
+                (void)field_float(line, "decay=", rz.decay_seconds);
+                (void)field_float(line, "predelay=", rz.pre_delay_seconds);
+                (void)field_float(line, "spacing=", rz.echo_spacing_seconds);
+                rz.enabled = line.find("enabled=false") == std::string::npos;
+                if (!(rz.radius > 0.0f)) {
+                    // A zone that reaches nothing is a mistake, not a setting.
+                    // Kept out of the world so it cannot be mistaken for an
+                    // author's "no reverb here".
+                    result.warnings.push_back(
+                        "ReverbZone with a non-positive radius was ignored: " + line);
+                } else {
+                    // `inner <= radius` is the ReverbZone contract; an inner
+                    // radius past the outer one would make the falloff invert.
+                    rz.inner_radius = std::min(std::max(rz.inner_radius, 0.0f), rz.radius);
+                    rz.wet_gain = std::min(std::max(rz.wet_gain, 0.0f), 1.0f);
+                    rz.decay_seconds = std::max(rz.decay_seconds, 0.0f);
+                    rz.pre_delay_seconds = std::max(rz.pre_delay_seconds, 0.0f);
+                    rz.echo_spacing_seconds = std::max(rz.echo_spacing_seconds, 0.0f);
+                    scene->world().add<audio::ReverbZoneComponent>(e, rz);
+                }
+            } else if (line.rfind("  Music:",0)==0) {
+                audio::MusicComponent mus;
+                mus.buffer_name = field_value(line, "buffer=");
+                (void)field_float(line, "volume=", mus.volume);
+                (void)field_float(line, "fade=", mus.fade_in_seconds);
+                mus.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<audio::MusicComponent>(e, std::move(mus));
+            } else if (line.rfind("  Ambience:",0)==0) {
+                audio::AmbienceComponent amb;
+                amb.buffer_name = field_value(line, "buffer=");
+                (void)field_float(line, "fade=", amb.fade_in_seconds);
+                amb.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<audio::AmbienceComponent>(e, std::move(amb));
             } else if (line.rfind("  Module:",0)==0) {
                 gameplay::GameplayModuleComponent comp;
                 comp.module_name = field_value(line, "name=");
@@ -996,27 +1103,55 @@ SceneLoadResult load_scene_from_vfs(assets::VirtualFileSystem& vfs, const std::s
 // reads the file and decodes it (WAV/OGG/MP3/FLAC) into owned_buffer at the
 // mix rate, so the source is audible without any procedural tone. Unresolvable
 // names keep the old loud warning instead of silent failure.
+//
+// `what` names the component in the warning ("Audio", "Music", "Ambience") and
+// is the only thing that differs between the three callers, so they cannot
+// drift in how a missing or undecodable file is reported. "Audio" reproduces
+// the original message byte for byte.
+static bool decode_scene_audio(assets::VirtualFileSystem& vfs, const std::string& logical_path,
+                               const char* what, audio::AudioBuffer& out,
+                               std::vector<std::string>& warnings) {
+    if (logical_path.empty() || !out.samples.empty()) {
+        return false;
+    }
+    auto bytes = vfs.read_bytes(logical_path);
+    if (!bytes.ok) {
+        warnings.push_back(std::string(what) + " buffer '" + logical_path +
+                           "' not found in VFS; the source will be silent");
+        return false;
+    }
+    audio::DecodeOptions options;
+    options.target_sample_rate = audio::kDefaultSampleRate;
+    audio::DecodeResult decoded =
+        audio::decode_audio_memory(bytes.value.data(), bytes.value.size(), options);
+    if (!decoded.ok) {
+        warnings.push_back(std::string(what) + " buffer '" + logical_path +
+                           "' could not be decoded (" + decoded.error +
+                           "); the source will be silent");
+        return false;
+    }
+    out = std::move(decoded.buffer);
+    return true;
+}
+
 void resolve_scene_audio(assets::VirtualFileSystem& vfs, scene::Scene& scene_obj,
                          std::vector<std::string>& warnings) {
     for (ecs::Entity e : scene_obj.world().all_entities()) {
-        auto* aud = scene_obj.world().get<audio::AudioComponent>(e);
-        if (!aud || !aud->owned_buffer.samples.empty() || aud->buffer_name.empty()) continue;
-        auto bytes = vfs.read_bytes(aud->buffer_name);
-        if (!bytes.ok) {
-            warnings.push_back("Audio buffer '" + aud->buffer_name +
-                               "' not found in VFS; the source will be silent");
-            continue;
+        if (auto* aud = scene_obj.world().get<audio::AudioComponent>(e)) {
+            // A `tone=` spec already generated its samples; the asset path is
+            // the other route and only one of them can win.
+            if (aud->buffer == nullptr && aud->owned_buffer.samples.empty()) {
+                (void)decode_scene_audio(vfs, aud->buffer_name, "Audio", aud->owned_buffer,
+                                         warnings);
+            }
         }
-        audio::DecodeOptions options;
-        options.target_sample_rate = audio::kDefaultSampleRate;
-        audio::DecodeResult decoded =
-            audio::decode_audio_memory(bytes.value.data(), bytes.value.size(), options);
-        if (!decoded.ok) {
-            warnings.push_back("Audio buffer '" + aud->buffer_name + "' could not be decoded (" +
-                               decoded.error + "); the source will be silent");
-            continue;
+        if (auto* mus = scene_obj.world().get<audio::MusicComponent>(e)) {
+            (void)decode_scene_audio(vfs, mus->buffer_name, "Music", mus->owned_buffer, warnings);
         }
-        aud->owned_buffer = std::move(decoded.buffer);
+        if (auto* amb = scene_obj.world().get<audio::AmbienceComponent>(e)) {
+            (void)decode_scene_audio(vfs, amb->buffer_name, "Ambience", amb->owned_buffer,
+                                     warnings);
+        }
     }
 }
 
@@ -1133,7 +1268,37 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " sharpen_amount=" << pp->sharpen_amount
                 << " sharpen_radius=" << pp->sharpen_radius
                 << " saturation=" << pp->saturation
-                << " vignette=" << pp->vignette << "\n";
+                << " vignette=" << pp->vignette
+                << " lens=" << (pp->lens_enabled ? "true" : "false")
+                << " lens_distortion=" << pp->lens_distortion
+                << " lens_chroma=" << pp->lens_chromatic_aberration
+                << " dof=" << (pp->dof_enabled ? "true" : "false")
+                << " dof_focus=" << pp->dof_focus_distance
+                << " dof_range=" << pp->dof_focus_range
+                << " dof_radius=" << pp->dof_max_radius
+                << " motion=" << (pp->motion_enabled ? "true" : "false")
+                << " motion_intensity=" << pp->motion_intensity
+                << " motion_length=" << pp->motion_max_length;
+            // Written ONLY when authored. These two have sentinels, so an
+            // unconditional write would turn every scene into one that names an
+            // exposure and an operator it never chose — and the acceptance
+            // scene's golden pixels are pinned to the renderer's defaults.
+            if (pp->exposure > 0.0f) {
+                out << " exposure=" << pp->exposure;
+            }
+            if (pp->tonemap >= 0) {
+                out << " tonemap=" << post_process_tonemap_name(pp->tonemap);
+            }
+            // The strength is written only alongside a path: on its own it is a
+            // claim that changes nothing, and a reader would be right to wonder
+            // what LUT it referred to.
+            if (!pp->lut_path.empty()) {
+                out << " lut=" << pp->lut_path;
+                if (pp->lut_strength > 0.0f) {
+                    out << " lut_strength=" << pp->lut_strength;
+                }
+            }
+            out << "\n";
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {
@@ -1226,6 +1391,35 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 out << " tone=" << aud->tone_hz << " tone_duration=" << aud->tone_duration;
             }
             out << "\n";
+        }
+        // The audio environment lines are written ONLY when their component
+        // exists, so a scene that never heard of them round-trips byte for byte
+        // — the same rule the Sky, TimeOfDay and PostProcess lines follow.
+        const auto* rz = scene_obj.world().get<audio::ReverbZoneComponent>(e);
+        if (rz) {
+            out << "  ReverbZone: radius=" << rz->radius
+                << " inner=" << rz->inner_radius
+                << " wet=" << rz->wet_gain
+                << " decay=" << rz->decay_seconds
+                << " predelay=" << rz->pre_delay_seconds
+                << " spacing=" << rz->echo_spacing_seconds
+                << " enabled=" << (rz->enabled ? "true" : "false")
+                << "\n";
+        }
+        const auto* mus = scene_obj.world().get<audio::MusicComponent>(e);
+        if (mus) {
+            out << "  Music: buffer=" << mus->buffer_name
+                << " volume=" << mus->volume
+                << " fade=" << mus->fade_in_seconds
+                << " enabled=" << (mus->enabled ? "true" : "false")
+                << "\n";
+        }
+        const auto* amb = scene_obj.world().get<audio::AmbienceComponent>(e);
+        if (amb) {
+            out << "  Ambience: buffer=" << amb->buffer_name
+                << " fade=" << amb->fade_in_seconds
+                << " enabled=" << (amb->enabled ? "true" : "false")
+                << "\n";
         }
         const auto* mod = scene_obj.world().get<gameplay::GameplayModuleComponent>(e);
         if (mod && !mod->module_name.empty()) {
@@ -1383,6 +1577,15 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* au = src.get<audio::AudioComponent>(se)) {
         dst.add<audio::AudioComponent>(de, *au);
+    }
+    if (const auto* rz = src.get<audio::ReverbZoneComponent>(se)) {
+        dst.add<audio::ReverbZoneComponent>(de, *rz);
+    }
+    if (const auto* mus = src.get<audio::MusicComponent>(se)) {
+        dst.add<audio::MusicComponent>(de, *mus);
+    }
+    if (const auto* amb = src.get<audio::AmbienceComponent>(se)) {
+        dst.add<audio::AmbienceComponent>(de, *amb);
     }
     if (const auto* g = src.get<gameplay::GameplayModuleComponent>(se)) {
         dst.add<gameplay::GameplayModuleComponent>(de, *g);

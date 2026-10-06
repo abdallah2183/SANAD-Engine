@@ -25,6 +25,7 @@
 // ProjectLauncher.cpp is a thin Win32 shell over them.
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
@@ -257,6 +258,48 @@ inline bool project_matches_search(const std::string& path, const std::string& n
     }
     return hay.find(ndl) != std::string::npos;
 }
+
+/// One card in the New Project template gallery.
+struct LauncherTemplateCard {
+    const char* name_key;      // localization key for the card title
+    const char* desc_key;      // localization key for the one-line blurb
+    int thumb;                 // index into the launcher's thumbnail list
+    bool enabled;              // false = visible placeholder with a "soon" ribbon
+    // The folder under the templates root that `nf new --template <name>` also
+    // accepts, or "" for a placeholder. Resolved through the CLI's own
+    // allow-list, so the gallery and the CLI cannot drift into offering
+    // different content.
+    const char* template_name;
+};
+
+/// The New Project gallery, in display order.
+///
+/// Header-inline (not file-local) so a test can pin the two invariants that make
+/// the gallery honest, without a window:
+///
+///  1. every ENABLED card names a template the CLI accepts, and
+///  2. every template the CLI accepts is offered by an enabled card.
+///
+/// Both halves matter and they fail differently. A card naming a template that
+/// does not exist scaffolds nothing useful; a template with no card is a feature
+/// the engine can do that the gallery hides from the user. That second one has
+/// now shipped twice — four templates existed on disk while the gallery offered
+/// one, and then FPSStarter stayed behind a "soon" ribbon after the other two
+/// were enabled.
+///
+/// Placeholders stay visible-but-disabled: the shape of the page is the design,
+/// and a card that simply vanished would leave a hole in the grid. An empty
+/// `template_name` on a disabled card is what guarantees a click cannot scaffold
+/// a template-less project — which yields a Content/ with no Main.nfscene and an
+/// editor that exits the moment it opens one.
+inline constexpr std::array<LauncherTemplateCard, 6> kLauncherTemplateCards{{
+    {"sh_tpl_nature", "sh_tpl_nature_desc", 0, false, ""},
+    {"sh_tpl_platformer", "sh_tpl_platformer_desc", 1, true, "Platformer2D"},
+    {"sh_tpl_arena", "sh_tpl_arena_desc", 2, true, "FPSStarter"},
+    {"sh_tpl_side", "sh_tpl_side_desc", 0, true, "ThirdPerson"},
+    {"sh_tpl_blank", "sh_tpl_blank_desc", 2, true, "Default"},
+    {"sh_tpl_marine", "sh_tpl_marine_desc", 1, false, ""},
+}};
 
 /// Shows the native launcher and blocks until the user picks a project, creates
 /// one, or quits. On a non-Windows build this returns `quit = true` immediately

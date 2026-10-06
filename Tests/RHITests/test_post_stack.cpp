@@ -14,9 +14,15 @@
 
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Test/TestFramework.hpp>
+#include <NF/ECS/ECS.hpp>
 #include <NF/Rendering/Camera.hpp>
+#include <NF/Rendering/Components.hpp>
+#include <NF/Rendering/MeshLibrary.hpp>
 #include <NF/Rendering/Renderer3D.hpp>
 #include <NF/Rendering/RenderWorld.hpp>
+#include <NF/Rendering/StaticMesh.hpp>
+#include <NF/Runtime/SceneExtraction.hpp>
+#include <NF/Scene/Transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -105,6 +111,120 @@ bool render_empty_scene(rhi::IGraphicsDevice& dev, Renderer3D& renderer,
     return true;
 }
 
+/// One cube at the origin, so the depth buffer has a real surface to reproject.
+///
+/// `render_empty_scene` cannot show motion blur: with no geometry every depth is
+/// the far plane, the reprojection then reports zero velocity BY CONSTRUCTION,
+/// and a test built on it would pass with the whole stage deleted.
+bool render_cube_scene(rhi::IGraphicsDevice& dev, Renderer3D& renderer,
+                       u32 width, u32 height, const PostFxParams& params,
+                       const Camera& camera, std::vector<Pixel>& out_pixels) {
+    renderer.set_postfx(params);
+
+    MeshLibrary meshes;
+    auto cube = StaticMesh::create_cube(1.0f);
+    if (!cube || !cube->upload(dev)) return false;
+    const StaticMeshHandle handle = meshes.add(std::move(cube));
+    renderer.set_mesh_library(&meshes);
+
+    ecs::World world;
+    const ecs::Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    world.add<MeshComponent>(e, MeshComponent{handle, kInvalidMaterialHandle, true});
+    scene::propagate_transforms(world);
+
+    RenderWorld render_world;
+    nf::runtime::extract_render_objects(world, meshes, render_world);
+
+    rhi::TextureDesc target_desc{};
+    target_desc.width = width;
+    target_desc.height = height;
+    target_desc.format = rhi::Format::R8G8B8A8_UNorm;
+    target_desc.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::Sampled |
+                        rhi::ImageUsage::TransferSrc;
+    auto target = dev.create_texture(target_desc);
+    if (!target) return false;
+
+    auto cmd = dev.create_command_buffer();
+    auto fence = dev.create_fence(false);
+    if (!cmd || !fence) return false;
+
+    cmd->begin();
+    if (!renderer.render(*cmd, render_world, camera, *target)) return false;
+    rhi::BufferDesc rb_desc{};
+    rb_desc.size = usize(width) * height * 4;
+    rb_desc.usage = rhi::BufferUsage::TransferDst;
+    rb_desc.memory = rhi::MemoryUsage::GPUToCPU;
+    auto rb = dev.create_buffer(rb_desc);
+    if (!rb) return false;
+    cmd->copy_texture_to_buffer(*target, *rb, 0, 0, width, height, 0);
+    cmd->end();
+    dev.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+    if (!fence->wait(kGpuTimeoutNs)) return false;
+    dev.wait_idle();
+
+    auto* px = static_cast<Pixel*>(rb->map());
+    if (!px) return false;
+    out_pixels.assign(px, px + usize(width) * height);
+    rb->unmap();
+    // The library is about to die, so leave the renderer with no stale pointer.
+    renderer.set_mesh_library(nullptr);
+    return true;
+}
+
+/// Uploads a `kLutSize^3` strip and hands back its view, so a test can bind a
+/// REAL LUT rather than only exercising the "no LUT bound" path.
+std::unique_ptr<rhi::Texture> upload_lut(rhi::IGraphicsDevice& dev, const std::vector<u8>& rgba,
+                                        std::unique_ptr<rhi::TextureView>& out_view) {
+    rhi::TextureDesc td{};
+    td.width = rendering::kLutSize * rendering::kLutSize;
+    td.height = rendering::kLutSize;
+    td.format = rhi::Format::R8G8B8A8_UNorm;
+    td.usage = rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferDst;
+    auto tex = dev.create_texture(td);
+    if (!tex) return nullptr;
+    rhi::BufferDesc bd{};
+    bd.size = rgba.size();
+    bd.usage = rhi::BufferUsage::TransferSrc;
+    bd.memory = rhi::MemoryUsage::CPUToGPU;
+    auto staging = dev.create_buffer(bd);
+    if (!staging) return nullptr;
+    staging->update(rgba.data(), 0, rgba.size());
+    if (auto upload = dev.create_upload_context()) {
+        upload->copy_buffer_to_texture(*staging, *tex, 0, 0, 0, td.width, td.height);
+        if (auto fence = upload->submit()) {
+            fence->wait();
+        }
+    }
+    auto cmd = dev.create_command_buffer();
+    auto fence = dev.create_fence(false);
+    if (!cmd || !fence) return nullptr;
+    cmd->begin();
+    cmd->transition_texture_for_sampling(*tex);
+    cmd->end();
+    dev.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+    if (!fence->wait(kGpuTimeoutNs)) return nullptr;
+    rhi::TextureViewDesc vd{};
+    vd.texture = tex.get();
+    out_view = dev.create_texture_view(vd);
+    if (!out_view) return nullptr;
+    return tex;
+}
+
+/// A `kLutSize^3` strip where every texel is the same colour.
+std::vector<u8> constant_lut(u8 r, u8 g, u8 b) {
+    std::vector<u8> rgba(static_cast<usize>(rendering::kLutSize) * rendering::kLutSize *
+                             rendering::kLutSize * 4u,
+                         0);
+    for (usize i = 0; i < rgba.size(); i += 4) {
+        rgba[i] = r;
+        rgba[i + 1] = g;
+        rgba[i + 2] = b;
+        rgba[i + 3] = 255;
+    }
+    return rgba;
+}
+
 /// Number of pixels that differ by more than `tolerance` in any channel.
 u32 count_different_pixels(const std::vector<Pixel>& a, const std::vector<Pixel>& b,
                            u8 tolerance = 4) {
@@ -152,6 +272,16 @@ NF_TEST(post_stack_default_params_are_neutral) {
     NF_CHECK_NEAR(p.grade.gamma, 1.0f, 1e-6f);
     NF_CHECK(!p.sharpen.enabled);
     NF_CHECK_NEAR(p.sharpen.amount, 0.0f, 1e-6f);
+    NF_CHECK(!p.lens.enabled);
+    NF_CHECK_NEAR(p.lens.distortion, 0.0f, 1e-6f);
+    NF_CHECK_NEAR(p.lens.chromatic_aberration, 0.0f, 1e-6f);
+    NF_CHECK(!p.dof.enabled);
+    NF_CHECK_NEAR(p.dof.max_radius, 6.0f, 1e-6f);
+    NF_CHECK(p.dof.focus_range > 0.0f);
+    NF_CHECK(!p.motion.enabled);
+    NF_CHECK_NEAR(p.motion.intensity, 1.0f, 1e-6f);
+    NF_CHECK(p.motion.max_length > 0.0f);
+    NF_CHECK_NEAR(p.lut_strength, 0.0f, 1e-6f);
 }
 
 NF_TEST(post_stack_off_equals_the_legacy_path) {
@@ -502,6 +632,266 @@ NF_TEST(post_stack_grade_runs_before_the_tonemap) {
     NF_CHECK(std::abs(got.x - wrong_b.x) > 1e-3f);
 }
 
+NF_TEST(post_stack_lens_neutral_is_identity) {
+    // The golden-pixel contract for this stage: with the defaults, or with the
+    // box unchecked and the sliders moved, every channel must read the SAME
+    // coordinate. Anything else moves the whole image for a scene that never
+    // asked for a lens.
+    const LensParams off{};
+    for (Vec2 uv : {Vec2{0.0f, 0.0f}, Vec2{0.5f, 0.5f}, Vec2{1.0f, 1.0f}, Vec2{0.13f, 0.87f}}) {
+        for (int ch = 0; ch < 3; ++ch) {
+            const Vec2 got = lens_sample_uv(uv, off, ch);
+            NF_CHECK_NEAR(got.x, uv.x, 1e-7f);
+            NF_CHECK_NEAR(got.y, uv.y, 1e-7f);
+        }
+    }
+    LensParams unchecked{};
+    unchecked.enabled = false;
+    unchecked.distortion = 0.4f;
+    unchecked.chromatic_aberration = 0.05f;
+    for (int ch = 0; ch < 3; ++ch) {
+        const Vec2 got = lens_sample_uv(Vec2{0.9f, 0.2f}, unchecked, ch);
+        NF_CHECK_NEAR(got.x, 0.9f, 1e-7f);
+        NF_CHECK_NEAR(got.y, 0.2f, 1e-7f);
+    }
+}
+
+NF_TEST(post_stack_lens_distortion_moves_the_edges_out) {
+    LensParams p{};
+    p.enabled = true;
+    p.distortion = 0.5f;
+
+    // The centre is the fixed point of a radial warp: it must not move, or the
+    // whole image would shift as the slider moves.
+    const Vec2 centre = lens_sample_uv(Vec2{0.5f, 0.5f}, p, 1);
+    NF_CHECK_NEAR(centre.x, 0.5f, 1e-7f);
+    NF_CHECK_NEAR(centre.y, 0.5f, 1e-7f);
+
+    // A positive coefficient reads FURTHER out at the edges, which is what
+    // makes the image bow (barrel). Pincushion is the same test with the sign
+    // flipped, so both directions are pinned.
+    const Vec2 edge = lens_sample_uv(Vec2{1.0f, 0.5f}, p, 1);
+    NF_CHECK(edge.x > 1.0f);
+    NF_CHECK_NEAR(edge.y, 0.5f, 1e-7f);
+
+    p.distortion = -0.5f;
+    const Vec2 pinched = lens_sample_uv(Vec2{1.0f, 0.5f}, p, 1);
+    NF_CHECK(pinched.x < 1.0f);
+
+    // A zero coefficient is identity even with the stage enabled.
+    LensParams zero = p;
+    zero.distortion = 0.0f;
+    const Vec2 same = lens_sample_uv(Vec2{1.0f, 0.25f}, zero, 1);
+    NF_CHECK_NEAR(same.x, 1.0f, 1e-7f);
+    NF_CHECK_NEAR(same.y, 0.25f, 1e-7f);
+}
+
+NF_TEST(post_stack_lens_chroma_splits_red_out_and_blue_in) {
+    LensParams p{};
+    p.enabled = true;
+    p.chromatic_aberration = 0.02f;
+
+    // Red outward, blue inward, green untouched. Green is the anchor: a
+    // neutral grey pixel must stay neutral, so an implementation that moved all
+    // three channels would fringe every grey surface in the scene.
+    const Vec2 r = lens_sample_uv(Vec2{1.0f, 0.5f}, p, 0);
+    const Vec2 g = lens_sample_uv(Vec2{1.0f, 0.5f}, p, 1);
+    const Vec2 b = lens_sample_uv(Vec2{1.0f, 0.5f}, p, 2);
+    NF_CHECK(r.x > 1.0f);
+    NF_CHECK_NEAR(g.x, 1.0f, 1e-7f);
+    NF_CHECK(b.x < 1.0f);
+
+    // At the centre every channel agrees, so the fringing is zero there —
+    // which is what makes it read as a lens rather than as a colour shift.
+    for (int ch = 0; ch < 3; ++ch) {
+        const Vec2 c = lens_sample_uv(Vec2{0.5f, 0.5f}, p, ch);
+        NF_CHECK_NEAR(c.x, 0.5f, 1e-7f);
+        NF_CHECK_NEAR(c.y, 0.5f, 1e-7f);
+    }
+}
+
+NF_TEST(post_stack_lens_applies_distortion_before_chroma) {
+    // The order the two compose in is observable, so it is pinned: the chroma
+    // split is measured on the DISTORTED coordinate. Doing it the other way
+    // round gives a different number, and this test would accept either if it
+    // only checked "the value moved".
+    LensParams p{};
+    p.enabled = true;
+    p.distortion = 0.1f;
+    p.chromatic_aberration = 0.02f;
+
+    const Vec2 got = lens_sample_uv(Vec2{1.0f, 0.5f}, p, 0); // red
+    // distortion: c=(0.5,0), r2=0.25, scale=1+0.1*0.25=1.025 -> x=1.0125
+    // then chroma on that: c=(0.5125,0), scale=1.02 -> x=0.5+0.5125*1.02
+    const float want = 0.5f + 0.5125f * 1.02f;
+    NF_CHECK_NEAR(got.x, want, 1e-5f);
+
+    // The other order: chroma first (x=1.01), then distortion on that.
+    const float other = 0.5f + (1.01f - 0.5f) * (1.0f + 0.1f * ((1.01f - 0.5f) * (1.01f - 0.5f)));
+    NF_CHECK(std::fabs(got.x - other) > 1e-5f);
+}
+
+NF_TEST(post_stack_dof_coc_is_zero_inside_the_focus_band) {
+    DofParams p{};
+    p.enabled = true;
+    p.focus_distance = 10.0f;
+    p.focus_range = 2.0f;
+    p.max_radius = 8.0f;
+
+    // Exactly at the focus distance nothing is confused, and the ramp is
+    // SYMMETRIC: a surface nearer than the focus plane blurs exactly as much as
+    // one further away, which is what makes the focus plane a plane.
+    NF_CHECK_NEAR(dof_coc(10.0f, p), 0.0f, 1e-6f);
+    NF_CHECK_NEAR(dof_coc(9.0f, p), dof_coc(11.0f, p), 1e-6f);
+    NF_CHECK_NEAR(dof_coc(6.0f, p), dof_coc(14.0f, p), 1e-6f);
+
+    // The confusion rises linearly with distance from the focus plane: half way
+    // to the full ramp is half the radius.
+    NF_CHECK_NEAR(dof_coc(11.0f, p), 4.0f, 1e-5f);
+    // At `focus_distance +/- focus_range` the ramp is SATURATED, and beyond it
+    // it clamps — a blur that kept growing would spend samples on a radius the
+    // frame cannot resolve. `focus_range` is therefore "the distance at which
+    // the blur reaches its maximum", not the half-width of a sharp band.
+    NF_CHECK_NEAR(dof_coc(12.0f, p), 8.0f, 1e-5f);
+    NF_CHECK_NEAR(dof_coc(8.0f, p), 8.0f, 1e-5f);
+    NF_CHECK_NEAR(dof_coc(1000.0f, p), 8.0f, 1e-5f);
+}
+
+NF_TEST(post_stack_dof_off_is_exactly_zero_confusion) {
+    // The golden-pixel contract. Disabled, or enabled with a zero radius, every
+    // depth must give a zero circle of confusion — which is what makes the
+    // gather return its own centre and the stage free when unused.
+    DofParams off{};
+    for (float d : {0.0f, 1.0f, 10.0f, 1.0e30f}) {
+        NF_CHECK_NEAR(dof_coc(d, off), 0.0f, 1e-6f);
+    }
+    DofParams zero_radius{};
+    zero_radius.enabled = true;
+    zero_radius.max_radius = 0.0f;
+    for (float d : {0.0f, 1.0f, 10.0f, 1.0e30f}) {
+        NF_CHECK_NEAR(dof_coc(d, zero_radius), 0.0f, 1e-6f);
+    }
+    // A zero focus range would divide by zero. It is refused rather than read as
+    // "everything is sharp": a band of no width has no focus plane in it, and
+    // treating that as a no-op would hide the author's mistake.
+    DofParams zero_range{};
+    zero_range.enabled = true;
+    zero_range.focus_range = 0.0f;
+    NF_CHECK_NEAR(dof_coc(10.0f, zero_range), 0.0f, 1e-6f);
+    NF_CHECK_NEAR(dof_coc(1000.0f, zero_range), 0.0f, 1e-6f);
+}
+
+NF_TEST(post_stack_motion_smear_is_zero_for_a_still_camera) {
+    // The golden contract, and the reason the stage costs nothing in a still
+    // frame: reprojecting with the SAME view-projection lands on the same pixel.
+    const Mat4 vp = make_camera(3.0f, 1.0f).view_projection;
+    const Mat4 inv = vp.inverse();
+    MotionBlurParams p{};
+    p.enabled = true;
+    p.intensity = 1.0f;
+    p.max_length = 0.05f;
+    for (float depth : {0.1f, 0.5f, 0.9f, 1.0f}) {
+        for (Vec2 uv : {Vec2{0.5f, 0.5f}, Vec2{0.1f, 0.8f}}) {
+            const Vec2 s = motion_smear(uv, depth, inv, vp, p);
+            NF_CHECK_NEAR(s.x, 0.0f, 1e-5f);
+            NF_CHECK_NEAR(s.y, 0.0f, 1e-5f);
+        }
+    }
+    // Disabled is zero no matter how far the camera travelled.
+    MotionBlurParams off{};
+    const Mat4 moved = make_camera(9.0f, 1.0f).view_projection;
+    const Vec2 s = motion_smear(Vec2{0.5f, 0.5f}, 0.5f, inv, moved, off);
+    NF_CHECK_NEAR(s.x, 0.0f, 1e-6f);
+    NF_CHECK_NEAR(s.y, 0.0f, 1e-6f);
+}
+
+NF_TEST(post_stack_motion_smear_follows_the_reprojection) {
+    const Camera a = make_camera(3.0f, 1.0f);
+    const Camera b = make_camera(6.0f, 1.0f);
+    MotionBlurParams p{};
+    p.enabled = true;
+    p.intensity = 1.0f;
+    p.max_length = 10.0f; // effectively no cap, so the raw reprojection shows
+    const Vec2 uv{0.9f, 0.5f};
+    const Vec2 prev = motion_prev_uv(uv, 0.5f, a.view_projection.inverse(), b.view_projection);
+    const Vec2 s = motion_smear(uv, 0.5f, a.view_projection.inverse(), b.view_projection, p);
+
+    // The smear IS the reprojected difference: same direction, same magnitude
+    // when the intensity is 1 and the cap does not bite.
+    NF_CHECK(std::sqrt((prev.x - uv.x) * (prev.x - uv.x) + (prev.y - uv.y) * (prev.y - uv.y)) > 1e-4f);
+    NF_CHECK_NEAR(s.x, uv.x - prev.x, 1e-6f);
+    NF_CHECK_NEAR(s.y, uv.y - prev.y, 1e-6f);
+    // The camera came CLOSER between the two frames — b (z=6) is the previous
+    // one, a (z=3) the current — so a point off-centre moved OUTWARD, away from
+    // the centre of the frame, and the smear points that way. Pinning the sign
+    // is what catches an inverted reprojection, which would smear the frame the
+    // wrong way while still "doing something".
+    NF_CHECK(prev.x < uv.x);
+    NF_CHECK(s.x > 0.0f);
+    NF_CHECK_NEAR(s.y, 0.0f, 1e-4f); // the move is along the view axis
+}
+
+NF_TEST(post_stack_motion_smear_is_capped) {
+    // A camera that teleports must smear by a bounded amount instead of
+    // stretching one frame across the screen.
+    const Camera a = make_camera(1.0f, 1.0f);
+    const Camera b = make_camera(500.0f, 1.0f);
+    MotionBlurParams p{};
+    p.enabled = true;
+    p.intensity = 4.0f;
+    p.max_length = 0.02f;
+    const Vec2 s = motion_smear(Vec2{0.95f, 0.5f}, 0.2f, a.view_projection.inverse(),
+                                b.view_projection, p);
+    const float len = std::sqrt(s.x * s.x + s.y * s.y);
+    NF_CHECK(len <= 0.02f + 1e-6f);
+    NF_CHECK(len > 0.0f);
+}
+
+NF_TEST(post_stack_lut_zero_strength_is_identity) {
+    // The golden contract: at strength 0 the LUT is not read at all, whatever
+    // is in the buffer — including a buffer of the wrong size.
+    const std::vector<u8> lut = constant_lut(255, 0, 0);
+    for (Vec3 c : {Vec3{0.2f, 0.5f, 0.8f}, Vec3{0.0f, 0.0f, 0.0f}, Vec3{1.0f, 1.0f, 1.0f}}) {
+        const Vec3 got = apply_color_lut(c, lut, 0.0f);
+        NF_CHECK_NEAR(got.x, c.x, 1e-6f);
+        NF_CHECK_NEAR(got.y, c.y, 1e-6f);
+        NF_CHECK_NEAR(got.z, c.z, 1e-6f);
+    }
+    // A LUT of the wrong size is ignored rather than read out of bounds.
+    const std::vector<u8> tiny{1, 2, 3, 4};
+    const Vec3 got = apply_color_lut(Vec3{0.3f, 0.4f, 0.5f}, tiny, 1.0f);
+    NF_CHECK_NEAR(got.x, 0.3f, 1e-6f);
+    NF_CHECK_NEAR(got.y, 0.4f, 1e-6f);
+    NF_CHECK_NEAR(got.z, 0.5f, 1e-6f);
+}
+
+NF_TEST(post_stack_lut_constant_lut_replaces_the_colour) {
+    // A constant LUT is the case where the CPU's nearest-texel approximation and
+    // the shader's bilinear fetch agree EXACTLY, so it is the one a mirror test
+    // can assert equality on.
+    const std::vector<u8> lut = constant_lut(255, 128, 0);
+    for (Vec3 c : {Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.4f, 0.6f, 0.9f}, Vec3{1.0f, 1.0f, 1.0f}}) {
+        const Vec3 got = apply_color_lut(c, lut, 1.0f);
+        NF_CHECK_NEAR(got.x, 1.0f, 2e-3f);
+        NF_CHECK_NEAR(got.y, 128.0f / 255.0f, 2e-3f);
+        NF_CHECK_NEAR(got.z, 0.0f, 2e-3f);
+    }
+    // The strength is a blend, so half strength lands half way.
+    const Vec3 half = apply_color_lut(Vec3{0.2f, 0.2f, 0.2f}, lut, 0.5f);
+    NF_CHECK_NEAR(half.x, 0.6f, 5e-3f); // 0.2 -> 1.0, half way
+    NF_CHECK_NEAR(half.z, 0.1f, 5e-3f); // 0.2 -> 0.0, half way
+}
+
+NF_TEST(post_stack_lut_clamps_its_input) {
+    // The cube only covers [0, 1], and an HDR pixel is routinely outside it, so
+    // the lookup clamps rather than reading a texel that does not exist.
+    const std::vector<u8> lut = constant_lut(10, 20, 30);
+    const Vec3 got = apply_color_lut(Vec3{9.0f, -3.0f, 4.0f}, lut, 1.0f);
+    NF_CHECK_NEAR(got.x, 10.0f / 255.0f, 2e-3f);
+    NF_CHECK_NEAR(got.y, 20.0f / 255.0f, 2e-3f);
+    NF_CHECK_NEAR(got.z, 30.0f / 255.0f, 2e-3f);
+}
+
 NF_TEST(post_stack_bloom_is_added_after_sharpening) {
     // The order inside the HDR block matters too: sharpen first, then the
     // bloom add, so the glow is not itself sharpened into a hard ring.
@@ -676,5 +1066,241 @@ NF_TEST(post_stack_bloom_changes_the_rendered_image) {
         sum_with += u64(with[i].r) + with[i].g + with[i].b;
     }
     NF_CHECK(sum_with > sum_without);
+    renderer.shutdown();
+}
+
+NF_TEST(post_stack_lens_changes_the_rendered_image) {
+    // The end-to-end claim: not "the push block has two more floats" but "the
+    // warp is in the pixels". The scene is empty and the sky fills the frame
+    // with a vertical gradient, so a radial warp has to move a large part of
+    // it.
+    const GpuFixture& f = require_gpu();
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+
+    Renderer3D renderer;
+    if (!renderer.init(*f.device, basic3d_shader_dir(), 64, 64)) {
+        NF_CHECK(false);
+        return;
+    }
+
+    std::vector<Pixel> without;
+    PostFxParams off{};
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, off, without));
+
+    // Enabled with both coefficients at zero must be pixel-IDENTICAL. This is
+    // the "an unchecked box and a slider at zero agree" contract, and it is the
+    // one an implementation that always took the three-tap fetch path — or that
+    // applied a warp unconditionally — would break.
+    std::vector<Pixel> enabled_neutral;
+    PostFxParams neutral{};
+    neutral.lens.enabled = true;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, neutral, enabled_neutral));
+    NF_CHECK_EQ(without.size(), enabled_neutral.size());
+    NF_CHECK(count_different_pixels(without, enabled_neutral, 0) == 0);
+
+    // Distortion only, so the centre's invariance is not muddied by the chroma
+    // split (which touches even a near-centre texel).
+    std::vector<Pixel> warped;
+    PostFxParams on{};
+    on.lens.enabled = true;
+    on.lens.distortion = 0.35f;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, on, warped));
+
+    NF_CHECK_EQ(without.size(), warped.size());
+    const u32 different = count_different_pixels(without, warped, 4);
+    NF_CHECK(different > without.size() / 8);
+
+    // The centre is the warp's fixed point: it must survive. A centre that
+    // moved would mean the image SHIFTED rather than bowed.
+    const auto at = [](const std::vector<Pixel>& v, u32 w, u32 x, u32 y) -> const Pixel& {
+        return v[static_cast<usize>(y) * w + x];
+    };
+    const Pixel& c0 = at(without, 64, 32, 32);
+    const Pixel& c1 = at(warped, 64, 32, 32);
+    NF_CHECK(std::abs(int(c0.r) - int(c1.r)) <= 2);
+    NF_CHECK(std::abs(int(c0.g) - int(c1.g)) <= 2);
+    NF_CHECK(std::abs(int(c0.b) - int(c1.b)) <= 2);
+
+    // And the corner must move, or nothing was warped at all.
+    const Pixel& e0 = at(without, 64, 1, 1);
+    const Pixel& e1 = at(warped, 64, 1, 1);
+    NF_CHECK(std::abs(int(e0.r) - int(e1.r)) > 2 || std::abs(int(e0.g) - int(e1.g)) > 2 ||
+             std::abs(int(e0.b) - int(e1.b)) > 2);
+
+    renderer.shutdown();
+}
+
+NF_TEST(post_stack_dof_changes_the_rendered_image) {
+    // The end-to-end claim: not "the layout has two more bindings" but "the
+    // blur is in the pixels, and it is driven by DEPTH".
+    //
+    // The scene is empty, so the depth buffer is the clear value everywhere —
+    // which the shader reads as "the sky, very far away". That gives two
+    // deterministic cases without needing geometry: focus the camera on that
+    // distance and nothing is confused; focus it near and the whole frame is.
+    const GpuFixture& f = require_gpu();
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+
+    Renderer3D renderer;
+    if (!renderer.init(*f.device, basic3d_shader_dir(), 64, 64)) {
+        NF_CHECK(false);
+        return;
+    }
+
+    std::vector<Pixel> without;
+    PostFxParams off{};
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, off, without));
+
+    // Enabled with a zero radius must be pixel-IDENTICAL: that is the stage's
+    // own off switch, and the reason the renderer can disable it by folding the
+    // flag into one value.
+    std::vector<Pixel> enabled_neutral;
+    PostFxParams neutral{};
+    neutral.dof.enabled = true;
+    neutral.dof.max_radius = 0.0f;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, neutral, enabled_neutral));
+    NF_CHECK_EQ(without.size(), enabled_neutral.size());
+    NF_CHECK(count_different_pixels(without, enabled_neutral, 0) == 0);
+
+    // Focused ON the far plane: every circle of confusion is zero, so the frame
+    // must be identical again. This is the half that proves the blur is depth
+    // driven rather than unconditional — an implementation that always blurred
+    // would fail here while passing the "enabled with radius 0" case.
+    std::vector<Pixel> focused_far;
+    PostFxParams far_focus{};
+    far_focus.dof.enabled = true;
+    far_focus.dof.focus_distance = 1.0e30f; // the sky's reported distance
+    far_focus.dof.focus_range = 1.0f;
+    far_focus.dof.max_radius = 8.0f;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, far_focus, focused_far));
+    NF_CHECK_EQ(without.size(), focused_far.size());
+    NF_CHECK(count_different_pixels(without, focused_far, 0) == 0);
+
+    // Focused NEAR: the whole frame is at full confusion, so the sky gradient
+    // and its horizon must visibly change.
+    std::vector<Pixel> blurred;
+    PostFxParams near_focus{};
+    near_focus.dof.enabled = true;
+    near_focus.dof.focus_distance = 10.0f;
+    near_focus.dof.focus_range = 2.0f;
+    near_focus.dof.max_radius = 12.0f;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, near_focus, blurred));
+
+    NF_CHECK_EQ(without.size(), blurred.size());
+    const u32 different = count_different_pixels(without, blurred, 4);
+    NF_CHECK(different > 0);
+
+    renderer.shutdown();
+}
+
+NF_TEST(post_stack_motion_blur_changes_the_rendered_image) {
+    // The end-to-end claim, and the one that needs GEOMETRY: with an empty scene
+    // every depth is the far plane, the reprojection reports zero velocity by
+    // construction, and a test built on it would pass with the stage deleted.
+    const GpuFixture& f = require_gpu();
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+
+    Renderer3D renderer;
+    if (!renderer.init(*f.device, basic3d_shader_dir(), 64, 64)) {
+        NF_CHECK(false);
+        return;
+    }
+
+    const Camera near_cam = make_camera(3.0f, 1.0f);
+    const Camera far_cam = make_camera(5.0f, 1.0f);
+
+    PostFxParams off{};
+    PostFxParams on{};
+    on.motion.enabled = true;
+    on.motion.intensity = 1.0f;
+    on.motion.max_length = 0.05f;
+
+    // A STILL camera must be pixel-identical with the stage enabled: the
+    // reprojection lands on the same pixel, so there is nothing to smear.
+    std::vector<Pixel> warm, still_a, still_b;
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, off, near_cam, warm));
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, off, near_cam, still_a));
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, on, near_cam, still_b));
+    NF_CHECK_EQ(still_a.size(), still_b.size());
+    NF_CHECK(count_different_pixels(still_a, still_b, 0) == 0);
+
+    // A camera that MOVED. The baseline and the blurred frame must share the
+    // same history, so the camera is returned to `near_cam` before each
+    // `far_cam` render — otherwise the second one would see a still camera and
+    // correctly do nothing.
+    std::vector<Pixel> baseline, blurred;
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, off, near_cam, warm));
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, off, far_cam, baseline));
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, off, near_cam, warm));
+    NF_CHECK(render_cube_scene(*f.device, renderer, 64, 64, on, far_cam, blurred));
+    NF_CHECK_EQ(baseline.size(), blurred.size());
+    NF_CHECK(count_different_pixels(baseline, blurred, 4) > 0);
+
+    renderer.shutdown();
+}
+
+NF_TEST(post_stack_color_lut_changes_the_rendered_image) {
+    // The end-to-end claim for the last §206 stage, and the one that has to
+    // BIND A REAL TEXTURE: the "no LUT bound" path is already identity by
+    // construction, so a test that only exercised it would pass with the whole
+    // stage deleted.
+    const GpuFixture& f = require_gpu();
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+
+    Renderer3D renderer;
+    if (!renderer.init(*f.device, basic3d_shader_dir(), 64, 64)) {
+        NF_CHECK(false);
+        return;
+    }
+
+    std::vector<Pixel> without;
+    PostFxParams off{};
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, off, without));
+
+    // An authored strength with NO LUT bound must be pixel-IDENTICAL. The slot
+    // holds the renderer's 1x1 white texture, so without the push folding the
+    // strength to 0 this would grade the whole frame toward white.
+    std::vector<Pixel> strength_only;
+    PostFxParams on{};
+    on.lut_strength = 1.0f;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, on, strength_only));
+    NF_CHECK_EQ(without.size(), strength_only.size());
+    NF_CHECK(count_different_pixels(without, strength_only, 0) == 0);
+
+    // Bind a real LUT: constant red, so every input lands on red.
+    std::unique_ptr<rhi::TextureView> lut_view;
+    auto lut_tex = upload_lut(*f.device, constant_lut(255, 0, 0), lut_view);
+    NF_CHECK(lut_tex != nullptr);
+    NF_CHECK(lut_view != nullptr);
+    if (!lut_tex || !lut_view) {
+        renderer.shutdown();
+        return;
+    }
+    renderer.set_color_lut(lut_view.get());
+    NF_CHECK(renderer.has_color_lut());
+
+    // Bound but at strength 0: still exactly identity.
+    std::vector<Pixel> bound_off;
+    PostFxParams bound_off_params{};
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, bound_off_params, bound_off));
+    NF_CHECK(count_different_pixels(without, bound_off, 0) == 0);
+
+    // Bound AND applied: the frame is graded toward the LUT.
+    std::vector<Pixel> graded;
+    NF_CHECK(render_empty_scene(*f.device, renderer, 64, 64, on, graded));
+    NF_CHECK_EQ(without.size(), graded.size());
+    NF_CHECK(count_different_pixels(without, graded, 4) > without.size() / 2);
+
+    // And it is RED-dominant now, which a stage that merely "changed something"
+    // would not be.
+    u64 r_sum = 0, g_sum = 0;
+    for (const Pixel& p : graded) {
+        r_sum += p.r;
+        g_sum += p.g;
+    }
+    NF_CHECK(r_sum > g_sum);
+
+    renderer.clear_color_lut();
+    NF_CHECK(!renderer.has_color_lut());
     renderer.shutdown();
 }

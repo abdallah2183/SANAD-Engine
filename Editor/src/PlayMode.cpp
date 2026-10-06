@@ -153,23 +153,48 @@ bool scenes_equal_structure(const scene::Scene& a, const scene::Scene& b, std::s
         out_diff = "entity count differs";
         return false;
     }
-    // Index b by name (names are unique in editor-managed scenes).
-    std::unordered_map<std::string, ecs::Entity> by_name_b;
+    // The comparison key for an entity: its authored name, or a positional
+    // fallback for an entity that has none.
+    //
+    // `#<id>` is a WEAK key — the live and reloaded scenes do not have to agree
+    // on ids — but it can only ever apply to an entity that is unnamed in BOTH
+    // scenes, which the editor path cannot produce: Runtime assigns a
+    // NameComponent to every entity that lacks one, so there is always a name to
+    // key on. It is kept for the raw-scene callers (tests) that build a world by
+    // hand.
+    const auto key_of = [](const scene::Scene& s, ecs::Entity e) {
+        const auto* n = s.world().get<scene::NameComponent>(e);
+        return (n != nullptr && !n->name.empty()) ? n->name : ("#" + std::to_string(e.id));
+    };
+
+    // Index b by name into a LIST, not a single entity — names are NOT unique.
+    // Runtime synthesizes a name from the entity's KIND for every entity with no
+    // `Name:` line, so a scene with two meshes is a scene with two entities both
+    // called "Mesh" (Panels.cpp already works around the same collision for its
+    // ground-plane glyph). Keeping only the last one, which this used to do,
+    // paired every live "Mesh" against the LAST saved "Mesh": a scene that
+    // round-tripped perfectly reported "transform values differ for 'Mesh'" and
+    // the editor exited 1, sending the reader to the serializer to hunt a
+    // corruption that was never there.
+    std::unordered_map<std::string, std::vector<ecs::Entity>> by_name_b;
     for (ecs::Entity e : blist) {
-        const auto* n = b.world().get<scene::NameComponent>(e);
-        const std::string key = (n != nullptr && !n->name.empty()) ? n->name : ("#"+std::to_string(e.id));
-        by_name_b[key] = e;
+        by_name_b[key_of(b, e)].push_back(e);
     }
+    // How many entities of each name b has already been paired. The Nth entity
+    // with a given name in `a` pairs with the Nth with that name in `b`, which
+    // is the right pairing: both lists come from the same file order and a
+    // re-save cannot reorder what the loader wrote in order. A cursor rather
+    // than erase-from-front keeps a 2000-entity scene linear.
+    std::unordered_map<std::string, std::size_t> paired;
     for (ecs::Entity ea : alist) {
-        const auto* na = a.world().get<scene::NameComponent>(ea);
-        const std::string key =
-            (na != nullptr && !na->name.empty()) ? na->name : ("#" + std::to_string(ea.id));
+        const std::string key = key_of(a, ea);
         auto it = by_name_b.find(key);
-        if (it == by_name_b.end()) {
+        std::size_t& taken = paired[key];
+        if (it == by_name_b.end() || taken >= it->second.size()) {
             out_diff = "entity '" + key + "' missing in second scene";
             return false;
         }
-        ecs::Entity eb = it->second;
+        ecs::Entity eb = it->second[taken++];
         if (signature_of(a.world(), ea) != signature_of(b.world(), eb)) {
             out_diff = "component set differs for '" + key + "'";
             return false;

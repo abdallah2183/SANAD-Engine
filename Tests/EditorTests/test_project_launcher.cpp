@@ -12,11 +12,14 @@
 
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Editor/ProjectLauncher.hpp>
+#include <NF/Project/ProjectScaffold.hpp>
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace nf;
@@ -225,4 +228,54 @@ NF_TEST(launcher_search_is_case_insensitive_substring) {
     NF_CHECK(project_matches_search("C:/games/SandRunner/SandRunner.nfproj", "Runner"));
     NF_CHECK(!project_matches_search("C:/games/SandRunner/SandRunner.nfproj", "oasis"));
     NF_CHECK(!project_matches_search("C:/games/SandRunner/SandRunner.nfproj", "sandrunnerx"));
+}
+
+// --- New Project template gallery ---------------------------------------------
+//
+// The gallery is a table of cards, and it has to agree with what the engine can
+// actually scaffold. Both directions of that agreement have shipped broken:
+// once with four real templates on disk and a single enabled card, and again
+// when FPSStarter stayed behind a "soon" ribbon while `nf new --template
+// FPSStarter` worked. Neither is a crash, which is why neither was noticed —
+// so both directions are pinned here rather than trusted.
+
+NF_TEST(launcher_gallery_enabled_cards_name_real_templates) {
+    for (const LauncherTemplateCard& card : kLauncherTemplateCards) {
+        if (!card.enabled) {
+            // A disabled card must name NO template. An empty name is what makes
+            // the create path scaffold Default, which is what stops a stray
+            // click from producing a Content/ with no Main.nfscene.
+            if (card.template_name == nullptr || card.template_name[0] != '\0') {
+                throw std::runtime_error(
+                    "disabled gallery card '" + std::string(card.name_key) +
+                    "' names a template; it must be a placeholder with an empty name");
+            }
+            continue;
+        }
+        const bool known =
+            std::any_of(nf::project::kProjectTemplateNames.begin(),
+                        nf::project::kProjectTemplateNames.end(),
+                        [&](std::string_view n) { return n == card.template_name; });
+        if (!known) {
+            throw std::runtime_error(
+                "gallery card '" + std::string(card.name_key) + "' names template '" +
+                (card.template_name != nullptr ? card.template_name : "(null)") +
+                "', which the CLI does not accept");
+        }
+    }
+}
+
+NF_TEST(launcher_gallery_offers_every_real_template) {
+    for (std::string_view name : nf::project::kProjectTemplateNames) {
+        const bool offered = std::any_of(
+            kLauncherTemplateCards.begin(), kLauncherTemplateCards.end(),
+            [&](const LauncherTemplateCard& c) {
+                return c.enabled && c.template_name != nullptr && name == c.template_name;
+            });
+        if (!offered) {
+            throw std::runtime_error("the engine can scaffold template '" +
+                                     std::string(name) +
+                                     "' but no enabled gallery card offers it");
+        }
+    }
 }

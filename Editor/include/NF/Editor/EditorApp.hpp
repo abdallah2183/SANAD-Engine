@@ -186,6 +186,17 @@ public:
                        std::string& out_err);
     bool set_audio(ecs::Entity e, const audio::AudioComponent& aud, std::string& out_err);
 
+    // --- Scene audio environment --------------------------------------------
+    // The level's reverb zone, music and ambience bed. Separate setters from
+    // set_audio because they are separate components: a scene can have a cave
+    // that echoes and no music. Each is add-or-replace with undo, and undo of
+    // the edit that FIRST created the component removes it, so a scene that
+    // never had the line round-trips to a file with no line.
+    bool set_reverb_zone(ecs::Entity e, const audio::ReverbZoneComponent& zone,
+                         std::string& out_err);
+    bool set_music(ecs::Entity e, const MusicEdit& edit, std::string& out_err);
+    bool set_ambience(ecs::Entity e, const AmbienceEdit& edit, std::string& out_err);
+
     // --- Gameplay modules (Phase 10) ----------------------------------------
     // Attaches a GameplayModuleComponent naming a registered module to `e`.
     // Re-attaching the module that is already there is a no-op rather than a

@@ -244,6 +244,21 @@ Full walkthrough (add-on install, export settings, round trip, current gaps):
 
 ---
 
+## Samples
+
+`Samples/` holds the engine's own demos. Two of them are worth calling out
+because they are the closest thing in the tree to a finished game:
+
+| Sample | What it shows |
+|---|---|
+| `NFSampleCliffStory` — **حكاية الجرف / The Cliff's Tale** | A complete 2D story-climb rendered through `NFScene2D`. 65 ledges, 32 flames, bats, spikes and lanterns; the background runs dusk → night as you climb; the story text is shaped Arabic. This is the only sample with a GPU path for the 2D layer (`Samples/CliffStory/Render2D.cpp`). See its own [`README.md`](Samples/CliffStory/README.md). |
+| `NFSampleVehicleDemo` | A real Jolt vehicle with visible wheels, a chase camera, golden gates and destructible crates. |
+
+Run any of them directly from `build/DebugNinja/bin/`; most accept `--frames N`
+to run a bounded number of frames and exit.
+
+---
+
 ## Project Roadmap
 
 - **Phase 1–11:** Core Engine Foundation (Completed)

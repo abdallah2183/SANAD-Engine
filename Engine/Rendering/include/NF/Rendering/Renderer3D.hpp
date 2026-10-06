@@ -220,6 +220,37 @@ struct SharpenParams {
     float radius = 1.0f;
 };
 
+/// Lens effects (§206): the two UV-space warps a real lens imposes on the
+/// image before it reaches the sensor.
+///
+/// Both are read from the SAME place, which is why they are one stage rather
+/// than two: the HDR is fetched at a warped coordinate, and chromatic
+/// aberration is the same warp applied per channel with a slightly different
+/// strength. Neither filters anything, so neither needs a neighbourhood — which
+/// is also what makes both exactly mirrorable on the CPU (see lens_sample_uv).
+///
+/// Every value's neutral is EXACTLY identity: with both at zero the fetch is
+/// `texture(hdr, uv)` and the frame is bit-for-bit what it was before the stage
+/// existed. The golden pixels depend on that.
+struct LensParams {
+    bool enabled = false;
+    /// Radial barrel/pincushion distortion, as a coefficient on r² (r measured
+    /// from the centre of the frame in half-extent units). Positive pulls the
+    /// edges OUT (barrel — the classic wide-angle bow), negative pinches them
+    /// in (pincushion). 0 is no distortion.
+    ///
+    /// Applied to the FETCH coordinate, so the image moves opposite the
+    /// coefficient's name at the edges — the usual convention, and the one that
+    /// keeps 0 meaning "nothing happens".
+    float distortion = 0.0f;
+    /// Chromatic aberration: red is fetched slightly further out than blue, so
+    /// a high-contrast edge splits into a warm/cool fringe. Expressed as a
+    /// fraction of the radial distance, so it scales with the frame and a value
+    /// of 0.01 is a subtle fringe. 0 is none. Green is never displaced, so a
+    /// neutral grey pixel stays neutral.
+    float chromatic_aberration = 0.0f;
+};
+
 // The whole §206 post stack, minus the stages that are separate renderer state
 // by history: exposure and the tonemap mode are their own setters because they
 // predate this struct and the golden pixels are pinned to their defaults.
@@ -233,12 +264,82 @@ struct SharpenParams {
 // `saturation` and `vignette` stay first so the aggregate initialisation
 // `PostFxParams{1.15f, 0.28f}` that samples and tests already use keeps
 // meaning what it meant.
+/// Depth of field (§206).
+///
+/// A linear circle-of-confusion ramp rather than a thin-lens model: the two
+/// things an author actually wants to set are WHERE the image is sharp and HOW
+/// WIDE the sharp band is, and a physical model would replace both with an
+/// aperture and a focal length that mean the same thing to nobody who is not a
+/// photographer.
+struct DofParams {
+    bool enabled = false;
+    /// World-space distance from the camera that stays in focus.
+    float focus_distance = 10.0f;
+    /// The distance over which the blur ramps from zero (at `focus_distance`)
+    /// to the full radius. Larger = more of the scene reads as sharp. At or
+    /// below zero the ramp would divide by zero, which is refused rather than
+    /// silently treated as "everything is sharp".
+    float focus_range = 2.0f;
+    /// Blur radius in output texels at full confusion. **0 is exactly "off"**,
+    /// and that is how the renderer disables the stage: `enabled` is folded
+    /// into this one value at push time, the way `bloom_on` folds the intensity.
+    /// The shader has no separate flag, so an off stage costs one compare.
+    float max_radius = 6.0f;
+};
+
+/// Tap count of the depth-of-field gather. Must match tonemap.frag's kDofTaps.
+inline constexpr int kDofTaps = 12;
+
+/// Motion blur (§206), from depth reprojection.
+///
+/// The velocity comes from reprojecting each pixel's world position through the
+/// PREVIOUS frame's view-projection, so this needs no velocity buffer and no
+/// extra gbuffer attachment — the depth target the depth-of-field stage already
+/// reads carries everything required.
+///
+/// It is therefore CAMERA motion blur: a surface's own movement is not in the
+/// depth buffer, so a fast object under a still camera does not smear.
+/// Per-object motion needs a velocity attachment the deferred path does not
+/// write, which is a renderer change rather than a post stage.
+struct MotionBlurParams {
+    bool enabled = false;
+    /// Multiplier on the reprojected velocity. **0 is exactly "off"**, and that
+    /// is how the renderer disables the stage: `enabled` is folded into it at
+    /// push time.
+    float intensity = 1.0f;
+    /// Cap on the smear, in uv units, so a camera that teleports smears by a
+    /// bounded amount instead of stretching one frame across the screen.
+    float max_length = 0.05f;
+};
+
+/// Tap count of the motion-blur smear. Must match tonemap.frag's kMotionTaps.
+inline constexpr int kMotionTaps = 8;
+
+/// Edge length of the colour-grading LUT: a `kLutSize^3` cube stored as a 2D
+/// strip `kLutSize` slices wide and `kLutSize` texels tall (`kLutSize*kLutSize`
+/// x `kLutSize`). Must match tonemap.frag's kLutSize.
+///
+/// A strip rather than a 3D texture because the RHI's sampled-image views are
+/// 2D; the shader does the slice blend itself, which costs one extra fetch and
+/// keeps the whole stage inside the texture format the rest of the engine
+/// already uploads.
+inline constexpr u32 kLutSize = 16;
+
 struct PostFxParams {
     float saturation = 1.0f; // 0 = grayscale, 1 = neutral, >1 = vivid
     float vignette = 0.0f;   // 0 = off .. 1 = strong corner darkening
+    /// How much of the colour-grading LUT to apply, 0..1. **0 is exactly "off"**:
+    /// the shader never reads the LUT texture, so a scene with no LUT — and a
+    /// renderer with no LUT bound — is bit-for-bit the frame it was before this
+    /// stage existed. The LUT texture itself arrives through
+    /// `set_color_lut()`; this is only the strength.
+    float lut_strength = 0.0f;
     BloomParams bloom{};
     ColorGradeParams grade{};
     SharpenParams sharpen{};
+    LensParams lens{};
+    DofParams dof{};
+    MotionBlurParams motion{};
 };
 
 /// CPU mirror of the tonemap operator (pre-gamma). Matches tonemap.frag
@@ -280,6 +381,54 @@ Vec3 unsharp_hdr(Vec3 center, Vec3 blurred, float amount);
 
 /// CPU mirror of the colour grade. Matches tonemap.frag's grade branch.
 Vec3 apply_color_grade(Vec3 hdr, const ColorGradeParams& params);
+
+/// CPU mirror of the colour-grading LUT stage. `rgba` is the `kLutSize^3` cube
+/// stored as a STRIP: `kLutSize` slices side by side, each `kLutSize` texels
+/// wide and `kLutSize` tall, row-major with a top-left origin — the layout
+/// `ImageDecode` produces and the shader reads. `strength` at 0 is exactly
+/// identity, and a LUT of the wrong size is ignored rather than read out of
+/// bounds.
+Vec3 apply_color_lut(Vec3 color, std::span<const u8> rgba, float strength);
+
+/// CPU mirror of the lens stage: the coordinate the HDR is FETCHED from for
+/// channel `channel` (0 = red, 1 = green, 2 = blue), after barrel distortion
+/// and chromatic aberration. Matches lens_sample_uv() in tonemap.frag.
+///
+/// This is a separate mirror from apply_post_chain on purpose: the lens stage
+/// rewrites WHERE the image is read from, and apply_post_chain receives the
+/// colour already fetched — it has no coordinate to warp. Keeping the two apart
+/// is what lets both be exact: with distortion and aberration at zero this
+/// returns `uv` unchanged for every channel, which is the identity the golden
+/// pixels rest on, and a test can pin that per channel.
+Vec2 lens_sample_uv(Vec2 uv, const LensParams& params, int channel);
+
+/// CPU mirror of the depth-of-field circle of confusion, in output texels.
+/// Matches dof_coc() in tonemap.frag: 0 inside the focus band, rising linearly
+/// to `max_radius` outside it, and 0 whenever the stage is off.
+///
+/// This is the part of the stage with the physics in it, so it is the part that
+/// is mirrored. The gather that consumes it needs a whole image (12 taps of
+/// depth and colour), which is why it is covered by a GPU test instead — the
+/// same split the bloom chain uses.
+float dof_coc(float view_depth, const DofParams& params);
+
+/// CPU mirror of the motion-blur reprojection: where the surface under `uv` was
+/// on the PREVIOUS frame's screen, in uv. Matches motion_prev_uv() in
+/// tonemap.frag.
+///
+/// `depth` is the raw depth-buffer value in [0, 1]; anything at the far plane
+/// (no surface, i.e. the sky) returns `uv` unchanged, because there is nothing
+/// to reproject. `inv_view_proj` is the current inverse and `prev_view_proj`
+/// the previous forward view-projection.
+Vec2 motion_prev_uv(Vec2 uv, float depth, const Mat4& inv_view_proj,
+                    const Mat4& prev_view_proj);
+
+/// CPU mirror of the smear the motion-blur stage actually applies: the
+/// reprojected velocity scaled by `intensity` and capped at `max_length`, in uv
+/// units. Zero whenever the stage is off — and, importantly, zero whenever the
+/// camera has not moved, which is what makes the stage free in a still frame.
+Vec2 motion_smear(Vec2 uv, float depth, const Mat4& inv_view_proj,
+                  const Mat4& prev_view_proj, const MotionBlurParams& params);
 
 /// CPU mirror of the whole tonemap.frag fragment body, in the shader's own
 /// order: sharpen -> bloom add -> exposure -> grade -> tonemap operator ->
@@ -413,6 +562,18 @@ public:
     void set_postfx(const PostFxParams& params) { m_postfx = params; }
     const PostFxParams& postfx() const { return m_postfx; }
 
+    /// The colour-grading LUT, as a 2D strip of `kLutSize^3` texels. NOT owned:
+    /// the caller keeps the view alive, and it must stay alive until the next
+    /// call — the runtime hands it the view it already caches for the path.
+    ///
+    /// Passing nullptr (or calling `clear_color_lut`) unbinds it, and the
+    /// renderer binds its own 1x1 white texture in the slot instead: an
+    /// unwritten binding is not a valid set, and the shader's `lut_strength`
+    /// guard means the substitute is then never sampled.
+    void set_color_lut(const rhi::TextureView* lut_view) { m_color_lut_view = lut_view; }
+    void clear_color_lut() { m_color_lut_view = nullptr; }
+    bool has_color_lut() const { return m_color_lut_view != nullptr; }
+
     /// True when the bloom chain is actually recorded this frame: the stage is
     /// enabled AND the shaders/pipelines for it came up. A device or a shader
     /// directory without bloom_*.spv leaves this false while everything else
@@ -512,7 +673,16 @@ public:
     /// Readback-friendly access to intermediate targets for tests. The depth
     /// target carries TransferSrc usage, so copy_texture_to_buffer works.
     rhi::Texture* depth_target() { return m_graph->get_texture(m_depth_handle); }
-    rhi::Texture* gbuffer_target(u32 index); // 0 = base color, 1 = normal, 2 = surface
+    /// 0 = base color, 1 = normal, 2 = surface, 3 = emissive radiance.
+    ///
+    /// Index 3 exists because the emission COLOUR had no home in the deferred
+    /// path: the material block has carried `emission.rgb` since it was written,
+    /// but the gbuffer had only three attachments and the lighting pass is
+    /// fullscreen with no per-object data, so `lighting.frag` multiplied the
+    /// ALBEDO by `emission_strength` and the colour was parsed, saved,
+    /// round-tripped and never read. A material with a dark base colour and a
+    /// bright emission therefore rendered black.
+    rhi::Texture* gbuffer_target(u32 index);
     rhi::Texture* hdr_target() { return m_graph->get_texture(m_hdr_handle); }
 
 private:
@@ -529,6 +699,17 @@ private:
     struct FrameUniforms {
         float inv_view_proj[16];
         float cam_pos_ambient[4];   // xyz camera, w ambient
+        // The PREVIOUS frame's view-projection, for the depth-reprojection
+        // motion blur. It sits here, next to the other per-frame camera data,
+        // rather than appended at the end: the tonemap pass declares a PREFIX of
+        // this block (a std140 block may do that), and a field at the far end
+        // would force it to redeclare the other forty floats.
+        //
+        // ⚠️ Its position must match brdf.glsl's `FrameUniforms` block exactly —
+        // every member after it moves, on BOTH sides. Inserting a field here
+        // without inserting it there silently misreads the directional light,
+        // the shadows and the sky.
+        float prev_view_proj[16];
         float dir_dir_enable[4];    // xyz direction, w enabled
         float dir_color_int[4];     // rgb color, a intensity
         // One world -> shadow-clip transform per cascade. A std140 mat4 array is
@@ -587,35 +768,44 @@ private:
         // float because std140 has no bools; the shader compares it.
         float fog_color[4];       // rgb haze tint, w unused
         float fog_params[4];      // x enabled, y start, z end, w unused
+        // Procedural clouds (P4 weather). APPENDED, so no field above it moves
+        // and the tonemap pass's 144-byte PREFIX of this block is unaffected.
+        // x = coverage, y = altitude, z = scale, w = time (hours).
+        float sky_cloud[4];
     };
     // Per-field offsets rather than one hand-summed total: a field inserted in
     // the middle shifts everything after it, and the sum only notices when the
     // shift happens to change the total. The named offsets say exactly which
     // field drifted, and where the shader expects it.
+    //
+    // `prev_view_proj` sits at 80 — deliberately in the middle, so the tonemap
+    // pass can declare a PREFIX of the block — and every offset below it moved
+    // by one mat4. Both sides (here and brdf.glsl) moved together.
     static_assert(offsetof(FrameUniforms, inv_view_proj) == 0);
     static_assert(offsetof(FrameUniforms, cam_pos_ambient) == 64);
-    static_assert(offsetof(FrameUniforms, dir_dir_enable) == 80);
-    static_assert(offsetof(FrameUniforms, dir_color_int) == 96);
-    static_assert(offsetof(FrameUniforms, light_view_proj) == 112);
-    static_assert(offsetof(FrameUniforms, shadow_params) == 368);
-    static_assert(offsetof(FrameUniforms, cascade_splits) == 384);
-    static_assert(offsetof(FrameUniforms, cascade_info) == 400);
-    static_assert(offsetof(FrameUniforms, cascade_bias) == 416);
-    static_assert(offsetof(FrameUniforms, cam_forward) == 432);
-    static_assert(offsetof(FrameUniforms, sky_zenith) == 448);
-    static_assert(offsetof(FrameUniforms, sky_horizon) == 464);
-    static_assert(offsetof(FrameUniforms, sky_ground) == 480);
-    static_assert(offsetof(FrameUniforms, sky_params) == 496);
-    static_assert(offsetof(FrameUniforms, sky_clear) == 512);
-    static_assert(offsetof(FrameUniforms, counts) == 528);
-    static_assert(offsetof(FrameUniforms, points) == 544);
+    static_assert(offsetof(FrameUniforms, prev_view_proj) == 80);
+    static_assert(offsetof(FrameUniforms, dir_dir_enable) == 144);
+    static_assert(offsetof(FrameUniforms, dir_color_int) == 160);
+    static_assert(offsetof(FrameUniforms, light_view_proj) == 176);
+    static_assert(offsetof(FrameUniforms, shadow_params) == 432);
+    static_assert(offsetof(FrameUniforms, cascade_splits) == 448);
+    static_assert(offsetof(FrameUniforms, cascade_info) == 464);
+    static_assert(offsetof(FrameUniforms, cascade_bias) == 480);
+    static_assert(offsetof(FrameUniforms, cam_forward) == 496);
+    static_assert(offsetof(FrameUniforms, sky_zenith) == 512);
+    static_assert(offsetof(FrameUniforms, sky_horizon) == 528);
+    static_assert(offsetof(FrameUniforms, sky_ground) == 544);
+    static_assert(offsetof(FrameUniforms, sky_params) == 560);
+    static_assert(offsetof(FrameUniforms, sky_clear) == 576);
+    static_assert(offsetof(FrameUniforms, counts) == 592);
+    static_assert(offsetof(FrameUniforms, points) == 608);
     static_assert(offsetof(FrameUniforms, spots) ==
-                  544 + kMaxPointLights * 48); // both are 16-byte aligned vec4s
+                  608 + kMaxPointLights * 48); // both are 16-byte aligned vec4s
     // The two light arrays are the last fields whose size depends on the LIGHT
     // limits; the local shadow block depends on the TILE count instead, so its
     // offsets are written as "after the light arrays" rather than as a number.
     static constexpr u32 kLocalShadowBlockOffset =
-        544 + kMaxPointLights * 48 + kMaxSpotLights * 64;
+        608 + kMaxPointLights * 48 + kMaxSpotLights * 64;
     static_assert(offsetof(FrameUniforms, local_shadow_view_proj) ==
                   kLocalShadowBlockOffset);
     static_assert(offsetof(FrameUniforms, local_shadow_params) ==
@@ -625,7 +815,8 @@ private:
         kLocalShadowBlockOffset + kLocalShadowTileCount * 80;
     static_assert(offsetof(FrameUniforms, fog_color) == kFogBlockOffset);
     static_assert(offsetof(FrameUniforms, fog_params) == kFogBlockOffset + 16);
-    static_assert(sizeof(FrameUniforms) == kFogBlockOffset + 32,
+    static_assert(offsetof(FrameUniforms, sky_cloud) == kFogBlockOffset + 32);
+    static_assert(sizeof(FrameUniforms) == kFogBlockOffset + 48,
                   "FrameUniforms must match the shader's std140 layout");
 
     rhi::IGraphicsDevice* m_device = nullptr;
@@ -714,6 +905,9 @@ private:
     RGTextureHandle m_gbuffer0_handle = kInvalidRGHandle;
     RGTextureHandle m_gbuffer1_handle = kInvalidRGHandle;
     RGTextureHandle m_gbuffer2_handle = kInvalidRGHandle;
+    // Emissive radiance (emission.rgb * emission_strength), already multiplied
+    // so the lighting pass only has to add it. See gbuffer_target().
+    RGTextureHandle m_gbuffer3_handle = kInvalidRGHandle;
     RGTextureHandle m_hdr_handle = kInvalidRGHandle;
     // The bloom mip chain, level 0 = half resolution. Graph-owned so the graph
     // transitions them, exactly like HDR; created at the same point in init/
@@ -722,7 +916,8 @@ private:
     RGTextureHandle m_bloom_handles[kBloomLevels] = {};
 
     std::unique_ptr<rhi::TextureView> m_gbuffer0_view, m_gbuffer1_view;
-    std::unique_ptr<rhi::TextureView> m_gbuffer2_view, m_gbuffer_depth_view;
+    std::unique_ptr<rhi::TextureView> m_gbuffer2_view, m_gbuffer3_view;
+    std::unique_ptr<rhi::TextureView> m_gbuffer_depth_view;
     std::unique_ptr<rhi::TextureView> m_hdr_view;
     std::unique_ptr<rhi::TextureView> m_bloom_views[kBloomLevels];
     std::unique_ptr<rhi::Sampler> m_sampler;
@@ -814,6 +1009,17 @@ private:
     float m_exposure = 1.0f;
     TonemapMode m_tonemap_mode = TonemapMode::Exponential;
     PostFxParams m_postfx{};
+    // The colour-grading LUT, owned by the CALLER (the runtime's texture cache).
+    // Null means none is bound, and the tonemap pass then binds the white
+    // texture in the slot.
+    const rhi::TextureView* m_color_lut_view = nullptr;
+    // The view-projection the PREVIOUS frame was rendered with, for the
+    // reprojection motion blur. `m_has_prev_view_proj` is false until a frame
+    // has been rendered, and the first frame then reports ZERO velocity rather
+    // than a jump from the identity matrix — which would smear the whole image
+    // on the frame a scene opens.
+    Mat4 m_prev_view_proj = Mat4::identity();
+    bool m_has_prev_view_proj = false;
     FogParams m_fog{};
     Stats m_stats;
     std::vector<float> m_lod_max_distances{40.0f, 100.0f, 250.0f};

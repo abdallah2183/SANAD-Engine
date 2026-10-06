@@ -138,6 +138,17 @@ add_executable(RuntimeTests
     # into the renderer (the integration half, without which the component is a
     # library nobody drives).
     RuntimeTests/test_runtime_post_process.cpp
+    # The exposure route the editor's Settings > Rendering section writes
+    # through: Runtime::renderer() is const by design, so without this narrow
+    # setter the editor could read exposure and never set it. Pins that the value
+    # reaches the renderer, and that a value which would poison the tonemap is
+    # refused rather than stored.
+    RuntimeTests/test_runtime_exposure.cpp
+    # The scene's audio environment: reverb zones, the level's music and its
+    # ambience bed. AudioScene and MusicSystem are unit-tested in isolation;
+    # this file proves the three `.nfscene` lines reach the LIVE mixer and that
+    # a new scene replaces the previous one's environment.
+    RuntimeTests/test_runtime_scene_audio.cpp
     RuntimeTests/test_runtime_audio_import.cpp
     # The Rule 0 file: destruction's arithmetic world (DestructionTests) and its
     # Jolt sink (PhysicsTests) are both unit-tested in isolation. This one proves
@@ -478,6 +489,11 @@ if(NF_BUILD_EDITOR)
         TestFramework.cpp
         EditorTests/test_outliner.cpp
         EditorTests/test_inspector.cpp
+        # The editor path for the scene audio environment (reverb zone / music /
+        # ambience): command-level cases with no device, plus the EditorApp case
+        # that proves a music path is resolved through the VFS and that an
+        # unchanged path keeps the samples already decoded.
+        EditorTests/test_audio_env_editor.cpp
         EditorTests/test_undo_redo.cpp
         EditorTests/test_delete_selection.cpp
         EditorTests/test_asset_filter.cpp
@@ -509,7 +525,13 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_ide_open.cpp
         EditorTests/test_transform_gizmo.cpp
     )
-    target_include_directories(EditorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_include_directories(EditorTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        # test_project_launcher.cpp pins the New Project gallery against the
+        # CLI's own template allow-list (NF/Project/ProjectScaffold.hpp) so the
+        # two cannot drift into offering different content. Header-only, so the
+        # include path is all that is needed — no link to NFProjectTool.
+        "${CMAKE_SOURCE_DIR}/Tools/ProjectTool/include")
     target_link_libraries(EditorTests PRIVATE NFCore NFEditorCore NFAssets NFRHI NFRendering NFGameplay NFScripting NFVfx NFUI)
     target_compile_definitions(EditorTests PRIVATE
         "NF_EDITOR_IMGUI_SHADER_DIR=\"${NF_EDITOR_IMGUI_SHADER_DIR}\""

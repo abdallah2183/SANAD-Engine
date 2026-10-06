@@ -117,6 +117,10 @@ void Runtime::shutdown() {
     m_material_dirty.clear();
     m_material_albedo.clear();
     m_textures.clear();
+    // The cached texture views just died with the map, so the LUT pointer into
+    // one of them must go with it.
+    m_lut_path.clear();
+    m_lut_view = nullptr;
     m_default_material = rendering::kInvalidMaterialHandle;
     // Free GPU-backed libraries while the device is still alive.
     // Recreate empty ones so the Runtime stays usable after shutdown.
@@ -423,6 +427,10 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // assets — the previous scene's emitters and sheets do not carry over.
     build_scene_particles();
     build_scene_cloths();
+    // Audio environment: reverb zones, the level's theme and its ambience bed.
+    // Same rule as the two above — the scene owns them, so the previous scene's
+    // do not carry over.
+    build_scene_audio();
     // AI population is game-registered per scene; a previous scene's crowd
     // must not govern the next one.
     if (m_ai_world) {
@@ -1179,6 +1187,81 @@ void Runtime::build_scene_cloths() {
     }
 }
 
+void Runtime::build_scene_audio() {
+    // The scene owns its audio environment, so the previous scene's zones are
+    // dropped and its theme/bed are stopped unless this scene names them. A
+    // level change must not leave the old cave echoing under the new one.
+    m_audio_scene.clear_zones();
+    m_scene_music_buffer = audio::AudioBuffer{};
+    m_scene_ambience_buffer = audio::AudioBuffer{};
+    bool music_from_scene = false;
+    bool ambience_from_scene = false;
+
+    if (m_scene_data_ptr && m_scene_data_ptr->scene) {
+        auto& world = m_scene_data_ptr->scene->world();
+
+        // Reverb zones: the zone's position is the ENTITY's, so placing the
+        // object places the echo. A zone on an entity with no transform sits at
+        // the origin, which is the same thing a default Transform would give.
+        for (auto e : world.query<audio::ReverbZoneComponent>()) {
+            const auto* rz = world.get<audio::ReverbZoneComponent>(e);
+            if (rz == nullptr || !rz->enabled) {
+                continue;
+            }
+            const auto* t = world.get<scene::Transform>(e);
+            audio::ReverbZone zone{};
+            if (t != nullptr) {
+                zone.position = Vec3{t->world_x, t->world_y, t->world_z};
+            }
+            zone.radius = rz->radius;
+            zone.inner_radius = rz->inner_radius;
+            zone.wet_gain = rz->wet_gain;
+            zone.decay_seconds = rz->decay_seconds;
+            zone.pre_delay_seconds = rz->pre_delay_seconds;
+            zone.echo_spacing_seconds = rz->echo_spacing_seconds;
+            m_audio_scene.add_zone(zone);
+        }
+
+        // One theme per level: the first enabled component that resolved a
+        // buffer wins. Order is the world's entity order, which is insertion
+        // order, so it is deterministic.
+        for (auto e : world.query<audio::MusicComponent>()) {
+            const auto* mus = world.get<audio::MusicComponent>(e);
+            if (mus == nullptr || !mus->enabled || mus->resolved_buffer() == nullptr) {
+                continue;
+            }
+            m_scene_music_buffer = *mus->resolved_buffer();
+            audio::MusicTrack track{};
+            track.buffer = &m_scene_music_buffer;
+            track.base_volume = mus->volume;
+            m_audio_scene.music().play(track, std::max(0.0f, mus->fade_in_seconds));
+            music_from_scene = true;
+            break;
+        }
+        for (auto e : world.query<audio::AmbienceComponent>()) {
+            const auto* amb = world.get<audio::AmbienceComponent>(e);
+            if (amb == nullptr || !amb->enabled || amb->resolved_buffer() == nullptr) {
+                continue;
+            }
+            m_scene_ambience_buffer = *amb->resolved_buffer();
+            m_audio_scene.music().set_ambience(&m_scene_ambience_buffer,
+                                               std::max(0.0f, amb->fade_in_seconds));
+            ambience_from_scene = true;
+            break;
+        }
+    }
+
+    // Nothing named it, so nothing should be playing. A game that wants music
+    // across a level change starts it again after the load — the alternative is
+    // the previous level's theme surviving into one that never asked for it.
+    if (!music_from_scene) {
+        m_audio_scene.music().stop(0.0f);
+    }
+    if (!ambience_from_scene) {
+        m_audio_scene.music().clear_ambience(0.0f);
+    }
+}
+
 u32 Runtime::step_particles(float dt) {
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return 0;
@@ -1354,6 +1437,9 @@ void Runtime::enable_streaming(const std::string& chunk_dir_logical,
     (void)ecs::component_type_id<physics::ColliderComponent>();
     (void)ecs::component_type_id<animation::AnimationComponent>();
     (void)ecs::component_type_id<audio::AudioComponent>();
+    (void)ecs::component_type_id<audio::ReverbZoneComponent>();
+    (void)ecs::component_type_id<audio::MusicComponent>();
+    (void)ecs::component_type_id<audio::AmbienceComponent>();
     (void)ecs::component_type_id<gameplay::GameplayModuleComponent>();
     (void)ecs::component_type_id<scripting::ScriptComponent>();
     (void)ecs::component_type_id<vfx::ParticleComponent>();
@@ -2550,7 +2636,64 @@ void Runtime::extract_post_process() {
         params.sharpen.radius = pp->sharpen_radius;
         params.saturation = pp->saturation;
         params.vignette = pp->vignette;
+        params.lens.enabled = pp->lens_enabled;
+        params.lens.distortion = pp->lens_distortion;
+        params.lens.chromatic_aberration = pp->lens_chromatic_aberration;
+        params.dof.enabled = pp->dof_enabled;
+        params.dof.focus_distance = pp->dof_focus_distance;
+        params.dof.focus_range = pp->dof_focus_range;
+        params.dof.max_radius = pp->dof_max_radius;
+        params.motion.enabled = pp->motion_enabled;
+        params.motion.intensity = pp->motion_intensity;
+        params.motion.max_length = pp->motion_max_length;
+        params.lut_strength = pp->lut_strength;
         m_renderer->set_postfx(params);
+        // Exposure and the tonemap operator are OPT-IN, and they are applied
+        // AFTER the block because they are not part of `PostFxParams` — the
+        // renderer holds them separately, and a scene that does not name them
+        // must leave them exactly as they were.
+        if (pp->exposure > 0.0f) {
+            m_renderer->set_exposure(pp->exposure);
+        }
+        if (pp->tonemap >= 0) {
+            m_renderer->set_tonemap_mode(static_cast<rendering::TonemapMode>(pp->tonemap));
+        }
+        // The colour LUT is a TEXTURE rather than a number, so it is resolved
+        // through the same path-keyed cache every other texture uses — and only
+        // when the path CHANGES, because this runs every frame.
+        if (pp->lut_path != m_lut_path) {
+            m_lut_path = pp->lut_path;
+            m_lut_view = nullptr;
+            if (!m_lut_path.empty()) {
+                std::string lut_err;
+                if (!ensure_texture(m_lut_path, lut_err)) {
+                    NF_LOG_WARN(LogCategory::Core,
+                                "Runtime: colour LUT '{}' unusable ({}); the LUT stage is off",
+                                m_lut_path, lut_err);
+                } else {
+                    const auto it = m_textures.find(m_lut_path);
+                    if (it != m_textures.end() && it->second && it->second->view) {
+                        // The shader reads a kLutSize^3 cube laid out as a strip.
+                        // A wrong-sized image would be sampled out of range, so
+                        // it is refused with a warning rather than bound.
+                        const rhi::TextureView* view = it->second->view.get();
+                        if (view->width() == rendering::kLutSize * rendering::kLutSize &&
+                            view->height() == rendering::kLutSize) {
+                            m_lut_view = view;
+                        } else {
+                            NF_LOG_WARN(LogCategory::Core,
+                                        "Runtime: colour LUT '{}' is {}x{}; a {}x{} strip is required",
+                                        m_lut_path, view->width(), view->height(),
+                                        rendering::kLutSize * rendering::kLutSize,
+                                        rendering::kLutSize);
+                        }
+                    }
+                }
+            }
+        }
+        // Bound every frame: the pointer is a plain store, and it must be
+        // re-established after the renderer is recreated.
+        m_renderer->set_color_lut(m_lut_view);
         return;
     }
     // No post block in the scene: keep the renderer's neutral defaults. Not

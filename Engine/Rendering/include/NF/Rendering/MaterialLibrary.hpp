@@ -42,11 +42,34 @@ struct PBRMaterialParams {
     float use_base_color_texture = 0.0f;
 
     /// Packs into the exact 12-float uniform layout (std140-safe order).
+    ///
+    /// An UNSET emission colour (all three channels exactly zero) resolves to
+    /// the base colour. That rule is what makes the emission colour a strict
+    /// generalisation of what the shaders used to do: the emissive term was
+    /// `albedo * emission_strength`, so every material that set a strength and
+    /// left the colour alone keeps rendering exactly as it did, bit for bit,
+    /// while a material that names a colour now gets that colour.
+    ///
+    /// The consequence to know: `emission: 0 0 0` with a non-zero strength is
+    /// indistinguishable from "no emission colour given", so it glows with the
+    /// base colour rather than not glowing. Turn the strength to 0 for "no
+    /// glow" — that is the field that means it.
+    ///
+    /// Resolved HERE rather than in the material parser because this is the one
+    /// point every material passes through: a `.nfmat` on disk, an editor edit,
+    /// and a hand-constructed `PBRMaterialParams` in a test or a sample all end
+    /// up in this function, and a default expressed anywhere else would be a
+    /// default one of them does not get.
     void pack(float out[12]) const {
+        const bool emission_unset =
+            emission[0] == 0.0f && emission[1] == 0.0f && emission[2] == 0.0f;
+        const float er = emission_unset ? base_color[0] : emission[0];
+        const float eg = emission_unset ? base_color[1] : emission[1];
+        const float eb = emission_unset ? base_color[2] : emission[2];
         out[0] = base_color[0]; out[1] = base_color[1];
         out[2] = base_color[2]; out[3] = base_color[3];
         out[4] = metallic; out[5] = roughness; out[6] = ao; out[7] = emission_strength;
-        out[8] = emission[0]; out[9] = emission[1]; out[10] = emission[2];
+        out[8] = er; out[9] = eg; out[10] = eb;
         out[11] = use_base_color_texture;
     }
 };

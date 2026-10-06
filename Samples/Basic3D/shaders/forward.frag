@@ -51,7 +51,12 @@ void main() {
     vec3 Lo = direct_lighting(in_world_pos, N, V, albedo, metallic, roughness);
 
     vec3 ambient = frame.camPos_ambient.w * albedo * ao;
-    vec3 emissive = albedo * emission_strength;
+    // The material's own emission colour — see lighting.frag. The forward path
+    // has the material block in its set, so it needs no extra binding; it must
+    // simply agree with the deferred path about what "emissive" means, or a
+    // transparent surface would glow a different colour than the opaque one
+    // behind it.
+    vec3 emissive = matParams.misc.rgb * emission_strength;
 
     // Post-multiplied alpha: the blend (src*a + dst*(1-a)) weights the colour
     // this surface contributes by the weight it claims over the pixel, so an

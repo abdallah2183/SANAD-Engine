@@ -22,6 +22,7 @@
 #include <NF/Assets/MeshExport.hpp>
 #include <NF/Core/Profiler.hpp>
 #include <NF/Rendering/ShadowCascades.hpp>
+#include <NF/Runtime/Runtime.hpp>
 #include <NF/UI/ArabicShaper.hpp>
 #include <NF/UI/Localization.hpp>
 #include <NF/Editor/UiText.hpp>
@@ -1061,15 +1062,28 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             }
 
             if (settings_section("rendering")) {
-                // Render preferences are COMPONENT state, not renderer state:
-                // Runtime::renderer() is const, so the editor cannot write global
-                // renderer settings. What it can write is the same values the
-                // renderer reads — the shadow parameters of the scene's
-                // directional light (scene_light_entity picks the first, which is
-                // the one that is drawn). The Inspector edits the SELECTED light;
-                // a user who never selects it had no way to reach shadows at all,
-                // which is the gap the lead's list names. One Apply = one undo
-                // step, exactly like the Inspector's light section.
+                // Exposure is the ONE renderer setting the editor may write, and
+                // it goes through the runtime's narrow setter (Runtime::set_exposure)
+                // rather than a mutable renderer() — see that function. It applies
+                // on the next frame, so there is no Apply button and no undo step:
+                // no scene data changed.
+                if (runtime::Runtime* rt = app.runtime()) {
+                    float exposure = rt->exposure();
+                    ImGui::SetNextItemWidth(200.0f);
+                    if (ImGui::SliderFloat((AV("exposure") + "##settings_exposure").c_str(),
+                                           &exposure, 0.1f, 8.0f, "%.2f")) {
+                        rt->set_exposure(exposure);
+                    }
+                }
+
+                // Everything below is COMPONENT state, not renderer state: the
+                // editor writes the same values the renderer reads — the shadow
+                // parameters of the scene's directional light (scene_light_entity
+                // picks the first, which is the one that is drawn). The Inspector
+                // edits the SELECTED light; a user who never selects it had no way
+                // to reach shadows at all, which is the gap the lead's list names.
+                // One Apply = one undo step, exactly like the Inspector's light
+                // section.
                 const ecs::World* world = app.world();
                 const ecs::Entity light =
                     (world != nullptr) ? scene_light_entity(*world) : ecs::kInvalidEntity;

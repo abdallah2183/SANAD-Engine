@@ -82,6 +82,14 @@ set(NF_BASIC3D_SHADER_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/Shaders/Basic3D")
 set(NF_EDITOR_IMGUI_SHADER_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Editor/shaders")
 set(NF_EDITOR_IMGUI_SHADER_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/Shaders/EditorImGui")
 
+# --- CliffStory 2D sprite pipeline ------------------------------------------
+# The 2D sample's only shader pair: position + uv + tint in, modulated texel
+# out. Lives beside the others because the same nf_compile_shaders helper fits
+# it exactly — one .vert and one .frag, no includes, no push constants.
+
+set(NF_CLIFF_SHADER_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Samples/CliffStory/shaders")
+set(NF_CLIFF_SHADER_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/Shaders/CliffStory")
+
 if(NF_GLSLC_EXECUTABLE)
     message(STATUS "[NF] glslc found: ${NF_GLSLC_EXECUTABLE}")
 
@@ -127,6 +135,9 @@ if(NF_GLSLC_EXECUTABLE)
     nf_compile_shaders(NFEditorImGuiShaders
         "${NF_EDITOR_IMGUI_SHADER_SRC_DIR}" "${NF_EDITOR_IMGUI_SHADER_OUT_DIR}" "imgui")
     set(NF_EDITOR_IMGUI_SHADER_DIR "${NF_EDITOR_IMGUI_SHADER_OUT_DIR}")
+    nf_compile_shaders(NFCliffStoryShaders
+        "${NF_CLIFF_SHADER_SRC_DIR}" "${NF_CLIFF_SHADER_OUT_DIR}" "sprite2d")
+    set(NF_CLIFF_SHADER_DIR "${NF_CLIFF_SHADER_OUT_DIR}")
 else()
     message(STATUS "[NF] glslc not found — using prebuilt SPIR-V from the source tree")
     set(NF_TRIANGLE_SHADER_DIR "${NF_TRIANGLE_SHADER_SRC_DIR}")
@@ -134,4 +145,5 @@ else()
     set(NF_RHI_PUSH_SHADER_DIR "${NF_RHI_PUSH_SHADER_SRC_DIR}")
     set(NF_BASIC3D_SHADER_DIR  "${NF_BASIC3D_SHADER_SRC_DIR}")
     set(NF_EDITOR_IMGUI_SHADER_DIR "${NF_EDITOR_IMGUI_SHADER_SRC_DIR}")
+    set(NF_CLIFF_SHADER_DIR        "${NF_CLIFF_SHADER_SRC_DIR}")
 endif()

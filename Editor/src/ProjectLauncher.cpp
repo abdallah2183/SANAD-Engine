@@ -551,39 +551,11 @@ void on_create(HWND hwnd) {
     ::PostQuitMessage(0);
 }
 
-// Template gallery for New Project. The four shipped project templates
-// (Templates/Default, ThirdPerson, FPSStarter, Platformer2D) are REAL: `nf new
-// --template <name>` scaffolds each of them, and the three named genres below are
-// placeholders whose content has not been written. Placeholders stay visible but
-// disabled with a "soon" ribbon — the shape of the page is the design, and a card
-// that simply vanished would leave a hole in the grid.
-//
-// `template_name` is empty for a placeholder, and the create path then scaffolds
-// the Default tree, so a click on a disabled card cannot produce an empty
-// project. That matters: scaffolding with no template gives a Content/ with no
-// Main.nfscene, and the editor exits the moment it opens that.
-//
-// Declared here, above create_project_in_shell(), because that function reads it
-// to decide what to scaffold — the card the user picked is the whole point of the
-// gallery, and a table defined further down would leave the selection unused.
-struct TemplateInfo {
-    const char* name_key;
-    const char* desc_key; // one-line blurb painted in the card's title strip
-    int thumb; // index into LauncherState::thumbs, -1 = gradient block
-    bool enabled;
-    // Empty = a placeholder. Non-empty = the folder under NF_TEMPLATE_DIR that
-    // `nf new --template <name>` also accepts, so the gallery and the CLI cannot
-    // drift apart into offering different content.
-    const char* template_name;
-};
-constexpr TemplateInfo kTemplates[6] = {
-    {"sh_tpl_nature", "sh_tpl_nature_desc", 0, false, ""},
-    {"sh_tpl_platformer", "sh_tpl_platformer_desc", 1, true, "Platformer2D"},
-    {"sh_tpl_arena", "sh_tpl_arena_desc", 2, false, ""},
-    {"sh_tpl_side", "sh_tpl_side_desc", 0, true, "ThirdPerson"},
-    {"sh_tpl_blank", "sh_tpl_blank_desc", 2, true, "Default"},
-    {"sh_tpl_marine", "sh_tpl_marine_desc", 1, false, ""},
-};
+// The New Project gallery table lives in the header (kLauncherTemplateCards) so
+// EditorTests can pin the two invariants that keep it honest — every enabled
+// card names a real template, and every real template has an enabled card.
+// Aliased here because every call site in this file reads better as `kTemplates`.
+constexpr const auto& kTemplates = kLauncherTemplateCards;
 
 /// The template folder for gallery card `index`, or "" with `out_error` set.
 ///

@@ -204,6 +204,44 @@ add_executable(NOVAForgeServer
 target_link_libraries(NOVAForgeServer PRIVATE NFCore NFJobs NFNetworking)
 nf_target_set_warnings(NOVAForgeServer)
 
+# --- CliffStory — a 2D story climb, built on the engine's 2D layer ----------
+# حكاية الجرف — the first game to render through NFScene2D.
+#
+# NFScene2D already owns a complete 2D half-frame: Camera2D transforms world to
+# screen pixels, SpriteBatcher sorts and bakes, Lighting2D folds lights into
+# sprite tints, PhysicsWorld2D steps the player. What it deliberately does not
+# have is a GPU path — SpriteBatcher::vertices() is a CPU array so the same bake
+# stays verifiable in a headless test, and Scene2D has no RHI dependency by
+# design (Scripts/check_layering.sh enforces it). Samples/CliffStory/Render2D.cpp
+# is that missing last hundred lines: one alpha-blended pipeline, one descriptor
+# set per texture page, and a glyph atlas so Arabic story text rides the same
+# batcher as the rock.
+#
+# Links NFUI for Arabic shaping — a stock TrueType rasteriser draws logical
+# Arabic letter by letter, so NF/UI's ArabicShaper has to convert to
+# presentation forms and visual order first.
+add_executable(NFSampleCliffStory
+    CliffStory/main.cpp
+    CliffStory/Render2D.cpp
+    CliffStory/CliffWorld.cpp
+)
+target_link_libraries(NFSampleCliffStory PRIVATE
+    NFCore NFJobs NFPlatform NFRHI NFRendering NFScene2D NFUI)
+nf_target_set_warnings(NFSampleCliffStory)
+
+# imstb_truetype.h ships inside ThirdParty/imgui but is a standalone rasteriser
+# with no ImGui types; only Render2D.cpp includes it, with STBTT_STATIC.
+target_include_directories(NFSampleCliffStory PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ThirdParty/imgui")
+
+target_compile_definitions(NFSampleCliffStory PRIVATE
+    "NF_CLIFF_SHADER_DIR=\"${NF_CLIFF_SHADER_DIR}\""
+)
+
+if(NF_GLSLC_EXECUTABLE)
+    add_dependencies(NFSampleCliffStory NFCliffStoryShaders)
+endif()
+
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
     set_property(TARGET NFSampleTriangle
@@ -231,5 +269,7 @@ if(MSVC)
     set_property(TARGET NFSampleAudioWalkthrough
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET NOVAForgeServer
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set_property(TARGET NFSampleCliffStory
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()

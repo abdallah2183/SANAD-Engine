@@ -555,6 +555,89 @@ std::string SetPostProcessCommand::label() const {
     return "Edit post-processing";
 }
 
+// --- Scene audio environment -------------------------------------------------
+
+SetReverbZoneCommand::SetReverbZoneCommand(ecs::Entity e, bool had_before,
+                                           const audio::ReverbZoneComponent& before,
+                                           const audio::ReverbZoneComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetReverbZoneCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<audio::ReverbZoneComponent>(m_entity, m_after);
+}
+
+void SetReverbZoneCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<audio::ReverbZoneComponent>(m_entity, m_before);
+    } else {
+        world.remove<audio::ReverbZoneComponent>(m_entity);
+    }
+}
+
+std::string SetReverbZoneCommand::label() const {
+    return "Edit reverb zone";
+}
+
+SetMusicCommand::SetMusicCommand(ecs::Entity e, bool had_before,
+                                 const audio::MusicComponent& before,
+                                 const audio::MusicComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetMusicCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<audio::MusicComponent>(m_entity, m_after);
+}
+
+void SetMusicCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<audio::MusicComponent>(m_entity, m_before);
+    } else {
+        world.remove<audio::MusicComponent>(m_entity);
+    }
+}
+
+std::string SetMusicCommand::label() const {
+    return "Edit music";
+}
+
+SetAmbienceCommand::SetAmbienceCommand(ecs::Entity e, bool had_before,
+                                       const audio::AmbienceComponent& before,
+                                       const audio::AmbienceComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetAmbienceCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<audio::AmbienceComponent>(m_entity, m_after);
+}
+
+void SetAmbienceCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<audio::AmbienceComponent>(m_entity, m_before);
+    } else {
+        world.remove<audio::AmbienceComponent>(m_entity);
+    }
+}
+
+std::string SetAmbienceCommand::label() const {
+    return "Edit ambience";
+}
+
 // --- SetMaterialAssignmentCommand -------------------------------------------
 
 SetMaterialAssignmentCommand::SetMaterialAssignmentCommand(ecs::Entity e, std::string before_path,

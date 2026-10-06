@@ -2452,3 +2452,320 @@ underlying non-uniqueness was known and handled in the display layer, not here.
 should fall back to a stable key when a name repeats, or the synthesized names should be
 made unique per scene. Note that `#<id>` is not a safe fallback either: the live and
 reloaded scenes do not have to agree on ids.
+
+---
+
+## Triage & closeout 2026-10-03 — defect sweep (lead)
+
+Full build exit 0. Full sweep **26 suites, 1775 passed / 0 failed / 2 skipped**
+(`ECSTests` 1, `InputTests` 1 — the usual env-gated pair). Editor acceptance
+windowed 125f: exit 0, `automation=OK`, `cube lit pixels = 229149`, 0 validation
+errors, 0 RHI leaks. Every claim below was re-checked against the code and the
+run output — the doc's own markers are evidence, not proof.
+
+### CLOSED this session (with a test that fails without the fix)
+
+1. **`scenes_equal_structure` compared the wrong pair under duplicate names**
+   (finding 2026-10-02). `PlayMode.cpp` indexed the saved scene by name into a
+   single slot, so two entities called `"Mesh"` — which Runtime synthesizes for
+   every entity with no `Name:` line — made a correctly round-tripped scene
+   report `transform values differ for 'Mesh'` and the editor exit 1.
+   **Fix:** index into a LIST and pair the Nth of a name with the Nth, which is
+   the right pairing because both lists come from the same file order.
+   **Tests:** `Tests/EditorTests/test_playmode.cpp` +3.
+   **Rule 0:** reverting `PlayMode.cpp` to HEAD fails
+   `editor_play_duplicate_names_roundtrip` (254/1).
+2. **The gallery hid a real template** — same defect class as the 2026-10-01
+   launcher fix: `nf new --template FPSStarter` worked while `sh_tpl_arena`
+   ("FPS Arena" / «ساحة تصويب») sat behind a "soon" ribbon, and the table's own
+   comment claimed FPSStarter's content "has not been written" (it exists, with a
+   full `Content/` and `Main.nfscene`). **Fix:** the card table moved into
+   `ProjectLauncher.hpp` (`kLauncherTemplateCards`, header-inline by that file's
+   own design) and `sh_tpl_arena` → `FPSStarter` is enabled, so all four
+   templates the CLI accepts now have an enabled card.
+   **Tests:** `Tests/EditorTests/test_project_launcher.cpp` +2, pinning both
+   directions (every enabled card names a real template; every real template has
+   an enabled card). **Rule 0:** disabling the card again fails
+   `launcher_gallery_offers_every_real_template` with the template named.
+3. **G9 → Runtime: "last two Settings items" — item 1, exposure.** CLOSED.
+   `Runtime::set_exposure(float)` / `exposure()` added (narrow pair, because
+   `renderer()` is const by design), the Settings > Rendering section gained an
+   Exposure slider (the `exposure` localization key has existed unused since
+   Phase 15 — evidence the widget was planned), and a value that would poison the
+   tonemap is refused rather than stored.
+   **Tests:** `Tests/RuntimeTests/test_runtime_exposure.cpp` (new, registered).
+   **Rule 0:** a store-and-forget setter fails it (106/1).
+4. **`.nfmat` `emission:` colour is never read** (finding 2026-10-02). CLOSED in
+   the working tree before this session; **verified here** rather than assumed.
+   The fix adds gbuffer attachment 3 + lighting binding 7, and
+   `PBRMaterialParams::pack()` resolves an all-zero emission colour to
+   `base_color`, which makes it a strict generalisation — and the acceptance run
+   confirms it: `cube lit pixels = 229149`, unchanged, with 0 validation errors.
+
+### CLOSED — verified stale (the marker was already true; no action was needed)
+
+5. **G5 → Runtime/Application/G3 audio route.** `Runtime::step_audio` mixes
+   through one `audio::AudioScene` (`begin_block` → `mix_emitter` → `finalize`),
+   `Runtime::audio_scene()` is public, and the scene loader parses
+   `bus=` / `occluded=`. Landed 2026-10-01; the entry above is superseded.
+6. **G2 → G7 `test_templates.cpp` unregistered.** Registered —
+   `Tests/CMakeLists.txt:437`; `ToolTests` 52/52 this sweep.
+7. **G7 → G6 `nf run` rc=1 quoting bug.** Does not reproduce; verified on a path
+   containing spaces on 2026-10-01. `nf run` forwards the replay flags and the
+   shipped `README.txt` documents them.
+8. **`uv1` protocol collision (was "needs a lead decision").** There is no
+   conflict: one attribute, two consumers (terrain splat, water foam/reflection)
+   that never meet. Closed with evidence in `memory/2026-10-01.md` §1. The real
+   open item is that the renderer does not sample `uv1` — listed below as a
+   feature, not a protocol bug.
+9. **Day/night `TimeOfDay` `.nfscene` keys.** Landed 2026-10-01 (`TimeOfDay:`
+   line, `advance_time_of_day()` in `update()`, shared `find_time_of_day()`,
+   editor command + Inspector panel).
+
+### STILL OPEN — these are FEATURES, not defects, and none is gate-blocking
+
+Named so they are not silently dropped. Each needs real work, not a fix:
+
+- **GPU skinning has no render path** (G4 → render core): needs a joint/weight
+  vertex attribute, a joint-matrix buffer and the vertex-shader path. The CPU
+  half (`compute_skin_palette`) is done and tested.
+- **Retargeting and the locomotion graph are not authorable from `.nfscene`**
+  (G4 → runtime): `AnimationComponent` holds one skeleton and the `Animation:`
+  branch parses only `clip=`, `procedural=` and a `state_machine=true` boolean.
+- **Editor settings persistence to `.nfproj`** (G9 item 2, owned by ProjectTool):
+  settings are session-only on purpose today.
+- **P2–P4 backlog with no marker:** terrain splat painting and water `uv1`
+  painting in the renderer, vehicles mirror, scene-material presets, the
+  sky/weather remainder beyond fog, and the Basic3D palette demo.
+  **Correction (2026-10-03):** the DEFERRED splat paint is NOT pending — the
+  vertex layout supplies `uv1` at location 3 and `gbuffer.frag` samples
+  `SplatPalette` (binding 2) when `uv1 != (0,0)`. Only the forward/transparency
+  path stops at uv0, so it is water's foam/reflection that is still unpainted.
+  What IS missing is reachability: splat layer colours are settable from C++
+  only, and terrain itself is not scene-authorable.
+
+---
+
+## G5 step 2 CLOSED (2026-10-03) — the scene's audio environment
+
+G5's runtime-route request listed four steps. Step 1 (the AudioScene mixer),
+step 3's `bus=`/`occluded=` half and step 4 (the settings bridge) landed
+2026-10-01. **Step 2 — scene-authored reverb zones, music and ambience — is now
+in**, as ENTITY component lines rather than the scene-level records the request
+sketched:
+
+```
+  ReverbZone: radius=12 inner=3 wet=0.5 decay=2 predelay=0.02 spacing=0.09
+  Music: buffer=content://Audio/theme.ogg volume=0.6 fade=0.5
+  Ambience: buffer=content://Audio/wind.ogg fade=1.5
+```
+
+**Why entities and not global records:** the request itself flagged that scene
+v1 expects `---` immediately after `entity_count`, so a scene-level list is a
+format migration. An entity component is backward-compatible, and a reverb
+zone's position IS the entity's transform — placing the echo by placing an
+object is what an author wants anyway.
+
+`Runtime::build_scene_audio()` runs on scene adopt and REPLACES the previous
+scene's environment (zones cleared; a theme or bed the new scene does not name
+is stopped). Tests: `Tests/RuntimeTests/test_runtime_scene_audio.cpp` (5),
+including a Rule-0 check — removing the `build_scene_audio()` call fails both
+integration tests.
+
+**Editor UI — LANDED the same day.** Three inspector sections (Reverb Zone /
+Music / Ambience) with add, edit, undo/redo and 17 Arabic keys;
+`SetReverbZoneCommand` / `SetMusicCommand` / `SetAmbienceCommand` follow the
+`SetPostProcessCommand` pattern (undo of the first-creating edit removes the
+component). Music and ambience are deliberately NOT in the Add-component menu —
+both need a buffer path and the setter refuses an empty one, so their sections'
+empty state carries the path field. `EditorApp::set_music`/`set_ambience`
+resolve the path through the VFS (mirroring `set_audio_buffer`, so an authored
+track is audible without a save/reload) and carry the decoded samples over when
+the path is unchanged. Tests:
+`Tests/EditorTests/test_audio_env_editor.cpp` (4), Rule-0 checked.
+**This request is now fully closed.**
+
+---
+
+## §206 Lens Effects LANDED (2026-10-03) — the deferred post-FX list shrinks
+
+Phase 27 deferred "DOF, motion blur, lens effects, a grading LUT, and
+exposure/tonemap-mode as scene data". **Lens effects is now in**, as an in-pass
+stage rather than a new pass:
+
+- `LensParams{enabled, distortion, chromatic_aberration}` in `PostFxParams`.
+  Both stages are UV-space warps applied before the HDR fetch, so both neutrals
+  are EXACTLY identity and the golden pixels are untouched — confirmed by the
+  acceptance run (`cube lit pixels = 229149`).
+- `lens_sample_uv()` is the CPU mirror, deliberately separate from
+  `apply_post_chain` (which receives an already-fetched colour and has no
+  coordinate to warp). Distortion composes before chroma; the order is pinned.
+- Scene data (`lens=`, `lens_distortion=`, `lens_chroma=`), `PostProcessComponent`
+  fields, `extract_post_process`, an Inspector Lens block, and 3 Arabic keys.
+- Tests: 5 new in `Tests/RHITests/test_post_stack.cpp` plus extensions to the
+  neutral / round-trip / push / editor cases. Rule-0 checked.
+
+**Trap recorded:** `PipelineDesc::push_constant_size` IS the Vulkan push range.
+Growing the tonemap block 16 → 20 floats without growing it in BOTH tonemap
+pipelines (offscreen and present) produced 19 unrelated RHITests failures on
+`validation_error_count()`. Check it whenever a push block changes.
+
+**Still deferred, with the architecture already worked out:**
+- **Depth of field** — **LANDED 2026-10-03**, inside the tonemap pass. See below.
+- **Motion blur** — still blocked: the deferred path writes no velocity buffer.
+- A per-stage colour-grading LUT; exposure / tonemap-mode as scene data.
+
+---
+
+## §206 Depth of Field LANDED (2026-10-03) — only motion blur remains deferred
+
+Built INSIDE the tonemap pass rather than as its own pass: the depth target and
+the frame block (for the inverse view-projection that turns a depth value into a
+view distance) joined the tonemap descriptor layout, which grew 5 → 7 bindings.
+No new pipeline, render pass, graph texture or framebuffer, and no second HDR
+target — at the cost of the layout being shared by four pipelines and written at
+two sites (see the trap below).
+
+- `DofParams{enabled, focus_distance, focus_range, max_radius}` in `PostFxParams`.
+  A linear circle-of-confusion ramp; `max_radius` 0 is the off switch, with
+  `enabled` folded into it at push time.
+- A golden-angle disc gather, taps weighted by their own confusion clamped to the
+  centre's. `dof_coc()` is the CPU mirror; the gather is covered by a GPU test.
+- Scene data (`dof=`, `dof_focus=`, `dof_range=`, `dof_radius=`), component
+  fields, `extract_post_process`, an Inspector block, 4 Arabic keys.
+- Tests: 3 new in `Tests/RHITests/test_post_stack.cpp` plus extensions to the
+  neutral / round-trip / push / editor cases. Rule-0 checked.
+
+**Trap recorded:** the tonemap descriptor layout is shared by FOUR pipelines and
+written at TWO sites. Binding 5 is a UNIFORM BUFFER, so the present site's
+image loop could not cover it — it had to be special-cased. An unwritten binding
+is not a valid set, and an image view in a uniform-buffer binding is a validation
+error. The tonemap pass also had to DECLARE the depth handle as a read, or the
+graph would never transition it into a sampled layout.
+
+**§206 after this:** exposure, colour grading, bloom, DOF, lens effects,
+tonemapping, sharpening, saturation, vignette are all implemented and reachable
+from a scene. **Motion blur is the only stage still deferred**, and it is
+genuinely blocked — the deferred path writes no velocity buffer, so it needs a
+renderer change rather than a post-pass.
+
+---
+
+## §206 Motion Blur LANDED (2026-10-03) — **§206 IS COMPLETE**
+
+The blocker was real but not fatal: motion blur "wants a velocity buffer the
+deferred path does not write", and it does not have to have one. The world
+position is reconstructed from the depth target (exactly what the DOF stage
+does) and projected with the PREVIOUS frame's view-projection — classic
+reprojection, no extra gbuffer attachment, and no per-object `prev_model`
+matrix (which would have pushed the 128-byte vertex push block past the Vulkan
+minimum guarantee).
+
+**Scope, stated plainly:** this is CAMERA motion blur. A surface's own movement
+is not in the depth buffer, so a fast object under a still camera does not
+smear. Per-object motion needs a velocity attachment, which is a renderer change.
+
+- `MotionBlurParams{enabled, intensity, max_length}`; `intensity` 0 is the off
+  switch. An 8-tap box average along the capped velocity, centred on the pixel.
+- `FrameUniforms::prev_view_proj` sits at offset **80** — in the MIDDLE of the
+  block, so the tonemap pass declares a std140 prefix (144 B) instead of
+  redeclaring forty floats. Every member after it moved by one mat4 on BOTH
+  sides (`Renderer3D.hpp`'s `static_assert(offsetof(...))` block and
+  `brdf.glsl`), and those asserts caught the one-sided edit immediately.
+- `motion_prev_uv()` / `motion_smear()` are the CPU mirrors.
+- Scene data (`motion=`, `motion_intensity=`, `motion_length=`), component
+  fields, `extract_post_process`, an Inspector block, 2 Arabic keys.
+- Tests: 4 new in `Tests/RHITests/test_post_stack.cpp`, including a GPU case
+  that renders a **cube** — `render_empty_scene` cannot show motion blur, since
+  with no geometry every depth is the far plane and the reprojection reports zero
+  velocity by construction. Rule-0 checked.
+
+**§206 (Post Processing) is now COMPLETE:** exposure, colour grading, bloom,
+depth of field, motion blur, lens effects, tonemapping, sharpening, saturation
+and vignette — all implemented, all individually switchable, all reachable from
+a `.nfscene`. That is the §263 "post process" success criterion.
+
+---
+
+## §206 Colour-Grading LUT LANDED (2026-10-03) — **NOTHING LEFT DEFERRED**
+
+The last item on Phase 27's deferred list. A `kLutSize^3` (16³) colour cube
+stored as a **2D strip, 256x16**: the RHI's sampled views are 2D, so the shader
+does the slice blend itself — one extra fetch, and the stage stays inside the
+texture format the rest of the engine already uploads.
+
+- `PostFxParams::lut_strength` (0 = exactly identity);
+  `Renderer3D::set_color_lut(view)` / `clear_color_lut()` / `has_color_lut()`.
+  The view is NOT owned by the renderer — the runtime hands over the view from
+  its existing path-keyed texture cache.
+- **Tonemap binding 7**; the layout is now 8 bindings, and both descriptor-set
+  write sites were updated.
+- Runtime: `PostProcessComponent::lut_path` + `lut_strength`; the path resolves
+  through `ensure_texture` once per CHANGE, and an image that is not exactly
+  256x16 is refused with a warning rather than bound (the shader would sample out
+  of range).
+- Scene keys `lut=` / `lut_strength=`; editor path field + strength slider;
+  2 Arabic keys.
+- Tests: 4 new in `Tests/RHITests/test_post_stack.cpp` (including a GPU case that
+  uploads a REAL LUT, because the "no LUT bound" path is identity by construction
+  and a test built on it alone would pass with the stage deleted). Rule-0 checked.
+
+**Trap recorded:** the strength is **folded to 0 at push time when no LUT is
+bound** — the slot then holds the renderer's 1x1 white texture, so an authored
+strength with no LUT would grade the whole frame toward white. Same shape as
+`bloom_on` folding the intensity.
+
+**§206 (Post Processing) is COMPLETE with nothing deferred:** exposure, colour
+grading (parametric AND LUT), bloom, depth of field, motion blur, lens effects,
+tonemapping, sharpening, saturation and vignette — all implemented, all
+individually switchable, all reachable from a `.nfscene`, with exposure and the
+tonemap operator authorable as scene data too. That is the §263 criterion.
+
+
+---
+
+## §206 Exposure + tonemap operator as scene data LANDED (2026-10-03)
+
+The last deferred post-FX item besides a grading LUT. It was deferred because
+"exposure is a display preference, not scene data — never persisted per scene,
+because the editor's golden pixel count is pinned to its default".
+
+**Resolved with a sentinel rather than a reversal:** `exposure = 0` and
+`tonemap = -1` mean "the scene says nothing", so `extract_post_process` applies
+them only when a scene names them. The default scene is untouched, the golden
+pixels hold, and a level can still author its own exposure and operator. The
+writer emits the keys only when authored, so no existing scene gains a claim it
+never made.
+
+- `Runtime::set_tonemap_mode` — a narrow wrapper like `set_exposure`. The
+  operator is a CLOSED SET, so an unknown value is refused, never defaulted.
+- Both live on the renderer rather than in `PostFxParams`, so they are applied
+  after `set_postfx`.
+- Scene keys `exposure=` and `tonemap=exponential|aces|reinhard|linear`; an
+  Inspector slider (0 shows "(renderer default)") and combo ("Not set" first);
+  7 Arabic keys.
+- Tests extended: the round trip, the push, the editor bounds, and — the one
+  that matters — the OPT-IN contract, that a scene with no `PostProcess:` line
+  must not reset the renderer's exposure or operator.
+
+**Localization trap recorded:** a value legitimately IDENTICAL in both languages
+(a proper noun — here the operator names ACES and Reinhard) must go in
+`same_in_both_languages()` in `Tests/UITests/test_localization.cpp`.
+`latin_allowed_in_arabic()` is the OTHER list, for Arabic values that merely
+contain a Latin token.
+
+---
+
+## `Samples/CliffStory` registered (2026-10-03)
+
+Was a complete 2D story-climb with its own README, built and runnable, but absent
+from `README.md`, `ROADMAP.md` and memory — the largest undocumented artefact in
+the tree. Verified (`NFSampleCliffStory.exe --frames 30` → exit 0) and
+registered: a Samples section in `README.md`, and a bullet in `ROADMAP.md`'s
+Phase 18 noting it is the ONLY sample with a GPU path for the 2D layer.
+
+
+
+
+
+

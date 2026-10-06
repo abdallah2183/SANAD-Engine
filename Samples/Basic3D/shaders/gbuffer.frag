@@ -4,6 +4,7 @@
 //   attachment 0: BaseColor (rgba)
 //   attachment 1: Normal (encoded *0.5+0.5)
 //   attachment 2: Metallic (r), Roughness (g), AO (b), EmissionStrength (a)
+//   attachment 3: Emissive radiance (emission.rgb * EmissionStrength, rgb)
 //
 // Material parameters arrive through a per-instance uniform block (binding 0)
 // so changing them never requires a new pipeline. An optional albedo texture
@@ -18,6 +19,7 @@ layout(location = 2) in vec2 in_uv1;
 layout(location = 0) out vec4 out_base_color;
 layout(location = 1) out vec4 out_normal;
 layout(location = 2) out vec4 out_surface;
+layout(location = 3) out vec4 out_emissive;
 
 layout(set = 0, binding = 0) uniform MaterialParams {
     vec4 baseColor;   // rgb + a (alpha kept for future transparency)
@@ -63,4 +65,10 @@ void main() {
     out_normal = vec4(n * 0.5 + 0.5, 1.0);
     out_surface = vec4(matParams.surface.x, matParams.surface.y,
                        matParams.surface.z, matParams.surface.w);
+    // The emissive RADIANCE, already multiplied, so the lighting pass only has
+    // to add it. `misc.rgb` is the material's emission colour — the field the
+    // deferred path could not previously reach, because the lighting pass is
+    // fullscreen and has no per-object data. See PBRMaterialParams::pack() for
+    // how an unset emission colour resolves.
+    out_emissive = vec4(matParams.misc.rgb * matParams.surface.w, 1.0);
 }
