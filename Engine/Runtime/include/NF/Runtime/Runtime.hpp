@@ -564,6 +564,16 @@ public:
     }
     float exposure() const { return m_renderer != nullptr ? m_renderer->exposure() : 1.0f; }
 
+    /// Image-based lighting on/off, exposed for the same reason `set_exposure`
+    /// is: the editor's look-dev and capture flows (notably --no-ibl) need to
+    /// compare the sky-baked look against the scalar-ambient look without
+    /// touching scene data. No validation needed — any bool is meaningful.
+    void set_ibl_enabled(bool enabled) {
+        if (m_renderer != nullptr) {
+            m_renderer->set_ibl_enabled(enabled);
+        }
+    }
+
     /// The renderer's tonemap operator, exposed for the same reason
     /// `set_exposure` is: `renderer()` is const by design, and a scene may
     /// author the operator per level (a stylized level wants ACES, a

@@ -44,6 +44,7 @@
 #include <NF/Rendering/RenderWorld.hpp>
 #include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Rendering/Sky.hpp>
+#include <NF/Rendering/SkyEnv.hpp>
 
 #include <cstddef>
 #include <array>
@@ -508,7 +509,23 @@ public:
     // --- Lights ---
     void set_directional_light(const DirectionalLight& light) { m_directional = light; }
     const DirectionalLight& directional_light() const { return m_directional; }
+    // Scalar ambient: the flat fill the IBL bake REPLACES when it is live
+    // (see set_ibl_enabled). Kept as the fallback for a renderer/device that
+    // never baked — an unset IBL reads as this, never as black.
     void set_ambient(float ambient) { m_ambient = ambient; }
+
+    // --- Image-based lighting (sky environment bake) ---
+    // On by default: the sky gradient + haze + sun light every surface
+    // directionally (diffuse) and glossily (specular split-sum), which is what
+    // lifts shaded sides out of flat grey and gives metals something real to
+    // reflect. The multipliers are artistic trims on top of a physical base:
+    // 1.0 = the bake as-is. Pure state (no device), like set_sky.
+    void set_ibl_enabled(bool enabled) { m_ibl_enabled = enabled; }
+    bool ibl_enabled() const { return m_ibl_enabled; }
+    void set_ibl_intensity(float diffuse, float specular) {
+        m_ibl_diffuse = diffuse;
+        m_ibl_specular = specular;
+    }
 
     // --- Sky (Phase 13): procedural gradient + sun disk, painted by the
     // lighting pass where depth reads far. Pure state: no device needed.
@@ -772,6 +789,10 @@ private:
         // and the tonemap pass's 144-byte PREFIX of this block is unaffected.
         // x = coverage, y = altitude, z = scale, w = time (hours).
         float sky_cloud[4];
+        // Image-based lighting (sky environment bake). APPENDED last, so only
+        // the total moves: x = enabled, y = diffuse multiplier, z = specular
+        // multiplier, w = env mip count - 1 (0 = sample level 0 only).
+        float ibl_params[4];
     };
     // Per-field offsets rather than one hand-summed total: a field inserted in
     // the middle shifts everything after it, and the sum only notices when the
@@ -816,7 +837,8 @@ private:
     static_assert(offsetof(FrameUniforms, fog_color) == kFogBlockOffset);
     static_assert(offsetof(FrameUniforms, fog_params) == kFogBlockOffset + 16);
     static_assert(offsetof(FrameUniforms, sky_cloud) == kFogBlockOffset + 32);
-    static_assert(sizeof(FrameUniforms) == kFogBlockOffset + 48,
+    static_assert(offsetof(FrameUniforms, ibl_params) == kFogBlockOffset + 48);
+    static_assert(sizeof(FrameUniforms) == kFogBlockOffset + 64,
                   "FrameUniforms must match the shader's std140 layout");
 
     rhi::IGraphicsDevice* m_device = nullptr;
@@ -1028,6 +1050,29 @@ private:
     // albedo binding (the shader multiplies by it, i.e. ignores it).
     std::unique_ptr<rhi::Texture> m_white_texture;
     std::unique_ptr<rhi::TextureView> m_white_view;
+
+    // Sky environment bake for image-based lighting (SkyEnv): 128x64 RGBA
+    // half-float equirect with a full mip chain, re-baked when the sky or the
+    // sun moves. Resolution-independent like the white fallback — it never
+    // follows the swapchain — so it is created once in init(), not per frame.
+    // m_env_baked_key is the key the LIVE texture was baked from; a mismatch
+    // re-bakes before the lighting pass reads it.
+    std::unique_ptr<rhi::Texture> m_env_texture;
+    std::unique_ptr<rhi::TextureView> m_env_view;
+    std::unique_ptr<rhi::Sampler> m_env_sampler;
+    bool m_ibl_enabled = true;
+    float m_ibl_diffuse = 1.0f;
+    float m_ibl_specular = 1.0f;
+    bool m_env_has_mips = false;
+    bool m_env_baked_once = false;
+    SkyEnvKey m_env_baked_key{};
+    std::vector<u16> m_env_pixels; // bake scratch: capacity survives re-bakes
+    bool ensure_env_map();
+    // Re-bakes and re-uploads when the key moved. Returns false when there is
+    // no bake to read (device refused, upload failed): the frame then falls
+    // back to the scalar ambient, so a failed IBL dims nothing to black.
+    bool refresh_env_map(const SkyParams& sky, const Vec3& sun_dir,
+                         const Vec3& sun_color, bool light_enabled);
 
     // Terrain splat palette, bound on every gbuffer material set as binding 2.
     // One std140 array of vec4, mirrored CPU-side so a read-back matches what

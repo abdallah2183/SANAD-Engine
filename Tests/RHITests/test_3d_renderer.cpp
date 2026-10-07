@@ -1447,6 +1447,10 @@ struct SceneSpec {
     bool light_enabled = true;
     bool shadows = true;
     u32 cascades = kMaxShadowCascades;
+    // Image-based lighting. On by default (the product default); tests that
+    // measure the DIRECT term against a controlled ambient opt out, because a
+    // directional sky ambient is not the flat scalar those ratios assume.
+    bool ibl = true;
 };
 
 bool render_spec(rhi::IGraphicsDevice& dev, u32 W, u32 H, const SceneSpec& spec,
@@ -1468,6 +1472,7 @@ bool render_spec(rhi::IGraphicsDevice& dev, u32 W, u32 H, const SceneSpec& spec,
             d.shadows_enabled = spec.shadows;
             d.shadow_cascades = spec.cascades;
             renderer.set_directional_light(d);
+            renderer.set_ibl_enabled(spec.ibl);
             for (const PointLight& l : spec.points) renderer.add_point_light(l);
             for (const SpotLight& l : spec.spots) renderer.add_spot_light(l);
         },
@@ -1573,6 +1578,11 @@ NF_TEST(directional_shadow_does_not_darken_an_unoccluded_face) {
 NF_TEST(directional_light) {
     const GpuFixture& f = require_gpu();
     SceneSpec s = base_spec();
+    // Flat ambient for the ratio below: with the sky bake on, "light off"
+    // means "sky ambient only", which is brighter than any scalar the 2:1
+    // ratio was authored against. This test measures the DIRECT term, so
+    // ambient is the controlled variable here, not the subject.
+    s.ibl = false;
     std::vector<Pixel> on, off;
     NF_CHECK(render_spec(*f.device, 64, 64, s, on));
     s.light_enabled = false;
@@ -2248,6 +2258,13 @@ bool render_shadow_scene(rhi::IGraphicsDevice& dev, const ShadowScene& spec, std
             d.shadow_cascades = spec.cascades;
             d.shadow_distance = spec.distance;
             renderer.set_directional_light(d);
+            // Flat scalar ambient, not the sky bake: these scenes measure
+            // SHADOW occlusion (on/off pixel deltas through the tonemap), and
+            // a directional sky ambient compresses those deltas through the
+            // tonemap's concave curve without moving a single occluder. The
+            // IBL path has its own tests (skyenv + lighting); here ambient is
+            // the controlled variable, and the control is "uniform".
+            renderer.set_ibl_enabled(false);
         },
         out, nullptr, &cam);
 }

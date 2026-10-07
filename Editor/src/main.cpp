@@ -86,6 +86,15 @@ struct EditorConfig {
     // the engine's true rate (uncapped, may tear). Benchmarking and 120 Hz+
     // displays want this; normal editing wants the default.
     bool vsync = true;
+    // --no-automation: run the frames without driving the UI automation
+    // harness (the camera stays where the scene put it). Captures (--screenshot)
+    // need a deterministic frame; the harness exists to exercise workflows, not
+    // to hold still for a photograph.
+    bool no_automation = false;
+    // --no-ibl: skip the sky environment bake and light with the scalar
+    // ambient (the pre-IBL look). A look-dev A/B switch: the same frame with
+    // and without image-based lighting, nothing else moving.
+    bool no_ibl = false;
     // Empty means "open the engine tree", which is how the editor has always
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
@@ -194,6 +203,10 @@ EditorConfig parse_args(int argc, char** argv) {
             c.screenshot_path = value_of("--screenshot=");
         } else if (arg == "--resize-test") {
             c.resize_test = true;
+        } else if (arg == "--no-automation") {
+            c.no_automation = true;
+        } else if (arg == "--no-ibl") {
+            c.no_ibl = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("NOVAForgeEditor (Phase 5)\n"
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
@@ -207,7 +220,10 @@ EditorConfig parse_args(int argc, char** argv) {
                         "  --arabic            Start with the Arabic localised UI\n"
                         "  --headless          No window (logic + offscreen viewport only)\n"
                         "  --screenshot <file.bmp>  Write the last composited frame (scene +\n"
-                        "                      full UI) as a 24-bit BMP, then exit\n");
+                        "                      full UI) as a 24-bit BMP, then exit\n"
+                        "  --no-automation   With --frames, do not drive the UI automation\n"
+                        "                      harness (deterministic captures)\n"
+                        "  --no-ibl          Light with the scalar ambient (pre-IBL look)");
             std::exit(0);
         }
     }
@@ -831,6 +847,13 @@ int main(int argc, char** argv) {
                                                  .count());
         NF_LOG_INFO(nf::LogCategory::Editor, "Scene opened in {:.1f} ms",
                     static_cast<double>(scene_open_us) / 1000.0);
+        // --no-ibl: scalar ambient instead of the sky bake. Applied once at
+        // startup (not per frame): nothing in the run re-enables the bake, so
+        // re-asserting it per frame would only burn log lines.
+        if (cfg.no_ibl) {
+            runtime.set_ibl_enabled(false);
+            NF_LOG_INFO(nf::LogCategory::Editor, "IBL disabled by --no-ibl (scalar ambient)");
+        }
         {
             const auto rows = app.outliner_rows();
             std::string labels;
@@ -999,7 +1022,7 @@ int main(int argc, char** argv) {
         // "did it actually draw?" question needs an explicit answer.
         uint32_t max_draw_calls = 0;
         uint32_t max_visible = 0;
-        const bool automation = (cfg.max_frames != 0);
+        const bool automation = (cfg.max_frames != 0) && !cfg.no_automation;
         bool auto_failed = false;
         // `detail` is reported only on failure, so the OK line keeps its
         // historical shape ("Automation: <what> OK") for existing greps while a

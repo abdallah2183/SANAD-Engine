@@ -26,6 +26,12 @@ layout(set = 0, binding = 3) uniform sampler2D gbuffer_depth;
 // above the shared block — and it is deliberately NOT declared in brdf.glsl for
 // the same reason: the forward path has the material block and does not need it.
 layout(set = 0, binding = 7) uniform sampler2D gbuffer_emissive;
+// Binding 8: the sky environment bake for image-based lighting (SkyEnv —
+// equirect HDR, mip chain for roughness). Above the shared block for the same
+// reason as the emissive attachment: the forward pass reuses 7-8 for its
+// material block, so the bake rides a sampler PARAMETER into ibl_contrib and
+// each includer declares its own binding (9 in forward.frag).
+layout(set = 0, binding = 8) uniform sampler2D env_map;
 
 #include "brdf.glsl"
 
@@ -194,7 +200,17 @@ void main() {
     vec3 V = normalize(frame.camPos_ambient.xyz - pos);
     vec3 Lo = direct_lighting(pos, N, V, albedo, metallic, roughness);
 
+    // Image-based lighting replaces the scalar ambient when the bake is live:
+    // the sky (gradient + haze + sun) lights the surface directionally instead
+    // of one flat grey. The scalar stays as the fallback for a renderer that
+    // never baked (or a device that refused the texture) — an unset IBL reads
+    // as the old look, never as black.
     vec3 ambient = frame.camPos_ambient.w * albedo * ao;
+    if (frame.ibl_params.x > 0.5) {
+        ambient = ibl_contrib(env_map, frame.ibl_params.w, N, V,
+                              albedo, metallic, roughness, ao,
+                              frame.ibl_params.y, frame.ibl_params.z);
+    }
     // The material's own emission colour, NOT the albedo. It was albedo for as
     // long as the colour had nowhere to live in the gbuffer: a material with a
     // dark base colour and a bright `emission:` rendered black. `emission_strength`

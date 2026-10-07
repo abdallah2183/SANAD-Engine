@@ -31,6 +31,11 @@ layout(set = 0, binding = 7) uniform MaterialParams {
 
 layout(set = 0, binding = 8) uniform sampler2D albedoTex;
 
+// Binding 9: the sky environment bake (see lighting.frag binding 8). The
+// forward set has no gbuffer, so 7-8 are the material pair and the bake sits
+// above them; it rides the same sampler parameter into ibl_contrib.
+layout(set = 0, binding = 9) uniform sampler2D env_map;
+
 #include "brdf.glsl"
 
 void main() {
@@ -50,7 +55,15 @@ void main() {
     vec3 V = normalize(frame.camPos_ambient.xyz - in_world_pos);
     vec3 Lo = direct_lighting(in_world_pos, N, V, albedo, metallic, roughness);
 
+    // Same IBL branch as the deferred pass (see lighting.frag): a glass pane
+    // must be filled by the same sky that fills the wall behind it, or the
+    // two disagree about what "ambient" means.
     vec3 ambient = frame.camPos_ambient.w * albedo * ao;
+    if (frame.ibl_params.x > 0.5) {
+        ambient = ibl_contrib(env_map, frame.ibl_params.w, N, V,
+                              albedo, metallic, roughness, ao,
+                              frame.ibl_params.y, frame.ibl_params.z);
+    }
     // The material's own emission colour — see lighting.frag. The forward path
     // has the material block in its set, so it needs no extra binding; it must
     // simply agree with the deferred path about what "emissive" means, or a

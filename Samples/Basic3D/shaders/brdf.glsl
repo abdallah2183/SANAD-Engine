@@ -73,6 +73,11 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
     // block's member ORDER is its layout, so inserting this above fog_params
     // would silently misread the fog range as a cloud altitude.
     vec4 skyCloud;
+    // Image-based lighting (sky environment bake): x = enabled, y = diffuse
+    // multiplier, z = specular multiplier, w = env mip count - 1 (0 when the
+    // bake has no mip chain, so the lobes sample level 0). APPENDED last, for
+    // the same reason as fog and clouds: nothing above it may move.
+    vec4 ibl_params;
 } frame;
 
 layout(set = 0, binding = 5) uniform sampler2D shadow_map;
@@ -425,6 +430,61 @@ vec3 direct_lighting(vec3 pos, vec3 N, vec3 V,
     }
 
     return Lo;
+}
+
+// --- Image-based lighting (split-sum from the sky environment) ---------------
+//
+// env_map is the equirectangular sky bake (SkyEnv): gradient + haze + sun,
+// no clouds. The DIFFUSE lobe samples a very blurry mip — the whole-scene
+// average colour as ambient, but direction-aware (sky above, ground below),
+// which is what the old scalar ambient could never do. The SPECULAR lobe
+// walks the mip chain by roughness (level 0 = mirror) along the reflection
+// vector, combined with the Lazarov analytic fit of the environment BRDF so
+// no LUT texture is needed. Both lobes are occluded by the material AO.
+//
+// The sampler rides a PARAMETER, not a fixed binding: the deferred pass binds
+// the bake at 8 and the forward pass at 9 (its 7-8 are the material block),
+// and a sampler-typed parameter keeps this file shareable verbatim — the same
+// reason direct_lighting takes no storage.
+//
+// Mapping MUST match SkyEnv (equirect_direction/equirect_uv): u wraps at -X,
+// v = 0 is straight down. The roundtrip test in test_skyenv pins both sides;
+// a mirrored pair that disagrees puts the sun's reflection on the wrong side
+// of every glossy surface.
+vec2 env_equirect_uv(vec3 dir) {
+    return vec2(atan(dir.z, dir.x) * 0.15915494 + 0.5,
+                asin(clamp(dir.y, -1.0, 1.0)) * 0.31830988 + 0.5);
+}
+
+// Environment BRDF fit (Lazarov 2013): the split-sum scale/bias for (F0,
+// roughness, NoV) without a LUT texture. Average error vs the tabulated
+// integral is under a percent — invisible next to a mip-blurred sample.
+vec3 env_brdf_approx(vec3 F0, float roughness, float NoV) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    vec4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+    vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
+    return F0 * AB.x + AB.y;
+}
+
+vec3 ibl_contrib(sampler2D env_map, float env_max_lod,
+                 vec3 N, vec3 V, vec3 albedo, float metallic, float roughness,
+                 float ao, float diffuse_mul, float specular_mul) {
+    float NoV = max(dot(N, V), 1e-4);
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    // Diffuse: the blurriest mip along the normal — directional ambient.
+    vec3 irradiance =
+        textureLod(env_map, env_equirect_uv(N), min(env_max_lod, 5.0)).rgb;
+    vec3 F = fresnel_schlick(NoV, F0);
+    vec3 diffuse = irradiance * albedo * ((vec3(1.0) - F) * (1.0 - metallic)) / PI;
+    // Specular: roughness walks the chain along the reflection vector.
+    vec3 R = reflect(-V, N);
+    vec3 prefiltered = textureLod(
+        env_map, env_equirect_uv(R),
+        clamp(roughness * env_max_lod, 0.0, env_max_lod)).rgb;
+    vec3 specular = prefiltered * env_brdf_approx(F0, roughness, NoV);
+    return (diffuse * diffuse_mul + specular * specular_mul) * ao;
 }
 
 // Distance fog: fades a surface toward a haze colour over world-space distance

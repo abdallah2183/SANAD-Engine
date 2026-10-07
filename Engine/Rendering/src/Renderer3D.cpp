@@ -158,7 +158,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         ld.bindings = std::span<const rhi::DescriptorBinding>(material_binds);
         m_material_layout = device.create_descriptor_set_layout(ld);
 
-        const std::array<rhi::DescriptorBinding, 8> lighting_binds{{
+        const std::array<rhi::DescriptorBinding, 9> lighting_binds{{
             {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // base
             {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
             {2, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // surface
@@ -167,6 +167,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
             {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // cascade shadow map
             {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // point/spot shadow atlas
             {7, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // emissive radiance
+            {8, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // sky env bake (IBL)
         }};
         rhi::DescriptorSetLayoutDesc lld{};
         lld.bindings = std::span<const rhi::DescriptorBinding>(lighting_binds);
@@ -217,12 +218,15 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         // forward.frag declares them — above the gbuffer textures 0-3 that the
         // forward path does not have, since it reconstructs the surface from
         // vertex attributes instead of reading it back out of a target.
-        const std::array<rhi::DescriptorBinding, 5> forward_binds{{
+        const std::array<rhi::DescriptorBinding, 6> forward_binds{{
             {4, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
             {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
             {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
             {7, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
             {8, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+            // The sky env bake (IBL). Binding 9, not 0-3: the forward set has
+            // no gbuffer, and 7-8 are the material pair forward.frag declares.
+            {9, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
         }};
         rhi::DescriptorSetLayoutDesc fld{};
         fld.bindings = std::span<const rhi::DescriptorBinding>(forward_binds);
@@ -542,6 +546,13 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         return false;
     }
 
+    // Sky environment bake target (IBL). Not fatal when the device refuses:
+    // the lighting pass falls back to the scalar ambient, so a missing bake
+    // dims nothing to black — it just renders the old look.
+    if (!ensure_env_map()) {
+        NF_LOG_WARN(LogCategory::RHI, "Renderer3D: env map unavailable; IBL falls back to scalar ambient");
+    }
+
     // Terrain splat palette (binding 2 of the material set). One std140 array
     // of vec4 — no staging buffer, no sampler, no layout transition, just a
     // CPU-side mirror plus an update, exactly like the frame uniforms above.
@@ -825,6 +836,11 @@ void Renderer3D::shutdown() {
     }
     m_white_view.reset();
     m_white_texture.reset();
+    m_env_view.reset();
+    m_env_texture.reset();
+    m_env_sampler.reset();
+    m_env_baked_once = false;
+    m_env_has_mips = false;
     m_shadow_fb.reset();
     m_shadow_view.reset();
     m_shadow_map.reset();
@@ -969,6 +985,108 @@ bool Renderer3D::ensure_local_shadow_atlas(u32 tile_size) {
     return true;
 }
 
+bool Renderer3D::ensure_env_map() {
+    // The sky bake target: one equirect, half-float HDR, full mip chain for
+    // the roughness walk. Created once (resolution-independent), uploaded and
+    // mipmapped by refresh_env_map() whenever the sky moves.
+    if (m_env_texture && m_env_view && m_env_sampler) return true;
+    if (!m_device) return false;
+    rhi::TextureDesc desc{};
+    desc.width = static_cast<u32>(kSkyEnvWidth);
+    desc.height = static_cast<u32>(kSkyEnvHeight);
+    desc.mip_levels = static_cast<u32>(kSkyEnvMips);
+    desc.format = rhi::Format::R16G16B16A16_SFloat;
+    // TransferSrc is required, not just TransferDst: the mip chain is built
+    // with blits that READ each level as a blit source. Missing it is a
+    // validation error (VUID-vkCmdBlitImage-srcImage-00219) that runs silently
+    // without the validation layer and fails loudly with it.
+    desc.usage = rhi::ImageUsage::TransferDst | rhi::ImageUsage::TransferSrc |
+                 rhi::ImageUsage::Sampled;
+    auto texture = m_device->create_texture(desc);
+    if (!texture) return false;
+    rhi::TextureViewDesc vd{};
+    vd.texture = texture.get();
+    vd.dimension = rhi::ViewDimension::View2D;
+    vd.aspect = rhi::ImageAspect::Color;
+    vd.base_mip = 0;
+    vd.mip_count = static_cast<u32>(kSkyEnvMips);
+    vd.base_layer = 0;
+    vd.layer_count = 1;
+    auto view = m_device->create_texture_view(vd);
+    if (!view) return false;
+    // Clamp-to-edge on all axes: the u = 0/1 seam is one texel column apart
+    // in the bake, and Repeat would smear the -X direction across it.
+    rhi::SamplerDesc sd{};
+    sd.mag = rhi::Filter::Linear;
+    sd.min = rhi::Filter::Linear;
+    sd.mip = rhi::MipMapMode::Linear;
+    sd.address_u = rhi::AddressMode::ClampToEdge;
+    sd.address_v = rhi::AddressMode::ClampToEdge;
+    sd.address_w = rhi::AddressMode::ClampToEdge;
+    auto sampler = m_device->create_sampler(sd);
+    if (!sampler) return false;
+    m_env_texture = std::move(texture);
+    m_env_view = std::move(view);
+    m_env_sampler = std::move(sampler);
+    m_env_baked_once = false;
+    return true;
+}
+
+bool Renderer3D::refresh_env_map(const SkyParams& sky, const Vec3& sun_dir,
+                                 const Vec3& sun_color, bool light_enabled) {
+    if (!ensure_env_map()) return false;
+    const SkyEnvKey key = SkyEnvKey::make(sky, sun_dir, sun_color, light_enabled);
+    if (m_env_baked_once && m_env_baked_key.matches(key)) return true;
+    bake_sky_env(m_env_pixels, kSkyEnvWidth, kSkyEnvHeight, sky, sun_dir,
+                 sun_color, light_enabled);
+    const usize byte_size = m_env_pixels.size() * sizeof(u16);
+    rhi::BufferDesc staging_desc{};
+    staging_desc.size = byte_size;
+    staging_desc.usage = rhi::BufferUsage::TransferSrc;
+    staging_desc.memory = rhi::MemoryUsage::CPUToGPU;
+    auto staging = m_device->create_buffer(staging_desc);
+    if (!staging) return false;
+    staging->update(m_env_pixels.data(), 0, byte_size);
+    // The bake replaces the LIVE texture in place (same object, new
+    // contents), so quiesce first: the other in-flight slot may still be
+    // sampling it, and uploading under a pending read is a data race. This
+    // runs only when the sky actually moved, so the stall is rare by design.
+    m_device->wait_idle();
+    auto upload = m_device->create_upload_context();
+    if (!upload) return false;
+    upload->copy_buffer_to_texture(*staging, *m_env_texture, 0, 0, 0,
+                                   static_cast<u32>(kSkyEnvWidth),
+                                   static_cast<u32>(kSkyEnvHeight));
+    auto fence = upload->submit();
+    if (!fence || !fence->wait()) return false;
+    auto mip_cmd = m_device->create_command_buffer();
+    auto mip_fence = m_device->create_fence(false);
+    if (!mip_cmd || !mip_fence) return false;
+    mip_cmd->begin();
+    // Blurs level 0 down the chain for the roughness walk. On success every
+    // level ends SHADER_READ; on refusal (format cannot blit) the backend
+    // returns BEFORE recording anything, so the buffer below submits empty —
+    // a harmless no-op — and the lobes sample level 0: shiny but valid,
+    // never black.
+    m_env_has_mips = mip_cmd->generate_mipmaps(*m_env_texture);
+    mip_cmd->end();
+    m_device->submit(*mip_cmd, rhi::SubmitInfo{.signal_fence = mip_fence.get()});
+    if (!mip_fence->wait()) return false;
+    if (!m_env_has_mips) {
+        auto trans = m_device->create_command_buffer();
+        auto trans_fence = m_device->create_fence(false);
+        if (!trans || !trans_fence) return false;
+        trans->begin();
+        trans->transition_texture_for_sampling(*m_env_texture);
+        trans->end();
+        m_device->submit(*trans, rhi::SubmitInfo{.signal_fence = trans_fence.get()});
+        if (!trans_fence->wait()) return false;
+    }
+    m_env_baked_key = key;
+    m_env_baked_once = true;
+    return true;
+}
+
 bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world,
                         const Camera& camera, rhi::Texture& out_target,
                         bool out_is_present_source, u32 frame_slot) {
@@ -982,6 +1100,19 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // it does not depend on the output resolution.
     if (!ensure_shadow_atlas(m_shadow_tile_size)) return false;
     if (!ensure_local_shadow_atlas(m_local_shadow_tile_size)) return false;
+
+    // Sky environment bake for image-based lighting. Re-bakes only when the
+    // sky or the sun moved (SkyEnvKey epsilon); the first frame always bakes.
+    // env_ready false means "read the scalar ambient" — the shader's
+    // ibl_params.x guard — so a refused texture can never black the scene.
+    bool env_ready = false;
+    if (m_ibl_enabled) {
+        const Vec3 sun_dir = Vec3{-m_directional.direction.x, -m_directional.direction.y,
+                                  -m_directional.direction.z}
+                                 .normalized();
+        const Vec3 sun_col = m_directional.color * m_directional.intensity;
+        env_ready = refresh_env_map(m_sky, sun_dir, sun_col, m_directional.enabled);
+    }
 
     // --- Frustum culling: RenderWorld → Visible Objects ---
     nf::Clock cull_clock;
@@ -1107,6 +1238,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     fu.sky_cloud[1] = m_sky.cloud_altitude;
     fu.sky_cloud[2] = m_sky.cloud_scale;
     fu.sky_cloud[3] = m_sky.cloud_time;
+    // IBL uniforms (appended last — see the header). w is the specular walk's
+    // top lod: full chain when the bake blurred, 0 when it did not.
+    fu.ibl_params[0] = env_ready ? 1.0f : 0.0f;
+    fu.ibl_params[1] = m_ibl_diffuse;
+    fu.ibl_params[2] = m_ibl_specular;
+    fu.ibl_params[3] =
+        (env_ready && m_env_has_mips) ? static_cast<float>(kSkyEnvMips - 1) : 0.0f;
     fu.counts[0] = static_cast<i32>(m_point_lights.size());
     fu.counts[1] = static_cast<i32>(m_spot_lights.size());
     for (u32 i = 0; i < m_point_lights.size() && i < kMaxPointLights; ++i) {
@@ -1240,7 +1378,14 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     }
 
     {
-        const std::array<rhi::DescriptorWrite, 8> lighting_writes{{
+        // The env bake, or the white texture when there is no bake: an
+        // unwritten binding is not a valid set, and the ibl_params.x guard
+        // means the substitute is never sampled.
+        const rhi::TextureView* env_view =
+            (env_ready && m_env_view) ? m_env_view.get() : m_white_view.get();
+        const rhi::Sampler* env_sampler =
+            (env_ready && m_env_sampler) ? m_env_sampler.get() : m_sampler.get();
+        const std::array<rhi::DescriptorWrite, 9> lighting_writes{{
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer0_view.get(), m_sampler.get()},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer1_view.get(), m_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer2_view.get(), m_sampler.get()},
@@ -1249,6 +1394,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_shadow_view.get(), m_sampler.get()},
             {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_sampler.get()},
             {7, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer3_view.get(), m_sampler.get()},
+            {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, env_view, env_sampler},
         }};
         m_device->update_descriptor_set(*lighting_set, std::span<const rhi::DescriptorWrite>(lighting_writes));
 
@@ -1367,7 +1513,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 }
                 const rhi::TextureView* albedo =
                     entry->albedo_view ? entry->albedo_view : m_white_view.get();
-                const std::array<rhi::DescriptorWrite, 5> forward_writes{{
+                // Binding 9 is the env bake (forward.frag), with the same
+                // valid-substitute rule as the lighting set above.
+                const rhi::TextureView* fwd_env =
+                    (env_ready && m_env_view) ? m_env_view.get() : m_white_view.get();
+                const rhi::Sampler* fwd_env_sampler =
+                    (env_ready && m_env_sampler) ? m_env_sampler.get() : m_sampler.get();
+                const std::array<rhi::DescriptorWrite, 6> forward_writes{{
                     {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0,
                      sizeof(FrameUniforms), nullptr, nullptr},
                     {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
@@ -1377,6 +1529,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                     {7, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
                      12 * sizeof(float), nullptr, nullptr},
                     {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
+                    {9, rhi::DescriptorType::SampledImage, nullptr, 0, 0, fwd_env, fwd_env_sampler},
                 }};
                 m_device->update_descriptor_set(*fwd_set,
                                                 std::span<const rhi::DescriptorWrite>(forward_writes));

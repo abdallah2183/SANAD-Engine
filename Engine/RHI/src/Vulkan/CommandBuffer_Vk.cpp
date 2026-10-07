@@ -377,8 +377,11 @@ bool VulkanCommandBuffer::generate_mipmaps(Texture& texture) {
     if (mips <= 1) {
         return true; // nothing to do
     }
+    // Half-float HDR bakes blur on every desktop GPU that reports blit
+    // support for the format (checked below); the allow-list is the gate, the
+    // feature query is the guard.
     if (vk_tex.format() != Format::R8G8B8A8_UNorm && vk_tex.format() != Format::R8G8B8A8_sRGB &&
-        vk_tex.format() != Format::B8G8R8A8_UNorm) {
+        vk_tex.format() != Format::B8G8R8A8_UNorm && vk_tex.format() != Format::R16G16B16A16_SFloat) {
         NF_LOG_ERROR(LogCategory::RHI, "generate_mipmaps: unsupported format for blitting");
         return false;
     }

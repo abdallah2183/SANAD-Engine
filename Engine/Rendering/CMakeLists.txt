@@ -23,6 +23,7 @@ set(NFRENDERING_SOURCES
     src/ShadowCascades.cpp
     src/LocalShadows.cpp
     src/Sky.cpp
+    src/SkyEnv.cpp
     src/TimeOfDay.cpp
     src/Terrain.cpp
     src/CameraShake.cpp
