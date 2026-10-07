@@ -117,6 +117,13 @@ if(NF_GLSLC_EXECUTABLE)
     # downsample; the kernel rides a push-constant mode flag (see bloom.frag).
     nf_compile_shaders(NFBasic3DBloomShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "bloom")
+    # SSAO pair: hemisphere occlusion (ssao) + bilateral blur (ssao_blur).
+    # Both fullscreen, both optional: without the .spv the stage stays off
+    # and the lighting pass reads scalar 1.0.
+    nf_compile_shaders(NFBasic3DSSAOShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "ssao")
+    nf_compile_shaders(NFBasic3DSSAOBlurShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "ssao_blur")
     # GPU picking id pass (GpuPicker). Deliberately lives beside the other
     # renderer shaders: it reuses their vertex layout and transform path, and
     # picking is only correct if the id image lines up with the rendered one.

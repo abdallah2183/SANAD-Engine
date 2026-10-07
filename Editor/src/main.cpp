@@ -95,6 +95,9 @@ struct EditorConfig {
     // ambient (the pre-IBL look). A look-dev A/B switch: the same frame with
     // and without image-based lighting, nothing else moving.
     bool no_ibl = false;
+    // --no-ssao: skip the ambient-occlusion stage (the pre-SSAO look). Same
+    // A/B role as --no-ibl.
+    bool no_ssao = false;
     // Empty means "open the engine tree", which is how the editor has always
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
@@ -207,6 +210,8 @@ EditorConfig parse_args(int argc, char** argv) {
             c.no_automation = true;
         } else if (arg == "--no-ibl") {
             c.no_ibl = true;
+        } else if (arg == "--no-ssao") {
+            c.no_ssao = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("NOVAForgeEditor (Phase 5)\n"
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
@@ -223,7 +228,8 @@ EditorConfig parse_args(int argc, char** argv) {
                         "                      full UI) as a 24-bit BMP, then exit\n"
                         "  --no-automation   With --frames, do not drive the UI automation\n"
                         "                      harness (deterministic captures)\n"
-                        "  --no-ibl          Light with the scalar ambient (pre-IBL look)");
+                        "  --no-ibl          Light with the scalar ambient (pre-IBL look)\n"
+                        "  --no-ssao         Skip ambient occlusion (pre-SSAO look)");
             std::exit(0);
         }
     }
@@ -853,6 +859,11 @@ int main(int argc, char** argv) {
         if (cfg.no_ibl) {
             runtime.set_ibl_enabled(false);
             NF_LOG_INFO(nf::LogCategory::Editor, "IBL disabled by --no-ibl (scalar ambient)");
+        }
+        // --no-ssao: same once-at-startup application as --no-ibl above.
+        if (cfg.no_ssao) {
+            runtime.set_ssao_enabled(false);
+            NF_LOG_INFO(nf::LogCategory::Editor, "SSAO disabled by --no-ssao");
         }
         {
             const auto rows = app.outliner_rows();

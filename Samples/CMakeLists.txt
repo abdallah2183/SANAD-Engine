@@ -49,7 +49,7 @@ target_compile_definitions(NFSampleBasic3D PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFSampleBasic3D NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFSampleBasic3D NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
 add_executable(NFSampleRuntimeScene
@@ -63,7 +63,7 @@ target_compile_definitions(NFSampleRuntimeScene PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFSampleRuntimeScene NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFSampleRuntimeScene NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
 # --- GamePlayer — NOVAForgePlayer: the standalone game window the editor's
@@ -80,7 +80,7 @@ target_compile_definitions(NFGamePlayer PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFGamePlayer NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFGamePlayer NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
 # --- SimpleGame — playable demo: Cube Collector (WASD, coins, enemy) ---
@@ -95,7 +95,7 @@ target_compile_definitions(NFSampleSimpleGame PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFSampleSimpleGame NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFSampleSimpleGame NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
 # --- VehicleDemo — drivable Jolt car: chassis + 4 posed wheels, obstacles, gates ---
@@ -110,7 +110,7 @@ target_compile_definitions(NFSampleVehicleDemo PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFSampleVehicleDemo NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFSampleVehicleDemo NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
 # --- WaterDemo — animated Gerstner surface, shore surf, and a buoy riding the CPU field ---
@@ -130,7 +130,7 @@ target_compile_definitions(NFSampleWaterDemo PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFSampleWaterDemo NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFSampleWaterDemo NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
 # --- MedievalVillage — third-person collection game on the MegaKit assets ---
@@ -157,7 +157,7 @@ target_compile_definitions(NFSampleMedievalVillage PRIVATE
 )
 
 if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(NFSampleMedievalVillage NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+    add_dependencies(NFSampleMedievalVillage NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
     add_dependencies(NFSampleMedievalVillage NFEditorImGuiShaders)
 endif()
 

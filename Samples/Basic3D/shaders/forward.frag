@@ -46,6 +46,9 @@ layout(set = 0, binding = 13) uniform sampler2D emissiveTex;
 // above them; it rides the same sampler parameter into ibl_contrib.
 layout(set = 0, binding = 9) uniform sampler2D env_map;
 
+// Binding 14: the blurred SSAO (see lighting.frag binding 9).
+layout(set = 0, binding = 14) uniform sampler2D ssao_map;
+
 #include "brdf.glsl"
 #include "pbr_maps.glsl"
 
@@ -95,6 +98,10 @@ void main() {
     // reason: a pane at the far edge of the scene is behind as much air as the
     // opaque surface it partly hides, and fogging only the opaque one would
     // leave a transparent silhouette that gets sharper with distance.
-    vec3 lit = ambient + Lo + emissive;
+    //
+    // Same SSAO rule as the deferred pass (see lighting.frag): the pane's
+    // ambient is occluded like the wall's.
+    float ssao = frame.ssao_params.x > 0.5 ? texture(ssao_map, in_uv).r : 1.0;
+    vec3 lit = ambient * ssao + Lo + emissive;
     out_color = vec4(apply_fog(in_world_pos, lit), matParams.baseColor.a);
 }

@@ -107,7 +107,7 @@ target_compile_definitions(RHITests PRIVATE
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(RHITests NFTriangleShaders NFQuadShaders NFRHIPushShaders
         NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders
-        NFBasic3DBloomShaders NFBasic3DPickShaders)
+        NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
 endif()
 
 add_executable(AssetTests
@@ -481,7 +481,7 @@ endif()
 if(NF_GLSLC_EXECUTABLE)
     # The packager copies these, so they must exist before the tests run.
     add_dependencies(ToolTests NFBasic3DDepthShaders NFBasic3DGBufferShaders
-        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DPickShaders)
+        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
 endif()
 
 # --- Editor tests (window-independent editor logic + headless GPU viewport) ---
@@ -560,7 +560,7 @@ target_compile_definitions(HeadlessProbe PRIVATE
 )
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(HeadlessProbe NFTriangleShaders NFBasic3DDepthShaders
-        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders)
+        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 if(MSVC)
     set_property(TARGET HeadlessProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

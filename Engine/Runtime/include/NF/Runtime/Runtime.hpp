@@ -574,6 +574,15 @@ public:
         }
     }
 
+    /// Screen-space ambient occlusion on/off, exposed for the same reason:
+    /// capture flows and game settings screens need the compare switch
+    /// without touching scene data.
+    void set_ssao_enabled(bool enabled) {
+        if (m_renderer != nullptr) {
+            m_renderer->set_ssao_enabled(enabled);
+        }
+    }
+
     /// The renderer's tonemap operator, exposed for the same reason
     /// `set_exposure` is: `renderer()` is const by design, and a scene may
     /// author the operator per level (a stylized level wants ACES, a

@@ -26,6 +26,7 @@
 #include <NF/Scene/Transform.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 
@@ -3408,4 +3409,97 @@ NF_TEST(pbr_emissive_map_matches_scalar_emission) {
     NF_CHECK(bare_g > 0u); // sanity: the unmapped cube actually glows green
     NF_CHECK(mapped_g * 2 < bare_g); // green killed by the magenta map
     NF_CHECK(mapped_r > mapped_g * 2); // ...while red survives
+}
+
+// ---------------------------------------------------------------------------
+NF_TEST(ssao_renderer_state_defaults_on) {
+    // Pure state, no device: on by default (the quality goal), with sane
+    // radius/bias for meter-scale scenes.
+    Renderer3D renderer;
+    NF_CHECK(renderer.ssao_enabled());
+    NF_CHECK_NEAR(renderer.ssao_intensity(), 1.0f, 1e-6f);
+    NF_CHECK_NEAR(renderer.ssao_radius(), 0.5f, 1e-6f);
+    NF_CHECK_NEAR(renderer.ssao_bias(), 0.02f, 1e-6f);
+    renderer.set_ssao_enabled(false);
+    NF_CHECK(!renderer.ssao_enabled());
+    renderer.set_ssao_intensity(0.5f);
+    NF_CHECK_NEAR(renderer.ssao_intensity(), 0.5f, 1e-6f);
+    renderer.set_ssao_radius(1.0f);
+    NF_CHECK_NEAR(renderer.ssao_radius(), 1.0f, 1e-6f);
+    renderer.set_ssao_bias(0.0f);
+    NF_CHECK_NEAR(renderer.ssao_bias(), 0.0f, 1e-6f);
+}
+
+// Renders a narrow corridor (floor + two close walls, camera looking down
+// its length) with SSAO on/off. Facing walls occlude each other across most
+// of the frame at radius 2, so the signal is broad, not a 3-pixel crack.
+static bool render_ssao_corner(rhi::IGraphicsDevice& dev, bool ssao_on,
+                               std::vector<Pixel>& out) {
+    Camera cam{};
+    cam.position = {0.0f, 0.3f, 2.2f};
+    cam.target = {0.0f, -0.3f, -2.0f};
+    cam.up = {0.0f, 1.0f, 0.0f};
+    cam.aspect = 1.0f;
+    cam.fov_y_rad = 60.0f * 3.14159265359f / 180.0f;
+    cam.near_plane = 0.1f;
+    cam.far_plane = 100.0f;
+    update_camera(cam);
+    return render_full_chain(
+        dev, 64, 64,
+        [&](ecs::World& world, MeshLibrary& meshes, Renderer3D& renderer) {
+            auto slab = StaticMesh::create_cube(1.0f);
+            StaticMeshHandle h = meshes.add(std::move(slab));
+            meshes.upload_all(dev);
+            PBRMaterialParams gray{};
+            set_rgb(gray, 0.8f, 0.8f, 0.8f);
+            gray.roughness = 0.9f;
+            MaterialHandle m = renderer.materials().create_instance(
+                *renderer.gbuffer_material(), gray, "ssaogray");
+            auto add_slab = [&](float x, float y, float z, float sx, float sy, float sz) {
+                Entity e = world.create_entity();
+                world.add<scene::Transform>(e, scene::Transform{});
+                world.get<scene::Transform>(e)->local_x = x;
+                world.get<scene::Transform>(e)->local_y = y;
+                world.get<scene::Transform>(e)->local_z = z;
+                world.get<scene::Transform>(e)->scale_x = sx;
+                world.get<scene::Transform>(e)->scale_y = sy;
+                world.get<scene::Transform>(e)->scale_z = sz;
+                world.add<MeshComponent>(e, MeshComponent{h, m, true});
+            };
+            add_slab(0.0f, -0.7f, -1.0f, 4.0f, 0.2f, 10.0f);   // floor
+            add_slab(-0.7f, 0.8f, -1.0f, 0.2f, 3.0f, 10.0f);   // left wall
+            add_slab(0.7f, 0.8f, -1.0f, 0.2f, 3.0f, 10.0f);    // right wall
+            // Dim direct light: SSAO multiplies the AMBIENT, so a sun that
+            // outshines the sky buries the signal under direct light that
+            // occlusion must never touch.
+            DirectionalLight d{Vec3{0.3f, -1.0f, -0.4f}, Vec3{1, 1, 1}, 0.4f, true};
+            renderer.set_directional_light(d);
+            renderer.set_ssao_enabled(ssao_on);
+            // Radius 2 over walls 1.4 apart: every surface sees an occluder.
+            // Intensity 2.5 (not the 1.0 default): at 64x64 the LDR rounding
+            // eats single-digit occlusion, so the mechanism test runs hot
+            // while the defaults stay product-sane (pinned by the state test
+            // above and verified visually in the editor).
+            renderer.set_ssao_radius(2.0f);
+            renderer.set_ssao_intensity(2.5f);
+        },
+        out, nullptr, &cam);
+}
+
+NF_TEST(ssao_darkens_an_inside_corner) {
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    std::vector<Pixel> off, on;
+    NF_CHECK(render_ssao_corner(dev, false, off));
+    NF_CHECK(render_ssao_corner(dev, true, on));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    // The open corridor end shows identical sky in both frames, so it only
+    // dilutes the ratio; the facing walls and floor carry the signal.
+    const u64 off_sum = pixel_sum(off);
+    const u64 on_sum = pixel_sum(on);
+    NF_LOG_WARN(nf::LogCategory::Core, "ssao corridor: off={} on={}", off_sum, on_sum);
+    NF_CHECK(off_sum > 0u); // sanity: the scene is actually lit
+    NF_CHECK(on_sum * 50 < off_sum * 49); // broad contact darkening (~4% here)
+    NF_CHECK(count_different_pixels(off, on) > 400); // ...across the frame
 }

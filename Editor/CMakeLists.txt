@@ -158,6 +158,8 @@ if(NF_GLSLC_EXECUTABLE)
         NFBasic3DForwardShaders
         NFBasic3DTonemapShaders
         NFBasic3DBloomShaders
+        NFBasic3DSSAOShaders
+        NFBasic3DSSAOBlurShaders
         NFBasic3DPickShaders
         NFBasic3DPresentShaders)
 endif()

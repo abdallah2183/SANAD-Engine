@@ -78,6 +78,12 @@ layout(set = 0, binding = 4) uniform FrameUniforms {
     // bake has no mip chain, so the lobes sample level 0). APPENDED last, for
     // the same reason as fog and clouds: nothing above it may move.
     vec4 ibl_params;
+    // Screen-space ambient occlusion: x = enabled, y = intensity, z = radius
+    // (world units), w = bias. APPENDED last. The lighting pass multiplies
+    // its ambient (scalar and IBL alike, never the direct term) by the
+    // blurred SSAO texture when x is set; the raw/blur passes read y/z/w
+    // from the push block instead (same values, same frame).
+    vec4 ssao_params;
 } frame;
 
 layout(set = 0, binding = 5) uniform sampler2D shadow_map;

@@ -111,6 +111,11 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     // stays off (bloom_active() reports false) and every other pass renders.
     auto bvs = load_spirv_file(sdir / "bloom_vert.spv");
     auto bfs = load_spirv_file(sdir / "bloom_frag.spv");
+    // SSAO pair, optional on the same terms: without ssao_*.spv the stage
+    // stays off and the lighting pass reads scalar 1.0 (no occlusion).
+    auto svs = load_spirv_file(sdir / "ssao_vert.spv");
+    auto sfs = load_spirv_file(sdir / "ssao_frag.spv");
+    auto sbfs = load_spirv_file(sdir / "ssao_blur_frag.spv");
     if (dvs.empty() || gvs.empty() || lvs.empty() || tvs.empty()) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to load shaders from '{}'", sdir.string());
         return false;
@@ -133,6 +138,11 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     if (!bvs.empty() && !bfs.empty()) {
         m_bloom_vs = device.create_shader_module({bvs, rhi::ShaderStage::Vertex});
         m_bloom_fs = device.create_shader_module({bfs, rhi::ShaderStage::Fragment});
+    }
+    if (!svs.empty() && !sfs.empty() && !sbfs.empty()) {
+        m_ssao_vs = device.create_shader_module({svs, rhi::ShaderStage::Vertex});
+        m_ssao_fs = device.create_shader_module({sfs, rhi::ShaderStage::Fragment});
+        m_ssao_blur_fs = device.create_shader_module({sbfs, rhi::ShaderStage::Fragment});
     }
     if (!m_depth_vs || !m_gbuffer_vs || !m_lighting_vs || !m_forward_vs || !m_tonemap_vs) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shader modules");
@@ -162,7 +172,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         ld.bindings = std::span<const rhi::DescriptorBinding>(material_binds);
         m_material_layout = device.create_descriptor_set_layout(ld);
 
-        const std::array<rhi::DescriptorBinding, 9> lighting_binds{{
+        const std::array<rhi::DescriptorBinding, 10> lighting_binds{{
             {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // base
             {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
             {2, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // surface
@@ -172,6 +182,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
             {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // point/spot shadow atlas
             {7, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // emissive radiance
             {8, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // sky env bake (IBL)
+            {9, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // blurred SSAO
         }};
         rhi::DescriptorSetLayoutDesc lld{};
         lld.bindings = std::span<const rhi::DescriptorBinding>(lighting_binds);
@@ -222,7 +233,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         // forward.frag declares them — above the gbuffer textures 0-3 that the
         // forward path does not have, since it reconstructs the surface from
         // vertex attributes instead of reading it back out of a target.
-        const std::array<rhi::DescriptorBinding, 10> forward_binds{{
+        const std::array<rhi::DescriptorBinding, 11> forward_binds{{
             {4, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
             {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
             {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
@@ -237,6 +248,9 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
             {11, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // metallic-roughness
             {12, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // occlusion
             {13, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // emissive
+            // Blurred SSAO (forward.frag binding 14). Same treatment as the
+            // deferred path: the pane's ambient is occluded like the wall's.
+            {14, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // ssao
         }};
         rhi::DescriptorSetLayoutDesc fld{};
         fld.bindings = std::span<const rhi::DescriptorBinding>(forward_binds);
@@ -244,6 +258,33 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     }
     if (!m_material_layout || !m_lighting_layout || !m_tonemap_layout || !m_forward_layout) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create descriptor layouts");
+        return false;
+    }
+    // SSAO sets (created with the others so every layout exists before any
+    // pipeline is built against it). The raw pass reads depth + normal + the
+    // frame block (144-byte prefix: invViewProj for reconstruction); the blur
+    // reads the raw result guided by depth + normal. Push blocks carry the
+    // rest (viewProj for the raw pass; nothing for the blur).
+    {
+        const std::array<rhi::DescriptorBinding, 3> ssao_binds{{
+            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // depth
+            {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
+            {2, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1}, // frame block
+        }};
+        rhi::DescriptorSetLayoutDesc sld{};
+        sld.bindings = std::span<const rhi::DescriptorBinding>(ssao_binds);
+        m_ssao_layout = device.create_descriptor_set_layout(sld);
+        const std::array<rhi::DescriptorBinding, 3> ssao_blur_binds{{
+            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // raw AO
+            {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // depth
+            {2, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
+        }};
+        rhi::DescriptorSetLayoutDesc sbld{};
+        sbld.bindings = std::span<const rhi::DescriptorBinding>(ssao_blur_binds);
+        m_ssao_blur_layout = device.create_descriptor_set_layout(sbld);
+    }
+    if (!m_ssao_layout || !m_ssao_blur_layout) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create SSAO layouts");
         return false;
     }
 
@@ -315,6 +356,17 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         bloom_rpd.color_attachments = std::span<const rhi::ColorAttachment>(bloom_atts);
         bloom_rpd.present_source = false;
         m_bloom_rp = device.create_render_pass(bloom_rpd);
+
+        // SSAO pair: single R8 occlusion, cleared (both stages fully write
+        // their target), no depth. One render pass serves both, the way the
+        // bloom levels share theirs — only the framebuffers differ.
+        rhi::ColorAttachment ssao_att{};
+        ssao_att.format = rhi::Format::R8_UNorm;
+        const std::array<rhi::ColorAttachment, 1> ssao_atts{ssao_att};
+        rhi::RenderPassDesc ssao_rpd{};
+        ssao_rpd.color_attachments = std::span<const rhi::ColorAttachment>(ssao_atts);
+        ssao_rpd.present_source = false;
+        m_ssao_rp = device.create_render_pass(ssao_rpd);
 
         // The present variant is format-agnostic at creation (the swapchain
         // format is fixed at init time by the caller's swapchain, typically
@@ -483,6 +535,45 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
             m_present_pipeline_off = m_pipeline_cache->get_or_create(ppd);
         }
 
+        // SSAO pair (optional, like bloom): the raw pass and the blur share
+        // the vertex shader and the render pass; only the fragment differs.
+        // A missing stage degrades to "no occlusion" via the lighting pass's
+        // white fallback, never to a failed init.
+        if (m_ssao_vs && m_ssao_fs && m_ssao_layout && m_ssao_rp) {
+            rhi::PipelineDesc spd{};
+            spd.vs = m_ssao_vs.get();
+            spd.fs = m_ssao_fs.get();
+            spd.render_pass = m_ssao_rp.get();
+            spd.descriptor_set_layout = m_ssao_layout.get();
+            spd.rasterizer.cull_mode = rhi::CullMode::None;
+            spd.depth.test_enabled = false;
+            spd.depth.write_enabled = false;
+            spd.push_constant_size = 80; // viewProj mat4 + radius/bias/intensity
+            spd.push_constant_stages = rhi::ShaderStage::Fragment;
+            m_ssao_pipeline = m_pipeline_cache->get_or_create(spd);
+            if (!m_ssao_pipeline) {
+                NF_LOG_WARN(LogCategory::RHI, "Renderer3D: SSAO pipeline creation failed; "
+                                              "the SSAO stage is disabled");
+            }
+        }
+        if (m_ssao_vs && m_ssao_blur_fs && m_ssao_blur_layout && m_ssao_rp) {
+            rhi::PipelineDesc sbpd{};
+            sbpd.vs = m_ssao_vs.get();
+            sbpd.fs = m_ssao_blur_fs.get();
+            sbpd.render_pass = m_ssao_rp.get();
+            sbpd.descriptor_set_layout = m_ssao_blur_layout.get();
+            sbpd.rasterizer.cull_mode = rhi::CullMode::None;
+            sbpd.depth.test_enabled = false;
+            sbpd.depth.write_enabled = false;
+            sbpd.push_constant_size = 0; // tunables are constants; texel via textureSize()
+            sbpd.push_constant_stages = rhi::ShaderStage::Fragment;
+            m_ssao_blur_pipeline = m_pipeline_cache->get_or_create(sbpd);
+            if (!m_ssao_blur_pipeline) {
+                NF_LOG_WARN(LogCategory::RHI, "Renderer3D: SSAO blur pipeline creation failed; "
+                                              "the SSAO stage is disabled");
+            }
+        }
+
     }
     if (!m_depth_pipeline || !m_gbuffer_material || !m_gbuffer_material->valid() ||
         !m_lighting_pipeline || !m_forward_pipeline || !m_tonemap_pipeline_off) {
@@ -611,6 +702,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     hdr_desc.format = rhi::Format::R16G16B16A16_SFloat;
     m_hdr_handle = m_graph->create_texture("HDR", hdr_desc);
     create_bloom_textures(width, height);
+    create_ssao_textures(width, height);
 
     rhi::TextureDesc depth_desc{};
     depth_desc.width = width;
@@ -629,6 +721,21 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
 
     NF_LOG_INFO(LogCategory::RHI, "Renderer3D initialized ({}x{})", width, height);
     return true;
+}
+
+void Renderer3D::create_ssao_textures(u32 width, u32 height) {
+    // Half resolution: occlusion is low frequency once blurred, and quarter
+    // pixels means quarter taps. Same R8 single channel the shaders write.
+    rhi::TextureDesc desc{};
+    desc.width = std::max(1u, width >> 1);
+    desc.height = std::max(1u, height >> 1);
+    desc.format = rhi::Format::R8_UNorm;
+    // TransferSrc for the same reason the bloom levels have it: a test that
+    // wants to check the stage's output rather than only its pass list has to
+    // be able to copy it back.
+    desc.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferSrc;
+    m_ssao_raw_handle = m_graph->create_texture("SSAORaw", desc);
+    m_ssao_blur_handle = m_graph->create_texture("SSAOBlur", desc);
 }
 
 void Renderer3D::create_bloom_textures(u32 width, u32 height) {
@@ -716,6 +823,41 @@ bool Renderer3D::create_resolution_dependent(u32 width, u32 height) {
         }
     }
 
+    // SSAO pair: a view each (the blur samples the raw, the lighting samples
+    // the blur) and a framebuffer each (they share one render pass, like the
+    // bloom levels, so the framebuffer is the only per-target object).
+    {
+        rhi::Texture* raw = m_graph->get_texture(m_ssao_raw_handle);
+        rhi::Texture* blur = m_graph->get_texture(m_ssao_blur_handle);
+        if (!raw || !blur) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: SSAO targets missing");
+            return false;
+        }
+        auto make_ssao_view = [&](rhi::Texture* tex) {
+            rhi::TextureViewDesc svd{};
+            svd.dimension = rhi::ViewDimension::View2D;
+            svd.aspect = rhi::ImageAspect::Color;
+            svd.base_mip = 0;
+            svd.mip_count = 1;
+            svd.base_layer = 0;
+            svd.layer_count = 1;
+            svd.texture = tex;
+            return m_device->create_texture_view(svd);
+        };
+        m_ssao_raw_view = make_ssao_view(raw);
+        m_ssao_blur_view = make_ssao_view(blur);
+        const std::array<rhi::Texture*, 1> raw_colors{raw};
+        m_ssao_raw_fb = m_device->create_framebuffer(
+            *m_ssao_rp, std::span<rhi::Texture* const>(raw_colors), nullptr);
+        const std::array<rhi::Texture*, 1> blur_colors{blur};
+        m_ssao_blur_fb = m_device->create_framebuffer(
+            *m_ssao_rp, std::span<rhi::Texture* const>(blur_colors), nullptr);
+        if (!m_ssao_raw_view || !m_ssao_blur_view || !m_ssao_raw_fb || !m_ssao_blur_fb) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create SSAO views/framebuffers");
+            return false;
+        }
+    }
+
     const std::array<rhi::Texture*, 0> no_colors{};
     m_depth_fb = m_device->create_framebuffer(*m_depth_rp,
                                               std::span<rhi::Texture* const>(no_colors), depth);
@@ -755,6 +897,10 @@ void Renderer3D::destroy_resolution_dependent() {
         m_bloom_fbs[level].reset();
         m_bloom_views[level].reset();
     }
+    m_ssao_raw_fb.reset();
+    m_ssao_blur_fb.reset();
+    m_ssao_raw_view.reset();
+    m_ssao_blur_view.reset();
 }
 
 void Renderer3D::resize(u32 width, u32 height) {
@@ -782,6 +928,7 @@ void Renderer3D::resize(u32 width, u32 height) {
     hdr_desc.format = rhi::Format::R16G16B16A16_SFloat;
     m_hdr_handle = m_graph->create_texture("HDR", hdr_desc);
     create_bloom_textures(width, height);
+    create_ssao_textures(width, height);
     rhi::TextureDesc depth_desc{};
     depth_desc.width = width;
     depth_desc.height = height;
@@ -818,6 +965,8 @@ void Renderer3D::shutdown() {
     m_tonemap_pipeline_off = nullptr;
     m_tonemap_pipeline_present = nullptr;
     m_bloom_pipeline = nullptr;
+    m_ssao_pipeline = nullptr;
+    m_ssao_blur_pipeline = nullptr;
     m_present_pipeline_off = nullptr;
     m_present_pipeline_present = nullptr;
     m_graph.reset();
@@ -828,11 +977,14 @@ void Renderer3D::shutdown() {
     m_tonemap_vs.reset(); m_tonemap_fs.reset();
     m_present_vs.reset(); m_present_fs.reset();
     m_bloom_vs.reset(); m_bloom_fs.reset();
+    m_ssao_vs.reset(); m_ssao_fs.reset(); m_ssao_blur_fs.reset();
     m_material_layout.reset();
     m_lighting_layout.reset();
     m_forward_layout.reset();
     m_tonemap_layout.reset();
     m_bloom_layout.reset();
+    m_ssao_layout.reset();
+    m_ssao_blur_layout.reset();
     m_depth_rp.reset();
     m_gbuffer_rp.reset();
     m_lighting_rp.reset();
@@ -840,10 +992,13 @@ void Renderer3D::shutdown() {
     m_tonemap_rp_off.reset();
     m_tonemap_rp_present.reset();
     m_bloom_rp.reset();
+    m_ssao_rp.reset();
     m_tonemap_present_ready = false;
     for (u32 level = 0; level < kBloomLevels; ++level) {
         m_bloom_handles[level] = kInvalidRGHandle;
     }
+    m_ssao_raw_handle = kInvalidRGHandle;
+    m_ssao_blur_handle = kInvalidRGHandle;
     m_white_view.reset();
     m_white_texture.reset();
     m_env_view.reset();
@@ -1111,6 +1266,17 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     if (!ensure_shadow_atlas(m_shadow_tile_size)) return false;
     if (!ensure_local_shadow_atlas(m_local_shadow_tile_size)) return false;
 
+    // SSAO stage state, decided once like bloom_on: the uniform fill, the
+    // lighting binding, and the pass list below must agree, and a predicate
+    // recomputed in three places eventually disagrees with itself in one.
+    bool ssao_on = m_ssao_enabled && m_ssao_pipeline != nullptr &&
+                   m_ssao_blur_pipeline != nullptr && m_ssao_raw_view && m_ssao_blur_view &&
+                   m_ssao_raw_fb && m_ssao_blur_fb &&
+                   m_ssao_raw_handle != kInvalidRGHandle &&
+                   m_ssao_blur_handle != kInvalidRGHandle &&
+                   m_graph->get_texture(m_ssao_raw_handle) != nullptr &&
+                   m_graph->get_texture(m_ssao_blur_handle) != nullptr;
+
     // Sky environment bake for image-based lighting. Re-bakes only when the
     // sky or the sun moved (SkyEnvKey epsilon); the first frame always bakes.
     // env_ready false means "read the scalar ambient" — the shader's
@@ -1255,6 +1421,12 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     fu.ibl_params[2] = m_ibl_specular;
     fu.ibl_params[3] =
         (env_ready && m_env_has_mips) ? static_cast<float>(kSkyEnvMips - 1) : 0.0f;
+    // SSAO uniforms (appended last). x rides the stage state so the lighting
+    // pass never samples a target that was not rendered this frame.
+    fu.ssao_params[0] = ssao_on ? 1.0f : 0.0f;
+    fu.ssao_params[1] = m_ssao_intensity;
+    fu.ssao_params[2] = m_ssao_radius;
+    fu.ssao_params[3] = m_ssao_bias;
     fu.counts[0] = static_cast<i32>(m_point_lights.size());
     fu.counts[1] = static_cast<i32>(m_spot_lights.size());
     for (u32 i = 0; i < m_point_lights.size() && i < kMaxPointLights; ++i) {
@@ -1349,6 +1521,42 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: descriptor allocation failed");
         return false;
     }
+    // SSAO sets (raw + blur), held until execute() returns like the bloom
+    // sets. Allocated only when the stage records this frame.
+    std::unique_ptr<rhi::DescriptorSet> ssao_set;
+    std::unique_ptr<rhi::DescriptorSet> ssao_blur_set;
+    if (ssao_on) {
+        ssao_set = m_descriptor_allocators[frame_slot]->allocate(*m_ssao_layout);
+        ssao_blur_set = m_descriptor_allocators[frame_slot]->allocate(*m_ssao_blur_layout);
+        if (!ssao_set || !ssao_blur_set) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: SSAO descriptor allocation failed");
+            return false;
+        }
+        // Clamp-to-edge sampling: spiral/blur taps past the screen edge must
+        // clamp, not wrap (m_sampler repeats). The env sampler has the right
+        // state; the white fallback never applies here (views are confirmed).
+        const rhi::Sampler* clamp_sampler = m_env_sampler ? m_env_sampler.get() : m_sampler.get();
+        const std::array<rhi::DescriptorWrite, 3> ssao_writes{{
+            {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+             m_gbuffer_depth_view.get(), clamp_sampler},
+            {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+             m_gbuffer1_view.get(), clamp_sampler},
+            {2, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0, 144,
+             nullptr, nullptr},
+        }};
+        m_device->update_descriptor_set(*ssao_set,
+                                        std::span<const rhi::DescriptorWrite>(ssao_writes));
+        const std::array<rhi::DescriptorWrite, 3> ssao_blur_writes{{
+            {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+             m_ssao_raw_view.get(), clamp_sampler},
+            {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+             m_gbuffer_depth_view.get(), clamp_sampler},
+            {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+             m_gbuffer1_view.get(), clamp_sampler},
+        }};
+        m_device->update_descriptor_set(*ssao_blur_set,
+                                        std::span<const rhi::DescriptorWrite>(ssao_blur_writes));
+    }
 
     // Whether the bloom chain records this frame. Decided once, here, because
     // three separate things depend on it — the tonemap descriptor writes, the
@@ -1395,7 +1603,9 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             (env_ready && m_env_view) ? m_env_view.get() : m_white_view.get();
         const rhi::Sampler* env_sampler =
             (env_ready && m_env_sampler) ? m_env_sampler.get() : m_sampler.get();
-        const std::array<rhi::DescriptorWrite, 9> lighting_writes{{
+        // Same rule for the blurred SSAO (white = 1.0 = no occlusion), bound
+        // once the stage below confirms it rendered this frame.
+        const std::array<rhi::DescriptorWrite, 10> lighting_writes{{
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer0_view.get(), m_sampler.get()},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer1_view.get(), m_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer2_view.get(), m_sampler.get()},
@@ -1405,6 +1615,9 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_sampler.get()},
             {7, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer3_view.get(), m_sampler.get()},
             {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, env_view, env_sampler},
+            {9, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+             (m_ssao_blur_view && fu.ssao_params[0] > 0.5f) ? m_ssao_blur_view.get() : m_white_view.get(),
+             m_sampler.get()},
         }};
         m_device->update_descriptor_set(*lighting_set, std::span<const rhi::DescriptorWrite>(lighting_writes));
 
@@ -1529,7 +1742,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                     (env_ready && m_env_view) ? m_env_view.get() : m_white_view.get();
                 const rhi::Sampler* fwd_env_sampler =
                     (env_ready && m_env_sampler) ? m_env_sampler.get() : m_sampler.get();
-                const std::array<rhi::DescriptorWrite, 10> forward_writes{{
+                const std::array<rhi::DescriptorWrite, 11> forward_writes{{
                     {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0,
                      sizeof(FrameUniforms), nullptr, nullptr},
                     {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
@@ -1548,6 +1761,10 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                      entry->occlusion_view ? entry->occlusion_view : m_white_view.get(), m_sampler.get()},
                     {13, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
                      entry->emissive_view ? entry->emissive_view : m_white_view.get(), m_sampler.get()},
+                    {14, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     (m_ssao_blur_view && fu.ssao_params[0] > 0.5f) ? m_ssao_blur_view.get()
+                                                                    : m_white_view.get(),
+                     m_sampler.get()},
                 }};
                 m_device->update_descriptor_set(*fwd_set,
                                                 std::span<const rhi::DescriptorWrite>(forward_writes));
@@ -1875,6 +2092,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     lighting_pass.reads = {m_gbuffer0_handle, m_gbuffer1_handle, m_gbuffer2_handle,
                            m_gbuffer3_handle, m_depth_handle,
                            rg_shadow, rg_local_shadow};
+    // The blurred SSAO joins the read set only when the stage rendered it:
+    // the graph orders lighting after the blur from this edge, and the
+    // barrier lands on it for the same reason. Unconditional would pin a
+    // never-written texture into every frame's barrier list.
+    if (ssao_on) {
+        lighting_pass.reads.push_back(m_ssao_blur_handle);
+    }
     lighting_pass.color_attachments = {m_hdr_handle};
     lighting_pass.execute = [&](rhi::CommandBuffer& gcmd) {
         const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -1888,6 +2112,78 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.end_render_pass();
     };
     m_graph->add_pass(lighting_pass);
+
+    // SSAO pair (raw half-res hemisphere + bilateral blur). Recorded only
+    // when the stage is on — the lighting binding stays valid either way
+    // (white fallback + ssao_params.x guard). The graph orders them from the
+    // read/write sets: raw after the gbuffer, blur after raw, lighting after
+    // blur. Half viewports: occlusion is low frequency once blurred.
+    if (ssao_on) {
+        struct SsaoPush {
+            float view_proj[16];
+            float radius;
+            float bias;
+            float intensity;
+            float unused;
+        };
+        static_assert(sizeof(SsaoPush) == 80, "must match ssao.frag's push block");
+        SsaoPush push{};
+        std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
+        push.radius = m_ssao_radius;
+        push.bias = m_ssao_bias;
+        push.intensity = m_ssao_intensity;
+        push.unused = 0.0f;
+        const u32 ssao_w = std::max(1u, m_width >> 1);
+        const u32 ssao_h = std::max(1u, m_height >> 1);
+
+        RGPassDesc ssao_pass{};
+        ssao_pass.name = "SSAORaw";
+        ssao_pass.reads = {m_depth_handle, m_gbuffer1_handle};
+        ssao_pass.color_attachments = {m_ssao_raw_handle};
+        // `push`, `ssao_w` and `ssao_h` ride BY VALUE (not by the [&] around
+        // it): the locals die at the end of this block but the lambda runs at
+        // execute() far below. A reference capture reads dead stack there —
+        // in practice a zero viewport, which renders nothing and fails
+        // SILENTLY (white clears survive, lighting multiplies by 1.0, every
+        // test passes vacuously). This exact dangling-capture is what made
+        // the stage a no-op.
+        ssao_pass.execute = [&, push, ssao_w, ssao_h](rhi::CommandBuffer& gcmd) {
+            const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{1.0f, 1.0f, 1.0f, 1.0f}};
+            gcmd.begin_render_pass(*m_ssao_rp, *m_ssao_raw_fb,
+                                   std::span<const rhi::ClearValue>(clears));
+            gcmd.bind_pipeline(*m_ssao_pipeline);
+            const std::array<const rhi::DescriptorSet*, 1> sets{ssao_set.get()};
+            gcmd.bind_descriptor_sets(*m_ssao_layout,
+                                      std::span<const rhi::DescriptorSet* const>(sets), 0);
+            gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(push), &push);
+            gcmd.set_viewport(0, 0, ssao_w, ssao_h);
+            gcmd.set_scissor(0, 0, ssao_w, ssao_h);
+            gcmd.draw(3);
+            gcmd.end_render_pass();
+        };
+        m_graph->add_pass(ssao_pass);
+
+        RGPassDesc ssao_blur{};
+        ssao_blur.name = "SSAOBlur";
+        ssao_blur.reads = {m_ssao_raw_handle, m_depth_handle, m_gbuffer1_handle};
+        ssao_blur.color_attachments = {m_ssao_blur_handle};
+        // Same by-value capture as the raw pass (see above): ssao_w/ssao_h
+        // die with the block, the lambda outlives it.
+        ssao_blur.execute = [&, ssao_w, ssao_h](rhi::CommandBuffer& gcmd) {
+            const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{1.0f, 1.0f, 1.0f, 1.0f}};
+            gcmd.begin_render_pass(*m_ssao_rp, *m_ssao_blur_fb,
+                                   std::span<const rhi::ClearValue>(clears));
+            gcmd.bind_pipeline(*m_ssao_blur_pipeline);
+            const std::array<const rhi::DescriptorSet*, 1> sets{ssao_blur_set.get()};
+            gcmd.bind_descriptor_sets(*m_ssao_blur_layout,
+                                      std::span<const rhi::DescriptorSet* const>(sets), 0);
+            gcmd.set_viewport(0, 0, ssao_w, ssao_h);
+            gcmd.set_scissor(0, 0, ssao_w, ssao_h);
+            gcmd.draw(3);
+            gcmd.end_render_pass();
+        };
+        m_graph->add_pass(ssao_blur);
+    }
 
     // Transparency: forward PBR over the HDR image Lighting just wrote.
     //

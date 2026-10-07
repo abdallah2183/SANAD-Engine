@@ -32,6 +32,9 @@ layout(set = 0, binding = 7) uniform sampler2D gbuffer_emissive;
 // material block, so the bake rides a sampler PARAMETER into ibl_contrib and
 // each includer declares its own binding (9 in forward.frag).
 layout(set = 0, binding = 8) uniform sampler2D env_map;
+// Binding 9: the blurred SSAO (white = 1.0 = no occlusion when the stage is
+// off — same valid-substitute rule as every optional binding).
+layout(set = 0, binding = 9) uniform sampler2D ssao_map;
 
 #include "brdf.glsl"
 
@@ -222,6 +225,11 @@ void main() {
     // emission on the way to the eye as well, and applying it before the sum
     // would leave the terms disagreeing about how much air is between them.
     // Sky pixels already returned above, so this only touches real surfaces.
-    vec3 lit = ambient + Lo + emissive;
+    //
+    // SSAO multiplies the AMBIENT (scalar and IBL alike) — never the direct
+    // term, never the emission. Occlusion is, by definition, blocked skylight;
+    // a shadowed crevice still receives its lamp and glows what it glows.
+    float ssao = frame.ssao_params.x > 0.5 ? texture(ssao_map, in_uv).r : 1.0;
+    vec3 lit = ambient * ssao + Lo + emissive;
     out_color = vec4(apply_fog(pos, lit), 1.0);
 }

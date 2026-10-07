@@ -79,7 +79,7 @@ Requirements:
 
 | Subsystem | What it does |
 | :--- | :--- |
-| **Vulkan RHI &amp; Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, deferred PBR (GBuffer, GGX, cascaded shadows, procedural sky), **sky-baked image-based lighting** (split-sum diffuse + specular from the procedural sky, Lazarov BRDF fit — toggle with `set_ibl_enabled`, compare with `--no-ibl`), post stack (bloom, grading, tonemap, vignette), GPU picking, LOD |
+| **Vulkan RHI &amp; Rendering** | Low-overhead Vulkan 1.2+ backend, DAG RenderGraph, deferred PBR (GBuffer, GGX, cascaded shadows, procedural sky), **sky-baked image-based lighting** (split-sum diffuse + specular from the procedural sky, Lazarov BRDF fit — toggle with `set_ibl_enabled`, compare with `--no-ibl`), **screen-space ambient occlusion** (half-res hemisphere + bilateral blur, multiplies ambient only — `set_ssao_enabled`), post stack (bloom, grading, tonemap, vignette), GPU picking, LOD |
 | **Data-Oriented ECS** | Cache-friendly sparse-set ECS with hierarchical transform propagation |
 | **2D Layer (`NFScene2D`)** | CPU-only 2D: cameras, sprite batcher, tile chunks, 2D physics, A\* |
 | **Destruction** | Fracture assets, damage world with budgets, Jolt debris sink |

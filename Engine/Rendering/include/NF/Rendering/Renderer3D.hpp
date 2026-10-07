@@ -527,6 +527,21 @@ public:
         m_ibl_specular = specular;
     }
 
+    // --- Screen-space ambient occlusion ---
+    // On by default: hemisphere occlusion from the depth buffer darkens
+    // crevices, corners and contact points (the ambient — scalar and IBL —
+    // is multiplied, never the direct light). Radius is in world units;
+    // bias lifts sample rays off the surface so flat walls do not freckle.
+    // Pure state (no device).
+    void set_ssao_enabled(bool enabled) { m_ssao_enabled = enabled; }
+    bool ssao_enabled() const { return m_ssao_enabled; }
+    void set_ssao_intensity(float intensity) { m_ssao_intensity = intensity; }
+    float ssao_intensity() const { return m_ssao_intensity; }
+    void set_ssao_radius(float radius) { m_ssao_radius = radius; }
+    float ssao_radius() const { return m_ssao_radius; }
+    void set_ssao_bias(float bias) { m_ssao_bias = bias; }
+    float ssao_bias() const { return m_ssao_bias; }
+
     // --- Sky (Phase 13): procedural gradient + sun disk, painted by the
     // lighting pass where depth reads far. Pure state: no device needed.
     void set_sky(const SkyParams& sky) { m_sky = sky; }
@@ -793,6 +808,9 @@ private:
         // the total moves: x = enabled, y = diffuse multiplier, z = specular
         // multiplier, w = env mip count - 1 (0 = sample level 0 only).
         float ibl_params[4];
+        // Screen-space ambient occlusion. APPENDED last: x = enabled,
+        // y = intensity, z = radius (world units), w = bias.
+        float ssao_params[4];
     };
     // Per-field offsets rather than one hand-summed total: a field inserted in
     // the middle shifts everything after it, and the sum only notices when the
@@ -838,7 +856,8 @@ private:
     static_assert(offsetof(FrameUniforms, fog_params) == kFogBlockOffset + 16);
     static_assert(offsetof(FrameUniforms, sky_cloud) == kFogBlockOffset + 32);
     static_assert(offsetof(FrameUniforms, ibl_params) == kFogBlockOffset + 48);
-    static_assert(sizeof(FrameUniforms) == kFogBlockOffset + 64,
+    static_assert(offsetof(FrameUniforms, ssao_params) == kFogBlockOffset + 64);
+    static_assert(sizeof(FrameUniforms) == kFogBlockOffset + 80,
                   "FrameUniforms must match the shader's std140 layout");
 
     rhi::IGraphicsDevice* m_device = nullptr;
@@ -1073,6 +1092,29 @@ private:
     // back to the scalar ambient, so a failed IBL dims nothing to black.
     bool refresh_env_map(const SkyParams& sky, const Vec3& sun_dir,
                          const Vec3& sun_color, bool light_enabled);
+
+    // Screen-space ambient occlusion (half-resolution raw + bilateral blur).
+    // Resolution-dependent like the bloom chain (rebuilt on resize, not per
+    // frame); the passes are recorded per frame only when enabled.
+    bool m_ssao_enabled = true;
+    float m_ssao_intensity = 1.0f;
+    float m_ssao_radius = 0.5f;
+    float m_ssao_bias = 0.02f;
+    RGTextureHandle m_ssao_raw_handle = kInvalidRGHandle;
+    RGTextureHandle m_ssao_blur_handle = kInvalidRGHandle;
+    std::unique_ptr<rhi::TextureView> m_ssao_raw_view;
+    std::unique_ptr<rhi::TextureView> m_ssao_blur_view;
+    std::unique_ptr<rhi::Framebuffer> m_ssao_raw_fb;
+    std::unique_ptr<rhi::Framebuffer> m_ssao_blur_fb;
+    std::unique_ptr<rhi::ShaderModule> m_ssao_vs;
+    std::unique_ptr<rhi::ShaderModule> m_ssao_fs;
+    std::unique_ptr<rhi::ShaderModule> m_ssao_blur_fs;
+    std::unique_ptr<rhi::DescriptorSetLayout> m_ssao_layout;
+    std::unique_ptr<rhi::DescriptorSetLayout> m_ssao_blur_layout;
+    std::unique_ptr<rhi::RenderPass> m_ssao_rp;
+    rhi::Pipeline* m_ssao_pipeline = nullptr;
+    rhi::Pipeline* m_ssao_blur_pipeline = nullptr;
+    void create_ssao_textures(u32 width, u32 height);
 
     // Terrain splat palette, bound on every gbuffer material set as binding 2.
     // One std140 array of vec4, mirrored CPU-side so a read-back matches what
