@@ -15,6 +15,7 @@
 layout(location = 0) in vec3 in_normal;
 layout(location = 1) in vec2 in_uv;
 layout(location = 2) in vec2 in_uv1;
+layout(location = 3) in vec3 in_world_pos;
 
 layout(location = 0) out vec4 out_base_color;
 layout(location = 1) out vec4 out_normal;
@@ -25,9 +26,17 @@ layout(set = 0, binding = 0) uniform MaterialParams {
     vec4 baseColor;   // rgb + a (alpha kept for future transparency)
     vec4 surface;     // metallic, roughness, ao, emissionStrength
     vec4 misc;        // emission.rgb, useBaseColorTex
+    vec4 mapFlags;    // useNormalTex, useMRoughTex, useOcclusionTex, useEmissiveTex
 } matParams;
 
 layout(set = 0, binding = 1) uniform sampler2D albedoTex;
+// PBR maps (bindings 3-6 of the material layout). Unbound slots read the
+// renderer's white fallback, and the mapFlags guard means the substitute is
+// never sampled — the same rule the albedo binding follows.
+layout(set = 0, binding = 3) uniform sampler2D normalTex;
+layout(set = 0, binding = 4) uniform sampler2D mroughTex;
+layout(set = 0, binding = 5) uniform sampler2D occlusionTex;
+layout(set = 0, binding = 6) uniform sampler2D emissiveTex;
 
 // Must match Renderer3D::kSplatPaletteLayers. Slot 0 is never read from here —
 // layer 0 is the material itself — but is kept so `slot + 1` stays in range
@@ -38,12 +47,24 @@ layout(set = 0, binding = 2) uniform SplatPalette {
     vec4 layers[kSplatPaletteLayers];
 } splatPalette;
 
+#include "pbr_maps.glsl"
+
 void main() {
     vec3 n = normalize(in_normal);
     vec3 base = matParams.baseColor.rgb;
     if (matParams.misc.w > 0.5) {
         base *= texture(albedoTex, in_uv).rgb;
     }
+    float metallic = matParams.surface.x;
+    float roughness = matParams.surface.y;
+    float ao = matParams.surface.z;
+    vec3 emission = matParams.misc.rgb * matParams.surface.w;
+    // Texture maps modulate the scalars above (multiplicative, glTF-style),
+    // evaluated here so the gbuffer stores the FINAL surface — the lighting
+    // pass never knows whether a value was authored or sampled.
+    apply_pbr_maps(normalTex, mroughTex, occlusionTex, emissiveTex,
+                   matParams.mapFlags, in_world_pos, in_uv,
+                   n, base, metallic, roughness, ao, emission);
 
     // Terrain layer splat. A surface the mesh has classified carries
     // `uv1 = (slot, blend)`: the layer it is in, and how far it has moved
@@ -63,12 +84,10 @@ void main() {
 
     out_base_color = vec4(base, matParams.baseColor.a);
     out_normal = vec4(n * 0.5 + 0.5, 1.0);
-    out_surface = vec4(matParams.surface.x, matParams.surface.y,
-                       matParams.surface.z, matParams.surface.w);
+    out_surface = vec4(metallic, roughness, ao, matParams.surface.w);
     // The emissive RADIANCE, already multiplied, so the lighting pass only has
-    // to add it. `misc.rgb` is the material's emission colour — the field the
-    // deferred path could not previously reach, because the lighting pass is
-    // fullscreen and has no per-object data. See PBRMaterialParams::pack() for
-    // how an unset emission colour resolves.
-    out_emissive = vec4(matParams.misc.rgb * matParams.surface.w, 1.0);
+    // to add it. `emission` above is misc.rgb * strength, optionally modulated
+    // by the emissive map — see PBRMaterialParams::pack() for how an unset
+    // emission colour resolves.
+    out_emissive = vec4(emission, 1.0);
 }

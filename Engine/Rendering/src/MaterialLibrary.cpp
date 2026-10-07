@@ -5,8 +5,8 @@
 
 namespace nf::rendering {
 
-// Matches the gbuffer shader's MaterialParams uniform block (std140, 48 bytes).
-static constexpr usize kMaterialParamsUboSize = 12 * sizeof(float);
+// Matches the gbuffer shader's MaterialParams uniform block (std140, 64 bytes).
+static constexpr usize kMaterialParamsUboSize = 16 * sizeof(float);
 
 MaterialLibrary::MaterialLibrary(rhi::IGraphicsDevice& device) : m_device(&device) {}
 
@@ -27,7 +27,7 @@ MaterialHandle MaterialLibrary::create_instance(Material& material, const PBRMat
         return kInvalidMaterialHandle;
     }
 
-    float packed[12];
+    float packed[16];
     params.pack(packed);
     entry->params_ubo->update(packed, 0, kMaterialParamsUboSize);
 
@@ -49,7 +49,7 @@ void MaterialLibrary::set_params(MaterialHandle handle, const PBRMaterialParams&
     MaterialEntry* entry = get(handle);
     if (!entry || !entry->params_ubo) return;
     entry->params = params;
-    float packed[12];
+    float packed[16];
     params.pack(packed);
     entry->params_ubo->update(packed, 0, kMaterialParamsUboSize);
 }
@@ -65,7 +65,12 @@ void MaterialLibrary::clear_albedo_texture(MaterialHandle handle) {
         return;
     }
     entry->albedo_view = nullptr;
-    entry->sampler = nullptr;
+    // The sampler is shared by all five map slots: drop it only when no slot
+    // still references it, so clearing one map never unbinds another's.
+    if (entry->normal_view == nullptr && entry->mrough_view == nullptr &&
+        entry->occlusion_view == nullptr && entry->emissive_view == nullptr) {
+        entry->sampler = nullptr;
+    }
     // Binding changed: the cached descriptor set no longer matches. Marked, not
     // destroyed — the renderer rebuilds it after it has waited on the fence.
     entry->set_dirty = true;
@@ -85,6 +90,110 @@ void MaterialLibrary::set_albedo_texture(MaterialHandle handle, const rhi::Textu
     // Tell the shader to sample the texture instead of the scalar base color
     PBRMaterialParams p = entry->params;
     p.use_base_color_texture = 1.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::set_normal_texture(MaterialHandle handle, const rhi::TextureView& view,
+                                         const rhi::Sampler& sampler) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->normal_view = &view;
+    entry->sampler = &sampler;
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_normal_texture = 1.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::clear_normal_texture(MaterialHandle handle) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->normal_view = nullptr;
+    if (entry->albedo_view == nullptr && entry->mrough_view == nullptr &&
+        entry->occlusion_view == nullptr && entry->emissive_view == nullptr) {
+        entry->sampler = nullptr;
+    }
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_normal_texture = 0.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::set_mrough_texture(MaterialHandle handle, const rhi::TextureView& view,
+                                         const rhi::Sampler& sampler) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->mrough_view = &view;
+    entry->sampler = &sampler;
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_mrough_texture = 1.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::clear_mrough_texture(MaterialHandle handle) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->mrough_view = nullptr;
+    if (entry->albedo_view == nullptr && entry->normal_view == nullptr &&
+        entry->occlusion_view == nullptr && entry->emissive_view == nullptr) {
+        entry->sampler = nullptr;
+    }
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_mrough_texture = 0.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::set_occlusion_texture(MaterialHandle handle, const rhi::TextureView& view,
+                                            const rhi::Sampler& sampler) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->occlusion_view = &view;
+    entry->sampler = &sampler;
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_occlusion_texture = 1.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::clear_occlusion_texture(MaterialHandle handle) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->occlusion_view = nullptr;
+    if (entry->albedo_view == nullptr && entry->normal_view == nullptr &&
+        entry->mrough_view == nullptr && entry->emissive_view == nullptr) {
+        entry->sampler = nullptr;
+    }
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_occlusion_texture = 0.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::set_emissive_texture(MaterialHandle handle, const rhi::TextureView& view,
+                                           const rhi::Sampler& sampler) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->emissive_view = &view;
+    entry->sampler = &sampler;
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_emissive_texture = 1.0f;
+    set_params(handle, p);
+}
+
+void MaterialLibrary::clear_emissive_texture(MaterialHandle handle) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    entry->emissive_view = nullptr;
+    if (entry->albedo_view == nullptr && entry->normal_view == nullptr &&
+        entry->mrough_view == nullptr && entry->occlusion_view == nullptr) {
+        entry->sampler = nullptr;
+    }
+    entry->set_dirty = true;
+    PBRMaterialParams p = entry->params;
+    p.use_emissive_texture = 0.0f;
     set_params(handle, p);
 }
 

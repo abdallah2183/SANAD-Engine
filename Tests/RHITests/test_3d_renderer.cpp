@@ -1380,7 +1380,7 @@ NF_TEST(pbr_material) {
     NF_CHECK_NEAR(p2->roughness, 1.0f, 1e-6f);
 
     // The params UBO actually holds the packed block
-    float packed[12];
+    float packed[16];
     p1->pack(packed);
     auto* mapped = static_cast<const float*>(renderer.materials().get(h1)->params_ubo->map());
     NF_CHECK(mapped);
@@ -3014,4 +3014,398 @@ NF_TEST(point_light_shadow_follows_a_moving_light) {
     NF_CHECK(std::abs(nx[1] - C) < 10.0);
     NF_CHECK(std::abs(py[0] - C) < 10.0);
     NF_CHECK(std::abs(ny[0] - C) < 10.0);
+}
+
+// ---------------------------------------------------------------------------
+// PBR texture maps (normal / metallic-roughness / occlusion / emissive)
+// ---------------------------------------------------------------------------
+
+/// One uploaded test map: texture + view kept alive by the caller past the
+/// render (the renderer shutdown inside render_full_chain must not free what
+/// the set still references — caller ownership, like the runtime cache).
+struct MapTexture {
+    std::unique_ptr<rhi::Texture> texture;
+    std::unique_ptr<rhi::TextureView> view;
+    std::unique_ptr<rhi::Sampler> sampler;
+};
+
+/// Uploads a tiny single-mip RGBA8 map. Solid colours in, exact texels out —
+/// no mip chain, no filtering ambiguity, so a response test measures the
+/// shader, not the sampler.
+bool upload_map_texture(rhi::IGraphicsDevice& dev, u32 w, u32 h,
+                        const std::vector<std::array<u8, 4>>& px, MapTexture& out) {
+    if (px.size() != usize(w) * h) return false;
+    rhi::TextureDesc td{};
+    td.width = w;
+    td.height = h;
+    td.format = rhi::Format::R8G8B8A8_UNorm;
+    td.mip_levels = 1;
+    td.usage = rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferDst;
+    auto tex = dev.create_texture(td);
+    if (!tex) return false;
+    rhi::BufferDesc sd{};
+    sd.size = px.size() * 4;
+    sd.usage = rhi::BufferUsage::TransferSrc;
+    sd.memory = rhi::MemoryUsage::CPUToGPU;
+    auto staging = dev.create_buffer(sd);
+    if (!staging) return false;
+    staging->update(static_cast<const void*>(px.data()), 0, sd.size);
+    auto upload = dev.create_upload_context();
+    if (!upload) return false;
+    upload->copy_buffer_to_texture(*staging, *tex, 0, 0, 0, w, h);
+    auto fence = upload->submit();
+    if (!fence || !fence->wait(kGpuTimeoutNs)) return false;
+    auto cmd = dev.create_command_buffer();
+    auto fence2 = dev.create_fence(false);
+    if (!cmd || !fence2) return false;
+    cmd->begin();
+    cmd->transition_texture_for_sampling(*tex);
+    cmd->end();
+    dev.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence2.get()});
+    if (!fence2->wait(kGpuTimeoutNs)) return false;
+    rhi::TextureViewDesc vd{};
+    vd.texture = tex.get();
+    auto view = dev.create_texture_view(vd);
+    if (!view) return false;
+    rhi::SamplerDesc samp{};
+    samp.mag = rhi::Filter::Linear;
+    samp.min = rhi::Filter::Linear;
+    samp.mip = rhi::MipMapMode::None;
+    samp.address_u = rhi::AddressMode::ClampToEdge;
+    samp.address_v = rhi::AddressMode::ClampToEdge;
+    samp.address_w = rhi::AddressMode::ClampToEdge;
+    auto sampler = dev.create_sampler(samp);
+    if (!sampler) return false;
+    out.texture = std::move(tex);
+    out.view = std::move(view);
+    out.sampler = std::move(sampler);
+    return true;
+}
+
+MapTexture solid_map(rhi::IGraphicsDevice& dev, u8 r, u8 g, u8 b, bool& ok) {
+    MapTexture t;
+    ok = upload_map_texture(dev, 2, 2,
+                            std::vector<std::array<u8, 4>>(4, {r, g, b, 255}), t);
+    return t;
+}
+
+/// One cube, one material, caller-chosen maps — the response tests below all
+/// render through this so only the map under test varies between frames.
+struct MapScene {
+    PBRMaterialParams material;
+    DirectionalLight light{Vec3{0.0f, -1.0f, -0.6f}, Vec3{1, 1, 1}, 2.0f, true};
+    bool light_on = true;
+    const MapTexture* normal = nullptr;
+    const MapTexture* mrough = nullptr;
+    const MapTexture* occlusion = nullptr;
+    const MapTexture* emissive = nullptr;
+};
+
+bool render_map_scene(rhi::IGraphicsDevice& dev, u32 W, u32 H, const MapScene& spec,
+                      std::vector<Pixel>& out) {
+    const Camera cam = make_camera(3.0f, float(W) / float(H));
+    return render_full_chain(
+        dev, W, H,
+        [&](ecs::World& world, MeshLibrary& meshes, Renderer3D& renderer) {
+            auto cube = StaticMesh::create_cube(1.5f);
+            StaticMeshHandle h = meshes.add(std::move(cube));
+            meshes.upload_all(dev);
+            MaterialHandle m = renderer.materials().create_instance(
+                *renderer.gbuffer_material(), spec.material, "maptest");
+            if (spec.normal)
+                renderer.materials().set_normal_texture(
+                    m, *spec.normal->view, *spec.normal->sampler);
+            if (spec.mrough)
+                renderer.materials().set_mrough_texture(
+                    m, *spec.mrough->view, *spec.mrough->sampler);
+            if (spec.occlusion)
+                renderer.materials().set_occlusion_texture(
+                    m, *spec.occlusion->view, *spec.occlusion->sampler);
+            if (spec.emissive)
+                renderer.materials().set_emissive_texture(
+                    m, *spec.emissive->view, *spec.emissive->sampler);
+            Entity e = world.create_entity();
+            world.add<scene::Transform>(e, scene::Transform{});
+            world.add<MeshComponent>(e, MeshComponent{h, m, true});
+            DirectionalLight d = spec.light;
+            d.enabled = spec.light_on;
+            renderer.set_directional_light(d);
+        },
+        out, nullptr, &cam);
+}
+
+NF_TEST(pbr_normal_map_tilts_the_surface_toward_the_light) {
+    // A tangent-space normal tilted toward a side light must catch direct
+    // light the geometric normal barely sees. Side light, matte gray cube:
+    // the flat face gets NoL ~ 0.14, the tilted one ~0.53 — and the tilt
+    // direction (toward +X, where the light is) is what the brighter frame
+    // proves, not just "a map changed pixels".
+    //
+    // The light sits HIGH (+Y): the face's mirror reflection samples the
+    // horizon, far from the sun disk, so the IBL specular cannot outshine the
+    // direct term the way it does when the sun sits behind the camera.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture flat = solid_map(dev, 128, 128, 255, ok);
+    NF_CHECK(ok);
+    MapTexture tilted = solid_map(dev, 204, 128, 230, ok); // ~(0.6, 0, 0.8)
+    NF_CHECK(ok);
+    MapTexture tilted_away = solid_map(dev, 51, 128, 230, ok); // ~(-0.6, 0, 0.8)
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
+    spec.material.roughness = 0.9f;
+    // Horizontal light from +X: the geometric face (NoL = 0) sees ambient
+    // only, while a +X tilt catches the full beam — the widest possible
+    // margin, with no sun-glint geometry to confuse it (the mirror
+    // reflection points at the horizon, far from the sun disk).
+    spec.light.direction = Vec3{-1.0f, 0.0f, 0.0f};
+    spec.light.color = Vec3{1, 1, 1};
+    spec.light.intensity = 4.0f;
+
+    std::vector<Pixel> flat_img, tilted_img, away_img;
+    MapScene flat_spec = spec;
+    flat_spec.normal = &flat;
+    NF_CHECK(render_map_scene(dev, 64, 64, flat_spec, flat_img));
+    MapScene tilted_spec = spec;
+    tilted_spec.normal = &tilted;
+    NF_CHECK(render_map_scene(dev, 64, 64, tilted_spec, tilted_img));
+    MapScene away_spec = spec;
+    away_spec.normal = &tilted_away;
+    NF_CHECK(render_map_scene(dev, 64, 64, away_spec, away_img));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    const u64 flat_c = pixel_sum_center(flat_img, 64, 64, 16);
+    const u64 tilted_c = pixel_sum_center(tilted_img, 64, 64, 16);
+    const u64 away_c = pixel_sum_center(away_img, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "normal map response: flat={} tilted={} away={}",
+                flat_c, tilted_c, away_c);
+    NF_CHECK(count_different_pixels(flat_img, tilted_img) > 200);
+    NF_CHECK(tilted_c > flat_c + flat_c * 2 / 5); // toward the light, not just elsewhere
+}
+
+NF_TEST(pbr_white_maps_match_the_scalar_material) {
+    // Identity control: neutral maps (flat normal, white mrough/occlusion/
+    // emissive-tint) must reproduce the scalar material bit for bit. Without
+    // this, every response test below could be measuring plumbing, not maps.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture flat = solid_map(dev, 128, 128, 255, ok);
+    NF_CHECK(ok);
+    MapTexture white = solid_map(dev, 255, 255, 255, ok);
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.7f, 0.6f, 0.5f);
+    spec.material.roughness = 0.5f;
+    spec.material.emission[0] = 0.2f;
+    spec.material.emission[1] = 0.2f;
+    spec.material.emission[2] = 0.2f;
+    spec.material.emission_strength = 1.0f;
+
+    std::vector<Pixel> bare, mapped;
+    NF_CHECK(render_map_scene(dev, 64, 64, spec, bare));
+    MapScene with_maps = spec;
+    with_maps.normal = &flat;
+    with_maps.mrough = &white;
+    with_maps.occlusion = &white;
+    with_maps.emissive = &white;
+    NF_CHECK(render_map_scene(dev, 64, 64, with_maps, mapped));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+    NF_CHECK_EQ(count_different_pixels(bare, mapped), 0u);
+}
+
+NF_TEST(pbr_mrough_map_matches_scalar_roughness) {
+    // The strongest map test there is: a G-channel roughness must render BIT-
+    // IDENTICAL to the scalar it multiplies to. Metal + frontal light (the
+    // geometry where the GGX lobe is broad enough to see at 64x64 — a matte
+    // dielectric's razor lobe is a few pixels and proves nothing).
+    //
+    // Exactness needs exact values: UNorm8 13/255 is NOT 0.05, so the smooth
+    // pair compares against scalar 13/255 (same IEEE division both sides),
+    // while the matte pair uses exactly-representable 1.0.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture smooth = solid_map(dev, 0, 13, 0, ok); // G = 13/255, B = 0
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.9f, 0.9f, 0.9f);
+    spec.material.metallic = 1.0f;
+    spec.light.direction = Vec3{0.0f, 0.0f, -1.0f}; // straight at the face
+    spec.light.color = Vec3{1, 1, 1};
+    spec.light.intensity = 2.0f;
+
+    std::vector<Pixel> scalar_mid, map_mid, scalar_matte, map_matte;
+    // Identity at a NON-spiky operating point: with metal + frontal light the
+    // GGX spike amplifies even a UNorm-conversion-bit wobble into visible
+    // pixels, so exactness is proven on a DIELECTRIC (broad dim lobe), where
+    // a conversion bit cannot move a pixel — while the metal pair below
+    // proves the range still separates.
+    MapScene mid = spec;
+    mid.material.metallic = 0.0f;
+    mid.material.roughness = 128.0f / 255.0f;
+    NF_CHECK(render_map_scene(dev, 64, 64, mid, scalar_mid));
+    MapTexture mid_map_tex = solid_map(dev, 0, 128, 0, ok);
+    NF_CHECK(ok);
+    MapScene with_mid = spec;
+    with_mid.material.metallic = 0.0f;
+    with_mid.material.roughness = 1.0f;
+    with_mid.mrough = &mid_map_tex;
+    NF_CHECK(render_map_scene(dev, 64, 64, with_mid, map_mid));
+    MapScene matte_s = spec;
+    matte_s.material.roughness = 1.0f;
+    NF_CHECK(render_map_scene(dev, 64, 64, matte_s, scalar_matte));
+    // The matte control preserves BOTH channels (G = 1 keeps roughness 1.0,
+    // B = 1 keeps metallic 1.0) — a G-only white would zero the metal and
+    // compare different materials.
+    MapTexture matte_keep_metal = solid_map(dev, 0, 255, 255, ok);
+    NF_CHECK(ok);
+    MapScene with_matte = spec;
+    with_matte.material.roughness = 1.0f;
+    with_matte.mrough = &matte_keep_metal;
+    NF_CHECK(render_map_scene(dev, 64, 64, with_matte, map_matte));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    // Map == scalar it multiplies to (tolerance 2: UNorm conversion rounding
+    // plus one GGX/tonemap rounding step on the steepest pixels).
+    NF_CHECK_EQ(count_different_pixels(map_mid, scalar_mid, 2), 0u);
+    NF_CHECK_EQ(count_different_pixels(map_matte, scalar_matte), 0u);
+    // ...and the smooth end of the range is visible (the old scalar bar).
+    std::vector<Pixel> map_smooth;
+    MapScene with_smooth = spec;
+    with_smooth.material.roughness = 1.0f;
+    with_smooth.mrough = &smooth;
+    NF_CHECK(render_map_scene(dev, 64, 64, with_smooth, map_smooth));
+    NF_CHECK(count_different_pixels(map_smooth, map_matte) > 150);
+}
+
+NF_TEST(pbr_metal_channel_switches_diffuse_for_reflection) {
+    // Scalar metallic 1, ambient IBL only (no direct light to hide behind).
+    // Bit-identity first: B = 1 over scalar 1 must equal scalar metal, B = 0
+    // is the dielectric image — and the two must differ, in the direction the
+    // sky gives (a rough metal mirrors the blurry sky better than a gray
+    // dielectric diffuses it, under this fixed default sky).
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture dielectric = solid_map(dev, 0, 255, 0, ok); // G=1, B=0
+    NF_CHECK(ok);
+    MapTexture metal = solid_map(dev, 0, 255, 255, ok); // G=1, B=1
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
+    spec.material.metallic = 1.0f;
+    spec.material.roughness = 1.0f;
+    spec.light_on = false; // ambient only
+
+    std::vector<Pixel> scalar_met, di_img, met_img;
+    NF_CHECK(render_map_scene(dev, 64, 64, spec, scalar_met));
+    MapScene di_spec = spec;
+    di_spec.mrough = &dielectric;
+    NF_CHECK(render_map_scene(dev, 64, 64, di_spec, di_img));
+    MapScene met_spec = spec;
+    met_spec.mrough = &metal;
+    NF_CHECK(render_map_scene(dev, 64, 64, met_spec, met_img));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    NF_CHECK_EQ(count_different_pixels(met_img, scalar_met), 0u);
+    const u64 di_c = pixel_sum_center(di_img, 64, 64, 16);
+    const u64 met_c = pixel_sum_center(met_img, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "metal response: dielectric={} metal={}", di_c,
+                met_c);
+    NF_CHECK(di_c > 0u); // sanity: the control frame is actually lit
+    NF_CHECK(count_different_pixels(di_img, met_img) > 200);
+    NF_CHECK(met_c >= di_c);
+}
+
+NF_TEST(pbr_occlusion_map_matches_scalar_ao) {
+    // Same bit-identity proof as the roughness map: R-channel occlusion must
+    // equal the scalar it multiplies to. Plus the direction check against the
+    // open frame (a 0.25 multiplier darkens — through whatever curve the
+    // tonemap draws, so the bound is loose on purpose).
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture shut = solid_map(dev, 64, 64, 64, ok); // R = 0.25
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
+    spec.material.roughness = 0.9f;
+    spec.light_on = false; // ambient only: ao scales the whole frame
+
+    std::vector<Pixel> scalar_img, map_img, open_img;
+    MapScene scalar = spec;
+    scalar.material.ao = 64.0f / 255.0f; // exactly the map texel, same division
+    NF_CHECK(render_map_scene(dev, 64, 64, scalar, scalar_img));
+    MapScene mapped = spec;
+    mapped.material.ao = 1.0f;
+    mapped.occlusion = &shut;
+    NF_CHECK(render_map_scene(dev, 64, 64, mapped, map_img));
+    MapScene open = spec;
+    open.material.ao = 1.0f;
+    NF_CHECK(render_map_scene(dev, 64, 64, open, open_img));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    NF_CHECK_EQ(count_different_pixels(map_img, scalar_img), 0u);
+    const u64 open_c = pixel_sum_center(open_img, 64, 64, 16);
+    const u64 shut_c = pixel_sum_center(map_img, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "occlusion response: open={} shut={}", open_c,
+                shut_c);
+    NF_CHECK(open_c > 0u);
+    // Darker — with headroom, because the tonemap compresses bright deltas:
+    // the exactness above is the strict proof, this is the direction.
+    NF_CHECK(shut_c * 6 < open_c * 5);
+}
+
+NF_TEST(pbr_emissive_map_matches_scalar_emission) {
+    // Same proof once more: magenta-mapped white emission must equal a
+    // scalar magenta emission — and both must kill the green the unmapped
+    // white glow has. Measured on the cube (center), never the sky.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture magenta = solid_map(dev, 255, 0, 255, ok);
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.1f, 0.1f, 0.1f);
+    spec.material.emission[0] = 1.0f;
+    spec.material.emission[1] = 1.0f;
+    spec.material.emission[2] = 1.0f;
+    spec.material.emission_strength = 3.0f;
+    spec.light_on = false; // the glow alone, no lighting to hide behind
+
+    std::vector<Pixel> bare, mapped, scalar;
+    NF_CHECK(render_map_scene(dev, 64, 64, spec, bare));
+    MapScene with_map = spec;
+    with_map.emissive = &magenta;
+    NF_CHECK(render_map_scene(dev, 64, 64, with_map, mapped));
+    MapScene scalar_magenta = spec;
+    scalar_magenta.material.emission[1] = 0.0f; // white * magenta = magenta
+    NF_CHECK(render_map_scene(dev, 64, 64, scalar_magenta, scalar));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    NF_CHECK_EQ(count_different_pixels(mapped, scalar), 0u);
+    u64 bare_g = 0, mapped_g = 0, mapped_r = 0;
+    for (u32 y = 16; y < 48; ++y) {
+        for (u32 x = 16; x < 48; ++x) {
+            const usize i = usize(y) * 64 + x;
+            bare_g += bare[i].g;
+            mapped_g += mapped[i].g;
+            mapped_r += mapped[i].r;
+        }
+    }
+    NF_LOG_WARN(nf::LogCategory::Core,
+                "emissive response: bare_g={} mapped_g={} mapped_r={}", bare_g, mapped_g,
+                mapped_r);
+    NF_CHECK(bare_g > 0u); // sanity: the unmapped cube actually glows green
+    NF_CHECK(mapped_g * 2 < bare_g); // green killed by the magenta map
+    NF_CHECK(mapped_r > mapped_g * 2); // ...while red survives
 }

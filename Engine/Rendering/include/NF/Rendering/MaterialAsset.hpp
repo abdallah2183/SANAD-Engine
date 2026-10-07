@@ -24,6 +24,12 @@ struct MaterialAsset {
     PBRMaterialParams params;
     // Optional albedo image (content:// logical path, "" = scalar only).
     std::string albedo;
+    // Optional PBR maps ("" = scalar only). glTF convention for the packed
+    // channels: mrough G = roughness, B = metallic; occlusion R = occlusion.
+    std::string normal;
+    std::string mrough;
+    std::string occlusion;
+    std::string emissive;
     // Sampler mip filtering for the albedo ("none", "nearest", "linear").
     // Anything else loads as linear; unknown keys are ignored as usual.
     rhi::MipMapMode mip_mode = rhi::MipMapMode::Linear;

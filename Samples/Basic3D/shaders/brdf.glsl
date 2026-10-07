@@ -487,6 +487,14 @@ vec3 ibl_contrib(sampler2D env_map, float env_max_lod,
     return (diffuse * diffuse_mul + specular * specular_mul) * ao;
 }
 
+// --- PBR texture maps --------------------------------------------------------
+//
+// Evaluated by apply_pbr_maps in pbr_maps.glsl (its own include — see the
+// header there for why it cannot live in this file). The lighting pass never
+// calls it directly: the gbuffer stores the FINAL modulated surface, so by
+// the time this file's direct_lighting/ibl_contrib run, the maps are already
+// baked into albedo/N/metallic/roughness/ao/emission.
+
 // Distance fog: fades a surface toward a haze colour over world-space distance
 // from the camera. Applies to the composited result (ambient + direct +
 // emission), not to the direct term alone — haze attenuates skylight and

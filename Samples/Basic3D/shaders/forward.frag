@@ -27,9 +27,19 @@ layout(set = 0, binding = 7) uniform MaterialParams {
     vec4 baseColor;   // rgb + a (a is the transparency this path exists for)
     vec4 surface;     // metallic, roughness, ao, emissionStrength
     vec4 misc;        // emission.rgb, useBaseColorTex
+    vec4 mapFlags;    // useNormalTex, useMRoughTex, useOcclusionTex, useEmissiveTex
 } matParams;
 
 layout(set = 0, binding = 8) uniform sampler2D albedoTex;
+
+// PBR maps (bindings 10-13 of the forward set; 9 is the IBL bake). Same
+// evaluation as the gbuffer path — a transparent surface must modulate by
+// the same maps that modulate the opaque surface behind it, including
+// occlusion (it scales this path's ambient term too, scalar or IBL).
+layout(set = 0, binding = 10) uniform sampler2D normalTex;
+layout(set = 0, binding = 11) uniform sampler2D mroughTex;
+layout(set = 0, binding = 12) uniform sampler2D occlusionTex;
+layout(set = 0, binding = 13) uniform sampler2D emissiveTex;
 
 // Binding 9: the sky environment bake (see lighting.frag binding 8). The
 // forward set has no gbuffer, so 7-8 are the material pair and the bake sits
@@ -37,6 +47,7 @@ layout(set = 0, binding = 8) uniform sampler2D albedoTex;
 layout(set = 0, binding = 9) uniform sampler2D env_map;
 
 #include "brdf.glsl"
+#include "pbr_maps.glsl"
 
 void main() {
     vec3 N = normalize(in_normal);
@@ -51,6 +62,12 @@ void main() {
     float roughness = clamp(matParams.surface.y, 0.045, 1.0);
     float ao = matParams.surface.z;
     float emission_strength = matParams.surface.w;
+    vec3 emissive = matParams.misc.rgb * emission_strength;
+    // Same map evaluation as the gbuffer path (see gbuffer.frag): the pane
+    // and the wall behind it must agree about what the surface is.
+    apply_pbr_maps(normalTex, mroughTex, occlusionTex, emissiveTex,
+                   matParams.mapFlags, in_world_pos, in_uv,
+                   N, albedo, metallic, roughness, ao, emissive);
 
     vec3 V = normalize(frame.camPos_ambient.xyz - in_world_pos);
     vec3 Lo = direct_lighting(in_world_pos, N, V, albedo, metallic, roughness);
@@ -64,12 +81,10 @@ void main() {
                               albedo, metallic, roughness, ao,
                               frame.ibl_params.y, frame.ibl_params.z);
     }
-    // The material's own emission colour — see lighting.frag. The forward path
-    // has the material block in its set, so it needs no extra binding; it must
-    // simply agree with the deferred path about what "emissive" means, or a
-    // transparent surface would glow a different colour than the opaque one
-    // behind it.
-    vec3 emissive = matParams.misc.rgb * emission_strength;
+    // `emissive` above is the material's emission colour times strength,
+    // optionally modulated by the emissive map — the forward path agrees with
+    // the deferred path about what "emissive" means, or a transparent surface
+    // would glow a different colour than the opaque one behind it.
 
     // Post-multiplied alpha: the blend (src*a + dst*(1-a)) weights the colour
     // this surface contributes by the weight it claims over the pixel, so an

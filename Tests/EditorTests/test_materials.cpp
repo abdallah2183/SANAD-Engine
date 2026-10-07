@@ -97,6 +97,23 @@ NF_TEST(material_asset_roundtrip) {
     NF_CHECK(!rendering::MaterialAsset::load_from_text("hello world", d, err));
     NF_CHECK(!err.empty());
 
+    // Map paths round-trip; silence keeps scalar (""), like every key.
+    rendering::MaterialAsset t;
+    t.normal = "content://Textures/Brick_n";
+    t.mrough = "content://Textures/Brick_mr";
+    t.occlusion = "content://Textures/Brick_occ";
+    t.emissive = "content://Textures/Brick_e";
+    rendering::MaterialAsset t2;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(t.save_to_text(), t2, err));
+    NF_CHECK(t2.normal == "content://Textures/Brick_n");
+    NF_CHECK(t2.mrough == "content://Textures/Brick_mr");
+    NF_CHECK(t2.occlusion == "content://Textures/Brick_occ");
+    NF_CHECK(t2.emissive == "content://Textures/Brick_e");
+    rendering::MaterialAsset s;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(
+        "# NOVAForge Material v1\nname: S\n", s, err));
+    NF_CHECK(s.normal.empty() && s.mrough.empty() && s.occlusion.empty() && s.emissive.empty());
+
     // mip: key round-trips; silence keeps Linear; unknown values are ignored.
     rendering::MaterialAsset m;
     m.mip_mode = rhi::MipMapMode::None;

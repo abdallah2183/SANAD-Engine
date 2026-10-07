@@ -149,10 +149,14 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
 
     // --- descriptor layouts ---
     {
-        const std::array<rhi::DescriptorBinding, 3> material_binds{{
+        const std::array<rhi::DescriptorBinding, 7> material_binds{{
             {0, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
             {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
             {2, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1}, // terrain splat palette
+            {3, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal map
+            {4, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // metallic-roughness map
+            {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // occlusion map
+            {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // emissive map
         }};
         rhi::DescriptorSetLayoutDesc ld{};
         ld.bindings = std::span<const rhi::DescriptorBinding>(material_binds);
@@ -218,7 +222,7 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         // forward.frag declares them — above the gbuffer textures 0-3 that the
         // forward path does not have, since it reconstructs the surface from
         // vertex attributes instead of reading it back out of a target.
-        const std::array<rhi::DescriptorBinding, 6> forward_binds{{
+        const std::array<rhi::DescriptorBinding, 10> forward_binds{{
             {4, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},
             {5, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
             {6, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
@@ -227,6 +231,12 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
             // The sky env bake (IBL). Binding 9, not 0-3: the forward set has
             // no gbuffer, and 7-8 are the material pair forward.frag declares.
             {9, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+            // The PBR maps (forward.frag 10-13), mirroring the gbuffer set's
+            // 3-6 so the two paths sample the same maps.
+            {10, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // normal
+            {11, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // metallic-roughness
+            {12, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // occlusion
+            {13, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // emissive
         }};
         rhi::DescriptorSetLayoutDesc fld{};
         fld.bindings = std::span<const rhi::DescriptorBinding>(forward_binds);
@@ -1519,7 +1529,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                     (env_ready && m_env_view) ? m_env_view.get() : m_white_view.get();
                 const rhi::Sampler* fwd_env_sampler =
                     (env_ready && m_env_sampler) ? m_env_sampler.get() : m_sampler.get();
-                const std::array<rhi::DescriptorWrite, 6> forward_writes{{
+                const std::array<rhi::DescriptorWrite, 10> forward_writes{{
                     {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0,
                      sizeof(FrameUniforms), nullptr, nullptr},
                     {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
@@ -1527,9 +1537,17 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                     {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
                      m_local_shadow_view.get(), m_sampler.get()},
                     {7, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
-                     12 * sizeof(float), nullptr, nullptr},
+                     16 * sizeof(float), nullptr, nullptr},
                     {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
                     {9, rhi::DescriptorType::SampledImage, nullptr, 0, 0, fwd_env, fwd_env_sampler},
+                    {10, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     entry->normal_view ? entry->normal_view : m_white_view.get(), m_sampler.get()},
+                    {11, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     entry->mrough_view ? entry->mrough_view : m_white_view.get(), m_sampler.get()},
+                    {12, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     entry->occlusion_view ? entry->occlusion_view : m_white_view.get(), m_sampler.get()},
+                    {13, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                     entry->emissive_view ? entry->emissive_view : m_white_view.get(), m_sampler.get()},
                 }};
                 m_device->update_descriptor_set(*fwd_set,
                                                 std::span<const rhi::DescriptorWrite>(forward_writes));
@@ -1553,12 +1571,27 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 }
                 const rhi::TextureView* albedo =
                     entry->albedo_view ? entry->albedo_view : m_white_view.get();
-                const std::array<rhi::DescriptorWrite, 3> material_writes{{
+                // Unbound map slots read the white fallback: an unwritten
+                // binding is not a valid set, and the mapFlags guard means the
+                // substitute is never sampled.
+                const rhi::TextureView* map_normal =
+                    entry->normal_view ? entry->normal_view : m_white_view.get();
+                const rhi::TextureView* map_mrough =
+                    entry->mrough_view ? entry->mrough_view : m_white_view.get();
+                const rhi::TextureView* map_occlusion =
+                    entry->occlusion_view ? entry->occlusion_view : m_white_view.get();
+                const rhi::TextureView* map_emissive =
+                    entry->emissive_view ? entry->emissive_view : m_white_view.get();
+                const std::array<rhi::DescriptorWrite, 7> material_writes{{
                     {0, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
-                     12 * sizeof(float), nullptr, nullptr},
+                     16 * sizeof(float), nullptr, nullptr},
                     {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
                     {2, rhi::DescriptorType::UniformBuffer, m_splat_palette.get(), 0,
                      sizeof(SplatPaletteGPU), nullptr, nullptr},
+                    {3, rhi::DescriptorType::SampledImage, nullptr, 0, 0, map_normal, m_sampler.get()},
+                    {4, rhi::DescriptorType::SampledImage, nullptr, 0, 0, map_mrough, m_sampler.get()},
+                    {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, map_occlusion, m_sampler.get()},
+                    {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, map_emissive, m_sampler.get()},
                 }};
                 m_device->update_descriptor_set(*entry->cached_set,
                                                 std::span<const rhi::DescriptorWrite>(material_writes));

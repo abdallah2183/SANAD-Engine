@@ -620,7 +620,7 @@ public:
 
     // --- Shared material assets (Phase 5) ---
     // MeshComponent::material names a .nfmat logical path; every entity with
-    // the same path shares one renderer instance (one 48-byte UBO). Edits
+    // the same path shares one renderer instance (one 64-byte UBO). Edits
     // rewrite that UBO in place — visible next frame, no pipeline touched.
     rendering::MaterialHandle material_for_path(const std::string& logical_path);
     bool set_material_params(const std::string& logical_path,
@@ -652,6 +652,20 @@ public:
     bool set_material_albedo(const std::string& material_path, const std::string& texture_path,
                              std::string& out_error);
     std::string material_albedo(const std::string& material_path) const;
+    // PBR maps, same contract as the albedo pair above (bind/unbind + dirty).
+    // Keys in the .nfmat: "normal:", "mrough:", "occlusion:", "emissive_map:".
+    bool set_material_normal(const std::string& material_path, const std::string& texture_path,
+                             std::string& out_error);
+    std::string material_normal(const std::string& material_path) const;
+    bool set_material_mrough(const std::string& material_path, const std::string& texture_path,
+                             std::string& out_error);
+    std::string material_mrough(const std::string& material_path) const;
+    bool set_material_occlusion(const std::string& material_path, const std::string& texture_path,
+                                std::string& out_error);
+    std::string material_occlusion(const std::string& material_path) const;
+    bool set_material_emissive_map(const std::string& material_path, const std::string& texture_path,
+                                   std::string& out_error);
+    std::string material_emissive_map(const std::string& material_path) const;
     std::vector<std::string> known_texture_paths() const;
     // Sampler mip filtering per material ("none"|"nearest"|"linear" in the
     // .nfmat "mip:" key; Linear when the file is silent). Changing it rebinds
@@ -939,6 +953,12 @@ private:
     std::unordered_map<std::string, bool> m_material_dirty;
     // Material path -> albedo texture path ("" = scalar only).
     std::unordered_map<std::string, std::string> m_material_albedo;
+    // Material path -> PBR map paths ("" = scalar only). Same contract as the
+    // albedo map above; all four ride the same sampler/mip mode.
+    std::unordered_map<std::string, std::string> m_material_normal;
+    std::unordered_map<std::string, std::string> m_material_mrough;
+    std::unordered_map<std::string, std::string> m_material_occlusion;
+    std::unordered_map<std::string, std::string> m_material_emissive_map;
     // Material path -> sampler mip mode (Linear when the file is silent).
     std::unordered_map<std::string, rhi::MipMapMode> m_material_mip;
 
@@ -962,10 +982,16 @@ private:
     // Sampler for (texture entry, mode), creating and caching on demand.
     // max_lod follows the texture's real chain (or 0 when mode is None).
     rhi::Sampler* sampler_for_mode(TextureObjects& entry, rhi::MipMapMode mode);
-    // (Re)binds a material instance to its recorded albedo+mode, if any.
+    // (Re)binds a material instance to its recorded maps+mode, if any.
     // Returns false only when the renderer is down.
     bool rebind_material_sampling(const std::string& material_path, rendering::MaterialHandle handle,
                                   std::string& out_error);
+    // Shared body of the four set_material_* map setters (normal, mrough,
+    // occlusion, emissive_map): record-then-rebind, mirroring set_material_albedo.
+    bool set_material_map(const std::string& material_path, const std::string& texture_path,
+                          std::unordered_map<std::string, std::string>& slot_map,
+                          void (rendering::MaterialLibrary::*clear)(rendering::MaterialHandle),
+                          std::string& out_error);
 
     static std::string normalize_material_path(const std::string& p);
     static rendering::PBRMaterialParams default_material_params();

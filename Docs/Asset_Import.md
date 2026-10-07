@@ -43,12 +43,15 @@ Geometry on its own arrives grey, which is not an import a developer can use. So
 the reader carries materials and textures out with the mesh:
 
 - **glTF** — base colour, metallic, roughness and emissive factors come from the
-  material; the base-colour map is resolved to an entry in `images`. Images are
-  extracted from a GLB's BIN chunk, from a base64 `bufferView`, from a `data:`
-  URI, or from an external file beside the `.gltf`.
+  material; the base-colour, metallic-roughness, normal, occlusion and
+  emissive maps resolve to entries in `images` and land in the `.nfmat` as
+  `albedo:` / `mrough:` / `normal:` / `occlusion:` / `emissive_map:`. Images
+  are extracted from a GLB's BIN chunk, from a base64 `bufferView`, from a
+  `data:` URI, or from an external file beside the `.gltf`.
 - **OBJ** — an OBJ carries *no* material values at all; `usemtl` only names one.
   The reader therefore resolves the `.mtl` its `mtllib` line points at, so `Kd`,
-  `d`/`Tr` and `map_Kd` survive. A submesh's `material_slot` becomes the index of
+  `d`/`Tr`, `map_Kd` and the bump map (`map_Bump`/`bump`/`norm` → `normal:`)
+  survive. A submesh's `material_slot` becomes the index of
   a real material in first-use order — which also reproduces MeshExport's own
   `slot0`, `slot1`, … numbering on a round trip.
 - **Images keep their original encoded bytes** (PNG/JPEG exactly as the file
@@ -56,8 +59,9 @@ the reader carries materials and textures out with the mesh:
   data for nothing. The extension is sniffed from the bytes, not trusted from a
   filename that may lie.
 
-The engine's material block holds **one** texture and has no specular, clearcoat,
-sheen, transmission or normal map. Everything the source declared that has
+The engine's material block holds **five** textures (albedo + normal +
+metallic-roughness + occlusion + emissive) and still has no specular,
+clearcoat, sheen or transmission. Everything the source declared that has
 nowhere to go is **named per material** in `GltfMaterialInfo::dropped` and shown
 in the import row — a Blinn-Phong exponent (`Ns`) is never quietly turned into a
 roughness, and a specular colour (`Ks`) is never folded into metallic. That would
@@ -68,8 +72,10 @@ What the editor writes for a model import:
 ```
 content://Meshes/<stem>.nfmesh              the cooked geometry
 content://Textures/<stem>_<image>.<ext>     registered texture assets (+ cache copy)
-content://Materials/<stem>_<material>.nfmat the material, with `albedo:` already
-                                            pointing at the texture above
+content://Materials/<stem>_<material>.nfmat the material, with `albedo:`,
+                                             `normal:`, `mrough:`,
+                                             `occlusion:` and `emissive_map:`
+                                             already pointing at the textures above
 ```
 
 `.nfmat` is the only route a material has into the engine, because `.nfmesh`

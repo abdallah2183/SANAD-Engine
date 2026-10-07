@@ -84,6 +84,14 @@ struct GltfMaterialInfo {
     /// Index into MeshImportResult::images for the base-colour (albedo) texture,
     /// -1 when the material has none.
     int albedo_image = -1;
+    /// glTF PBR map slots this pipeline now carries (indices into the same
+    /// image list, -1 when absent). metallic_roughness follows the glTF
+    /// packing the shader reads: G = roughness, B = metallic. occlusion is
+    /// the glTF occlusionTexture (R channel).
+    int normal_image = -1;
+    int metallic_roughness_image = -1;
+    int occlusion_image = -1;
+    int emissive_image = -1;
 
     /// Slots and fields the source declared that this pipeline does not carry,
     /// by human-readable name ("normal map", "specular exponent"). Empty for a

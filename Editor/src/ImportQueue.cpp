@@ -362,6 +362,18 @@ void ImportQueue::run_cpu_stages(const std::string& src_absolute, const std::str
                     static_cast<usize>(material.albedo_image) < image_paths.size()) {
                     asset.albedo = image_paths[static_cast<usize>(material.albedo_image)];
                 }
+                // PBR maps ride the same staged images: each index is the same
+                // list, only the .nfmat key differs.
+                auto wire_map = [&](int image_index, std::string& slot) {
+                    if (image_index >= 0 &&
+                        static_cast<usize>(image_index) < image_paths.size()) {
+                        slot = image_paths[static_cast<usize>(image_index)];
+                    }
+                };
+                wire_map(material.normal_image, asset.normal);
+                wire_map(material.metallic_roughness_image, asset.mrough);
+                wire_map(material.occlusion_image, asset.occlusion);
+                wire_map(material.emissive_image, asset.emissive);
                 if (!material.dropped.empty()) {
                     // One readable line per material instead of one per slot: a
                     // full MTL declares four or five things this pipeline has no

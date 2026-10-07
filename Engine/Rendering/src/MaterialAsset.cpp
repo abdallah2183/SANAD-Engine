@@ -93,6 +93,14 @@ bool MaterialAsset::load_from_text(const std::string& text, MaterialAsset& out, 
             }
         } else if (key == "albedo") {
             parsed.albedo = val;
+        } else if (key == "normal") {
+            parsed.normal = val;
+        } else if (key == "mrough") {
+            parsed.mrough = val;
+        } else if (key == "occlusion") {
+            parsed.occlusion = val;
+        } else if (key == "emissive_map") {
+            parsed.emissive = val;
         } else if (key == "mip") {
             if (val == "none") {
                 parsed.mip_mode = rhi::MipMapMode::None;
@@ -132,6 +140,18 @@ std::string MaterialAsset::save_to_text() const {
     out += buf;
     if (!albedo.empty()) {
         out += "albedo: " + albedo + "\n";
+    }
+    if (!normal.empty()) {
+        out += "normal: " + normal + "\n";
+    }
+    if (!mrough.empty()) {
+        out += "mrough: " + mrough + "\n";
+    }
+    if (!occlusion.empty()) {
+        out += "occlusion: " + occlusion + "\n";
+    }
+    if (!emissive.empty()) {
+        out += "emissive_map: " + emissive + "\n";
     }
     out += std::string("mip: ") +
            (mip_mode == rhi::MipMapMode::None

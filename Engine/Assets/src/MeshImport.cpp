@@ -465,6 +465,7 @@ MeshImportResult import_nfmesh(std::span<const uint8_t> bytes, const std::string
 struct MtlEntry {
     GltfMaterialInfo info;
     std::string albedo_path; // raw map_Kd value, resolved against `dir`
+    std::string bump_path;   // raw map_Bump/bump/norm value, same resolution
     std::string dir;         // directory of the .mtl that defined it
 };
 
@@ -535,6 +536,11 @@ void parse_mtl(const std::string& text, const std::string& mtl_dir, std::vector<
             }
         } else if (key == "map_Kd") {
             current->albedo_path = mtl_map_filename(tokens, 1);
+        } else if (key == "map_Bump" || key == "bump" || key == "norm") {
+            // The bump/normal slot this pipeline carries (as a tangent-space
+            // normal map). Other maps (Ka/Ks/Ns/disp/decal/...) still have no
+            // slot and stay in `dropped` below.
+            current->bump_path = mtl_map_filename(tokens, 1);
         } else if (key == "Ka" || key == "Ks" || key == "Ns" || key == "Ni" || key == "Tf" ||
                    key == "illum" || key == "sharpness") {
             // Deliberately NOT approximated. Turning a Blinn-Phong exponent (Ns)
@@ -542,10 +548,9 @@ void parse_mtl(const std::string& text, const std::string& mtl_dir, std::vector<
             // hand the renderer a material the artist never authored.
             note_dropped(current->info, std::string(key),
                          "(no equivalent in this pipeline's parameter set)");
-        } else if (key == "map_Ka" || key == "map_Ks" || key == "map_Ns" || key == "map_Bump" ||
-                   key == "bump" || key == "disp" || key == "decal" || key == "refl" ||
-                   key == "map_d" || key == "norm") {
-            note_dropped(current->info, std::string(key), "(only the base-colour map is carried)");
+        } else if (key == "map_Ka" || key == "map_Ks" || key == "map_Ns" || key == "map_d" ||
+                   key == "disp" || key == "decal" || key == "refl") {
+            note_dropped(current->info, std::string(key), "(no slot in this pipeline)");
         }
         // Any other statement is ignored by name, never by accident.
     }
@@ -700,36 +705,43 @@ MeshImportResult import_obj(std::span<const uint8_t> bytes, const std::string& l
         info.name = name;
         auto entry = mtl_by_name.find(name);
         if (entry != mtl_by_name.end()) {
-            const std::string albedo_path = entry->second.albedo_path;
             const std::string mtl_dir = entry->second.dir;
             info = entry->second.info;
             info.name = name;
-            if (!albedo_path.empty()) {
+            // One loader for both map slots (map_Kd -> albedo, map_Bump ->
+            // normal): same read, same sniff-or-fallback extension, same
+            // registry index. Only the source label and the slot differ.
+            auto load_map = [&](const std::string& map_path, const std::string& label,
+                                int& slot) {
+                if (map_path.empty()) return;
                 std::vector<uint8_t> image_bytes;
                 std::string image_error;
-                const std::string image_path = (std::filesystem::path(mtl_dir) / albedo_path).string();
-                if (read_all_bytes(image_path, image_bytes, image_error)) {
-                    MeshImportImage image;
-                    image.name = std::filesystem::path(albedo_path).stem().string();
-                    if (image.name.empty()) image.name = name;
-                    image.source = "mtllib map_Kd " + albedo_path;
-                    const char* sniffed = image_extension_for_bytes(image_bytes);
-                    // TGA has no magic number, so the source's own extension is
-                    // the only evidence there is; it is a fallback, not a guess
-                    // dressed up as one.
-                    std::string fallback = std::filesystem::path(albedo_path).extension().string();
-                    std::transform(fallback.begin(), fallback.end(), fallback.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    image.extension = sniffed[0] != '\0' ? std::string(sniffed) : fallback;
-                    image.bytes = std::move(image_bytes);
-                    info.albedo_image = static_cast<int>(result.images.size());
-                    result.images.push_back(std::move(image));
-                } else {
+                const std::string image_path =
+                    (std::filesystem::path(mtl_dir) / map_path).string();
+                if (!read_all_bytes(image_path, image_bytes, image_error)) {
                     ++result.images_skipped;
-                    result.warnings.push_back("material '" + name + "' maps its base colour to '" +
-                                              albedo_path + "', which could not be read");
+                    result.warnings.push_back("material '" + name + "' maps '" + map_path +
+                                              "' (" + label + "), which could not be read");
+                    return;
                 }
-            }
+                MeshImportImage image;
+                image.name = std::filesystem::path(map_path).stem().string();
+                if (image.name.empty()) image.name = name;
+                image.source = "mtllib " + label + " " + map_path;
+                const char* sniffed = image_extension_for_bytes(image_bytes);
+                // TGA has no magic number, so the source's own extension is
+                // the only evidence there is; it is a fallback, not a guess
+                // dressed up as one.
+                std::string fallback = std::filesystem::path(map_path).extension().string();
+                std::transform(fallback.begin(), fallback.end(), fallback.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                image.extension = sniffed[0] != '\0' ? std::string(sniffed) : fallback;
+                image.bytes = std::move(image_bytes);
+                slot = static_cast<int>(result.images.size());
+                result.images.push_back(std::move(image));
+            };
+            load_map(entry->second.albedo_path, "map_Kd", info.albedo_image);
+            load_map(entry->second.bump_path, "map_Bump", info.normal_image);
         }
         result.materials.push_back(std::move(info));
         return slot;

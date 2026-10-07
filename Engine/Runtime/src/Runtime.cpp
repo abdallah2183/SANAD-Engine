@@ -116,6 +116,10 @@ void Runtime::shutdown() {
     m_material_instances.clear();
     m_material_dirty.clear();
     m_material_albedo.clear();
+    m_material_normal.clear();
+    m_material_mrough.clear();
+    m_material_occlusion.clear();
+    m_material_emissive_map.clear();
     m_textures.clear();
     // The cached texture views just died with the map, so the LUT pointer into
     // one of them must go with it.
@@ -3064,13 +3068,19 @@ rendering::MaterialHandle Runtime::material_for_path(const std::string& logical_
     m_material_instances.emplace(path, h);
     m_material_mip[path] =
         have_file ? file_asset.mip_mode : rhi::MipMapMode::Linear;
-    // Albedo binding follows the file; failures stay scalar (never fatal).
-    // Record first: rebind_material_sampling reads the recorded binding.
+    // Map bindings follow the file; failures stay scalar (never fatal).
+    // Record first: rebind_material_sampling reads the recorded bindings.
     m_material_albedo[path] = (have_file ? file_asset.albedo : "");
-    if (have_file && !file_asset.albedo.empty()) {
+    m_material_normal[path] = (have_file ? file_asset.normal : "");
+    m_material_mrough[path] = (have_file ? file_asset.mrough : "");
+    m_material_occlusion[path] = (have_file ? file_asset.occlusion : "");
+    m_material_emissive_map[path] = (have_file ? file_asset.emissive : "");
+    if (have_file && (!file_asset.albedo.empty() || !file_asset.normal.empty() ||
+                      !file_asset.mrough.empty() || !file_asset.occlusion.empty() ||
+                      !file_asset.emissive.empty())) {
         std::string tex_err;
         if (!rebind_material_sampling(path, h, tex_err)) {
-            NF_LOG_WARN(LogCategory::Core, "Runtime: material '{}' albedo unreachable ({}), scalar",
+            NF_LOG_WARN(LogCategory::Core, "Runtime: material '{}' maps unreachable ({}), scalar",
                         path, tex_err);
         }
     }
@@ -3183,6 +3193,10 @@ bool Runtime::save_material(const std::string& src_path, const std::string& dst_
     }
     asset.params = params;
     asset.albedo = material_albedo(src);
+    asset.normal = material_normal(src);
+    asset.mrough = material_mrough(src);
+    asset.occlusion = material_occlusion(src);
+    asset.emissive = material_emissive_map(src);
     asset.mip_mode = material_mip_mode(src);
     auto r = m_vfs.write_text(dst, asset.save_to_text());
     if (!r.ok) {
@@ -3236,25 +3250,55 @@ bool Runtime::rebind_material_sampling(const std::string& material_path,
         out_error = "Renderer unavailable";
         return false;
     }
-    const std::string tex_path = material_albedo(material_path);
-    if (tex_path.empty()) {
-        m_renderer->materials().clear_albedo_texture(handle);
+    // One binder for all five map slots: same pre-validation, same sampler
+    // lookup, same setter/clearer shape — only the recorded path and the
+    // library methods differ. Five copies of this block would drift the way
+    // the old albedo-only copy did when the sampler lookup changed.
+    using Lib = rendering::MaterialLibrary;
+    using SetFn = void (Lib::*)(rendering::MaterialHandle, const rhi::TextureView&,
+                                const rhi::Sampler&);
+    using ClearFn = void (Lib::*)(rendering::MaterialHandle);
+    auto bind_one = [&](const std::string& tex_path, SetFn set, ClearFn clear) -> bool {
+        if (tex_path.empty()) {
+            (m_renderer->materials().*clear)(handle);
+            return true;
+        }
+        if (!ensure_texture(tex_path, out_error)) {
+            return false;
+        }
+        auto tit = m_textures.find(tex_path);
+        if (tit == m_textures.end() || !tit->second->view) {
+            out_error = "Texture objects missing for '" + tex_path + "'";
+            return false;
+        }
+        rhi::Sampler* sampler = sampler_for_mode(*tit->second, material_mip_mode(material_path));
+        if (sampler == nullptr) {
+            out_error = "Sampler creation failed for '" + tex_path + "'";
+            return false;
+        }
+        (m_renderer->materials().*set)(handle, *tit->second->view, *sampler);
         return true;
-    }
-    if (!ensure_texture(tex_path, out_error)) {
+    };
+    if (!bind_one(material_albedo(material_path), &Lib::set_albedo_texture,
+                  &Lib::clear_albedo_texture)) {
         return false;
     }
-    auto tit = m_textures.find(tex_path);
-    if (tit == m_textures.end() || !tit->second->view) {
-        out_error = "Texture objects missing for '" + tex_path + "'";
+    if (!bind_one(material_normal(material_path), &Lib::set_normal_texture,
+                  &Lib::clear_normal_texture)) {
         return false;
     }
-    rhi::Sampler* sampler = sampler_for_mode(*tit->second, material_mip_mode(material_path));
-    if (sampler == nullptr) {
-        out_error = "Sampler creation failed for '" + tex_path + "'";
+    if (!bind_one(material_mrough(material_path), &Lib::set_mrough_texture,
+                  &Lib::clear_mrough_texture)) {
         return false;
     }
-    m_renderer->materials().set_albedo_texture(handle, *tit->second->view, *sampler);
+    if (!bind_one(material_occlusion(material_path), &Lib::set_occlusion_texture,
+                  &Lib::clear_occlusion_texture)) {
+        return false;
+    }
+    if (!bind_one(material_emissive_map(material_path), &Lib::set_emissive_texture,
+                  &Lib::clear_emissive_texture)) {
+        return false;
+    }
     return true;
 }
 
@@ -3379,18 +3423,21 @@ bool Runtime::reload_texture(const std::string& logical_path, std::string& out_e
     m_device.wait_idle();
     m_textures[logical_path] = std::move(entry);
     // Rebind every material sampling this path (raw pointers changed), each
-    // with its own recorded mip mode.
+    // with its own recorded mip mode. A texture can sit in any of the five
+    // map slots, so every slot map is consulted — checking only the albedo
+    // map would leave a reloaded normal map bound to freed objects.
     if (m_renderer != nullptr) {
-        for (const auto& kv : m_material_albedo) {
-            if (kv.second != logical_path) {
-                continue;
-            }
-            auto mit = m_material_instances.find(kv.first);
-            if (mit == m_material_instances.end()) {
+        auto uses_path = [&](const std::string& mat) {
+            return material_albedo(mat) == logical_path || material_normal(mat) == logical_path ||
+                   material_mrough(mat) == logical_path || material_occlusion(mat) == logical_path ||
+                   material_emissive_map(mat) == logical_path;
+        };
+        for (const auto& mit : m_material_instances) {
+            if (!uses_path(mit.first)) {
                 continue;
             }
             std::string rerr;
-            if (!rebind_material_sampling(kv.first, mit->second, rerr)) {
+            if (!rebind_material_sampling(mit.first, mit.second, rerr)) {
                 NF_LOG_WARN(LogCategory::Core, "Runtime: rebind after reload failed ({})", rerr);
             }
         }
@@ -3431,14 +3478,98 @@ std::string Runtime::material_albedo(const std::string& material_path) const {
     return (it != m_material_albedo.end()) ? it->second : std::string{};
 }
 
+// The four PBR map slots share one implementation shape with the albedo
+// pair above: record-then-rebind on set, recorded path on get, empty string
+// for "scalar". Only the map and the library methods differ.
+bool Runtime::set_material_map(const std::string& material_path, const std::string& texture_path,
+                               std::unordered_map<std::string, std::string>& slot_map,
+                               void (rendering::MaterialLibrary::*clear)(
+                                   rendering::MaterialHandle),
+                               std::string& out_error) {
+    const std::string path = normalize_material_path(material_path);
+    rendering::MaterialHandle h = material_for_path(path);
+    if (!h.valid() || m_renderer == nullptr) {
+        out_error = "Renderer unavailable for material '" + path + "'";
+        return false;
+    }
+    if (texture_path.empty()) {
+        (m_renderer->materials().*clear)(h);
+        slot_map[path] = "";
+        m_material_dirty[path] = true;
+        return true;
+    }
+    if (!ensure_texture(texture_path, out_error)) {
+        return false;
+    }
+    slot_map[path] = texture_path;
+    if (!rebind_material_sampling(path, h, out_error)) {
+        return false;
+    }
+    m_material_dirty[path] = true;
+    return true;
+}
+
+bool Runtime::set_material_normal(const std::string& material_path, const std::string& texture_path,
+                                  std::string& out_error) {
+    return set_material_map(material_path, texture_path, m_material_normal,
+                             &rendering::MaterialLibrary::clear_normal_texture, out_error);
+}
+
+std::string Runtime::material_normal(const std::string& material_path) const {
+    auto it = m_material_normal.find(normalize_material_path(material_path));
+    return (it != m_material_normal.end()) ? it->second : std::string{};
+}
+
+bool Runtime::set_material_mrough(const std::string& material_path, const std::string& texture_path,
+                                  std::string& out_error) {
+    return set_material_map(material_path, texture_path, m_material_mrough,
+                             &rendering::MaterialLibrary::clear_mrough_texture, out_error);
+}
+
+std::string Runtime::material_mrough(const std::string& material_path) const {
+    auto it = m_material_mrough.find(normalize_material_path(material_path));
+    return (it != m_material_mrough.end()) ? it->second : std::string{};
+}
+
+bool Runtime::set_material_occlusion(const std::string& material_path,
+                                     const std::string& texture_path,
+                                     std::string& out_error) {
+    return set_material_map(material_path, texture_path, m_material_occlusion,
+                             &rendering::MaterialLibrary::clear_occlusion_texture, out_error);
+}
+
+std::string Runtime::material_occlusion(const std::string& material_path) const {
+    auto it = m_material_occlusion.find(normalize_material_path(material_path));
+    return (it != m_material_occlusion.end()) ? it->second : std::string{};
+}
+
+bool Runtime::set_material_emissive_map(const std::string& material_path,
+                                        const std::string& texture_path,
+                                        std::string& out_error) {
+    return set_material_map(material_path, texture_path, m_material_emissive_map,
+                             &rendering::MaterialLibrary::clear_emissive_texture, out_error);
+}
+
+std::string Runtime::material_emissive_map(const std::string& material_path) const {
+    auto it = m_material_emissive_map.find(normalize_material_path(material_path));
+    return (it != m_material_emissive_map.end()) ? it->second : std::string{};
+}
+
 std::vector<std::string> Runtime::known_texture_paths() const {
     std::vector<std::string> out;
-    for (const auto& kv : m_material_albedo) {
-        if (!kv.second.empty() &&
-            std::find(out.begin(), out.end(), kv.second) == out.end()) {
-            out.push_back(kv.second);
+    auto collect = [&](const std::unordered_map<std::string, std::string>& slot_map) {
+        for (const auto& kv : slot_map) {
+            if (!kv.second.empty() &&
+                std::find(out.begin(), out.end(), kv.second) == out.end()) {
+                out.push_back(kv.second);
+            }
         }
-    }
+    };
+    collect(m_material_albedo);
+    collect(m_material_normal);
+    collect(m_material_mrough);
+    collect(m_material_occlusion);
+    collect(m_material_emissive_map);
     return out;
 }
 

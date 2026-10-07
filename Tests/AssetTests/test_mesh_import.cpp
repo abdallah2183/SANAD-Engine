@@ -833,9 +833,10 @@ NF_TEST(mesh_import_gltf_carries_an_embedded_texture) {
     NF_CHECK_NEAR(m.metallic, 0.2f, 1e-5f);
     NF_CHECK_NEAR(m.roughness, 0.6f, 1e-5f);
 
-    // The normal map it also declares has nowhere to go, and says so.
-    NF_CHECK(m.dropped.size() == 1u);
-    NF_CHECK(m.dropped[0].find("normal map") != std::string::npos);
+    // The normal map it also declares is carried too (same image, second
+    // slot) — and with every declared slot carried, nothing is dropped.
+    NF_CHECK(m.normal_image == 0);
+    NF_CHECK(m.dropped.empty());
 }
 
 NF_TEST(mesh_import_gltf_carries_a_data_uri_texture) {

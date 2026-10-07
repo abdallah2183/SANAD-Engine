@@ -507,6 +507,17 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
         const cgltf_material& m = data->materials[mi];
         GltfMaterialInfo info;
         if (m.name) info.name = m.name;
+        // One image-index resolver for every map slot below: a texture's
+        // cgltf image pointer becomes this result's image index, or the slot
+        // stays -1. Shared because the translation (and its guards) is
+        // identical for all five slots.
+        auto carry_map = [&](const cgltf_texture* tex, int& slot) {
+            if (tex == nullptr || tex->image == nullptr) return;
+            const usize image_index = static_cast<usize>(tex->image - data->images);
+            if (image_index < image_index_of.size() && image_index_of[image_index] >= 0) {
+                slot = image_index_of[image_index];
+            }
+        };
         if (m.has_pbr_metallic_roughness) {
             for (int c = 0; c < 4; ++c) {
                 info.base_color[c] = m.pbr_metallic_roughness.base_color_factor[c];
@@ -514,16 +525,17 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
             info.metallic = m.pbr_metallic_roughness.metallic_factor;
             info.roughness = m.pbr_metallic_roughness.roughness_factor;
 
-            // The base-colour map is the one texture this pipeline carries; the
-            // engine's MaterialAsset stores exactly one albedo image.
-            const cgltf_texture* albedo = m.pbr_metallic_roughness.base_color_texture.texture;
-            if (albedo != nullptr && albedo->image != nullptr) {
-                const usize image_index = static_cast<usize>(albedo->image - data->images);
-                if (image_index < image_index_of.size() && image_index_of[image_index] >= 0) {
-                    info.albedo_image = image_index_of[image_index];
-                }
-            }
+            carry_map(m.pbr_metallic_roughness.base_color_texture.texture,
+                      info.albedo_image);
+            carry_map(m.pbr_metallic_roughness.metallic_roughness_texture.texture,
+                      info.metallic_roughness_image);
         }
+        // Material-level slots, independent of the PBR block: a material can
+        // legally carry a normal map without has_pbr_metallic_roughness, so
+        // these resolve outside the if above.
+        carry_map(m.normal_texture.texture, info.normal_image);
+        carry_map(m.occlusion_texture.texture, info.occlusion_image);
+        carry_map(m.emissive_texture.texture, info.emissive_image);
         for (int c = 0; c < 3; ++c) {
             info.emissive[c] = m.emissive_factor[c];
         }
@@ -532,21 +544,8 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
         }
 
         // Everything else the material declares, named so the loss is visible
-        // instead of implied. These are real slots an artist authored; the
-        // engine's 12-float material block simply has nowhere to put them.
-        if (m.has_pbr_metallic_roughness &&
-            m.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr) {
-            info.dropped.push_back("metallic_roughness map (only the base-colour map is carried)");
-        }
-        if (m.normal_texture.texture != nullptr) {
-            info.dropped.push_back("normal map (only the base-colour map is carried)");
-        }
-        if (m.occlusion_texture.texture != nullptr) {
-            info.dropped.push_back("occlusion map (only the base-colour map is carried)");
-        }
-        if (m.emissive_texture.texture != nullptr) {
-            info.dropped.push_back("emissive map (only the base-colour map is carried)");
-        }
+        // instead of implied. PBR maps are carried above (not dropped); what
+        // remains here genuinely has no slot in this pipeline.
         if (m.has_pbr_specular_glossiness) {
             info.dropped.push_back("specular_glossiness (no equivalent in this pipeline)");
         }
