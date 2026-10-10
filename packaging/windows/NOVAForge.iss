@@ -1,22 +1,22 @@
-﻿; NOVAForge.iss — Windows-only (x64) installer for the NOVAForge Engine beta.
+﻿; NOVAForge.iss — Windows-only (x64) installer for the NOVAForge Engine.
 ;
 ; Built by packaging/windows/build_installer.ps1 locally and by
 ; .github/workflows/release.yml on a v* tag. Both pass:
-;   /DAppVersion=0.2.0-beta.1  (full string, shown in Add/Remove Programs)
+;   /DAppVersion=0.2.0  (full string, shown in Add/Remove Programs)
 ;   /DVersionInfo=0.2.0.0      (numeric x.y.z.b for the Setup.exe properties)
 ;   /DStageDir=<absolute staged folder produced by build_installer.ps1>
 ;   /DOutputDir=<absolute dir for the Setup.exe>
 ;   /DRepoDir=<absolute repo root, for the .ico>
 ; Defaults below let `iscc NOVAForge.iss` still work from this folder.
-
+;
 #ifndef AppVersion
-  #define AppVersion "0.2.0-beta.1"
+  #define AppVersion "0.2.0"
 #endif
 #ifndef VersionInfo
   #define VersionInfo "0.2.0.0"
 #endif
 #ifndef StageDir
-  #define StageDir "..\\..\\dist\\stage\\NOVAForge-0.2.0-beta.1"
+  #define StageDir "..\\..\\dist\\stage\\NOVAForge-0.2.0"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\\..\\dist"
@@ -80,7 +80,7 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,NOVAForge Editor}";
 [Code]
 // The Vulkan loader (vulkan-1.dll) ships with the GPU driver, never with the
 // app — bundling a stale loader is how you get a black screen on a newer
-// driver. package_beta.ps1 documents the same decision. The editor already
+// driver. build_installer.ps1 documents the same decision. The editor already
 // reports a missing loader plainly at startup; this only warns earlier, at
 // install time, and never blocks the install.
 function VulkanLoaderPresent(): Boolean;

@@ -76,7 +76,7 @@ Static captures (available today): [editor EN](Docs/images/shot_editor_en.png) �
 
 ## 🚀 Quick Start
 
-Download the latest beta for **Windows 10/11 x64**, then run it.
+Download the latest release for **Windows 10/11 x64**, then run it.
 
 | File | How to use |
 |:---|:---|
@@ -94,7 +94,7 @@ cd MyGame\dist && NFPlayer.exe
 > A Vulkan-capable GPU driver is required. `vulkan-1.dll` ships **with the driver, not the package** (a bundled loader older than the driver causes black screens). The editor reports plainly if it is missing.
 
 > [!WARNING]
-> This beta is **Windows x64 only** — no Linux/macOS yet.
+> This release is **Windows x64 only** — no Linux/macOS yet.
 
 ---
 

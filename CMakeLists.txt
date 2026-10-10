@@ -8,9 +8,9 @@ cmake_minimum_required(VERSION 3.24)
 # A hand-maintained literal in a .cpp is what made the launcher keep advertising
 # 0.1.0 after every build; the fix is that there is nowhere left to put one.
 #
-# 0.2.0-beta.1: the first tagged beta. It carries the full transform-hierarchy
-# upgrade (world rotation and scale now propagate and reach the renderer), asset
-# delete/rename, view framing, and the Godot-style FileSystem dock.
+# 0.2.0: the transform-hierarchy upgrade (world rotation and scale now
+# propagate and reach the renderer), asset delete/rename, view framing, and
+# the Godot-style FileSystem dock.
 project(NOVAForge
     VERSION 0.2.0
     LANGUAGES C CXX
@@ -21,7 +21,7 @@ project(NOVAForge
 # It gets its own line next to the version instead of being smeared into a
 # hand-copied string somewhere, and NF_VERSION_STRING composes the two. Set it
 # empty for a final release; the "-suffix" disappears with it.
-set(NF_VERSION_SUFFIX "beta.1")
+set(NF_VERSION_SUFFIX "")
 if(NF_VERSION_SUFFIX STREQUAL "")
     set(NF_VERSION_STRING "${PROJECT_VERSION}")
 else()

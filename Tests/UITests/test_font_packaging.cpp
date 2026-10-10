@@ -109,7 +109,7 @@ NF_TEST(the_arabic_font_resolves_from_a_package_layout) {
     // The walk-up fallback is a source-tree convenience. A PACKAGED build has
     // Resources/fonts beside the executable and nothing above it that looks like
     // the engine, so this asserts the direct "beside the exe" case works — it is
-    // the layout package_beta.ps1 produces.
+    // the layout the installer produces.
     const std::string file = NF_FONT_FILE;
     if (file.empty() || std::string(NF_FONT_DIR).empty()) {
         NF_SKIP("no font configured for this build");

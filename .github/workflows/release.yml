@@ -1,7 +1,7 @@
-name: Release Beta (Windows x64)
+name: Release (Windows x64)
 
-# Publishes the downloadable beta: a Windows installer EXE + a portable zip.
-# Trigger: push a version tag (v0.2.0-beta.1) or run manually from the Actions tab.
+# Publishes the downloadable release: a Windows installer EXE + a portable zip.
+# Trigger: push a version tag (v0.2.0) or run manually from the Actions tab.
 # Windows-only by design — the job runs on windows-latest and the installer
 # declares ArchitecturesAllowed=x64compatible, MinVersion=10.0.
 
@@ -55,18 +55,16 @@ jobs:
         shell: pwsh
         run: Get-ChildItem dist/*.exe, dist/*.zip | Format-Table Name, Length
 
-      - name: Publish GitHub Release (prerelease beta)
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
           files: |
             dist/*-Setup.exe
             dist/*-Portable.zip
           body: |
-            NOVAForge Engine beta — Windows 10+ x64 only.
-
-            نسخة البيتا — ويندوز 64-بت فقط (ويندوز 10 فأحدث).
+            NOVAForge Engine — Windows 10+ x64 only.
 
             INSTALLER (recommended) / المثبت (مُستحسن)
             - Download `NOVAForge-*-Setup.exe`, double-click, follow the wizard (English / العربية).
@@ -77,7 +75,7 @@ jobs:
             - حمّل الـ zip وفك الضغط في أي مكان وشغّل `NOVAForgeEditor.exe`.
 
             REQUIREMENTS / المتطلبات
-            - Windows 10+ x64. No other Windows versions, no Linux/macOS in this beta.
+            - Windows 10+ x64. No other Windows versions, no Linux/macOS.
             - A Vulkan-capable GPU driver. `vulkan-1.dll` ships with the driver and is
               intentionally NOT bundled; the installer warns and the editor reports
               plainly if it is missing.

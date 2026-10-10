@@ -1,4 +1,4 @@
-﻿# build_installer.ps1 - stage the beta, zip a portable, compile the Setup EXE.
+﻿# build_installer.ps1 - stage the release, zip a portable, compile the Setup EXE.
 #
 # Windows-only by design: the installer targets Windows 10+ x64 (see
 # packaging/windows/NOVAForge.iss: ArchitecturesAllowed=x64compatible,
