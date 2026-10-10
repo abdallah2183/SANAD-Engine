@@ -1,6 +1,50 @@
 -- content://Scripts/example.lua
--- Starter behaviour authored by `nf new` (Inspector > Script can attach it).
--- `self` is this entity; nf.entity_pos / nf.set_entity_pos move it.
--- Keep update(dt) defined: a script without it is disabled loudly.
+-- ============================================================
+--  سكربت البداية — أوّل سلوك حقيقي في محرّك سند.
+--  هذا الملف مُرفَق بمكعّب مشهدك. اضغط «تشغيل» في المحرّر (أو شغّل
+--  NFPlayer) وسترى المكعّب يطفو صعودًا ونزولًا.
+-- ============================================================
+--
+--  الأفكار الثلاث التي تحتاجها فقط لتبدأ:
+--
+--   1) update(dt) تُنادى كل إطار. dt = الزمن منذ آخر إطار (بالثواني).
+--      ما دُمت تُبقيها معرّفة، يظلّ السكربت يعمل.
+--
+--   2) الكيان الذي يحمل هذا السكربت هو «أنت». معرّفه محفوظ مسبقًا
+--      في متغيّرين جاهزين: self_id و self_gen.
+--      (تقدر أيضًا الحصول عليهما بنفسك عبر: local id, gen = nf.self() )
+--
+--   3) لتحريك كيان: اقرأ موضعه بـ nf.entity_pos، ثم اضعه بـ nf.set_entity_pos.
+--      كل الدوال تأخذ (id, gen) أوّلًا — لذلك نمرّر self_id و self_gen.
+--
+--  المتغيّرات المُعرَّفة هنا (local) تُحفظ بين الإطارات، فتُشكّل «ذاكرة»
+--  السكربت: ساعةً نجمّع فيها الزمن، وحالةً نبدّل بينها.
+
+local home_y   = 2      -- ارتفاع التمايل فوق الأرض. عدّله ليناسب مشهدك.
+local range    = 1      -- مدى الصعود والنزول بالأمتار.
+local speed    = 1.5    -- سرعة التمايل (دورات في الثانية).
+
+local clock    = 0      -- ذاكرة السكربت: الزمن المتراكم.
+local logged   = false  -- لنطبع رسالة ترحيب مرّة واحدة فقط.
+
 function update(dt)
+    clock = clock + dt
+
+    -- رسالة ترحيب في الطرفية مرّة واحدة (اكتب ما تريد لتفهم ما يجري).
+    if not logged then
+        logged = true
+        print("مرحبًا! هذا السكربت يعمل. معرّف الكيان: " .. self_id)
+    end
+
+    -- نقرأ الموضع الحالي أولًا حتى نحافظ على X و Z كما هما،
+    -- ونغيّر Y فقط (نتمايل الصندوق أعلى وأسفل).
+    local x, y, z = nf.entity_pos(self_id, self_gen)
+    if x == nil then
+        return -- الكيان بلا تحويل بعد؛ لا شيء نحرّكه هذا الإطار.
+    end
+
+    -- موجة جيبية: تمايل ناعم بين home_y-range و home_y+range.
+    local new_y = home_y + math.sin(clock * speed * math.pi * 2) * range
+
+    nf.set_entity_pos(self_id, self_gen, x, new_y, z)
 end

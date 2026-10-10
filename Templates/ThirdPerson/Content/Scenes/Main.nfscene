@@ -31,6 +31,7 @@ entity: 5:0
   Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
   RigidBody: type=Dynamic mass=1 friction=0.600000 restitution=0.350000 linear_damping=0.100000 angular_damping=0.300000 allow_sleep=true
   Collider: shape=Sphere radius=0.6
+  Script: lang=lua path=content://Scripts/player.lua
 ---
 entity: 6:0
   Name: SpinnerA

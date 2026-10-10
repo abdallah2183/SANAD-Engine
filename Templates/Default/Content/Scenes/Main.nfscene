@@ -14,6 +14,7 @@ entity: 2:0
 entity: 3:0
   Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)
   Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Script: lang=lua path=content://Scripts/example.lua
 ---
 entity: 4:0
   Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)

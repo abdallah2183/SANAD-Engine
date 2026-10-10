@@ -31,6 +31,7 @@ entity: 5:0
   Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
   RigidBody: type=Dynamic mass=1 friction=0.500000 restitution=0.200000 linear_damping=0.050000 angular_damping=0.300000 allow_sleep=true
   Collider: shape=Box half(0.5,0.5,0.5)
+  Script: lang=lua path=content://Scripts/player.lua
 ---
 entity: 6:0
   Name: Platform1
@@ -75,7 +76,7 @@ entity: 12:0
   Name: Slime
   Transform: local(10,0.9,0) world(10,0.9,0) rot(0,0,0) scale(1,0.8,1) parent(4294967295:0)
   Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
-  Animation: clip=hop speed=1 loop=loop paused=false state_machine=false procedural=bob axis=y turns=1 amplitude=0.3 duration=1.2
+  Animation: clip=bob speed=1 loop=loop paused=false state_machine=false procedural=bob axis=y turns=1 amplitude=0.3 duration=1.2
 ---
 entity: 13:0
   Name: GoalPole

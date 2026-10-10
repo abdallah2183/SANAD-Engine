@@ -1,7 +1,7 @@
 # NOVAForge Scene v1
 version: 1
 name: Main
-entity_count: 15
+entity_count: 16
 ---
 entity: 1:0
   Name: MainCamera
@@ -96,3 +96,9 @@ entity: 15:0
   Name: RangeHum
   Transform: local(0,2,-8) world(0,2,-8) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Audio: buffer=ambience volume=0.12 pitch=1 looping=true spatial=false autoplay=true tone=196 tone_duration=2
+---
+entity: 16:0
+  Name: Player
+  Transform: local(0,1.7,4) world(0,1.7,4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Script: lang=lua path=content://Scripts/player.lua
