@@ -1653,6 +1653,7 @@ struct NewLayout {
     RECT browse{0, 0, 0, 0};
     RECT create{0, 0, 0, 0};
     RECT cancel{0, 0, 0, 0};
+    int label_w = 0; // label column width (shrinks on a narrow window)
 };
 
 NewLayout layout_new(const LauncherState* st, int W) {
@@ -1673,16 +1674,33 @@ NewLayout layout_new(const LauncherState* st, int W) {
         mirror_rect(st, W, L.cards[i]);
     }
     const int fy = gy + 2 * (gh + gap) + S(st, 44);
-    const int label_w = S(st, 130);
+    // On a narrow window the fixed label + Browse widths can push a field's
+    // right edge past its left edge (negative width), and Win32 renders an
+    // inverted rect as a full-width box that spills over its neighbours — the
+    // overlap seen when the launcher is shrunk. Clamp every field to a minimum
+    // usable width and let the fixed chrome (label, Browse) shrink first.
+    int label_w = S(st, 130);
+    int bw = S(st, 110);
+    // Space left of Browse after the label column. If the window is too narrow
+    // for label+field+Browse side by side, shrink the label (never below 0)
+    // so the field keeps a usable width instead of going negative.
+    const int avail = cw - label_w - S(st, 10) - bw - S(st, 10);
+    if (avail < S(st, 120)) {
+        label_w = std::max(0, cw - bw - S(st, 10) - S(st, 120));
+        bw = std::max(S(st, 60), bw);
+    }
     const int field_x = x + label_w + S(st, 10);
-    const int bw = S(st, 110);
     // Fields run to the right margin (same edge the Cancel button uses) —
     // stopping them 220 px short left a dead strip next to Browse.
     L.name_edit = {field_x, fy, x + cw, fy + S(st, 28)};
     L.loc_edit = {field_x, fy + S(st, 38), x + cw - bw - S(st, 10), fy + S(st, 66)};
+    // Final clamp: never emit an inverted rect (right <= left).
+    if (L.loc_edit.right <= L.loc_edit.left) L.loc_edit.right = L.loc_edit.left + S(st, 120);
+    if (L.name_edit.right <= L.name_edit.left) L.name_edit.right = L.name_edit.left + S(st, 120);
     L.browse = {x + cw - bw, fy + S(st, 38), x + cw, fy + S(st, 66)};
     L.create = {x + cw - S(st, 300), fy + S(st, 110), x + cw - S(st, 150), fy + S(st, 142)};
     L.cancel = {x + cw - S(st, 140), fy + S(st, 110), x + cw, fy + S(st, 142)};
+    L.label_w = label_w;
     // RTL mirror: label column swaps with the fields, buttons flip to the far
     // edge. Same rects hit_test consumes, so clicks follow the paint.
     mirror_rect(st, W, L.name_edit);
@@ -1733,8 +1751,10 @@ void paint_new(HDC dc, LauncherState* st, int W, const NewLayout& L) {
     const int fy = L.name_edit.top;
     paint_text_key(dc, "sh_setup", x, fy - S(st, 30), S(st, 300), S(st, 22), st->font_body,
                    theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    // Label column mirrors with the fields (right side in RTL).
-    const int lab_w = S(st, 130);
+    // Label column mirrors with the fields (right side in RTL). Use the same
+    // label width the layout computed (it shrinks on a narrow window), so the
+    // labels and their fields stay aligned at every size.
+    const int lab_w = L.label_w;
     const int lab_x = g_shell_rtl ? (x + cw - lab_w) : x;
     paint_text_key(dc, "sh_name_label", lab_x, L.name_edit.top, lab_w, S(st, 28), st->font_body,
                    theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -1742,9 +1762,17 @@ void paint_new(HDC dc, LauncherState* st, int W, const NewLayout& L) {
                    theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     paint_text_key(dc, "sh_renderer_label", lab_x, L.loc_edit.top + S(st, 38), lab_w, S(st, 20),
                    st->font_body, theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    // Renderer value: never a fixed 420 px — on a narrow window that width
+    // runs past the content edge and overlaps the next column. Bound it to the
+    // real space left of the field (name/loc edit share the same right edge),
+    // so it always ends where the input box ends.
+    const int value_right = L.name_edit.right; // same right edge as the fields
+    const int value_w = (value_right > L.loc_edit.left)
+                            ? (value_right - L.loc_edit.left)
+                            : S(st, 120);
     paint_text_key(dc, "sh_renderer_value", L.loc_edit.left, L.loc_edit.top + S(st, 38),
-                   S(st, 420), S(st, 20), st->font_small, theme::text,
-                   DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                   value_w, S(st, 20), st->font_small, theme::text,
+                   DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     paint_shell_btn(dc, st, L.browse.left, L.browse.top, L.browse.right - L.browse.left,
                     L.browse.bottom - L.browse.top, shell_w_key("sh_btn_browse").c_str(), false,
                     st->hover_btn == 11);
