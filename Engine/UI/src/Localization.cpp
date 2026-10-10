@@ -356,9 +356,9 @@ constexpr Entry kEntries[] = {
     // The product name. Identical in both languages on purpose (same rule as
     // the language radio tags and `deg_fmt`): a product name is not translated.
     // This key exists so the shell has ONE brand string instead of a hardcoded
-    // Arabic literal in one place and "NOVAForge" in the window title, the file
+    // Arabic literal in one place and "SANAD" in the window title, the file
     // filter and the window class.
-    {"sh_brand", "NOVAForge", "NOVAForge"},
+    {"sh_brand", "SANAD", "SANAD"},
     {"sh_windows_only", "Windows PC only", "ويندوز فقط"},
     {"sh_tagline", "Game engine", "محرك ألعاب"},
     {"sh_all_projects", "All projects %zu", "كل المشاريع %zu"},
@@ -587,6 +587,32 @@ constexpr Entry kEntries[] = {
     {"drive", "Drive", "قيادة"},
     {"grounded_yes", "grounded: yes", "على الأرض: نعم"},
     {"grounded_no", "grounded: no", "ليست على الأرض"},
+    // Phase 28: navigation (voxel navmesh volume + walkers). Same rule as the
+    // panels above — display strings only, logic keys stay unshaped. Keys that
+    // already existed ("speed", "radius", "enabled", "apply", "attach",
+    // "detach") are deliberately NOT repeated here: a second row would trip the
+    // duplicate audit for no change in behaviour.
+    {"navmesh", "NavMesh", "شبكة التنقل"},
+    {"no_navmesh", "No navigation volume on this entity.",
+     "لا يوجد حجم تنقل لهذا الكيان."},
+    {"nav_agent", "Nav Agent", "عميل التنقل"},
+    {"no_nav_agent", "No nav agent on this entity.", "لا يوجد عميل تنقل لهذا الكيان."},
+    {"nav_area", "Area extents", "أبعاد الحجم"},
+    {"cell_size", "Cell size", "حجم الخلية"},
+    {"cell_height", "Cell height", "ارتفاع الخلية"},
+    {"slope", "Slope", "الميل"},
+    {"climb", "Climb", "الصعود"},
+    {"headroom", "Headroom", "ارتفاع النفاذ"},
+    {"min_area", "Min region area", "أدنى مساحة منطقة"},
+    {"agent_radius", "Agent radius", "نصف قطر العميل"},
+    {"jump_distance", "Jump distance", "مسافة القفز"},
+    {"jump_height", "Jump height", "ارتفاع القفز"},
+    {"max_verts", "Max verts", "أقصى عدد رؤوس"},
+    {"goal", "Goal", "الهدف"},
+    {"arrive_radius", "Arrive radius", "نصف قطر الوصول"},
+    {"navmesh_polys", "NavMesh polygons", "مضلعات شبكة التنقل"},
+    {"nav_agents", "Nav agents", "عملاء التنقل"},
+    {"nav_agents_arrived", "%d / %d agents at goal", "%d / %d عميل وصل للهدف"},
     // External IDE (Unity-style script editing): one button, three backends.
     {"open_in_vs", "Open in VS", "فتح في فيجوال ستوديو"},
     // Richer UI: outliner search is keyless (reuses "filter"), but the
@@ -656,9 +682,9 @@ constexpr Entry kEntries[] = {
     // diamond at this point, so the message has to name the FILE and the folder,
     // not just say something is wrong. Shown as a top banner, not only logged.
     {"err_font_missing_ar",
-     "Arabic font not found: copy Resources/fonts next to NOVAForgeEditor.exe "
+     "Arabic font not found: copy Resources/fonts next to SANADEditor.exe "
      "(every Arabic label is currently unreadable).",
-     "الخط العربي غير موجود: انسخ مجلد Resources/fonts بجوار NOVAForgeEditor.exe "
+     "الخط العربي غير موجود: انسخ مجلد Resources/fonts بجوار SANADEditor.exe "
      "(جميع النصوص العربية غير مقروءة حالياً)."},
     {"frame_all_hint", "Centre the view on everything in the scene (Shift+Home)",
      "توسيط العرض على كل شيء في المشهد (Shift+Home)"},

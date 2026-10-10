@@ -172,7 +172,7 @@ void run_lua_path() {
 } // namespace
 
 int main() {
-    std::printf("NOVAForge — G3 runtime game UI sample\n");
+    std::printf("SANAD — G3 runtime game UI sample\n");
     std::printf("flow: main -> play -> pause -> play -> game over -> restart\n\n");
 
     run_cpp_path();

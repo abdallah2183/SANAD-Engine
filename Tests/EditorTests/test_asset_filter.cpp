@@ -38,7 +38,7 @@ NF_TEST(editor_asset_list_and_filter) {
     assets::AssetRegistry reg;
     std::string err;
     NF_CHECK(reg.add(meta, err));
-    NF_CHECK(vfs.write_text("content://Scenes/Level.nfscene", "# NOVAForge Scene v1\n").ok);
+    NF_CHECK(vfs.write_text("content://Scenes/Level.nfscene", "# SANAD Scene v1\n").ok);
 
     auto all = editor::list_content_assets(vfs, reg);
     NF_CHECK(all.size() >= 2u);

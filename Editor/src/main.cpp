@@ -1,4 +1,4 @@
-// NOVAForgeEditor — native editor shell (Phase 4: Editor Foundation).
+// SANADEditor — native editor shell (Phase 4: Editor Foundation).
 //
 // Window + Vulkan device + swapchain + Runtime viewport (offscreen via
 // Runtime::render_offscreen) + Dear ImGui docking panels. With --frames N the
@@ -213,7 +213,7 @@ EditorConfig parse_args(int argc, char** argv) {
         } else if (arg == "--no-ssao") {
             c.no_ssao = true;
         } else if (arg == "--help" || arg == "-h") {
-            std::printf("NOVAForgeEditor (Phase 5)\n"
+            std::printf("SANADEditor (Phase 5)\n"
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
                         "  --scene <logical>   Scene to open (default content://Scenes/Example.nfscene)\n"
                         "  --frames N          Run N frames then exit (0 = interactive until close)\n"
@@ -618,7 +618,7 @@ int main(int argc, char** argv) {
     nf::editor::ConsoleBuffer console;
     nf::Logger::instance().add_sink(nf::editor::make_console_sink(console));
 
-    NF_LOG_INFO(nf::LogCategory::Editor, "=== NOVAForge Editor (Phase 4) ===");
+    NF_LOG_INFO(nf::LogCategory::Editor, "=== SANAD Editor (Phase 4) ===");
     NF_LOG_INFO(nf::LogCategory::Editor, "Project: '{}' Frames: {} Validation: {} Headless: {}",
                 cfg.project_path.empty() ? std::string("<engine tree>") : cfg.project_path,
                 cfg.max_frames, cfg.validation, cfg.headless);
@@ -745,7 +745,7 @@ int main(int argc, char** argv) {
         nf::WindowDesc wdesc{};
         wdesc.width = 1280;
         wdesc.height = 720;
-        wdesc.title = "NOVAForge Editor";
+        wdesc.title = "SANAD Editor";
         wdesc.vsync = cfg.vsync;
         // A human session opens maximized; scripted runs (--frames) keep the
         // exact 1280x720 so automation pixel math stays deterministic.
@@ -1970,7 +1970,7 @@ int main(int argc, char** argv) {
 
             // Dirty flag + play state in the window title.
             if (!cfg.headless) {
-                std::string title = "NOVAForge Editor — " + app.status().scene_label;
+                std::string title = "SANAD Editor — " + app.status().scene_label;
                 if (app.playing()) {
                     title += "  ● PLAYING (Esc = Stop)";
                 }
@@ -2844,6 +2844,6 @@ static nf::ecs::Entity automation_drag_entity{};
     }
     nf::JobSystem::instance().shutdown();
     nf::platform_shutdown();
-    NF_LOG_INFO(nf::LogCategory::Editor, "=== NOVAForge Editor exited (code {}) ===", exit_code);
+    NF_LOG_INFO(nf::LogCategory::Editor, "=== SANAD Editor exited (code {}) ===", exit_code);
     return exit_code;
 }

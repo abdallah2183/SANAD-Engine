@@ -1,4 +1,4 @@
-﻿; NOVAForge.iss — Windows-only (x64) installer for the NOVAForge Engine.
+﻿; SANAD.iss — Windows-only (x64) installer for the SANAD Engine.
 ;
 ; Built by packaging/windows/build_installer.ps1 locally and by
 ; .github/workflows/release.yml on a v* tag. Both pass:
@@ -7,7 +7,7 @@
 ;   /DStageDir=<absolute staged folder produced by build_installer.ps1>
 ;   /DOutputDir=<absolute dir for the Setup.exe>
 ;   /DRepoDir=<absolute repo root, for the .ico>
-; Defaults below let `iscc NOVAForge.iss` still work from this folder.
+; Defaults below let `iscc SANAD.iss` still work from this folder.
 ;
 #ifndef AppVersion
   #define AppVersion "0.2.0"
@@ -16,7 +16,7 @@
   #define VersionInfo "0.2.0.0"
 #endif
 #ifndef StageDir
-  #define StageDir "..\\..\\dist\\stage\\NOVAForge-0.2.0"
+  #define StageDir "..\\..\\dist\\stage\\SANAD-0.2.0"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\\..\\dist"
@@ -25,8 +25,8 @@
   #define RepoDir "..\\.."
 #endif
 
-#define AppName "NOVAForge Engine"
-#define AppExe "NOVAForgeEditor.exe"
+#define AppName "SANAD Engine"
+#define AppExe "SANADEditor.exe"
 #define AppId "{{B5A7F3E2-8C41-4D9E-9F2A-6E1C4D8B7A03}"
 
 [Setup]
@@ -35,19 +35,19 @@ AppName={#AppName}
 AppVerName={#AppName} {#AppVersion}
 AppVersion={#AppVersion}
 VersionInfoVersion={#VersionInfo}
-VersionInfoDescription=NOVAForge Engine installer (Windows x64)
-AppPublisher=NOVAForge
+VersionInfoDescription=SANAD Engine installer (Windows x64)
+AppPublisher=SANAD
 AppPublisherURL=https://github.com/abdallah2183/SANAD-Engine
 AppSupportURL=https://github.com/abdallah2183/SANAD-Engine/issues
 AppUpdatesURL=https://github.com/abdallah2183/SANAD-Engine/releases
-DefaultDirName={autopf}\NOVAForge Engine
-DefaultGroupName=NOVAForge Engine
+DefaultDirName={autopf}\SANAD Engine
+DefaultGroupName=SANAD Engine
 AllowNoIcons=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir={#OutputDir}
-OutputBaseFilename=NOVAForge-{#AppVersion}-Windows-x64-Setup
-SetupIconFile={#RepoDir}\Editor\resources\NOVAForge.ico
+OutputBaseFilename=SANAD-{#AppVersion}-Windows-x64-Setup
+SetupIconFile={#RepoDir}\Editor\resources\SANAD.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -71,11 +71,11 @@ Name: "starticon"; Description: "Start Menu entry"; GroupDescription: "{cm:Addit
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\NOVAForge Editor"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExe}"; Tasks: starticon
-Name: "{autodesktop}\NOVAForge Editor"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExe}"; Tasks: desktopicon
+Name: "{group}\SANAD Editor"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExe}"; Tasks: starticon
+Name: "{autodesktop}\SANAD Editor"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,NOVAForge Editor}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,SANAD Editor}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 // The Vulkan loader (vulkan-1.dll) ships with the GPU driver, never with the

@@ -34,7 +34,7 @@ int Application::run() {
     Logger::instance().add_sink(Logger::make_console_sink());
     Logger::instance().set_min_level(LogLevel::Info);
 
-    NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Runtime ===");
+    NF_LOG_INFO(LogCategory::Core, "=== SANAD Runtime ===");
     NF_LOG_INFO(LogCategory::Core, "Project: '{}' Frames: {} Validation: {} Headless: {}",
                 m_config.project_path.empty() ? std::string("<none — engine tree fallback>")
                                               : m_config.project_path,
@@ -609,7 +609,7 @@ int Application::run() {
                      "Exiting: the scene has an animated entity that never moved.");
         return 1;
     }
-    NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Runtime exited cleanly ===");
+    NF_LOG_INFO(LogCategory::Core, "=== SANAD Runtime exited cleanly ===");
     return 0;
 }
 

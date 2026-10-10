@@ -1,6 +1,6 @@
 #version 450
 
-// NOVAForge Engine — Textured quad sample fragment shader
+// SANAD Engine — Textured quad sample fragment shader
 //
 // Samples the bound texture at the interpolated UV. This is the first shader
 // that reads a resource through a descriptor set, so it is the real test of

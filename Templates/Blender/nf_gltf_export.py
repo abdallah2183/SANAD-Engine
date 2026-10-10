@@ -1,11 +1,11 @@
-# nf_gltf_export.py — NOVAForge one-click glTF export for Blender.
+# nf_gltf_export.py — SANAD one-click glTF export for Blender.
 #
-# Ships with the NOVAForge/SANAD Engine repo (Templates/Blender/). Install:
+# Ships with the SANAD/SANAD Engine repo (Templates/Blender/). Install:
 #   Blender > Edit > Preferences > Add-ons > Install… > pick this file,
-#   then enable "Import-Export: NOVAForge glTF Export".
+#   then enable "Import-Export: SANAD glTF Export".
 #
 # One-click use:
-#   File > Export > NOVAForge glTF (.glb)  — settings below are fixed to what
+#   File > Export > SANAD glTF (.glb)  — settings below are fixed to what
 #   the engine's importer (NFModelImporter / nf::assets::import_gltf_file)
 #   expects for a game-ready character (mesh + armature + actions + material).
 #
@@ -24,12 +24,12 @@
 # static-geometry mode; this add-on never labels a static export as a character.
 
 bl_info = {
-    "name": "NOVAForge glTF Export",
-    "author": "NOVAForge/SANAD Engine",
+    "name": "SANAD glTF Export",
+    "author": "SANAD/SANAD Engine",
     "version": (1, 0, 0),
     "blender": (3, 6, 0),
-    "location": "File > Export > NOVAForge glTF (.glb)",
-    "description": "One-click glTF export tuned for the NOVAForge engine importer",
+    "location": "File > Export > SANAD glTF (.glb)",
+    "description": "One-click glTF export tuned for the SANAD engine importer",
     "category": "Import-Export",
 }
 
@@ -110,10 +110,10 @@ _CRITICAL_OPTIONS = frozenset({
 
 
 class NF_OT_export_gltf(bpy.types.Operator):
-    """Export the selection as glTF for NOVAForge (character-ready settings)"""
+    """Export the selection as glTF for SANAD (character-ready settings)"""
 
     bl_idname = "nf.export_gltf"
-    bl_label = "NOVAForge glTF (.glb)"
+    bl_label = "SANAD glTF (.glb)"
 
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
 
@@ -153,7 +153,7 @@ class NF_OT_export_gltf(bpy.types.Operator):
     def execute(self, context):
         ok, detail = character_preflight(context)
         if not ok:
-            self.report({"ERROR"}, "NOVAForge character preflight failed: %s" % detail)
+            self.report({"ERROR"}, "SANAD character preflight failed: %s" % detail)
             return {"CANCELLED"}
 
         settings = self._settings()
@@ -161,7 +161,7 @@ class NF_OT_export_gltf(bpy.types.Operator):
         missing_critical = sorted(_CRITICAL_OPTIONS - supported)
         if missing_critical:
             self.report({"ERROR"},
-                        "NOVAForge: this Blender build lacks critical export options: %s"
+                        "SANAD: this Blender build lacks critical export options: %s"
                         % ", ".join(missing_critical))
             return {"CANCELLED"}
 
@@ -172,22 +172,22 @@ class NF_OT_export_gltf(bpy.types.Operator):
         export_result = bpy.ops.export_scene.gltf(**kwargs)
         if "FINISHED" not in export_result:
             self.report({"ERROR"},
-                        "NOVAForge: glTF exporter returned %s; no export confirmed"
+                        "SANAD: glTF exporter returned %s; no export confirmed"
                         % sorted(export_result))
             return {"CANCELLED"}
 
         output_path = bpy.path.abspath(self.filepath)
         if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
             self.report({"ERROR"},
-                        "NOVAForge: exporter reported success but output is missing or empty: %s"
+                        "SANAD: exporter reported success but output is missing or empty: %s"
                         % output_path)
             return {"CANCELLED"}
 
         if dropped:
             self.report({"WARNING"},
-                        "NOVAForge: optional settings unavailable on this Blender build: %s"
+                        "SANAD: optional settings unavailable on this Blender build: %s"
                         % ", ".join(dropped))
-        self.report({"INFO"}, "NOVAForge: exported character %s (%s)" % (output_path, detail))
+        self.report({"INFO"}, "SANAD: exported character %s (%s)" % (output_path, detail))
         return {"FINISHED"}
 
     def invoke(self, context, _event):
@@ -196,7 +196,7 @@ class NF_OT_export_gltf(bpy.types.Operator):
 
 
 def nf_export_menu(self, _context):
-    self.layout.operator(NF_OT_export_gltf.bl_idname, text="NOVAForge glTF (.glb)")
+    self.layout.operator(NF_OT_export_gltf.bl_idname, text="SANAD glTF (.glb)")
 
 
 def register():

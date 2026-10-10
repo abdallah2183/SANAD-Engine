@@ -1,7 +1,7 @@
-# NOVAForge Engine
+# SANAD Engine
 ## وثيقة التصميم والتطوير الشاملة لمحرك ألعاب موحّد عالي الأداء
 
-> **الاسم المؤقت للمشروع:** NOVAForge Engine  
+> **الاسم المؤقت للمشروع:** SANAD Engine  
 > **الهدف:** بناء محرك ألعاب احترافي موحّد يجمع سهولة الاستخدام وسرعة التطوير مع جودة رسومية عالية، قابلية التوسع، الاستقرار، دعم 2D و3D، الألعاب ذات العوالم المفتوحة، الألعاب متعددة اللاعبين، والمشاريع ذات المستوى التجاري وAAA.
 >
 > **الفكرة الأساسية:** لا نحاول نسخ محرك واحد. نبني Architecture جديدة تأخذ أفضل الأفكار من أنظمة متعددة، ثم توحّدها داخل منصة واحدة ذات Workflow واضح.
@@ -71,7 +71,7 @@
 
 ## 1.1 الهدف
 
-NOVAForge Engine هو محرك ألعاب متعدد الاستخدامات يهدف إلى تقديم:
+SANAD Engine هو محرك ألعاب متعدد الاستخدامات يهدف إلى تقديم:
 
 ### 2D
 - Sprites
@@ -188,7 +188,7 @@ Engine Core
 
 ```text
 +---------------------------------------------------------+
-|                    NOVAForge Editor                     |
+|                    SANAD Editor                     |
 +---------------------------------------------------------+
 |                 Tools / UI / Inspectors                |
 +---------------------------------------------------------+
@@ -1666,7 +1666,7 @@ IEditorPlugin
 يجب أن يكون بالإمكان بناء:
 
 ```text
-NOVAForgeServer
+SANADServer
 ```
 
 بدون:
@@ -2114,7 +2114,7 @@ namespace NF
 اقتراح:
 
 ```text
-NOVAForge/
+SANAD/
 │
 ├── Engine/
 │   ├── Core/
@@ -2670,9 +2670,9 @@ Platform.ini
 مهم جدًا للـCI:
 
 ```text
-NOVAForgeEditor --project MyGame --build
-NOVAForgeCook --project MyGame
-NOVAForgeServer --map Arena
+SANADEditor --project MyGame --build
+SANADCook --project MyGame
+SANADServer --map Arena
 ```
 
 ---
@@ -4045,7 +4045,7 @@ Major.Minor.Patch
 بعد الاستقرار:
 
 ```text
-NOVAForge 1.x LTS
+SANAD 1.x LTS
 ```
 
 ويتم تثبيت APIs المهمة.
@@ -4625,7 +4625,7 @@ Gameplay
 أسماء مقترحة:
 
 ```text
-NOVAForge
+SANAD
 AstraCore
 TitanForge
 Nebula Engine
@@ -4646,7 +4646,7 @@ Pulse Engine
 مثال:
 
 ```md
-# NOVAForge
+# SANAD
 
 High-performance cross-platform game engine.
 
@@ -5047,7 +5047,7 @@ Generated metadata
 الخلاصة:
 
 ```text
-                        NOVAForge
+                        SANAD
                             |
        +--------------------+--------------------+
        |                    |                    |
@@ -5127,7 +5127,7 @@ Generated metadata
 
 # 303. الأشياء التي يجب أن تمتلكها معماريًا
 
-الأشياء التي تعتبر جوهر NOVAForge:
+الأشياء التي تعتبر جوهر SANAD:
 
 - RHI
 - Render Graph
@@ -5421,11 +5421,11 @@ Recoverable errors
 
 اقتراح:
 
-> **NOVAForge — Build Worlds Without Fighting the Engine.**
+> **SANAD — Build Worlds Without Fighting the Engine.**
 
 أو:
 
-> **NOVAForge — One Engine. Every Scale.**
+> **SANAD — One Engine. Every Scale.**
 
 ---
 
@@ -5547,7 +5547,7 @@ Real Engine Architecture
 # 324. ملحق: Naming
 
 ```text
-NF = NovaForge
+NF = SANAD
 
 Entity: NFEntity
 World: NFWorld
@@ -5709,7 +5709,7 @@ nf editor Demo
 ثم يظهر:
 
 ```text
-NOVAForge Editor
+SANAD Editor
 ```
 
 وتستطيع:
@@ -5750,7 +5750,7 @@ Stability
 
 أما إذا كانت الـArchitecture سليمة، فكل Feature جديدة تصبح أسهل في الإضافة، وأقل تكلفة في الصيانة، وأقل خطورة على النظام كاملًا.
 
-**NOVAForge يجب أن يُبنى كمنصة طويلة العمر، وليس كديمو تقني.**
+**SANAD يجب أن يُبنى كمنصة طويلة العمر، وليس كديمو تقني.**
 
 ---
 
@@ -9606,5 +9606,5 @@ exit "$FAILED"
 > **القاعدة النهائية**: كل سطر في هذا المرجع قابل للقراءة بمعزل عن غيره.
 > إن احتجت لقراءة خمسة ملفات لفهم دالة واحدة، فالتصميم فشل — أعد كتابتها.
 
-**NOVAForge يُبنى سطرًا بسطر، باختبار يحمي كل سطر.**
+**SANAD يُبنى سطرًا بسطر، باختبار يحمي كل سطر.**
 

@@ -22,7 +22,7 @@ NF_TEST(test_filesystem_stem) {
 
 NF_TEST(test_filesystem_write_read) {
     const char* test_path = "nf_test_filesystem_write_read.tmp";
-    std::string text = "Hello NOVAForge!";
+    std::string text = "Hello SANAD!";
 
     bool written = FileSystem::write_text(test_path, text);
     NF_CHECK(written);

@@ -44,7 +44,7 @@ namespace nf::assets {
 
 namespace {
 
-constexpr const char* kGenerator = "NOVAForge MeshExport";
+constexpr const char* kGenerator = "SANAD MeshExport";
 
 // The neutral albedo both OBJ's Kd and glTF's baseColorFactor get: a MeshAsset
 // carries no material data, and inventing colours would be worse than saying
@@ -300,7 +300,7 @@ std::string write_obj_text(const MeshAsset& mesh, const ExportNames& names) {
 
     std::string out;
     out.reserve(64 * mesh.vertices.size() + 48 * triangles.size() + 256);
-    out += "# NOVAForge MeshExport\n";
+    out += "# SANAD MeshExport\n";
     out += "# vertices " + std::to_string(mesh.vertices.size()) +
            " triangles " + std::to_string(triangles.size()) + "\n";
     out += "mtllib " + names.stem_name + ".mtl\n";
@@ -334,7 +334,7 @@ std::string write_mtl_text(const MeshAsset& mesh) {
     }
 
     std::string out;
-    out += "# NOVAForge MeshExport\n";
+    out += "# SANAD MeshExport\n";
     out += "# A MeshAsset carries material slots, not materials: every entry is the\n";
     out += "# neutral default the editor shows until a real material is assigned.\n";
     for (u32 slot : slots) {
@@ -638,7 +638,7 @@ const std::vector<MeshFormat>& mesh_formats() {
 
 const char* mesh_format_name(MeshFormat format) {
     switch (format) {
-        case MeshFormat::NfMesh: return "NOVAForge Mesh (.nfmesh)";
+        case MeshFormat::NfMesh: return "SANAD Mesh (.nfmesh)";
         case MeshFormat::Obj: return "Wavefront OBJ (+ .mtl)";
         case MeshFormat::Stl: return "Stereolithography (binary STL)";
         case MeshFormat::Ply: return "Polygon File (ASCII PLY)";

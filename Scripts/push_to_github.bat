@@ -1,8 +1,8 @@
 ﻿@echo off
 chcp 65001 >nul
-title NOVAForge Engine - Push to GitHub
+title SANAD Engine - Push to GitHub
 echo ====================================================================
-echo        🚀 NOVAForge Engine - رفع المحرك على جيت هب (GitHub)
+echo        🚀 SANAD Engine - رفع المحرك على جيت هب (GitHub)
 echo ====================================================================
 echo.
 
@@ -26,7 +26,7 @@ git remote add origin %REPO_URL%
 echo.
 echo Ensuring all files are added and committed...
 git add .
-git commit -m "feat: Arab Game Engine launch - NOVAForge Engine with logo, web showcase, and community roadmap"
+git commit -m "feat: Arab Game Engine launch - SANAD Engine with logo, web showcase, and community roadmap"
 
 echo.
 echo Pushing branch 'main' to GitHub (%REPO_URL%)...
@@ -36,7 +36,7 @@ git push -u origin main
 echo.
 if %ERRORLEVEL% equ 0 (
     echo ====================================================================
-    echo   🎉 تم رفع محرك NOVAForge على جيت هب بنجاح!
+    echo   🎉 تم رفع محرك SANAD على جيت هب بنجاح!
     echo ====================================================================
 ) else (
     echo ====================================================================

@@ -22,8 +22,8 @@ struct CrashHandlerConfig {
     /// Directory for .dmp files (created when missing). Empty = disabled dumps
     /// (the logger still flushes).
     std::string dump_directory;
-    /// Prefix for dump file names ("NOVAForge_20260916_221500.dmp").
-    std::string dump_prefix = "NOVAForge";
+    /// Prefix for dump file names ("SANAD_20260916_221500.dmp").
+    std::string dump_prefix = "SANAD";
     /// Version string stamped into the crash report ("MyGame 1.2.0 nf 0.1").
     /// A crash dump without a version is untriageable, so shipped builds set
     /// this; empty means the report omits the line.

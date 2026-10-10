@@ -1,6 +1,6 @@
 #version 450
 
-// NOVAForge Engine — Textured quad sample vertex shader
+// SANAD Engine — Textured quad sample vertex shader
 //
 // Real vertex buffer input (position + UV), unlike the triangle sample which
 // generated vertices from gl_VertexIndex. This is the path every mesh will

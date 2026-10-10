@@ -1,6 +1,6 @@
 ---
 name: اقتراح ميزة جديدة | Feature Request
-about: اقترح ميزة جديدة أو فكرة لتطوير محرك NOVAForge
+about: اقترح ميزة جديدة أو فكرة لتطوير محرك SANAD
 title: "[FEATURE] "
 labels: enhancement, contribution
 assignees: ''

@@ -1,4 +1,4 @@
-# nf — the NOVAForge project CLI
+# nf — the SANAD project CLI
 #
 # Thin front end over NFProjectTool. It needs to know where the project template
 # and the compiled renderer shaders live, because it is the tool that turns a

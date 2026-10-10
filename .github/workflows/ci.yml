@@ -167,8 +167,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          exe="$BUILD_DIR/bin/NOVAForgeEditor.exe"
-          [ -f "$exe" ] || exe="$BUILD_DIR/bin/NOVAForgeEditor"
+          exe="$BUILD_DIR/bin/SANADEditor.exe"
+          [ -f "$exe" ] || exe="$BUILD_DIR/bin/SANADEditor"
           if [ ! -f "$exe" ]; then echo "Editor not built"; exit 1; fi
           "$exe" --scene content://Scenes/Example.nfscene --frames 120 --validation --headless \
             > editor_acceptance.log 2>&1

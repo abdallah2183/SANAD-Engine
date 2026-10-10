@@ -1,8 +1,8 @@
 <div align="center">
 
-  <img src="Docs/images/novaforge_logo.jpg" alt="NOVAForge Engine logo" width="140" />
+  <img src="Docs/images/sanad_logo.jpg" alt="SANAD Engine logo" width="140" />
 
-  # NOVAForge Engine | محرك سَنَد
+  # SANAD Engine | محرك سَنَد
 
   **A modern C++23 + Vulkan 3D game engine — with an Arabic-first editor.**
   <br>
@@ -28,13 +28,13 @@
   <br>
 
   <!-- TODO: record editor hero GIF -> Docs/media/hero.gif (see Docs/media/README.md) -->
-  <img src="Docs/media/hero.gif" alt="NOVAForge editor in action" width="720">
+  <img src="Docs/media/hero.gif" alt="SANAD editor in action" width="720">
 
 </div>
 
 ---
 
-## 🌟 Why NOVAForge?
+## 🌟 Why SANAD?
 
 - **Arabic-first, not Arabic-later.** The editor ships a UCD-verified Arabic text shaper (contextual forms, lam-alef ligatures, full bidi) with the Amiri font and complete EN/AR localization — first-class, not a bolt-on.
 - **Modern by construction.** C++23, Vulkan 1.2+ low-overhead RHI, a data-oriented sparse-set ECS, and a DAG RenderGraph.
@@ -80,8 +80,8 @@ Download the latest release for **Windows 10/11 x64**, then run it.
 
 | File | How to use |
 |:---|:---|
-| `NOVAForge-*-Setup.exe` (recommended) | Double-click → wizard (English / العربية) → Start Menu shortcut |
-| `NOVAForge-*-Portable.zip` | Extract anywhere → run `NOVAForgeEditor.exe` |
+| `SANAD-*-Setup.exe` (recommended) | Double-click → wizard (English / العربية) → Start Menu shortcut |
+| `SANAD-*-Portable.zip` | Extract anywhere → run `SANADEditor.exe` |
 
 ```bat
 :: build your first game in three commands
@@ -129,7 +129,7 @@ cd MyGame\dist && NFPlayer.exe
 
 ```mermaid
 flowchart TD
-    Editor["NOVAForge Editor<br/>(ImGui + Win32 Docking)"]
+    Editor["SANAD Editor<br/>(ImGui + Win32 Docking)"]
     Player["NFPlayer (Standalone)"]
     Editor --> Runtime["NFRuntime<br/>(World & Stepping)"]
     Player --> Runtime
@@ -154,7 +154,7 @@ flowchart TD
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│               NOVAForge Editor (ImGui + Win32 Docking)          │
+│               SANAD Editor (ImGui + Win32 Docking)          │
 ├───────────────────────────────┬─────────────────────────────────┤
 │    Gameplay Module Registry   │      NFPlayer Standalone        │
 ├───────────────────────────────┴─────────────────────────────────┤
@@ -191,7 +191,7 @@ build_nf.bat
 Run / test:
 
 ```bat
-.\build\DebugNinja\bin\NOVAForgeEditor.exe
+.\build\DebugNinja\bin\SANADEditor.exe
 .\build\DebugNinja\bin\RuntimeTests.exe
 ```
 
@@ -287,7 +287,7 @@ Phases 1–27 complete (foundation → LOD → shadows/sky → audio/glTF → Lu
 
 </details>
 
-Full history and next phases: [ROADMAP.md](ROADMAP.md) · full design: [Docs/NOVAForge_Engine_Complete_Design.md](Docs/NOVAForge_Engine_Complete_Design.md).
+Full history and next phases: [ROADMAP.md](ROADMAP.md) · full design: [Docs/SANAD_Engine_Complete_Design.md](Docs/SANAD_Engine_Complete_Design.md).
 
 ---
 

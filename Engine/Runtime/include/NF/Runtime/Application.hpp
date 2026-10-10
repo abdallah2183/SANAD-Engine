@@ -7,7 +7,7 @@
 namespace nf::runtime {
 
 struct ApplicationConfig {
-    std::string title = "NOVAForge Runtime";
+    std::string title = "SANAD Runtime";
     uint32_t width = 1280;
     uint32_t height = 720;
     bool vsync = true;

@@ -686,6 +686,8 @@ void world_panel(EditorApp& app) {
         kv(AV("particles"), std::to_string(n(vfx::ParticleComponent{})));
         kv(AV("cloths"), std::to_string(n(physics::ClothComponent{})));
         kv(AV("characters"), std::to_string(n(physics::CharacterComponent{})));
+        kv(AV("navmesh"), std::to_string(n(runtime::NavMeshComponent{})));
+        kv(AV("nav_agents"), std::to_string(n(runtime::NavAgentComponent{})));
     }
 
     if (const runtime::Runtime* rt = app.runtime(); rt != nullptr && section(AV("live_systems").c_str())) {
@@ -699,6 +701,13 @@ void world_panel(EditorApp& app) {
         if (const ai::AIWorld* ai = rt->ai_world()) {
             kv(AV("ai_actors"), std::to_string(ai->actors().size()));
         }
+        // Navigation reads the bake, not just the components: "40 polygons on
+        // screen, 3 of 4 agents there" is the state a level author needs, and a
+        // component count cannot tell an unbaked volume from a working one.
+        kv(AV("navmesh_polys"), std::to_string(rt->navmesh_polygon_count()));
+        kv(AV("nav_agents_arrived"),
+           fmt("%d / %d", static_cast<double>(rt->nav_agents_at_goal()),
+               static_cast<double>(rt->nav_agent_count())));
     }
 
     if (section(AV("selection").c_str())) {

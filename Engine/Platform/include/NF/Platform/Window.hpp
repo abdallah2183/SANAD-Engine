@@ -18,7 +18,7 @@ struct WindowPlatformAccess;
 struct WindowDesc {
     u32 width = 1280;
     u32 height = 720;
-    std::string title = "NOVAForge Engine";
+    std::string title = "SANAD Engine";
     bool fullscreen = false;
     bool resizable = true;
     bool vsync = true;

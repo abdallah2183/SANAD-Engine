@@ -1,4 +1,4 @@
-# NOVAForge Editor — Design (Phase 4 + Phase 5)
+# SANAD Editor — Design (Phase 4 + Phase 5)
 
 ## Identity
 Dense desktop tool UI for long sessions. Dark graphite (`#26272B`

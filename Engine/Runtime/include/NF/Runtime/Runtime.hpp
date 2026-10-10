@@ -37,6 +37,7 @@
 #include <NF/Vfx/Particles.hpp>
 #include <NF/Vfx/Components.hpp>
 #include <NF/AI/AIWorld.hpp>
+#include <NF/AI/NavMesh.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -390,6 +391,64 @@ public:
     /// difference is that these are per-scene artefacts, not renderer state a
     /// caller might have configured directly.
     void build_scene_audio();
+
+    // --- Navigation (Phase 28 — the voxel NavMesh, in the frame and the scene)
+    //
+    // The navmesh itself (nf::ai::NavMesh) is CPU-only, deterministic and was
+    // unit-tested from the day it landed — and reachable from nothing: no scene
+    // could name a volume, no frame stepped an agent, no editor authored either.
+    // This closes that gap the same way Phase 25 did for particles and cloth:
+    // the scene declares a volume and its walkers, the frame steps them, the
+    // editor authors both.
+    //
+    // The bake reads the scene honestly: the floor is the volume's own floor
+    // height (there is no terrain component to sample) and the obstacles are
+    // the scene's STATIC BOX colliders, so a crate an author places is a step
+    // the mesh knows about. Everything richer is a caller's `HeightSampler`
+    // through build_scene_navmesh(), not a scene-format change.
+    //
+    // Placement in the frame is deliberate and mirrors AIWorld: agents step
+    // after gameplay, scripts and the AI plan (a script that teleports an actor
+    // this frame is already visible to its path), and before particles — a
+    // walker's dust spawns where it now stands, not where it was.
+
+    /// Bakes the mesh for the scene's first enabled `NavMeshComponent` and
+    /// binds live path state to every enabled `NavAgentComponent`. A scene with
+    /// no volume drops the previous scene's mesh and agents, like every other
+    /// per-scene artefact here.
+    void build_scene_navmesh();
+
+    /// Steps every bound agent along its path, writing the result into its
+    /// Transform. Returns the number of agents that moved this frame. Only
+    /// advances on dt > 0 (callers go through update(), which enforces it).
+    u32 step_navmesh(f32 dt);
+
+    /// The live mesh, or null when the scene has no navigation volume. Const and
+    /// non-const for the same reason `ai_world()` has both: the editor reads
+    /// debug stats, a game may re-tune the bake in place.
+    ai::NavMesh* navmesh() { return m_navmesh.get(); }
+    const ai::NavMesh* navmesh() const { return m_navmesh.get(); }
+    /// True when a volume was baked (false for a scene with no NavMesh line).
+    [[nodiscard]] bool navmesh_built() const { return m_navmesh && m_navmesh->built(); }
+    /// Polygons in the live mesh, 0 when there is none — the "the bake ran and
+    /// produced something" observable.
+    [[nodiscard]] size_t navmesh_polygon_count() const {
+        return m_navmesh ? m_navmesh->polygon_count() : 0;
+    }
+    /// Enabled agents bound right now.
+    [[nodiscard]] size_t nav_agent_count() const { return m_nav_agents.size(); }
+    /// Agents whose last step drove them onto their goal. The difference
+    /// between "walkers exist" and "walkers arrived".
+    [[nodiscard]] size_t nav_agents_at_goal() const {
+        size_t n = 0;
+        for (const auto& [entity, state] : m_nav_agents) {
+            (void)entity;
+            if (state.at_goal) ++n;
+        }
+        return n;
+    }
+    /// Obstacles the last bake carved (static box colliders seen at build time).
+    [[nodiscard]] size_t navmesh_obstacle_count() const { return m_nav_obstacle_count; }
 
     /// The input source handed to modules. Non-owning; null means no input, and
     /// modules are expected to check.
@@ -881,6 +940,24 @@ private:
     // register actors and foci through ai_world(); the population is cleared
     // on scene adopt so a previous scene's crowd never governs the next one.
     std::unique_ptr<ai::AIWorld> m_ai_world;
+    // Navigation (Phase 28). The mesh is a per-scene artefact like the particle
+    // emitters: rebuilt on adopt, dropped with the scene that made it. Agents
+    // carry their live path beside the component rather than inside it, because
+    // the path is session state — the scene persists the goal, never the route.
+    struct NavAgentState {
+        std::vector<Vec3> path;
+        usize waypoint = 0;         ///< Index into `path` the agent is walking to.
+        Vec3 goal{};                ///< The goal this path was found for.
+        bool has_path = false;
+        bool at_goal = false;
+        u64 mesh_generation = 0;    ///< Bake this path was planned against.
+    };
+    std::unordered_map<ecs::Entity, NavAgentState> m_nav_agents;
+    std::unique_ptr<ai::NavMesh> m_navmesh;
+    /// Bumped on every bake, so a rebuilt mesh invalidates every agent's path
+    /// without the agents knowing anything about the bake.
+    u64 m_nav_generation = 0;
+    size_t m_nav_obstacle_count = 0;
     /// Edit-vs-play mode, mirrored into GameplayContext::playing (see
     /// set_playing). Defaults to editing so a harness that never sets it gets
     /// the editor-safe behaviour, not gameplay driving the scene.

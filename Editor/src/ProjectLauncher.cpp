@@ -186,7 +186,7 @@ std::string recent_store_path() {
         return {};
     }
     std::filesystem::path p(local);
-    p /= "NOVAForge";
+    p /= "SANAD";
     std::error_code ec;
     std::filesystem::create_directories(p, ec);
     p /= "recent_projects.txt";
@@ -2944,7 +2944,7 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_STANDARD_CLASSES};
     ::InitCommonControlsEx(&icc);
 
-    const wchar_t* kClass = L"NOVAForgeProjectLauncher";
+    const wchar_t* kClass = L"SANADProjectLauncher";
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = shell_wnd_proc;
@@ -3024,7 +3024,7 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
     const int x = work.left + ((work.right - work.left) - (wrc.right - wrc.left)) / 2;
     const int win_y = work.top + ((work.bottom - work.top) - (wrc.bottom - wrc.top)) / 2;
 
-    HWND hwnd = ::CreateWindowExW(0, kClass, L"NOVAForge — Project", style, x, win_y,
+    HWND hwnd = ::CreateWindowExW(0, kClass, L"SANAD — Project", style, x, win_y,
                                   wrc.right - wrc.left, wrc.bottom - wrc.top, nullptr, nullptr,
                                   wc.hInstance, nullptr);
     if (hwnd == nullptr) {
@@ -3305,7 +3305,7 @@ void save_recent_projects(const std::vector<std::string>& recent) {
 }
 
 // --- shell settings (language + window state) --------------------------------
-// %APPDATA%/NOVAForge/settings.json. The recent list keeps its own file in
+// %APPDATA%/SANAD/settings.json. The recent list keeps its own file in
 // LOCALAPPDATA (see above); this one is only language + window state.
 
 #ifdef _WIN32
@@ -3316,7 +3316,7 @@ std::string settings_store_path() {
         return {};
     }
     std::filesystem::path p(buf);
-    p /= "NOVAForge";
+    p /= "SANAD";
     std::error_code ec;
     std::filesystem::create_directories(p, ec);
     p /= "settings.json";
@@ -3422,7 +3422,7 @@ bool pick_project_file_dialog(const std::string& title, const std::string& start
     if (SUCCEEDED(dlg->GetOptions(&opts))) {
         dlg->SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
     }
-    const COMDLG_FILTERSPEC spec[] = {{L"NOVAForge project", L"*.nfproj"},
+    const COMDLG_FILTERSPEC spec[] = {{L"SANAD project", L"*.nfproj"},
                                       {L"All files", L"*.*"}};
     dlg->SetFileTypes(2, spec);
     dlg->SetFileTypeIndex(1);

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """export_project.py — MedievalVillage sample -> editor project (.nfproj).
 
-Builds a real NOVAForge editor project from the exact village the game plays:
+Builds a real SANAD editor project from the exact village the game plays:
   1. dumps the layout headlessly from NFSampleMedievalVillage.exe
      (--export-layout: layout.txt + ground.nfmesh, no window, no GPU),
   2. scaffolds a project with nf.exe,
@@ -14,7 +14,7 @@ Usage:
   python3 export_project.py [--out <dir>] [--force]
 
 Defaults to <Documents>/MedievalVillage. Open the result by dragging
-MedievalVillage.nfproj onto the NOVAForge launcher/editor window.
+MedievalVillage.nfproj onto the SANAD launcher/editor window.
 
 What you get in the editor is the whole village explorable in Play mode
 (fly with RMB+WASD, physics preview). The crate quest itself (pickup,
@@ -154,7 +154,7 @@ def write_materials(mat_dir, tex_stems):
     mat_dir.mkdir(parents=True, exist_ok=True)
 
     def write(name, base, metallic, rough, albedo=None):
-        lines = ["# NOVAForge Material v1", f"name: {name}",
+        lines = ["# SANAD Material v1", f"name: {name}",
                  f"base_color: {base[0]} {base[1]} {base[2]} {base[3]}",
                  f"metallic: {metallic}", f"roughness: {rough}", "ao: 1",
                  "emission: 0 0 0", "emission_strength: 0"]
@@ -301,7 +301,7 @@ def main():
     add("PlayerStart_Hood", (spawn[0], spawn[1] - 0.55 + 1.14, spawn[2]),
         scale=(1.0, 0.72, 1.0), mesh=sphere, material="content://Materials/Hood")
 
-    lines = ["# NOVAForge Scene v1", "version: 1", "name: Main",
+    lines = ["# SANAD Scene v1", "version: 1", "name: Main",
              f"entity_count: {len(entities)}"]
     for idx, e in enumerate(entities, start=1):
         x, y, z = e["pos"]
@@ -350,8 +350,8 @@ def main():
 
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nDone: {nfproj}", flush=True)
-    print("Open it: drag MedievalVillage.nfproj onto the NOVAForge launcher window,", flush=True)
-    print("or run: NOVAForgeEditor.exe --project", f'"{nfproj}"', flush=True)
+    print("Open it: drag MedievalVillage.nfproj onto the SANAD launcher window,", flush=True)
+    print("or run: SANADEditor.exe --project", f'"{nfproj}"', flush=True)
 
 
 if __name__ == "__main__":

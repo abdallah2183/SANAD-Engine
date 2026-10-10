@@ -131,7 +131,7 @@ NF_TEST(script_line_rejects_unknown_lang_and_missing_path) {
     vfs.mount("content://", tmp);
 
     const std::string text =
-        "# NOVAForge Scene v1\n"
+        "# SANAD Scene v1\n"
         "version: 1\n"
         "name: Bad\n"
         "entity_count: 2\n"

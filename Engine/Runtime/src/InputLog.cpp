@@ -72,7 +72,7 @@ f32 InputLog::value_at(u64 frame, std::string_view action) const {
 
 std::string InputLog::serialize() const {
     std::ostringstream out;
-    out << "# NOVAForge InputLog v1\n";
+    out << "# SANAD InputLog v1\n";
     out << "frame_count: " << m_frames.size() << "\n";
     for (const InputFrame& f : m_frames) {
         out << "@" << f.frame;

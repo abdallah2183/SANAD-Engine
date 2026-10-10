@@ -13,7 +13,7 @@ struct BuildOptions {
     std::filesystem::path shader_dir;   // compiled SPIR-V, copied to <project>/Shaders/Basic3D
     std::filesystem::path output_dir;   // empty means <project>/dist
     bool shipping = false;              // stage the shipping extras + emit the zip
-    std::string version;                // stamped into VERSION.txt ("nf 0.1 (NOVAForge Phase 7)")
+    std::string version;                // stamped into VERSION.txt ("nf 0.1 (SANAD Phase 7)")
 };
 
 struct BuildReport {

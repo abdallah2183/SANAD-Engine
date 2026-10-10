@@ -1,6 +1,6 @@
 #version 450
 
-// NOVAForge Engine — Triangle sample vertex shader
+// SANAD Engine — Triangle sample vertex shader
 // Hardcoded triangle vertices; no vertex buffer needed for this first milestone.
 
 vec2 positions[3] = vec2[](

@@ -3,7 +3,7 @@
 // NF/Editor/UiShell.hpp — Dear ImGui shell for the native editor executable.
 //
 // The pure editor logic lives in NFEditorCore (window-free, fully tested).
-// This header exposes the thin ImGui layer used only by NOVAForgeEditor:
+// This header exposes the thin ImGui layer used only by SANADEditor:
 // context/docking setup, per-frame panel recording, and input intents.
 //
 // Rendering note: ImGui frames are recorded every frame (real DockSpace

@@ -221,7 +221,7 @@ void run_template_suite(const TemplateSpec& spec, const std::string& scratch) {
 const TemplateSpec kThirdPerson{
     NF_TEMPLATE_THIRDPERSON_DIR, "ThirdPerson", 12};
 const TemplateSpec kFpsStarter{
-    NF_TEMPLATE_FPSSTARTER_DIR, "FPSStarter", 15};
+    NF_TEMPLATE_FPSSTARTER_DIR, "FPSStarter", 16};
 const TemplateSpec kPlatformer2D{
     NF_TEMPLATE_PLATFORMER2D_DIR, "Platformer2D", 16};
 
@@ -273,7 +273,7 @@ NF_TEST(template_default_is_still_green) {
 //                                                   A > 0, D > 0 (motion is driven)
 //   "Audio sources mixed (peak): C (P)"              C > 0, P > 0 (sound is mixed)
 //   "Alive RHI objects before shutdown: 0"
-//   "=== NOVAForge Runtime exited cleanly ==="
+//   "=== SANAD Runtime exited cleanly ==="
 
 #ifndef NF_PLAYER_EXE
     #define NF_PLAYER_EXE ""
@@ -385,7 +385,7 @@ void check_template_builds_and_plays(const TemplateSpec& spec, const std::string
     NF_CHECK_MSG(run.exit_code == 0,
                  (label + ": packaged player exited " + std::to_string(run.exit_code) +
                   "\n--- player log ---\n" + log).c_str());
-    NF_CHECK_MSG(contains(log, "=== NOVAForge Runtime exited cleanly ==="),
+    NF_CHECK_MSG(contains(log, "=== SANAD Runtime exited cleanly ==="),
                  (label + ": runtime did not report a clean exit\n--- player log ---\n" + log).c_str());
 
     // The startup scene the scaffold's descriptor points at is the one that ran.
@@ -426,7 +426,7 @@ void check_template_builds_and_plays(const TemplateSpec& spec, const std::string
 }
 
 const TemplateSpec kThirdPersonPlay{NF_TEMPLATE_THIRDPERSON_DIR, "ThirdPerson", 12};
-const TemplateSpec kFpsStarterPlay{NF_TEMPLATE_FPSSTARTER_DIR, "FPSStarter", 15};
+const TemplateSpec kFpsStarterPlay{NF_TEMPLATE_FPSSTARTER_DIR, "FPSStarter", 16};
 const TemplateSpec kPlatformer2DPlay{NF_TEMPLATE_PLATFORMER2D_DIR, "Platformer2D", 16};
 
 } // namespace

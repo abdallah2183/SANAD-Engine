@@ -98,7 +98,7 @@ void write_file(const std::filesystem::path& path, const void* data, usize size)
 /// sits at (3, 0, 4) — the runtime test checks the zone's POSITION comes from
 /// the transform, not from the line.
 const char* kAudioEnvScene =
-    "# NOVAForge Scene v1\nversion: 1\nname: AudioEnv\nentity_count: 2\n"
+    "# SANAD Scene v1\nversion: 1\nname: AudioEnv\nentity_count: 2\n"
     "---\nentity: 1:0\n"
     "  Name: Cave\n"
     "  Transform: local(3,0,4) world(3,0,4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
@@ -111,7 +111,7 @@ const char* kAudioEnvScene =
 
 /// A scene with no audio environment at all — the compatibility case.
 const char* kPlainScene =
-    "# NOVAForge Scene v1\nversion: 1\nname: Plain\nentity_count: 1\n"
+    "# SANAD Scene v1\nversion: 1\nname: Plain\nentity_count: 1\n"
     "---\nentity: 1:0\n  Name: Rock\n"
     "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n";
 

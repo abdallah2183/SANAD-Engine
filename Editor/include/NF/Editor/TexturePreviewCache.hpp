@@ -4,7 +4,7 @@
 //
 // Complements PreviewPixels: that module shrinks pixels on the CPU, this one
 // owns the RHI objects for the result and hands ImGui a stable texture id per
-// logical path. Lives in the NOVAForgeEditor shell only — NFEditorCore stays
+// logical path. Lives in the SANADEditor shell only — NFEditorCore stays
 // device-free, so the panels reach the cache through the EditorApp
 // `preview_texture` hook and get 0 (→ placeholder) when previews are off.
 //

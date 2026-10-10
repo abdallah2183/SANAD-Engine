@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!--
-  Application manifest for NOVAForgeEditor (and the project launcher it boots).
+  Application manifest for SANADEditor (and the project launcher it boots).
 
   Why it exists:
     * Microsoft.Windows.Common-Controls 6 — the launcher's search box relies on
@@ -11,15 +11,15 @@
       96, the window gets bitmap-stretched (blurry) above 100% scale, and the
       launcher's MulDiv(dpi) font/layout scaling never engages.
 
-  Attached to NOVAForgeEditor.exe by a POST_BUILD mt.exe merge in
+  Attached to SANADEditor.exe by a POST_BUILD mt.exe merge in
   Editor/CMakeLists.txt (NOT as an .rc resource: CMake already embeds its own
   id-1 manifest.res for this target, and a second one fails with CVT1100;
   NOT via /MANIFESTINPUT either: it requires /MANIFEST:EMBED, which CMake's
   link line does not carry, and the link dies with LNK1220).
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="NOVAForge.Editor" type="win32"/>
-  <description>NOVAForge project launcher and editor</description>
+  <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="SANAD.Editor" type="win32"/>
+  <description>SANAD project launcher and editor</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

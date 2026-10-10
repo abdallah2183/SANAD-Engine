@@ -103,7 +103,7 @@ const char* layout_ini_path() {
         char buf[MAX_PATH * 4] = {};
         if (::GetEnvironmentVariableA("APPDATA", buf, sizeof(buf)) != 0) {
             dir = buf;
-            dir += "\\NOVAForge";
+            dir += "\\SANAD";
         }
 #else
         dir = ".";

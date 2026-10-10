@@ -101,7 +101,7 @@ SampleConfig parse_args(int argc, char** argv) {
         if (arg == "--frames" && i + 1 < argc) config.max_frames = static_cast<u32>(std::atoi(argv[++i]));
         else if (arg.starts_with("--frames=")) config.max_frames = static_cast<u32>(std::atoi(arg.substr(9).data()));
         else if (arg == "--validation") config.enable_validation = true;
-        else if (arg == "--help") std::cout << "NOVAForge Textured Quad sample\n  --frames N      Render N frames then exit (0 = until closed)\n  --validation    Request Vulkan validation layers\n";
+        else if (arg == "--help") std::cout << "SANAD Textured Quad sample\n  --frames N      Render N frames then exit (0 = until closed)\n  --validation    Request Vulkan validation layers\n";
     }
     return config;
 }
@@ -128,7 +128,7 @@ i32 run(const SampleConfig& config) {
     auto frag_code = load_spirv(shader_dir / "textured_quad_frag.spv");
     if (vert_code.empty() || frag_code.empty()) { NF_LOG_FATAL(LogCategory::RHI, "Failed to load SPIR-V shaders from {}", shader_dir.string()); return -1; }
 
-    WindowDesc wdesc{}; wdesc.width=1280; wdesc.height=720; wdesc.title="NOVAForge Engine — Textured Quad (RenderGraph)"; wdesc.vsync=true;
+    WindowDesc wdesc{}; wdesc.width=1280; wdesc.height=720; wdesc.title="SANAD Engine — Textured Quad (RenderGraph)"; wdesc.vsync=true;
     Window window; if (!window.create(wdesc)) { NF_LOG_FATAL(LogCategory::Platform, "Failed to create window"); return -1; }
     if (window.width()==0 || window.height()==0) { NF_LOG_FATAL(LogCategory::Platform, "Window has a zero-sized client area"); window.destroy(); return -1; }
 
@@ -311,7 +311,7 @@ i32 run(const SampleConfig& config) {
 int run_sample(int argc, char** argv) {
     const SampleConfig config = parse_args(argc, argv);
     Logger& logger = Logger::instance(); logger.add_sink(Logger::make_console_sink()); logger.set_min_level(LogLevel::Debug);
-    NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Engine — Textured Quad Sample (RenderGraph) ===");
+    NF_LOG_INFO(LogCategory::Core, "=== SANAD Engine — Textured Quad Sample (RenderGraph) ===");
     platform_init();
     const i32 frames = run(config);
     platform_shutdown();

@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
     // ---- 2. Retarget A -> B by bone name (B keeps its own proportions). --
     const RetargetMap map = build_retarget_map(a, b);
 
-    std::printf("NOVAForge G4 demo — two characters, one locomotion graph\n");
+    std::printf("SANAD G4 demo — two characters, one locomotion graph\n");
     std::printf("  character A: %zu bones, character B: %zu bones\n", a.bone_count(),
                 b.bone_count());
     std::printf("  shared graph: %zu states, %zu matched bones, scale %.4f\n\n",

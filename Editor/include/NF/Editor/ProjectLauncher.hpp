@@ -152,7 +152,7 @@ inline std::string project_file_for(const std::string& dir, const std::string& n
 }
 
 /// Shell settings persisted across runs (language + window state). Stored as
-/// a tiny hand-parsed settings.json under %APPDATA%/NOVAForge (no JSON library
+/// a tiny hand-parsed settings.json under %APPDATA%/SANAD (no JSON library
 /// in the project); the recent list stays in its own file in LOCALAPPDATA.
 /// The launcher reads this at boot so it reopens in the saved language, and
 /// the editor applies it too (see main.cpp) so Arabic survives a restart even

@@ -1,6 +1,6 @@
 #pragma once
 
-// NF/Platform/Windows/InputSystem_Win.hpp — Win32 → NOVAForge input translation.
+// NF/Platform/Windows/InputSystem_Win.hpp — Win32 → SANAD input translation.
 // Internal to NFPlatform; not installed as a public header.
 
 #include <NF/Platform/InputSystem.hpp>

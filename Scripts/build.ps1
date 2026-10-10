@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# NOVAForge Engine — Windows build helper (CMake + Ninja + MSVC)
+# SANAD Engine — Windows build helper (CMake + Ninja + MSVC)
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File Scripts\build.ps1 [-Config Debug]

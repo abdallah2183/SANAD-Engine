@@ -35,7 +35,7 @@ using namespace nf::runtime;
 namespace {
 
 const char* kSceneHeader =
-    "# NOVAForge Scene v1\nversion: 1\nname: Post\nentity_count: 1\n"
+    "# SANAD Scene v1\nversion: 1\nname: Post\nentity_count: 1\n"
     "---\nentity: 1:0\n  Name: Env\n"
     "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n";
 

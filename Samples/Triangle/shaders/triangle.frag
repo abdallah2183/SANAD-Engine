@@ -1,6 +1,6 @@
 #version 450
 
-// NOVAForge Engine — Triangle sample fragment shader
+// SANAD Engine — Triangle sample fragment shader
 // Outputs interpolated vertex colors.
 
 layout(location = 0) in vec3 frag_color;

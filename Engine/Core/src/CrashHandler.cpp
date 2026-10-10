@@ -86,7 +86,7 @@ bool write_report_unlocked(const std::string& report_path,
                   tm_utc.tm_sec);
     char text[1024]{};
     std::snprintf(text, sizeof(text),
-                  "NOVAForge crash report\n"
+                  "SANAD crash report\n"
                   "======================\n"
                   "time:       %s\n"
                   "version:    %s\n"

@@ -151,7 +151,7 @@ NF_TEST(scene_time_of_day_line_wraps_hours_and_keeps_defaults) {
     vfs.mount("content://", tmp);
 
     const std::string text =
-        "# NOVAForge Scene v1\nversion: 1\nname: Tod\nentity_count: 1\n"
+        "# SANAD Scene v1\nversion: 1\nname: Tod\nentity_count: 1\n"
         "---\nentity: 1:0\n  Name: Sky\n"
         "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
         "  TimeOfDay: hours=25.0\n";
@@ -214,7 +214,7 @@ NF_TEST(runtime_advances_the_scene_clock_and_the_sun_follows_it) {
     vfs.mount("content://", tmp);
 
     const std::string text =
-        "# NOVAForge Scene v1\nversion: 1\nname: Tod\nentity_count: 2\n"
+        "# SANAD Scene v1\nversion: 1\nname: Tod\nentity_count: 2\n"
         "---\nentity: 1:0\n  Name: Sun\n"
         "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
         "  Light: type=Directional dir(-0.4,-1,-0.25) color(1,1,1) intensity=1.0\n"
@@ -293,7 +293,7 @@ NF_TEST(runtime_frozen_clock_does_not_advance) {
     vfs.mount("content://", tmp);
 
     const std::string text =
-        "# NOVAForge Scene v1\nversion: 1\nname: Tod\nentity_count: 1\n"
+        "# SANAD Scene v1\nversion: 1\nname: Tod\nentity_count: 1\n"
         "---\nentity: 1:0\n  Name: Sky\n"
         "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
         "  TimeOfDay: hours=17.5 day_length=0\n";

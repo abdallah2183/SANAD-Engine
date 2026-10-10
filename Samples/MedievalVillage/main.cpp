@@ -1,6 +1,6 @@
 // Samples/MedievalVillage/main.cpp — "Medieval Village: Harvest Run"
 //
-// A third-person collection game built inside NOVAForge on the Medieval Village
+// A third-person collection game built inside SANAD on the Medieval Village
 // MegaKit[Standard]. See DESIGN.md beside this file for the design rationale.
 //
 // The goal: the harvest festival needs its ten supply crates brought to the
@@ -124,7 +124,7 @@ struct Options {
 
 void print_help() {
     std::cout <<
-        "NOVAForge — Medieval Village: Harvest Run\n"
+        "SANAD — Medieval Village: Harvest Run\n"
         "  --frames N        Run N frames then exit (0 = until the window closes)\n"
         "  --validation      Enable Vulkan validation layers\n"
         "  --autoplay        Drive the player automatically (end-to-end check)\n"
@@ -512,8 +512,8 @@ int run_game(const Options& opt) {
         WindowDesc wdesc{};
         wdesc.width = opt.width;
         wdesc.height = opt.height;
-        wdesc.title = opt.english ? "NOVAForge - Medieval Village: Harvest Run"
-                                  : "NOVAForge - قرية العصور الوسطى: سباق الحصاد";
+        wdesc.title = opt.english ? "SANAD - Medieval Village: Harvest Run"
+                                  : "SANAD - قرية العصور الوسطى: سباق الحصاد";
         wdesc.vsync = true;
         if (!window.create(wdesc)) {
             NF_LOG_FATAL(LogCategory::Platform, "MedievalVillage: window creation failed");

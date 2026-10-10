@@ -1,4 +1,4 @@
-# Blender → NOVAForge Character Pipeline (glTF-first)
+# Blender → SANAD Character Pipeline (glTF-first)
 
 Blender export plus strict source validation for a skinned, animated character.
 The current engine can read the source data and sample it through the animation
@@ -7,15 +7,15 @@ plugins beyond the shipped add-on are required.
 
 > **العربية:** ملخّص بالعربية في نهاية هذا الملف.
 > المسار: تثبيت الإضافة من `Templates/Blender/nf_gltf_export.py`، ثم
-> File > Export > NOVAForge glTF، ثم الاستيراد بـ `NFModelImporter`.
+> File > Export > SANAD glTF، ثم الاستيراد بـ `NFModelImporter`.
 
 ## 1. Install the export preset (once)
 
 1. Blender → `Edit > Preferences > Add-ons > Install…`
 2. Pick `Templates/Blender/nf_gltf_export.py` from the repo.
-3. Enable **Import-Export: NOVAForge glTF Export**.
+3. Enable **Import-Export: SANAD glTF Export**.
 
-This adds `File > Export > NOVAForge glTF (.glb)` with settings fixed to
+This adds `File > Export > SANAD glTF (.glb)` with settings fixed to
 exactly what the engine importer consumes (see the add-on header for the
 setting-by-setting rationale).
 
@@ -36,7 +36,7 @@ setting-by-setting rationale).
 ## 3. Export and validate
 
 ```bash
-# Export: File > Export > NOVAForge glTF (.glb)  →  Hero.glb
+# Export: File > Export > SANAD glTF (.glb)  →  Hero.glb
 
 # Strict character source validation. This writes no file.
 .\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --character --info
@@ -185,7 +185,7 @@ sampling). It is not yet a cooked or playable character:
 
 1. ثبّت الإضافة: `Edit > Preferences > Add-ons > Install…` واختر
    `Templates/Blender/nf_gltf_export.py` من المستودع.
-2. من بلندر: `File > Export > NOVAForge glTF (.glb)`. الإضافة ترفض التصدير
+2. من بلندر: `File > Export > SANAD glTF (.glb)`. الإضافة ترفض التصدير
    إذا لم يوجد mesh مشوَّه، وarmature محدَّد، ومادة Principled، وفعلان
    على الأقل مرتبطان بالـarmature؛ كما تتحقق من خيارات التصدير الأساسية
    ومن نتيجة المشغّل ومن وجود ملف nonempty.

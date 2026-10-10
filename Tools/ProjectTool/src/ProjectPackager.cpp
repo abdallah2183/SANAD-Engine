@@ -136,7 +136,7 @@ bool stage_shipping_notes(const std::filesystem::path& dir,
     const std::string version_txt =
         "project:    " + project_name + "\n"
         "tool:       " + version + "\n"
-        "engine:     NOVAForge/SANAD 0.1.0\n"
+        "engine:     SANAD/SANAD 0.1.0\n"
         "target:     windows-x64\n"
         "built:      " + utc_stamp() + "\n";
     if (!detail::write_text(dir / "VERSION.txt", version_txt, out_error)) return false;
@@ -593,7 +593,7 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
     }
     std::sort(lines.begin(), lines.end());
 
-    std::string manifest = "# NOVAForge package manifest\n";
+    std::string manifest = "# SANAD package manifest\n";
     manifest += "# fingerprint       relative path\n";
     for (const auto& l : lines) {
         manifest += l;

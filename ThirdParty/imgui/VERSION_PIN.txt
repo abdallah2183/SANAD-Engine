@@ -1,6 +1,6 @@
 Dear ImGui — pinned source snapshot
 Upstream: https://github.com/ocornut/imgui
-Branch: docking (docking is required by the NOVAForge editor layout)
+Branch: docking (docking is required by the SANAD editor layout)
 Pinned commit: 367b2c24f399988ddafc0bb4628da0106bcc09be
 imgui.h reports: 1.93.0 WIP (IMGUI_VERSION_NUM 19297)
 

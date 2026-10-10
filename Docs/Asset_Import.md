@@ -1,4 +1,4 @@
-# NOVAForge Asset Import — the mesh read path
+# SANAD Asset Import — the mesh read path
 
 Everything the engine can **write**, it can now **read back**. That symmetry is
 the whole point of this document: before `nf::assets::MeshImport` existed, the
@@ -34,7 +34,7 @@ requiring a large vendored parser. The project's standing decision (see
 `.workbuddy-ai/agents/model-g2-assets.md`) is the **glTF-first route**: export
 from Blender with the shipped add-on
 (`Templates/Blender/nf_gltf_export.py`, one click under
-`File > Export > NOVAForge glTF`), which carries mesh, skeleton, clips and
+`File > Export > SANAD glTF`), which carries mesh, skeleton, clips and
 materials. See `Docs/Blender_Pipeline.md`.
 
 ### Materials and textures

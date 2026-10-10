@@ -1,6 +1,6 @@
 #!/bin/bash
 # build/scripts/configure_debug.sh
-# Configures the NOVAForge Engine CMake project with MSVC + Ninja.
+# Configures the SANAD Engine CMake project with MSVC + Ninja.
 # This script sets up the necessary environment for cl.exe, rc.exe, mt.exe.
 
 set -e
@@ -21,7 +21,7 @@ export LIB="${MSVC_LIB};${WINSDK_LIB}/ucrt/x64;${WINSDK_LIB}/um/x64"
 export VULKAN_SDK="C:/VulkanSDK/1.4.357.0"
 export PATH="${MSVC_BIN}:${WINSDK_BIN}:${PATH}"
 
-PROJECT_ROOT="C:/Users/abdal/OneDrive/Desktop/NOVAForge Engine"
+PROJECT_ROOT="C:/Users/abdal/OneDrive/Desktop/SANAD Engine"
 
 rm -rf "${PROJECT_ROOT}/build/debug"
 

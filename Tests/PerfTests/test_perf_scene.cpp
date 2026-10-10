@@ -627,7 +627,7 @@ double measure_mesh_law_scene(MeshLawHarness& h,
                              u32& out_draws) {
     {
         std::string text;
-        text += "# NOVAForge Scene v1\nversion: 1\nname: MeshLaw\n";
+        text += "# SANAD Scene v1\nversion: 1\nname: MeshLaw\n";
         text += "entity_count: " + std::to_string(entities + 2) + "\n";
 
         text += "---\nentity: 1:0\n  Name: Cam\n";

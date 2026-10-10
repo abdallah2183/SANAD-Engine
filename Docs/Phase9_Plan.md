@@ -145,7 +145,7 @@ Animated entities: 1 (max transform deviation over 120 frames: 174.93932)
 Audio sources mixed (peak): 1 (0.19999997)      # volume 0.4 x tone amplitude 0.5
 Validation errors: 0
 Alive RHI objects before shutdown: 0
-=== NOVAForge Runtime exited cleanly ===            # exit 0
+=== SANAD Runtime exited cleanly ===            # exit 0
 ```
 
 ---

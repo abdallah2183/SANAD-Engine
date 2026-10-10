@@ -235,12 +235,12 @@ NF_TEST(import_material_scene_noregistry) {
     std::string err;
 
     const auto mat = tmp / "External" / "Blue.nfmat";
-    const std::string mat_text = "# NOVAForge Material v1\nname: Blue\nbase_color: 0.1 0.2 0.9 1\n";
+    const std::string mat_text = "# SANAD Material v1\nname: Blue\nbase_color: 0.1 0.2 0.9 1\n";
     write_file(mat, std::vector<uint8_t>(mat_text.begin(), mat_text.end()));
     NF_CHECK(q.submit(mat.string(), "content://Materials", false, err) != 0);
 
     const auto scn = tmp / "External" / "Mini.nfscene";
-    const std::string scn_text = "# NOVAForge Scene v1\nversion: 1\nname: Mini\nentity_count: 0\n";
+    const std::string scn_text = "# SANAD Scene v1\nversion: 1\nname: Mini\nentity_count: 0\n";
     write_file(scn, std::vector<uint8_t>(scn_text.begin(), scn_text.end()));
     NF_CHECK(q.submit(scn.string(), "content://Scenes", false, err) != 0);
 
@@ -295,7 +295,7 @@ NF_TEST(import_async_completes_on_workers) {
     const auto tex_src = tmp / "External" / "red.bmp";
     write_file(tex_src, make_bmp_solid(4, 4, 255, 0, 0));
     const auto mat_src = tmp / "External" / "Blue.nfmat";
-    const std::string mat_text = "# NOVAForge Material v1\nname: Blue\nbase_color: 0.1 0.2 0.9 1\n";
+    const std::string mat_text = "# SANAD Material v1\nname: Blue\nbase_color: 0.1 0.2 0.9 1\n";
     write_file(mat_src, std::vector<uint8_t>(mat_text.begin(), mat_text.end()));
 
     const size_t j_mesh = q.submit(mesh_src.string(), "content://Meshes", false, err);

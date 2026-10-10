@@ -2,7 +2,7 @@
 
 **Verified:** 2026-09-14
 **Verifier:** Nova (independent rebuild, not a re-read of the phase's own claims)
-**Tree:** `C:/Users/abdal/WorkBuddy/Worktrees/NOVAForge Engine/main-e34f0fa2` (uncommitted Phase 7–9 work)
+**Tree:** `C:/Users/abdal/WorkBuddy/Worktrees/SANAD Engine/main-e34f0fa2` (uncommitted Phase 7–9 work)
 **Verdict at time of verification:** **Module layer green and trustworthy. Integration layer missing. Phase 9 is not complete.**
 
 > **Status update — 2026-09-14, later the same day.** The integration gap described below has been
@@ -188,7 +188,7 @@ Only after that is a Phase 9 acceptance run meaningful.
 
 ## 5. Note on repository state
 
-The main checkout (`C:/Users/abdal/OneDrive/Desktop/NOVAForge Engine`) is still at **Phase 6**
+The main checkout (`C:/Users/abdal/OneDrive/Desktop/SANAD Engine`) is still at **Phase 6**
 (`421511f`). All of Phases 7–9 — including the new `Engine/Animation/`, `Engine/Audio/`,
 `Engine/Physics/`, `Templates/`, `Tools/ProjectTool/` — exist only as **uncommitted changes** in the
 worktree: 88 changed/untracked paths, 6 commits total on `main`. The work is undefended against a

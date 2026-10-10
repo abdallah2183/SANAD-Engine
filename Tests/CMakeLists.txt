@@ -178,6 +178,11 @@ add_executable(RuntimeTests
     # the AI budget are unit-tested in isolation; this file proves a scene
     # that merely declares them is built and stepped by update().
     RuntimeTests/test_runtime_scene_systems.cpp
+    # Phase 28: navigation. NavMesh is unit-tested in AITests (19 tests over
+    # the voxel pipeline); this file is the Rule 0 half — a scene that merely
+    # declares `NavMesh:` / `NavAgent:` is baked, walked by update() and
+    # observable, with no game code calling the navmesh directly.
+    RuntimeTests/test_runtime_nav_agents.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI)
@@ -320,7 +325,7 @@ add_executable(NetworkTests
     NetworkTests/test_vehicle_replication.cpp
     NetworkTests/test_constraint_replication.cpp
     # The dedicated server (design 81): in-process provisioning/refusal rules,
-    # plus one test that spawns the real NOVAForgeServer binary and connects a
+    # plus one test that spawns the real SANADServer binary and connects a
     # client to it over real UDP — the only place the headless host is proven
     # as a process, not just as a library.
     NetworkTests/test_dedicated_server.cpp
@@ -330,11 +335,12 @@ target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)
 nf_target_set_warnings(NetworkTests)
 # The binary-spawn test needs the built server exe's absolute path (spaces in
 # the repo path are quoted by the test itself).
-target_compile_definitions(NetworkTests PRIVATE "NF_SERVER_EXE=\"$<TARGET_FILE:NOVAForgeServer>\"")
-add_dependencies(NetworkTests NOVAForgeServer)
+target_compile_definitions(NetworkTests PRIVATE "NF_SERVER_EXE=\"$<TARGET_FILE:SANADServer>\"")
+add_dependencies(NetworkTests SANADServer)
 
 # --- AI tests (grid pathfinding, behavior trees, perception, state machines) ---
 add_executable(AITests
+    AITests/test_navmesh.cpp
     TestFramework.cpp
     AITests/test_navgrid.cpp
     AITests/test_behavior_tree.cpp
@@ -525,6 +531,9 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_wiring_editor.cpp
         EditorTests/test_ide_open.cpp
         EditorTests/test_transform_gizmo.cpp
+        # Phase 28: navigation authoring (attach / validated edit / detach +
+        # the save/load round trip), same contract as test_wiring_editor.cpp.
+        EditorTests/test_nav_editor.cpp
     )
     target_include_directories(EditorTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

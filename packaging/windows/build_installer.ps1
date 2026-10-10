@@ -1,7 +1,7 @@
 ﻿# build_installer.ps1 - stage the release, zip a portable, compile the Setup EXE.
 #
 # Windows-only by design: the installer targets Windows 10+ x64 (see
-# packaging/windows/NOVAForge.iss: ArchitecturesAllowed=x64compatible,
+# packaging/windows/SANAD.iss: ArchitecturesAllowed=x64compatible,
 # MinVersion=10.0). Run from the repo root:
 #   powershell -ExecutionPolicy Bypass -File packaging/windows/build_installer.ps1
 # Switches:
@@ -27,7 +27,7 @@ Write-Host "repo: $repo"
 
 # --- Version: single source of truth is CMakeLists.txt (project VERSION + NF_VERSION_SUFFIX).
 $cmake = Get-Content (Join-Path $repo 'CMakeLists.txt') -Raw
-$m = [regex]::Match($cmake, 'project\s*\(\s*NOVAForge\s+VERSION\s+(\d+)\.(\d+)\.(\d+)')
+$m = [regex]::Match($cmake, 'project\s*\(\s*SANAD\s+VERSION\s+(\d+)\.(\d+)\.(\d+)')
 if (-not $m.Success) { throw 'Could not parse project(VERSION) from CMakeLists.txt' }
 $verNum = "$($m.Groups[1].Value).$($m.Groups[2].Value).$($m.Groups[3].Value)"
 $s = [regex]::Match($cmake, 'set\s*\(\s*NF_VERSION_SUFFIX\s+"([^"]*)"')
@@ -38,12 +38,12 @@ Write-Host "version: $version (VersionInfo $versionInfo)"
 
 $build = Join-Path $repo 'build\release'
 $dist = Join-Path $repo 'dist'
-$stage = Join-Path $dist "stage\NOVAForge-$version"
-$setupName = "NOVAForge-$version-Windows-x64-Setup.exe"
-$zipName = "NOVAForge-$version-Windows-x64-Portable.zip"
+$stage = Join-Path $dist "stage\SANAD-$version"
+$setupName = "SANAD-$version-Windows-x64-Setup.exe"
+$zipName = "SANAD-$version-Windows-x64-Portable.zip"
 
 # --- Build (unless skipped) ---------------------------------------------------
-$needBins = @('NOVAForgeEditor.exe', 'NFGamePlayer.exe')
+$needBins = @('SANADEditor.exe', 'NFGamePlayer.exe')
 $missing = @($needBins | Where-Object { -not (Test-Path (Join-Path $build "bin\$_")) })
 if ($missing.Count -gt 0 -and -not $SkipBuild) {
     Write-Host "Release binaries missing ($($missing -join ', ')) - building Release now (this takes a while)..."
@@ -125,19 +125,19 @@ Copy-Item $fontSrc (Join-Path $stage 'Resources\fonts') -Force
 Write-Host '  Resources/fonts/    Amiri-Regular.ttf (REQUIRED)'
 
 # --- Icon + README ------------------------------------------------------------
-Copy-Item (Join-Path $repo 'Editor\resources\NOVAForge.png') $stage -Force
+Copy-Item (Join-Path $repo 'Editor\resources\SANAD.png') $stage -Force
 $readme = @"
-NOVAForge Engine $version (Windows x64)
+SANAD Engine $version (Windows x64)
 =======================================
 WHAT THIS IS
     The editor, a Release build (optimised, no debug asserts).
 
 RUNNING IT (installed)
-    Start Menu -> NOVAForge Engine -> NOVAForge Editor, or the desktop shortcut.
+    Start Menu -> SANAD Engine -> SANAD Editor, or the desktop shortcut.
     That opens the project launcher: pick or create a project and the editor opens on it.
 
 RUNNING IT (portable zip)
-    Extract the zip anywhere and double-click NOVAForgeEditor.exe.
+    Extract the zip anywhere and double-click SANADEditor.exe.
 
 WHAT IT NEEDS FROM YOUR MACHINE
     * Windows 10 or newer, 64-bit. This build is Windows-only.
@@ -151,7 +151,7 @@ WHERE THE VERSION NUMBER COMES FROM
     One place: project(VERSION) and NF_VERSION_SUFFIX in CMakeLists.txt.
 "@
 $readme | Set-Content -Path (Join-Path $stage 'README.txt') -Encoding UTF8
-Write-Host '  README.txt + NOVAForge.png'
+Write-Host '  README.txt + SANAD.png'
 
 $total = (Get-ChildItem $stage -Recurse -File | Measure-Object -Property Length -Sum)
 Write-Host ("staged {0} files, {1:N1} MB -> {2}" -f $total.Count, ($total.Sum / 1MB), $stage)
@@ -186,7 +186,7 @@ if (-not $SkipInstaller) {
     }
     if (-not $iscc) { throw 'ISCC.exe still not found after winget install. Install Inno Setup 6 manually and re-run.' }
     Write-Host "Inno: $iscc"
-    $iss = Join-Path $PSScriptRoot 'NOVAForge.iss'
+    $iss = Join-Path $PSScriptRoot 'SANAD.iss'
     & $iscc $iss "/DAppVersion=$version" "/DVersionInfo=$versionInfo" "/DStageDir=$stage" "/DOutputDir=$dist" "/DRepoDir=$repo"
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
     $setupPath = Join-Path $dist $setupName

@@ -83,7 +83,7 @@ bool prepare_input_replay(const ApplicationConfig& config,
         out_probe = file_empty ? ReplayProbe::EmptyLog : ReplayProbe::RejectedLog;
         out_error = std::string("--replay: '") + config.input_replay_path + "' " +
                     (file_empty ? "is empty" : "is not a valid input log") +
-                    " (expected the 'NOVAForge InputLog v1' text form).";
+                    " (expected the 'SANAD InputLog v1' text form).";
         return false;
     }
 

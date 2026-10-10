@@ -15,7 +15,7 @@
 
 int main(int argc, char** argv) {
     nf::runtime::ApplicationConfig config;
-    config.title = "NOVAForge Game";
+    config.title = "SANAD Game";
     config.width = 1280;
     config.height = 720;
     config.vsync = true;
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
         } else if (arg == "--headless") {
             config.headless = true;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "NOVAForge GamePlayer\n"
+            std::cout << "SANAD GamePlayer\n"
                       << "  --scene <logical>     Scene to play (e.g. cache://EditorPlaySession.nfscene)\n"
                       << "  --project <file>      .nfproj providing the VFS mounts and window settings\n"
                       << "  --frames N            Run N frames then exit (0 = until closed)\n"

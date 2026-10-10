@@ -245,7 +245,7 @@ NF_TEST(module_line_without_a_name_is_reported_and_not_stored) {
     ContentHarness harness("nameless");
 
     const std::string text =
-        "# NOVAForge Scene v1\n"
+        "# SANAD Scene v1\n"
         "version: 1\n"
         "name: Nameless\n"
         "entity_count: 1\n"

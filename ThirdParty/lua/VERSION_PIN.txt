@@ -5,7 +5,7 @@ license header is also present atop each source file).
 Files vendored: lua/src/*.c + *.h EXCEPT the standalone tools
 (lua.c interpreter/repl, luac.c compiler) which the engine does not ship.
 
-NOVAForge usage: NFScripting links this static library and exposes a small
+SANAD usage: NFScripting links this static library and exposes a small
 `nf.*` API (logging, math, entity transform access) to game scripts.
 
 To refresh: download a newer lua-5.4.x.tar.gz, replace lua/src (again

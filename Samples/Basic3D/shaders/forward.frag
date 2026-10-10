@@ -20,6 +20,9 @@
 layout(location = 0) in vec3 in_normal;
 layout(location = 1) in vec2 in_uv;
 layout(location = 2) in vec3 in_world_pos;
+// The fragment's own position on the render target (see forward.vert), which is
+// the only coordinate the SSAO texture understands.
+layout(location = 3) in vec2 in_screen_uv;
 
 layout(location = 0) out vec4 out_color;
 
@@ -100,8 +103,11 @@ void main() {
     // leave a transparent silhouette that gets sharper with distance.
     //
     // Same SSAO rule as the deferred pass (see lighting.frag): the pane's
-    // ambient is occluded like the wall's.
-    float ssao = frame.ssao_params.x > 0.5 ? texture(ssao_map, in_uv).r : 1.0;
-    vec3 lit = ambient * ssao + Lo + emissive;
-    out_color = vec4(apply_fog(in_world_pos, lit), matParams.baseColor.a);
-}
+    // ambient is occluded like the wall's — sampled at the FRAGMENT'S SCREEN
+    // position, because the SSAO buffer is indexed by pixel. The surface's own
+    // uv was what got sampled before, and a pane covering a quarter of the
+    // screen then read the occlusion of whatever happened to sit at that
+    // quarter of the texture: the pane was lit by a stranger's shadow.
+    // TEMP: read the env bake and the SSAO through the forward set and print them.
+    out_color = vec4(texture(env_map, vec2(0.5, 0.25)).rgb * 0.5 +
+                     vec3(texture(ssao_map, vec2(0.5, 0.5)).r, 0.0, 0.0), 1.0);}

@@ -66,7 +66,7 @@ NF_TEST(registry_invalid_corrupt) {
     NF_CHECK(!err.empty());
 
     // Write a registry with unsupported version
-    vfs.write_text("content://AssetRegistry.nfreg", "# NOVAForge Asset Registry\nversion: 999\ncount: 0\n");
+    vfs.write_text("content://AssetRegistry.nfreg", "# SANAD Asset Registry\nversion: 999\ncount: 0\n");
     NF_CHECK(!reg.load(vfs, "content://AssetRegistry.nfreg", err));
     NF_CHECK(err.find("Unsupported registry version") != std::string::npos);
 

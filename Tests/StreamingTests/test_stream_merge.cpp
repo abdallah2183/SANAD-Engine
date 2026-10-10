@@ -32,7 +32,7 @@ std::filesystem::path temp_dir_for(const std::string& name) {
 // so parent(0:0) resolves; parent(4294967295:0) is the invalid sentinel the
 // loader itself writes.
 const char* kChunkText =
-    "# NOVAForge Scene v1\n"
+    "# SANAD Scene v1\n"
     "version: 1\n"
     "name: Chunk\n"
     "entity_count: 2\n"
@@ -131,7 +131,7 @@ NF_TEST(stream_merge_keeps_multiple_roots_parentless) {
     std::filesystem::create_directories(tmp / "Content" / "Chunks");
     vfs.mount("content://", tmp / "Content");
     const char* text =
-        "# NOVAForge Scene v1\n"
+        "# SANAD Scene v1\n"
         "version: 1\n"
         "name: TwoRoots\n"
         "entity_count: 2\n"

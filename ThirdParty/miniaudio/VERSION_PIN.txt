@@ -2,7 +2,7 @@ miniaudio — header-only audio decoding library (WAV, OGG-Vorbis, MP3, FLAC).
 Upstream: https://github.com/mackron/miniaudio
 File vendored: miniaudio.h (single-header, public domain / MIT-0, see header).
 
-NOVAForge usage: decode-only. The implementation is compiled once in
+SANAD usage: decode-only. The implementation is compiled once in
 Engine/Audio/src/MiniAudioImpl.cpp with MA_NO_ENCODING; output stays on the
 engine's AudioDevice seam (Null/WASAPI), miniaudio never touches hardware.
 

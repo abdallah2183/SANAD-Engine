@@ -1,7 +1,7 @@
 #pragma once
 
 // NF/Networking/DedicatedServer.hpp — headless authoritative server host
-// (design §81: NOVAForgeServer must build without Graphics, Editor or GPU
+// (design §81: SANADServer must build without Graphics, Editor or GPU
 // resources).
 //
 // AuthoritativeServer is the SIMULATION; this class is the HOST. It owns the

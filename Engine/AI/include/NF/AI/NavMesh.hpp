@@ -19,10 +19,8 @@
 //                   merge, so a crate sitting on the ground is one span whose
 //                   top is the crate lid — the ground simply *rises* there —
 //                   while a ledge floating above the floor keeps its own span
-//                   and leaves a headroom-limited tunnel beneath it.
-//                   Y is quantised to `cell_height` voxels at this stage and
-//                   stays integer throughout region work, so no float
-//                   arithmetic accumulates into the region topology.
+//                   and leaves a headroom-limited tunnel beneath it. Span heights are stored as world floats; `cell_height` is the vertical quantum used only when two spans count as the same solid volume.
+//                   Stays float: no integer Y quantisation accumulates error into the region topology, because region work never does float comparison of Y.
 //   2. Walkable   — a span is walkable when an agent can stand on it: enough
 //                   headroom to the span above (or the sky), and ground flat
 //                   enough in every of the 8 neighbours that the slope test
@@ -88,6 +86,22 @@
 
 namespace nf::ai {
 
+// Build-time scratch state for the voxel pipeline (see NavMesh.cpp). Kept
+// private and rebuilt from `m_sampler`/`m_obstacles` on every `build`; only the
+// finished `m_polys`/`m_links` are queried, so none of this is part of the
+// public surface. Declared here so the implementation stays in the .cpp.
+struct NavColumn {
+    // Solid Y intervals, ascending by `low`; [low, high) is solid and `top`
+    // is the walkable surface. `walkable` marks a standable span.
+    struct Span {
+        f32 low = 0.0f;
+        f32 high = 0.0f;
+        f32 top = 0.0f;
+        bool walkable = false;
+    };
+    std::vector<Span> spans;
+};
+
 /// An axis-aligned solid carved into (or added onto) the world. Overlapping
 /// obstacles behave as their union, because the voxeliser merges spans.
 struct NavObstacle {
@@ -120,7 +134,17 @@ struct NavPoly {
     std::vector<u32> neighbours;
     u32 region = 0;
 
-    bool operator==(const NavPoly& o) const = default;
+    // Vec3 deliberately has no operator== (float equality is a bug unless
+    // spelled out), so this compares vertices with an epsilon via
+    // `Vec3::nearly_equals`. Used by NavMesh::same_as, the determinism check.
+    bool operator==(const NavPoly& o) const {
+        if (region != o.region) return false;
+        if (neighbours != o.neighbours) return false;
+        if (verts.size() != o.verts.size()) return false;
+        for (usize i = 0; i < verts.size(); ++i)
+            if (!verts[i].nearly_equals(o.verts[i], 1e-5f)) return false;
+        return true;
+    }
 };
 
 class NavMesh {
@@ -240,6 +264,25 @@ private:
 
     /// True when the stored build inputs are usable.
     bool can_rebuild() const;
+
+    // --- build passes (NavMesh.cpp) ---------------------------------------
+    void voxelize();
+    void mark_walkable();
+    void build_regions();
+    void build_polygons();
+    void link_polygon_neighbours();
+    void build_links();
+
+    // --- internal helpers -------------------------------------------------
+    bool are_neighbours(u32 a, u32 b) const;
+    f32 edge_cost(u32 a, u32 b) const;
+
+    // Scratch from the passes above. `m_cols` is the voxelised solid; the
+    // parallel `m_walk`/`m_region_of` hold per-span walkability and region id
+    // (empty until the pass that fills them runs).
+    std::vector<NavColumn> m_cols;
+    std::vector<std::vector<bool>> m_walk;
+    std::vector<std::vector<u32>> m_region_of;
 
     std::vector<NavPoly> m_polys;
     std::vector<LinkRecord> m_links;

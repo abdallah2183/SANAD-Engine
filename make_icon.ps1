@@ -1,4 +1,4 @@
-# make_icon.ps1 — generates the NOVAForge application icon as a multi-resolution .ico.
+# make_icon.ps1 — generates the SANAD application icon as a multi-resolution .ico.
 #
 # Why a script and not a checked-in binary: the .ico is a BUILD ARTIFACT of the
 # brand, and keeping the only copy in the repository means nobody can change the
@@ -16,7 +16,7 @@ Add-Type -AssemblyName System.Drawing
 
 $outDir = Join-Path $PSScriptRoot 'Editor\resources'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$icoPath = Join-Path $outDir 'NOVAForge.ico'
+$icoPath = Join-Path $outDir 'SANAD.ico'
 
 # Sizes Windows actually asks for. 256 is the important one: it is also the
 # PNG-compressed entry Vista+ prefers.
@@ -142,7 +142,7 @@ foreach ($s in $sizes) {
         # Also drop a full-size PNG next to the .ico: that is what a README badge
         # or a docs page links, and generating it here means it can never be a
         # different logo from the one inside the exe.
-        $b.Save((Join-Path $outDir 'NOVAForge.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+        $b.Save((Join-Path $outDir 'SANAD.png'), [System.Drawing.Imaging.ImageFormat]::Png)
     }
     $ms.Dispose(); $b.Dispose()
     Write-Host "  rendered ${s}x${s}"
@@ -182,4 +182,4 @@ $bw.Dispose(); $dir.Dispose()
 $kb = [math]::Round((Get-Item $icoPath).Length / 1KB, 1)
 Write-Host ""
 Write-Host "wrote $icoPath ($kb KB, $($pngs.Count) resolutions)"
-Write-Host "wrote $(Join-Path $outDir 'NOVAForge.png')"
+Write-Host "wrote $(Join-Path $outDir 'SANAD.png')"

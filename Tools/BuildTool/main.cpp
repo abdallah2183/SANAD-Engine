@@ -42,10 +42,10 @@ using namespace nf::project;
 
 namespace {
 
-constexpr const char* kVersion = "nf 0.1 (NOVAForge Phase 7)";
+constexpr const char* kVersion = "nf 0.1 (SANAD Phase 7)";
 
 void print_help() {
-    std::cout << "nf — NOVAForge project tool\n"
+    std::cout << "nf — SANAD project tool\n"
               << "Usage:\n"
               << "  nf new <dir> [--name <Name>] [--template <name>]\n"
               << "                                   create a project (Default template when omitted)\n"

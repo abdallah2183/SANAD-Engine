@@ -89,7 +89,7 @@ SampleConfig parse_args(const int argc, char** argv) {
         else if (a.rfind("--frames=", 0) == 0) c.max_frames = static_cast<u32>(std::atoi(a.substr(9).data()));
         else if (a == "--validation") c.validation = true;
         else if (a == "--help") {
-            std::cout << "NOVAForge Water sample\n"
+            std::cout << "SANAD Water sample\n"
                          "  --frames N      Render N frames then exit (0 = until closed)\n"
                          "  --validation    Request Vulkan validation layers\n";
         }
@@ -142,7 +142,7 @@ i32 run(const SampleConfig& cfg) {
 
     WindowDesc wdesc{};
     wdesc.width = 1280; wdesc.height = 720;
-    wdesc.title = "NOVAForge — Water (Gerstner waves + shore surf)";
+    wdesc.title = "SANAD — Water (Gerstner waves + shore surf)";
     wdesc.vsync = true;
     Window window;
     if (!window.create(wdesc)) { NF_LOG_FATAL(LogCategory::Platform, "Failed to create window"); return -1; }
@@ -376,7 +376,7 @@ int run_sample(int argc, char** argv) {
     Logger& logger = Logger::instance();
     logger.add_sink(Logger::make_console_sink());
     logger.set_min_level(LogLevel::Info);
-    NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Engine — Water Sample (Gerstner + shore) ===");
+    NF_LOG_INFO(LogCategory::Core, "=== SANAD Engine — Water Sample (Gerstner + shore) ===");
     platform_init();
     const i32 frames = run(cfg);
     platform_shutdown();

@@ -1,8 +1,8 @@
 <div align="center">
 
-  <img src="Docs/images/novaforge_logo.jpg" alt="شعار محرك سَنَد" width="140" />
+  <img src="Docs/images/sanad_logo.jpg" alt="شعار محرك سَنَد" width="140" />
 
-  # محرك سَنَد | NOVAForge Engine
+  # محرك سَنَد | SANAD Engine
 
   <div dir="rtl">
 
@@ -92,8 +92,8 @@
 
 | الملف | كيف تستخدمه |
 |:---|:---|
-| `NOVAForge-*-Setup.exe` (مستحسن) | نقرة مزدوجة → معالج (English / العربية) → اختصار في قائمة البدء |
-| `NOVAForge-*-Portable.zip` | فكّ الضغط في أي مكان → شغّل `NOVAForgeEditor.exe` |
+| `SANAD-*-Setup.exe` (مستحسن) | نقرة مزدوجة → معالج (English / العربية) → اختصار في قائمة البدء |
+| `SANAD-*-Portable.zip` | فكّ الضغط في أي مكان → شغّل `SANADEditor.exe` |
 
 ```bat
 :: ابنِ لعبتك الأولى بثلاثة أوامر
@@ -172,7 +172,7 @@ flowchart TD
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│               NOVAForge Editor (ImGui + Win32 Docking)          │
+│               SANAD Editor (ImGui + Win32 Docking)          │
 ├───────────────────────────────┬─────────────────────────────────┤
 │    Gameplay Module Registry   │      NFPlayer Standalone        │
 ├───────────────────────────────┴─────────────────────────────────┤
@@ -209,7 +209,7 @@ build_nf.bat
 التشغيل والاختبار:
 
 ```bat
-.\build\DebugNinja\bin\NOVAForgeEditor.exe
+.\build\DebugNinja\bin\SANADEditor.exe
 .\build\DebugNinja\bin\RuntimeTests.exe
 ```
 
@@ -305,7 +305,7 @@ website/       موقع العرض التفاعلي
 
 </details>
 
-التاريخ الكامل والمراحل القادمة: [ROADMAP.md](ROADMAP.md) · التصميم الكامل: [Docs/NOVAForge_Engine_Complete_Design.md](Docs/NOVAForge_Engine_Complete_Design.md).
+التاريخ الكامل والمراحل القادمة: [ROADMAP.md](ROADMAP.md) · التصميم الكامل: [Docs/SANAD_Engine_Complete_Design.md](Docs/SANAD_Engine_Complete_Design.md).
 
 ---
 

@@ -135,6 +135,35 @@ static bool optional_float_in_range(const std::string& line, const char* key, f3
     return true;
 }
 
+/// The u32 twin of the helper above, for the handful of integer keys the scene
+/// format carries (max particles, cloth iterations, navmesh polygon cap). Same
+/// contract: absent keeps the default, present-but-out-of-range names itself.
+static bool optional_int_in_range(const std::string& line, const char* key, long long lo, long long hi,
+                                  u32& out, std::string& out_bad) {
+    const std::string v = field_value(line, key);
+    if (v.empty()) {
+        return true; // absent: not this function's call to make
+    }
+    long long parsed = 0;
+    try {
+        size_t used = 0;
+        parsed = std::stoll(v, &used);
+        if (used != v.size()) {
+            out_bad = key;
+            return false;
+        }
+    } catch (...) {
+        out_bad = key;
+        return false;
+    }
+    if (parsed < lo || parsed > hi) {
+        out_bad = key;
+        return false;
+    }
+    out = static_cast<u32>(parsed);
+    return true;
+}
+
 /// The `PostProcess:` line (design §206). Every key is optional and an absent
 /// one keeps the component default, so a scene can carry just `bloom=true` and
 /// inherit everything else.
@@ -294,6 +323,63 @@ static bool parse_spot_light(const std::string& line, SpotLightComponent& out,
     return true;
 }
 
+// --- Navigation lines (Phase 28) ---------------------------------------------
+//
+// Same contract as every other component line: every key optional, an absent
+// key keeps the component default, a present-but-impossible one rejects the
+// whole line and names itself in the warning. The bounds are the ones
+// `ai::NavMesh::build` and the agent stepper can actually use — a zero cell
+// size divides by zero in the voxeliser, a zero footprint bakes nothing, and a
+// negative speed would walk an agent backwards through its own path.
+
+static bool parse_navmesh(const std::string& line, NavMeshComponent& out, std::string& out_bad) {
+    f32 ax = out.area_x, ay = out.area_y, az = out.area_z;
+    if (field_vec3(line, "area", ax, ay, az)) {
+        if (!finite3(ax, ay, az) || ax <= 0.0f || ay <= 0.0f || az <= 0.0f || ax > 100000.0f ||
+            ay > 100000.0f || az > 100000.0f) {
+            out_bad = "area";
+            return false;
+        }
+        out.area_x = ax;
+        out.area_y = ay;
+        out.area_z = az;
+    }
+    if (!optional_float_in_range(line, "cell=", 0.01f, 100.0f, out.cell_size, out_bad)) return false;
+    if (!optional_float_in_range(line, "cell_height=", 0.01f, 100.0f, out.cell_height, out_bad)) return false;
+    if (!optional_float_in_range(line, "slope=", 0.0f, 90.0f, out.walkable_slope_deg, out_bad)) return false;
+    if (!optional_float_in_range(line, "climb=", 0.0f, 100.0f, out.walkable_climb, out_bad)) return false;
+    if (!optional_float_in_range(line, "headroom=", 0.01f, 1000.0f, out.walkable_height, out_bad)) return false;
+    if (!optional_float_in_range(line, "min_area=", 0.0f, 1000000.0f, out.min_region_area, out_bad)) return false;
+    if (!optional_float_in_range(line, "agent_radius=", 0.0f, 100.0f, out.agent_radius, out_bad)) return false;
+    if (!optional_float_in_range(line, "jump_distance=", 0.0f, 1000.0f, out.jump_distance, out_bad)) return false;
+    if (!optional_float_in_range(line, "jump_height=", 0.0f, 1000.0f, out.jump_height, out_bad)) return false;
+    // A polygon with two vertices is a line: the mesh's cover produces
+    // rectangles, so three is the smallest meaningful cap and sixty-four is far
+    // past any the convex merge can reach anyway.
+    if (!optional_int_in_range(line, "max_verts=", 3, 64, out.max_verts_per_poly, out_bad)) return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+static bool parse_nav_agent(const std::string& line, NavAgentComponent& out, std::string& out_bad) {
+    f32 gx = out.goal_x, gy = out.goal_y, gz = out.goal_z;
+    if (field_vec3(line, "goal", gx, gy, gz)) {
+        if (!finite3(gx, gy, gz)) {
+            out_bad = "goal";
+            return false;
+        }
+        out.goal_x = gx;
+        out.goal_y = gy;
+        out.goal_z = gz;
+    }
+    if (!optional_float_in_range(line, "speed=", 0.0f, 1000.0f, out.speed, out_bad)) return false;
+    // The arrival radius must be positive: zero makes "arrived" unreachable on a
+    // rounded waypoint, so an agent would orbit its goal forever.
+    if (!optional_float_in_range(line, "arrive=", 0.001f, 100.0f, out.arrive_radius, out_bad)) return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
 // Axis back to the single-letter form the loader reads. Only the three
 // cardinal axes are writable; anything else collapses to Y, which matches the
 // loader's own default and keeps save/load a fixed point.
@@ -327,7 +413,7 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
     std::string content(text);
     std::istringstream iss(content);
     std::string line;
-    if (!std::getline(iss, line) || line.rfind("# NOVAForge Scene",0)!=0) { result.error = "Invalid scene header"; return result; }
+    if (!std::getline(iss, line) || line.rfind("# SANAD Scene",0)!=0) { result.error = "Invalid scene header"; return result; }
     if (!std::getline(iss, line)) { result.error="Missing version"; return result; }
     {
         auto pos = line.find(":");
@@ -1056,6 +1142,29 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 } else {
                     scene->world().add<physics::CharacterComponent>(e, std::move(comp));
                 }
+            } else if (line.rfind("  NavMesh:",0)==0) {
+                // The navigation volume: placement comes from the entity
+                // Transform, so the line carries only the extents and the bake
+                // tuning. Same optional-keys contract as the lines above.
+                NavMeshComponent comp;
+                std::string bad;
+                if (!parse_navmesh(line, comp, bad)) {
+                    result.warnings.push_back("NavMesh line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<NavMeshComponent>(e, std::move(comp));
+                }
+            } else if (line.rfind("  NavAgent:",0)==0) {
+                // A walker: config plus the authored goal. The live path is a
+                // runtime artefact and is never parsed or written.
+                NavAgentComponent comp;
+                std::string bad;
+                if (!parse_nav_agent(line, comp, bad)) {
+                    result.warnings.push_back("NavAgent line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<NavAgentComponent>(e, std::move(comp));
+                }
             } else {
                 result.warnings.push_back("Unknown component line: " + line);
             }
@@ -1164,7 +1273,7 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
     // shortest width that round-trips every f32, so the stream is set once and
     // every float below inherits it.
     out << std::setprecision(9);
-    out << "# NOVAForge Scene v1\n";
+    out << "# SANAD Scene v1\n";
     out << "version: 1\n";
     out << "name: " << scene_obj.name() << "\n";
     auto entities = scene_obj.world().all_entities();
@@ -1491,6 +1600,31 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " friction=" << cfg.friction
                 << " enabled=" << (character->enabled ? "true" : "false") << "\n";
         }
+        // Navigation volume and its walkers. Written only when the entity
+        // carries the component, so a scene that never heard of navigation
+        // round-trips byte for byte — the same rule Sky/PostProcess follow.
+        const auto* nm = scene_obj.world().get<NavMeshComponent>(e);
+        if (nm) {
+            out << "  NavMesh: area(" << nm->area_x << "," << nm->area_y << "," << nm->area_z << ")"
+                << " cell=" << nm->cell_size
+                << " cell_height=" << nm->cell_height
+                << " slope=" << nm->walkable_slope_deg
+                << " climb=" << nm->walkable_climb
+                << " headroom=" << nm->walkable_height
+                << " min_area=" << nm->min_region_area
+                << " agent_radius=" << nm->agent_radius
+                << " jump_distance=" << nm->jump_distance
+                << " jump_height=" << nm->jump_height
+                << " max_verts=" << nm->max_verts_per_poly
+                << " enabled=" << (nm->enabled ? "true" : "false") << "\n";
+        }
+        const auto* agent = scene_obj.world().get<NavAgentComponent>(e);
+        if (agent) {
+            out << "  NavAgent: speed=" << agent->speed
+                << " goal(" << agent->goal_x << "," << agent->goal_y << "," << agent->goal_z << ")"
+                << " arrive=" << agent->arrive_radius
+                << " enabled=" << (agent->enabled ? "true" : "false") << "\n";
+        }
     }
     return out.str();
 }
@@ -1607,6 +1741,15 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         fresh.jump = false;
         fresh.grounded = false;
         dst.add<physics::CharacterComponent>(de, fresh);
+    }
+    if (const auto* nm = src.get<NavMeshComponent>(se)) {
+        dst.add<NavMeshComponent>(de, *nm);
+    }
+    if (const auto* na = src.get<NavAgentComponent>(se)) {
+        // The live path is per-session state the runtime keeps beside the
+        // component, so there is nothing to scrub here — the component itself
+        // is pure configuration plus the authored goal.
+        dst.add<NavAgentComponent>(de, *na);
     }
 }
 

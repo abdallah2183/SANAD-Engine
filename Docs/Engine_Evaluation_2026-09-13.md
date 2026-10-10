@@ -1,4 +1,4 @@
-# NOVAForge Engine — Codebase Evaluation
+# SANAD Engine — Codebase Evaluation
 
 **Date:** 2026-09-13  
 **Scope:** Actual source, build outputs, and live test execution (not the design document)  

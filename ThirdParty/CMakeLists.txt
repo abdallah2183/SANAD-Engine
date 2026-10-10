@@ -1,5 +1,5 @@
 # ThirdParty CMakeLists.txt
-# External dependencies for NOVAForge Engine.
+# External dependencies for SANAD Engine.
 # Each library is isolated and only linked where needed.
 
 # Currently no third-party dependencies.
@@ -44,9 +44,9 @@ target_compile_features(imgui PUBLIC cxx_std_17)
 # per frame instead. ImGui's own comment: "THIS WILL SLOW DOWN DEAR IMGUI.
 # DON'T KEEP ACTIVATED." — hence OFF by default, and on only for an audit:
 #
-#   cmake --build build/DebugNinja --target NOVAForgeEditor  (after configuring
+#   cmake --build build/DebugNinja --target SANADEditor  (after configuring
 #   the build dir once with -DNF_IMGUI_ID_AUDIT=ON)
-#   NOVAForgeEditor.exe --scene … --frames 125
+#   SANADEditor.exe --scene … --frames 125
 #
 # main.cpp then logs every conflicting ID with the window that owns it. Turn it
 # back off for normal work.

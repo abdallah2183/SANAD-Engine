@@ -86,7 +86,7 @@ NF_TEST(scene_audio_buffer_resolves_and_decodes) {
     const auto wav = make_wav_mono16(22050, 440.0f, 0.1f);
     write_file(tmp / "Audio" / "shot.wav", wav.data(), wav.size());
     const std::string scene_text =
-        "# NOVAForge Scene v1\nversion: 1\nname: AudioImport\nentity_count: 1\n---\n"
+        "# SANAD Scene v1\nversion: 1\nname: AudioImport\nentity_count: 1\n---\n"
         "entity: 1:0\n"
         "  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)\n"
         "  Audio: buffer=content://Audio/shot.wav autoplay=true\n";
@@ -116,7 +116,7 @@ NF_TEST(scene_audio_missing_buffer_warns_loudly) {
     vfs.mount("content://", tmp);
 
     const std::string scene_text =
-        "# NOVAForge Scene v1\nversion: 1\nname: AudioMissing\nentity_count: 1\n---\n"
+        "# SANAD Scene v1\nversion: 1\nname: AudioMissing\nentity_count: 1\n---\n"
         "entity: 1:0\n"
         "  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)\n"
         "  Audio: buffer=content://Audio/ghost.wav\n";

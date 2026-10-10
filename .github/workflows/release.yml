@@ -64,15 +64,15 @@ jobs:
             dist/*-Setup.exe
             dist/*-Portable.zip
           body: |
-            NOVAForge Engine — Windows 10+ x64 only.
+            SANAD Engine — Windows 10+ x64 only.
 
             INSTALLER (recommended) / المثبت (مُستحسن)
-            - Download `NOVAForge-*-Setup.exe`, double-click, follow the wizard (English / العربية).
+            - Download `SANAD-*-Setup.exe`, double-click, follow the wizard (English / العربية).
             - حمّل ملف الـ Setup ونقرة مزدوجة ثم اتبع الخطوات.
 
             PORTABLE / نسخة محمولة
-            - Download `NOVAForge-*-Portable.zip`, extract anywhere, run `NOVAForgeEditor.exe`.
-            - حمّل الـ zip وفك الضغط في أي مكان وشغّل `NOVAForgeEditor.exe`.
+            - Download `SANAD-*-Portable.zip`, extract anywhere, run `SANADEditor.exe`.
+            - حمّل الـ zip وفك الضغط في أي مكان وشغّل `SANADEditor.exe`.
 
             REQUIREMENTS / المتطلبات
             - Windows 10+ x64. No other Windows versions, no Linux/macOS.

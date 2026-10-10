@@ -264,7 +264,7 @@ RunResult run_importer(const std::filesystem::path& scratch, const std::string& 
     const auto log_path = scratch / "_importer_cli.log";
     // The command must NOT begin with a quote: cmd.exe's /c quoting heuristic
     // strips the first and last quote when a line holds more than two, which
-    // splits this repo's "NOVAForge Engine" path at the space. Leading with
+    // splits this repo's "SANAD Engine" path at the space. Leading with
     // `cd` sidesteps the heuristic entirely; every path passed in `args` is
     // absolute, so the working directory does not matter.
     const std::string cmd = "cd /d \"" + scratch.string() + "\" && \"" + exe + "\" " + args +

@@ -121,7 +121,7 @@ SampleConfig parse_args(int argc, char** argv) {
         } else if (arg == "--validation") {
             config.enable_validation = true;
         } else if (arg == "--help") {
-            std::cout << "NOVAForge Triangle sample\n"
+            std::cout << "SANAD Triangle sample\n"
                       << "  --frames N      Render N frames then exit (0 = until closed)\n"
                       << "  --validation    Request Vulkan validation layers\n";
         }
@@ -155,7 +155,7 @@ i32 run(const SampleConfig& config) {
     WindowDesc wdesc;
     wdesc.width = 1280;
     wdesc.height = 720;
-    wdesc.title = "NOVAForge Engine — Triangle";
+    wdesc.title = "SANAD Engine — Triangle";
     wdesc.vsync = true;
 
     Window window;
@@ -464,7 +464,7 @@ int run_sample(int argc, char** argv) {
     logger.add_sink(Logger::make_console_sink());
     logger.set_min_level(LogLevel::Debug);
 
-    NF_LOG_INFO(LogCategory::Core, "=== NOVAForge Engine — Triangle Sample ===");
+    NF_LOG_INFO(LogCategory::Core, "=== SANAD Engine — Triangle Sample ===");
 
     platform_init();
 

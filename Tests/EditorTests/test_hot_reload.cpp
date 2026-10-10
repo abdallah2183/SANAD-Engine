@@ -146,7 +146,7 @@ struct HotScene {
         }
         write_bytes(tmp / "Content" / "Textures" / "c.bmp", make_bmp_solid(4, 4, 255, 0, 0));
         const std::string mat_text =
-            "# NOVAForge Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\nmetallic: 0\n"
+            "# SANAD Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\nmetallic: 0\n"
             "roughness: 0.4\nao: 1\nemission: 0 0 0\nemission_strength: 0\n"
             "albedo: content://Textures/c.bmp\n";
         write_text(tmp / "Content" / "Materials" / "Default.nfmat", mat_text);
@@ -274,7 +274,7 @@ NF_TEST(hotreload_material_goes_live_and_dirty_wins) {
 
     // External edit turns the file blue-ish (base color, no albedo change).
     write_text(hs.tmp / "Content" / "Materials" / "Default.nfmat",
-               "# NOVAForge Material v1\nname: Default\nbase_color: 0.1 0.2 0.9 1\nmetallic: 0\n"
+               "# SANAD Material v1\nname: Default\nbase_color: 0.1 0.2 0.9 1\nmetallic: 0\n"
                "roughness: 0.4\nao: 1\nemission: 0 0 0\nemission_strength: 0\n"
                "albedo: content://Textures/c.bmp\n");
     auto results = hot.poll(hs.vfs, hs.reg, runtime);
@@ -294,7 +294,7 @@ NF_TEST(hotreload_material_goes_live_and_dirty_wins) {
     edit.base_color[3] = 1.0f;
     NF_CHECK(app.set_material_params("content://Materials/Default", edit, hs.err));
     write_text(hs.tmp / "Content" / "Materials" / "Default.nfmat",
-               "# NOVAForge Material v1\nname: Default\nbase_color: 1 1 0 1\nmetallic: 0\n"
+               "# SANAD Material v1\nname: Default\nbase_color: 1 1 0 1\nmetallic: 0\n"
                "roughness: 0.4\nao: 1\nemission: 0 0 0\nemission_strength: 0\n");
     auto results2 = hot.poll(hs.vfs, hs.reg, runtime);
     NF_CHECK(results2.size() == 1u && !results2[0].ok); // skipped, guarded

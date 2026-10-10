@@ -359,9 +359,9 @@ void VulkanDevice::shutdown() {
 bool VulkanDevice::create_instance() {
     VkApplicationInfo app_info{};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app_info.pApplicationName = "NOVAForge Engine";
+    app_info.pApplicationName = "SANAD Engine";
     app_info.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
-    app_info.pEngineName = "NOVAForge";
+    app_info.pEngineName = "SANAD";
     app_info.engineVersion = VK_MAKE_VERSION(0, 1, 0);
     app_info.apiVersion = VK_API_VERSION_1_2;
 
@@ -663,7 +663,7 @@ bool VulkanDevice::create_logical_device() {
     vkGetDeviceQueue(m_ctx.device, present_family, 0, &m_ctx.present_queue);
 
     vk_set_object_name(m_ctx.device, VK_OBJECT_TYPE_DEVICE,
-                       reinterpret_cast<u64>(m_ctx.device), "NOVAForge Device");
+                       reinterpret_cast<u64>(m_ctx.device), "SANAD Device");
 
     NF_LOG_DEBUG(LogCategory::RHI, "Vulkan logical device created (gfx queue {}, present queue {})",
                  graphics_family, present_family);

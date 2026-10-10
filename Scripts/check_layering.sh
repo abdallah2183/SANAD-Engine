@@ -67,7 +67,7 @@ check_depends() {
     fi
 }
 
-echo "=== NOVAForge layering invariants ==="
+echo "=== SANAD layering invariants ==="
 echo
 
 # Phase 11, W2. The renderer consumes RenderWorld, which holds no game types.

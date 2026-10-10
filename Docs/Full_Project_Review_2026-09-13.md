@@ -1,4 +1,4 @@
-# NOVAForge Engine — Full Project Review
+# SANAD Engine — Full Project Review
 
 **Date:** 2026-09-13 (21:31–21:35 PDT)
 **Reviewer:** Nova
@@ -128,7 +128,7 @@ Exactly 2 per frame, perfectly linear. This is unbounded log spam and wasted wor
 
 **Where:** `Content/AssetRegistry.nfreg` maps the scene's mesh to `cooked: cache://Meshes/cube.nfmesh`. That file only exists after `NFAssetCooker` has run, and nothing in the README, the build script, or CI runs it.
 
-**Before cooking** — `NOVAForgeEditor.exe --headless --frames 30`:
+**Before cooking** — `SANADEditor.exe --headless --frames 30`:
 
 ```
 WARN [Core] Runtime: mesh asset f04e488b-... failed: Failed to open file for reading: 'cache://Meshes/cube.nfmesh'
@@ -164,7 +164,7 @@ This is the same failure class the 2026-09-13 evaluation called out: a verificat
 `Scripts/build.sh:29` hardcodes:
 
 ```bash
-PROJECT_ROOT="C:/Users/abdal/OneDrive/Desktop/NOVAForge Engine"
+PROJECT_ROOT="C:/Users/abdal/OneDrive/Desktop/SANAD Engine"
 ```
 
 and pins the toolchain to VS 2022 BuildTools / MSVC `14.44.35207` (lines 12-13), while this worktree builds with VS 18 Community / MSVC `14.51`. Both paths exist on this machine, so the script does not fail — it **silently builds and tests the OneDrive copy instead of the worktree you are standing in.** That is worse than a hard error, because a green run would be reported for the wrong tree.
@@ -316,17 +316,17 @@ NF_TRIANGLE_FRAMES=60 NF_TRIANGLE_VALIDATION=1 ./NFSampleTriangle.exe   # 0 vali
 NF_BASIC3D_FRAMES=60  NF_BASIC3D_VALIDATION=1  ./NFSampleBasic3D.exe    # 0 validation errors
 
 # Demonstrate §4.2: acceptance green while rendering nothing
-./NOVAForgeEditor.exe --headless --frames 30 | grep -c "mesh asset"      # 60 warnings, automation=OK
+./SANADEditor.exe --headless --frames 30 | grep -c "mesh asset"      # 60 warnings, automation=OK
 
 # Demonstrate §4.1: retries scale linearly with frames
-./NOVAForgeEditor.exe --headless --frames 10 | grep -c "mesh asset"      # 20
-./NOVAForgeEditor.exe --headless --frames 60 | grep -c "mesh asset"      # 120
+./SANADEditor.exe --headless --frames 10 | grep -c "mesh asset"      # 20
+./SANADEditor.exe --headless --frames 60 | grep -c "mesh asset"      # 120
 
 # Fix it by cooking
 ./NFAssetCooker.exe --input content://Meshes/cube.nfmesh \
                     --output cache://Meshes/cube.nfmesh \
                     --registry content://AssetRegistry.nfreg
-./NOVAForgeEditor.exe --headless --frames 30 | grep "uploaded"           # mesh uploads
+./SANADEditor.exe --headless --frames 30 | grep "uploaded"           # mesh uploads
 ```
 
 > Note: running the cooker rewrites the tracked `Content/AssetRegistry.nfreg` (LF→CRLF). Restore it afterwards with `git checkout -- Content/AssetRegistry.nfreg` unless you intend to commit the change.

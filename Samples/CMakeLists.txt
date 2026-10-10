@@ -66,7 +66,7 @@ if(NF_GLSLC_EXECUTABLE)
     add_dependencies(NFSampleRuntimeScene NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
 endif()
 
-# --- GamePlayer — NOVAForgePlayer: the standalone game window the editor's
+# --- GamePlayer — SANADPlayer: the standalone game window the editor's
 # Play button launches. Same VFS mounts (same --project or engine-tree
 # fallback), full Runtime::update loop, real keyboard input for gameplay.
 add_executable(NFGamePlayer
@@ -194,15 +194,15 @@ add_executable(NFSampleAudioWalkthrough
 target_link_libraries(NFSampleAudioWalkthrough PRIVATE NFCore NFAudio)
 nf_target_set_warnings(NFSampleAudioWalkthrough)
 
-# --- Server — NOVAForgeServer: the dedicated, GPU-less host (design §81) ---
+# --- Server — SANADServer: the dedicated, GPU-less host (design §81) ---
 # Links NFCore/NFJobs/NFNetworking only. Adding RHI or Rendering here would
 # defeat the point: this binary must build and run on a machine with no GPU,
 # because a server does not render.
-add_executable(NOVAForgeServer
+add_executable(SANADServer
     Server/main.cpp
 )
-target_link_libraries(NOVAForgeServer PRIVATE NFCore NFJobs NFNetworking)
-nf_target_set_warnings(NOVAForgeServer)
+target_link_libraries(SANADServer PRIVATE NFCore NFJobs NFNetworking)
+nf_target_set_warnings(SANADServer)
 
 # --- CliffStory — a 2D story climb, built on the engine's 2D layer ----------
 # حكاية الجرف — the first game to render through NFScene2D.
@@ -268,7 +268,7 @@ if(MSVC)
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET NFSampleAudioWalkthrough
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    set_property(TARGET NOVAForgeServer
+    set_property(TARGET SANADServer
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET NFSampleCliffStory
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

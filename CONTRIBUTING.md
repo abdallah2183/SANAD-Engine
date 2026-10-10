@@ -1,6 +1,6 @@
 # Contributing | المساهمة
 
-Thanks for your interest in NOVAForge / محرك سَنَد. Contributions of code,
+Thanks for your interest in SANAD / محرك سَنَد. Contributions of code,
 docs, samples, and Arabic-first UX are all welcome.
 
 ## How to contribute

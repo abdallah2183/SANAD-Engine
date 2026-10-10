@@ -7,7 +7,7 @@
 
 int main(int argc, char** argv) {
     nf::runtime::ApplicationConfig config;
-    config.title = "NOVAForge — RuntimeScene";
+    config.title = "SANAD — RuntimeScene";
     config.width = 1280;
     config.height = 720;
     config.vsync = true;
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
         else if (arg=="--validation") config.validation = true;
         else if (arg=="--headless") config.headless = true;
         else if (arg=="--help" || arg=="-h") {
-            std::cout << "NOVAForge RuntimeScene\n"
+            std::cout << "SANAD RuntimeScene\n"
                       << "  --scene <logical>   Scene to load (default content://Scenes/Example.nfscene)\n"
                       << "  --frames N          Run N frames then exit (0 = until close)\n"
                       << "  --validation        Enable Vulkan validation\n"

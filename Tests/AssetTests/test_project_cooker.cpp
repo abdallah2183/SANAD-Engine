@@ -234,7 +234,7 @@ NF_TEST(cooker_cook_all_cooks_every_supported_file) {
     sb.write("Textures/T.png", "not-really-a-png");
     // Not cookable: must be left alone rather than half-handled.
     sb.write("Shaders/thing.frag", "void main(){}");
-    sb.write("AssetRegistry.nfreg", "# NOVAForge Asset Registry\nversion: 1\ncount: 0\n");
+    sb.write("AssetRegistry.nfreg", "# SANAD Asset Registry\nversion: 1\ncount: 0\n");
 
     CookReport report;
     std::string err;

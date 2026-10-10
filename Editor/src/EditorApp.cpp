@@ -1425,7 +1425,7 @@ bool valid_script_path(const std::string& path) {
 
 std::string script_template(const std::string& logical_path) {
     std::string out = "-- " + logical_path + "\n";
-    out += "-- Authored in the NOVAForge editor (Inspector > Script).\n";
+    out += "-- Authored in the SANAD editor (Inspector > Script).\n";
     out += "-- `self` is this entity; see nf.* in Docs for the host API.\n";
     out += "function update(dt)\n";
     out += "end\n";
@@ -1765,6 +1765,82 @@ bool valid_character_config(const physics::CharacterConfig& cfg, std::string& ou
     return true;
 }
 
+// Navigation (Phase 28). The bounds mirror the scene loader's, so a value the
+// inspector accepts is a value the file round-trips — a range that differs
+// between the two would let the UI write a component the loader then refuses.
+bool valid_navmesh_config(const runtime::NavMeshComponent& nm, std::string& out_err) {
+    auto extent = [&](f32 v, const char* what) {
+        if (!std::isfinite(v) || v <= 0.0f || v > 100000.0f) {
+            out_err = std::string(what) + " must be within (0, 100000]";
+            return false;
+        }
+        return true;
+    };
+    if (!extent(nm.area_x, "Area X") || !extent(nm.area_y, "Area Y") || !extent(nm.area_z, "Area Z")) {
+        return false;
+    }
+    if (!std::isfinite(nm.cell_size) || nm.cell_size < 0.01f || nm.cell_size > 100.0f) {
+        out_err = "Cell size must be within [0.01, 100]";
+        return false;
+    }
+    if (!std::isfinite(nm.cell_height) || nm.cell_height < 0.01f || nm.cell_height > 100.0f) {
+        out_err = "Cell height must be within [0.01, 100]";
+        return false;
+    }
+    if (!std::isfinite(nm.walkable_slope_deg) || nm.walkable_slope_deg < 0.0f ||
+        nm.walkable_slope_deg > 90.0f) {
+        out_err = "Walkable slope must be within [0, 90] degrees";
+        return false;
+    }
+    if (!std::isfinite(nm.walkable_climb) || nm.walkable_climb < 0.0f || nm.walkable_climb > 100.0f) {
+        out_err = "Walkable climb must be within [0, 100]";
+        return false;
+    }
+    if (!std::isfinite(nm.walkable_height) || nm.walkable_height < 0.01f ||
+        nm.walkable_height > 1000.0f) {
+        out_err = "Walkable height must be within [0.01, 1000]";
+        return false;
+    }
+    if (!std::isfinite(nm.min_region_area) || nm.min_region_area < 0.0f ||
+        nm.min_region_area > 1000000.0f) {
+        out_err = "Minimum region area must be within [0, 1000000]";
+        return false;
+    }
+    if (!std::isfinite(nm.agent_radius) || nm.agent_radius < 0.0f || nm.agent_radius > 100.0f) {
+        out_err = "Agent radius must be within [0, 100]";
+        return false;
+    }
+    if (!std::isfinite(nm.jump_distance) || nm.jump_distance < 0.0f || nm.jump_distance > 1000.0f) {
+        out_err = "Jump distance must be within [0, 1000]";
+        return false;
+    }
+    if (!std::isfinite(nm.jump_height) || nm.jump_height < 0.0f || nm.jump_height > 1000.0f) {
+        out_err = "Jump height must be within [0, 1000]";
+        return false;
+    }
+    if (nm.max_verts_per_poly < 3u || nm.max_verts_per_poly > 64u) {
+        out_err = "Max verts per polygon must be within [3, 64]";
+        return false;
+    }
+    return true;
+}
+
+bool valid_nav_agent_config(const runtime::NavAgentComponent& na, std::string& out_err) {
+    if (!std::isfinite(na.speed) || na.speed < 0.0f || na.speed > 1000.0f) {
+        out_err = "Speed must be within [0, 1000]";
+        return false;
+    }
+    if (!std::isfinite(na.goal_x) || !std::isfinite(na.goal_y) || !std::isfinite(na.goal_z)) {
+        out_err = "Goal must be a finite point";
+        return false;
+    }
+    if (!std::isfinite(na.arrive_radius) || na.arrive_radius < 0.001f || na.arrive_radius > 100.0f) {
+        out_err = "Arrive radius must be within [0.001, 100]";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool EditorApp::attach_particles(ecs::Entity e, std::string& out_err) {
@@ -1965,6 +2041,120 @@ bool EditorApp::detach_character(ecs::Entity e, std::string& out_err) {
         return false;
     }
     w->remove<physics::CharacterComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_navmesh(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<runtime::NavMeshComponent>(e)) {
+        return true;
+    }
+    w->add<runtime::NavMeshComponent>(e, runtime::NavMeshComponent{});
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_navmesh(ecs::Entity e, const runtime::NavMeshComponent& nm,
+                            std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_navmesh_config(nm, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<runtime::NavMeshComponent>(e)) {
+        *existing = nm;
+    } else {
+        w->add<runtime::NavMeshComponent>(e, nm);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_navmesh(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::NavMeshComponent>(e)) {
+        out_err = "Entity has no NavMeshComponent";
+        return false;
+    }
+    w->remove<runtime::NavMeshComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_nav_agent(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<runtime::NavAgentComponent>(e)) {
+        return true;
+    }
+    w->add<runtime::NavAgentComponent>(e, runtime::NavAgentComponent{});
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_nav_agent(ecs::Entity e, const runtime::NavAgentComponent& na,
+                              std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_nav_agent_config(na, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<runtime::NavAgentComponent>(e)) {
+        *existing = na;
+    } else {
+        w->add<runtime::NavAgentComponent>(e, na);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_nav_agent(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::NavAgentComponent>(e)) {
+        out_err = "Entity has no NavAgentComponent";
+        return false;
+    }
+    w->remove<runtime::NavAgentComponent>(e);
     after_mutation(e);
     return true;
 }

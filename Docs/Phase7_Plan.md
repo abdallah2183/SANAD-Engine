@@ -109,7 +109,7 @@ JSON parser and hand-rolls its own formats; adding a JSON dependency for this wo
 and unnecessary.
 
 ```text
-# NOVAForge Project
+# SANAD Project
 version: 1
 name: Demo
 engine_version: 0.1

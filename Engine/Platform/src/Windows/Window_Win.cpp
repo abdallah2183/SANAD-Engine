@@ -120,7 +120,7 @@ bool Window::create(const WindowDesc& desc) {
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
     wc.hbrBackground = nullptr;
-    wc.lpszClassName = L"NOVAForgeWindowClass";
+    wc.lpszClassName = L"SANADWindowClass";
 
     if (!RegisterClassExW(&wc)) {
         NF_LOG_ERROR(LogCategory::Platform, "Failed to register window class");

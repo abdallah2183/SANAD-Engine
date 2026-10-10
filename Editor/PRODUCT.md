@@ -1,4 +1,4 @@
-# NOVAForge Editor — Product (Phase 4 + Phase 5 + Phase 6)
+# SANAD Editor — Product (Phase 4 + Phase 5 + Phase 6)
 
 ## Who
 A solo/team game developer iterating on `.nfscene` levels for hours on a
@@ -26,7 +26,7 @@ Windows desktop with a GPU.
 - Keyboard: W/E/R gizmo, Ctrl+Z/Y undo/redo, Ctrl+S save, Delete request.
 
 ## Acceptance proof (automation)
-`NOVAForgeEditor.exe --scene content://Scenes/Example.nfscene --frames 120 --validation`
+`SANADEditor.exe --scene content://Scenes/Example.nfscene --frames 120 --validation`
 logs: outliner labels, inspector edit + undo + redo, UI overlay proof,
 play/stop, save-copy + reload round-trip, asset filter + drop + undo-drop,
 material edit visible + save + undo, texture import + albedo + hot reload,

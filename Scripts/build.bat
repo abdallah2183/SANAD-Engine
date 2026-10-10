@@ -1,6 +1,6 @@
 @echo off
 REM ---------------------------------------------------------------------------
-REM NOVAForge Engine — Windows build helper (CMake + Ninja + MSVC)
+REM SANAD Engine — Windows build helper (CMake + Ninja + MSVC)
 REM
 REM Usage:
 REM   Scripts\build.bat [Debug|Release|RelWithDebInfo]

@@ -5,7 +5,7 @@
 # WHY THIS EXISTS
 #
 # This repository's main `.git` lives inside OneDrive
-# (`C:/Users/abdal/OneDrive/Desktop/NOVAForge Engine/.git`). OneDrive's sync
+# (`C:/Users/abdal/OneDrive/Desktop/SANAD Engine/.git`). OneDrive's sync
 # engine deletes newly-created *loose* ref files under `.git/refs/`, and the
 # directory that holds them, within seconds of them being written.
 #

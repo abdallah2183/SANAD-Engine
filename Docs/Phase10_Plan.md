@@ -265,7 +265,7 @@ Animated entities: 1 (max transform deviation over 120 frames: 179.83662)
 Audio sources mixed (peak): 1 (0.19999997)
 Validation errors: 0
 Alive RHI objects before shutdown: 0
-=== NOVAForge Runtime exited cleanly ===          exit 0
+=== SANAD Runtime exited cleanly ===          exit 0
 ```
 
 Editor headless (`--project`, 30 frames, validation on): all automation checks OK, 0 validation errors,

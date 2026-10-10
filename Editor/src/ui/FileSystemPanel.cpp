@@ -1,4 +1,4 @@
-// FileSystemPanel.cpp — Godot-style FileSystem dock for NOVAForge.
+// FileSystemPanel.cpp — Godot-style FileSystem dock for SANAD.
 //
 // Layout mirrors the reference (second screenshot in the request):
 //   [FileSystem] [History]            <- top tabs

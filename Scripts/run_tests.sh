@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scripts/run_tests.sh — run every NOVAForge test suite and report one summary.
+# Scripts/run_tests.sh — run every SANAD test suite and report one summary.
 #
 # Usage:
 #   bash Scripts/run_tests.sh [build-dir]     # default: build/debug
@@ -18,7 +18,33 @@ if [ ! -d "${BIN}" ]; then
     exit 1
 fi
 
-SUITES=(CoreTests JobTests ECSTests AssetTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests RuntimeTests EditorTests ToolTests)
+# The suite list used to be a hardcoded array, and it had fallen a phase
+# behind: twelve built suites (AITests, DestructionTests, Scene2DTests,
+# ScriptTests, UITests, VFXTests, NetworkTests, PerfTests, ...) were silently
+# never run — the same "registered but not driven" failure this project keeps
+# finding elsewhere, at the runner level. Discovery is the fix: whatever the
+# build produced is what gets run, and a suite added later cannot be forgotten.
+#
+# NF_TEST_SUITES lets a caller add suites that are not on this disk (a remote
+# run, a suite renamed during a refactor).
+SUITES=()
+if [ -d "${BIN}" ]; then
+    for exe in "${BIN}"/*Tests.exe "${BIN}"/*Tests; do
+        [ -f "${exe}" ] || continue
+        name=$(basename "${exe}")
+        name=${name%.exe}
+        case " ${SUITES[*]:-} " in
+            *" ${name} "*) ;;
+            *) SUITES+=("${name}") ;;
+        esac
+    done
+fi
+for extra in ${NF_TEST_SUITES:-}; do
+    case " ${SUITES[*]:-} " in
+        *" ${extra} "*) ;;
+        *) SUITES+=("${extra}") ;;
+    esac
+done
 
 TOTAL_PASSED=0
 TOTAL_FAILED=0

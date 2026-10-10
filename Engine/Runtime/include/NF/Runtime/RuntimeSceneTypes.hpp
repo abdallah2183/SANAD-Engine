@@ -283,6 +283,76 @@ struct CameraComponent {
     // Position is stored in Transform, not here
 };
 
+/// The navigation volume: where the walkable mesh is baked, and how (design doc
+/// §45 "Navigation" — NavMesh, off-mesh links, dynamic obstacles).
+///
+/// Until this existed the voxel navigation mesh was CPU-only and test-only: no
+/// scene could name a volume, so no shipped game could path anything. This is
+/// that decision, as data — the same move SkyComponent made for the sky and
+/// DestructibleComponent for breakables.
+///
+/// Place is the ENTITY's Transform, not a field: the origin IS the volume's
+/// minimum corner (the floor), and the sizes run along +X/+Y/+Z from it. A
+/// level author drags the volume like any other object, and the floor it bakes
+/// is `Transform.y` — so a volume sitting on the ground bakes a ground-level
+/// mesh. No second copy of the corner exists to drift from the gizmo.
+///
+/// The height sampler is the honest v1: a FLAT floor at the volume's own floor
+/// height. Terrain is not scene-authorable (there is no Terrain component in
+/// `.nfscene`), so a sampler that invented hills would be fiction the physics
+/// world does not share. What the mesh DOES read from the scene is the static
+/// box colliders, which become obstacles: a crate is a step, a wall is a wall.
+/// A richer sampler is a caller-side extension (`ai::NavMesh::build` takes any
+/// callable), not a scene-format change.
+struct NavMeshComponent {
+    /// Volume extents from the entity origin, world metres. Each must be
+    /// positive and finite; a degenerate one is refused by the loader rather
+    /// than baked into an empty or infinite mesh.
+    f32 area_x = 20.0f;
+    f32 area_y = 8.0f; ///< Headroom above the floor (the sky bound).
+    f32 area_z = 20.0f;
+
+    // Bake tuning, mirroring ai::NavMesh::Config one for one with the same
+    // defaults, so an authored volume and a hand-built mesh agree exactly.
+    f32 cell_size = 0.5f;
+    f32 cell_height = 0.25f;
+    f32 walkable_slope_deg = 45.0f;
+    f32 walkable_climb = 0.5f;
+    f32 walkable_height = 2.0f;
+    f32 min_region_area = 2.0f;
+    f32 agent_radius = 0.0f;
+    f32 jump_distance = 4.0f;
+    f32 jump_height = 1.5f;
+    u32 max_verts_per_poly = 6;
+
+    /// Off: the component survives (the author keeps the volume placed) but no
+    /// mesh is baked and no agent moves. The same "switch it off, keep it
+    /// placed" contract PointLightComponent uses.
+    bool enabled = true;
+};
+
+/// An entity that walks the navigation mesh to a goal. Configuration plus the
+/// authored goal; the live path is a runtime artefact and is never saved.
+///
+/// The goal is WORLD space, like a camera's placement: "walk to that door" is a
+/// fact about the level, not about the agent's parent. The start is the
+/// entity's own Transform, so dragging the agent in the viewport re-paths it
+/// from where it now stands.
+struct NavAgentComponent {
+    /// Walk speed, world metres/second.
+    f32 speed = 4.0f;
+    /// Goal position, world metres.
+    f32 goal_x = 0.0f;
+    f32 goal_y = 0.0f;
+    f32 goal_z = 0.0f;
+    /// How close counts as arrived, world metres. A goal centred in a polygon
+    /// is reached on the nose, so this only has to absorb waypoint rounding.
+    f32 arrive_radius = 0.25f;
+    /// Off: the agent keeps its placement and its goal but never moves — the
+    /// "posed crowd" state a cinematic level wants.
+    bool enabled = true;
+};
+
 /// A breakable object authored in the scene (Phase 19, design doc §41
 /// "Breakable meshes / Fracture assets / Debris / Impulses").
 ///

@@ -55,7 +55,7 @@ std::string accepted_input_list() {
 }
 
 void print_help() {
-    std::cout << "NFModelImporter — NOVAForge mesh importer\n"
+    std::cout << "NFModelImporter — SANAD mesh importer\n"
               << "Usage:\n"
               << "  NFModelImporter --input <model> --output <mesh.nfmesh> [--mesh N|all]\n"
               << "  NFModelImporter --input <model> --info\n"

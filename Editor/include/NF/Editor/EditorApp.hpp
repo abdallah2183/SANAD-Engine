@@ -255,6 +255,17 @@ public:
     // never wipe or invent intent.
     bool set_character_input(ecs::Entity e, const Vec3& wish_dir, bool jump, std::string& out_err);
     bool detach_character(ecs::Entity e, std::string& out_err);
+    // --- Navigation (Phase 28) ----------------------------------------------
+    // Same direct-edit shape as the systems above: validated at the door,
+    // add-or-replace, covered by save/load round-trip tests. A volume has no
+    // live counterpart in the editor (the mesh is baked by the Runtime on
+    // adopt), so authoring one is a component write like any other.
+    bool attach_navmesh(ecs::Entity e, std::string& out_err);
+    bool set_navmesh(ecs::Entity e, const runtime::NavMeshComponent& nm, std::string& out_err);
+    bool detach_navmesh(ecs::Entity e, std::string& out_err);
+    bool attach_nav_agent(ecs::Entity e, std::string& out_err);
+    bool set_nav_agent(ecs::Entity e, const runtime::NavAgentComponent& na, std::string& out_err);
+    bool detach_nav_agent(ecs::Entity e, std::string& out_err);
 
     // --- Asset folders (Unity-style Project panel) --------------------------
     // Creates a VFS directory for the browser (content:// or project://, no

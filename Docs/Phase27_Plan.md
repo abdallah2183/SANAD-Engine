@@ -118,7 +118,7 @@ bash .workbuddy-ai/nfb.sh                       # full build, exit 0
 ./build/DebugNinja/bin/RuntimeTests.exe post_process   # 5/5
 ./build/DebugNinja/bin/EditorTests.exe post_process    # 1/1
 python Scripts/audit_imgui_ids.py               # no NEW collisions
-./build/DebugNinja/bin/NOVAForgeEditor.exe --scene content://Scenes/Example.nfscene \
+./build/DebugNinja/bin/SANADEditor.exe --scene content://Scenes/Example.nfscene \
     --frames 125 --validation                   # exit 0, 0 validation errors, automation=OK
 ```
 

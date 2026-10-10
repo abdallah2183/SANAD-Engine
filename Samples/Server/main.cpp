@@ -1,4 +1,4 @@
-// Samples/Server/main.cpp — NOVAForgeServer: a dedicated server that runs the
+// Samples/Server/main.cpp — SANADServer: a dedicated server that runs the
 // same simulation a client does, with no window, no Vulkan device and no
 // renderer (design §81).
 //
@@ -16,7 +16,7 @@
 //   3. Exit after --ticks (default 600, i.e. 10s at 60Hz), so a test can start
 //      and stop it deterministically.
 //
-// Usage: NOVAForgeServer --port 7777 --ticks 600 --max-players 16
+// Usage: SANADServer --port 7777 --ticks 600 --max-players 16
 
 #include <NF/Networking/DedicatedServer.hpp>
 #include <NF/Networking/Snapshot.hpp>
@@ -61,7 +61,7 @@ CliArgs parse_args(int argc, char** argv) {
         } else if (arg == "--quiet") {
             a.print_port = false;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "NOVAForgeServer — headless dedicated server (design 81)\n"
+            std::cout << "SANADServer — headless dedicated server (design 81)\n"
                       << "  --port N             UDP port (0 = ephemeral)\n"
                       << "  --ticks N            Exit after N ticks (0 = until shutdown)\n"
                       << "  --max-players N      Player slots (default 16)\n"
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     DedicatedServer server(config);
     std::string err;
     if (!server.start(&err)) {
-        std::cerr << "NOVAForgeServer: failed to bind port " << args.port << ": "
+        std::cerr << "SANADServer: failed to bind port " << args.port << ": "
                   << (err.empty() ? "unknown error" : err) << "\n";
         return 1;
     }

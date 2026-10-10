@@ -126,7 +126,7 @@ int run() {
 
     WindowDesc wdesc{};
     wdesc.width = 1280; wdesc.height = 720;
-    wdesc.title = "NOVAForge — Vehicle Demo | WASD/Xbox drive, Space/A handbrake, R reset";
+    wdesc.title = "SANAD — Vehicle Demo | WASD/Xbox drive, Space/A handbrake, R reset";
     wdesc.vsync = true;
     Window window;
     if (!window.create(wdesc)) { NF_LOG_FATAL(LogCategory::Platform, "Failed to create window"); return -1; }
@@ -473,7 +473,7 @@ int run() {
                                    ? "Xbox drive, A handbrake, Y reset, Back quit"
                                    : "WASD drive, Space handbrake, R reset";
             std::snprintf(buf, sizeof(buf),
-                          "NOVAForge — Vehicle Demo | %d km/h | Wheels=%.4s | Gates=%d Resets=%d | %s",
+                          "SANAD — Vehicle Demo | %d km/h | Wheels=%.4s | Gates=%d Resets=%d | %s",
                           static_cast<int>(std::sqrt(kmh) * 3.6f), wtxt, score, resets,
                           hand);
             window.set_title(buf);

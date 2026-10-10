@@ -29,7 +29,7 @@ struct ProjectMount {
 // project has no JSON parser and hand-rolls its own formats; adding a dependency
 // for this would be inconsistent.
 //
-//   # NOVAForge Project
+//   # SANAD Project
 //   version: 1
 //   name: Demo
 //   startup_scene: content://Scenes/Main.nfscene

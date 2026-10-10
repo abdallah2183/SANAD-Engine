@@ -331,7 +331,7 @@ const std::vector<MeshImportFormat>& mesh_import_formats() {
 
 const char* mesh_import_format_name(MeshImportFormat format) {
     switch (format) {
-        case MeshImportFormat::NfMesh: return "NOVAForge Mesh";
+        case MeshImportFormat::NfMesh: return "SANAD Mesh";
         case MeshImportFormat::Obj: return "Wavefront OBJ";
         case MeshImportFormat::Stl: return "STL (binary or ASCII)";
         case MeshImportFormat::Ply: return "Stanford PLY";

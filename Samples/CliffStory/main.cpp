@@ -1543,7 +1543,7 @@ i32 Game::run(const GameConfig& config) {
     WindowDesc wd{};
     wd.width = kWindowW;
     wd.height = kWindowH;
-    wd.title = "NOVAForge — حكاية الجرف (The Cliff's Tale)";
+    wd.title = "SANAD — حكاية الجرف (The Cliff's Tale)";
     wd.vsync = true;
     if (!m_window.create(wd)) {
         NF_LOG_FATAL(LogCategory::Platform, "CliffStory: failed to create the window");
@@ -1821,7 +1821,7 @@ GameConfig parse_args(int argc, char** argv) {
         } else if (arg.rfind("--screenshot=", 0) == 0) {
             config.screenshot = std::string(arg.substr(13));
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "NOVAForge CliffStory — حكاية الجرف\n"
+            std::cout << "SANAD CliffStory — حكاية الجرف\n"
                          "  --frames N        Render N frames then exit (0 = until closed)\n"
          "  --screenshot P   Write the final frame to a PNG, then exit\n"
    "  --skip-title     Begin the climb instead of the title card\n"
@@ -1844,7 +1844,7 @@ int main(int argc, char** argv) {
     logger.add_sink(Logger::make_console_sink());
     logger.set_min_level(LogLevel::Info);
 
-    NF_LOG_INFO(LogCategory::Core, "=== NOVAForge — CliffStory (2D, NFScene2D) ===");
+    NF_LOG_INFO(LogCategory::Core, "=== SANAD — CliffStory (2D, NFScene2D) ===");
     platform_init();
     const cliff::GameConfig config = cliff::parse_args(argc, argv);
     cliff::Game game;

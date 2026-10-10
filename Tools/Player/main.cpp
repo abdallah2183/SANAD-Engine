@@ -30,10 +30,10 @@ namespace {
 
 // Stamped into every crash report the player writes, so a dump that arrives
 // from a player can be tied back to the exact build that produced it.
-constexpr const char* kPlayerVersion = "NFPlayer 0.1 (NOVAForge Phase 7)";
+constexpr const char* kPlayerVersion = "NFPlayer 0.1 (SANAD Phase 7)";
 
 void print_help() {
-    std::cout << "NFPlayer — NOVAForge standalone runtime\n"
+    std::cout << "NFPlayer — SANAD standalone runtime\n"
               << "Usage:\n"
               << "  NFPlayer --project <file.nfproj> [options]\n"
               << "Options:\n"

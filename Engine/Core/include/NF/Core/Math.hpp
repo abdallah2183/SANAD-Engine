@@ -1,6 +1,6 @@
 #pragma once
 
-// NF/Core/Math.hpp — SIMD-aware math primitives for NOVAForge Engine
+// NF/Core/Math.hpp — SIMD-aware math primitives for SANAD Engine
 // Provides Vec2, Vec3, Vec4, Mat4, Quat with cache-friendly operations.
 
 #include <NF/Core/Types.hpp>

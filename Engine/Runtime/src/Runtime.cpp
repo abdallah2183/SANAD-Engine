@@ -40,6 +40,25 @@ f32 safe_scale_ratio(f32 posed, f32 rest) {
     return posed / rest;
 }
 
+/// Distance in the XZ plane from `p` to the segment `a`→`b`. Navigation is a
+/// ground-plane problem, so a height difference never counts as "off the
+/// corridor" — an agent that falls and lands is still on its path.
+f32 xz_distance_to_segment(const Vec3& p, const Vec3& a, const Vec3& b) {
+    const f32 abx = b.x - a.x;
+    const f32 abz = b.z - a.z;
+    const f32 ab2 = abx * abx + abz * abz;
+    if (ab2 < 1e-12f) {
+        const f32 dx = p.x - a.x;
+        const f32 dz = p.z - a.z;
+        return std::sqrt(dx * dx + dz * dz);
+    }
+    f32 t = ((p.x - a.x) * abx + (p.z - a.z) * abz) / ab2;
+    t = nf::clamp(t, 0.0f, 1.0f);
+    const f32 dx = p.x - (a.x + abx * t);
+    const f32 dz = p.z - (a.z + abz * t);
+    return std::sqrt(dx * dx + dz * dz);
+}
+
 /// The fracture piece for a box collider, in the asset's own local space. The
 /// collider is the only description of an object's shape a scene carries —
 /// there is no fracture-asset import pipeline — so the cut starts from it.
@@ -412,6 +431,10 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
                 label = "Cloth";
             } else if (world.has<physics::CharacterComponent>(e)) {
                 label = "Character";
+            } else if (world.has<NavMeshComponent>(e)) {
+                label = "NavMesh";
+            } else if (world.has<NavAgentComponent>(e)) {
+                label = "NavAgent";
             } else {
                 label = "Entity " + std::to_string(e.id);
             }
@@ -440,6 +463,11 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     if (m_ai_world) {
         m_ai_world->clear();
     }
+    // Navigation is a per-scene artefact like the crowd: the previous scene's
+    // mesh and its walkers are dropped with it, and the new one bakes its own
+    // (a no-op for a scene with no NavMesh line).
+    m_nav_agents.clear();
+    build_scene_navmesh();
     // The previous scene's bindings and shards do not carry over. Assets stay
     // (the game registered them), but which entities are breakable and what is
     // flying around belongs to this scene.
@@ -575,6 +603,10 @@ void Runtime::update(float dt) {
     // World-scale AI plans next: a plan only assigns tiers and grants, so a
     // script that moved an actor this frame is already visible to it.
     step_ai_world(dt);
+    // Navigation walks last of the movers: an agent sees this frame's
+    // simulation results and the AI plan, and writes its transform before
+    // propagation below — so the walk renders where it ends up this frame.
+    step_navmesh(dt);
     // Particles and cloth simulate after decisions, before debris, so a burst
     // or gust triggered this frame is already integrated when it renders.
     step_particles(dt);
@@ -1342,6 +1374,233 @@ u32 Runtime::step_ai_world(float dt) {
         }
     }
     return ticking;
+}
+
+// --- Navigation (Phase 28) ---------------------------------------------------
+//
+// The bake reads three things from the scene and invents nothing else:
+//   * the volume's own Transform origin as the area's minimum corner,
+//   * a FLAT floor sampler at the volume's floor height — terrain is not
+//     scene-authorable, so a sampler that invented hills would describe a
+//     world the physics does not simulate, and
+//   * the scene's static box colliders as obstacles.
+// A richer sampler is a caller's extension through ai::NavMesh::build (it takes
+// any callable); this is the honest v1 a scene can author.
+
+void Runtime::build_scene_navmesh() {
+    // The scene owns its navigation: dropping the previous scene's mesh and
+    // walkers is the same rule the particle, cloth and audio-environment
+    // builders follow.
+    m_navmesh.reset();
+    m_nav_agents.clear();
+    m_nav_obstacle_count = 0;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+
+    ecs::Entity volume = ecs::kInvalidEntity;
+    const NavMeshComponent* spec = nullptr;
+    for (auto e : world.query<NavMeshComponent>()) {
+        const auto* comp = world.get<NavMeshComponent>(e);
+        if (comp != nullptr && comp->enabled) {
+            volume = e;
+            spec = comp;
+            break;
+        }
+    }
+    if (spec == nullptr || volume == ecs::kInvalidEntity) {
+        NF_LOG_INFO(LogCategory::Core,
+                    "Runtime: scene carries no enabled navigation volume; no navmesh baked");
+        return;
+    }
+
+    const auto* vt = world.get<scene::Transform>(volume);
+    const Vec3 origin =
+        vt != nullptr ? Vec3{vt->local_x, vt->local_y, vt->local_z} : Vec3{};
+    const Vec3 area_min = origin;
+    const Vec3 area_max{origin.x + spec->area_x, origin.y + spec->area_y,
+                        origin.z + spec->area_z};
+
+    std::vector<ai::NavObstacle> obstacles;
+    for (auto e : world.query<physics::ColliderComponent>()) {
+        if (e == volume) {
+            continue; // the volume is not an obstacle to itself
+        }
+        const auto* col = world.get<physics::ColliderComponent>(e);
+        const auto* rb = world.get<physics::RigidBodyComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (col == nullptr || t == nullptr) {
+            continue;
+        }
+        // Static scenery only: a dynamic body is simulated by the engine
+        // solver, and an obstacle that moves every frame would need a re-bake
+        // to mean anything (callers get that through set_obstacles on the mesh).
+        if (rb != nullptr && rb->type != physics::BodyType::Static) {
+            continue;
+        }
+        // A walker is not its own wall — an agent's collider would carve a hole
+        // exactly where it stands.
+        if (world.has<NavAgentComponent>(e)) {
+            continue;
+        }
+        // The voxeliser is AABB-based; other shapes are skipped rather than
+        // approximated, because a sphere baked as its bounding box is a wall
+        // that is wider than the thing an author placed and can see.
+        if (col->shape.type != physics::ShapeType::Box) {
+            continue;
+        }
+        const Vec3 centre{t->local_x, t->local_y, t->local_z};
+        const Vec3 half{col->shape.box.half_extents.x * t->scale_x,
+                        col->shape.box.half_extents.y * t->scale_y,
+                        col->shape.box.half_extents.z * t->scale_z};
+        ai::NavObstacle obs;
+        obs.min = Vec3{centre.x - half.x, centre.y - half.y, centre.z - half.z};
+        obs.max = Vec3{centre.x + half.x, centre.y + half.y, centre.z + half.z};
+        obstacles.push_back(obs);
+    }
+
+    ai::NavMesh::Config cfg;
+    cfg.cell_size = spec->cell_size;
+    cfg.cell_height = spec->cell_height;
+    cfg.walkable_slope_deg = spec->walkable_slope_deg;
+    cfg.walkable_climb = spec->walkable_climb;
+    cfg.walkable_height = spec->walkable_height;
+    cfg.min_region_area = spec->min_region_area;
+    cfg.agent_radius = spec->agent_radius;
+    cfg.jump_distance = spec->jump_distance;
+    cfg.jump_height = spec->jump_height;
+    cfg.max_verts_per_poly = spec->max_verts_per_poly;
+
+    const f32 floor_y = area_min.y;
+    auto sampler = [floor_y](f32, f32) { return floor_y; };
+
+    auto mesh = std::make_unique<ai::NavMesh>();
+    if (!mesh->build(cfg, area_min, area_max, sampler, obstacles)) {
+        NF_LOG_ERROR(LogCategory::Core,
+                     "Runtime: navigation bake failed for the volume at ({}, {}, {}) "
+                     "with extents ({}, {}, {}) — check the area, the cell size and the floor",
+                     origin.x, origin.y, origin.z, spec->area_x, spec->area_y, spec->area_z);
+        return;
+    }
+    // Bumped only on success, and before the agents bind, so a freshly bound
+    // agent's path is stamped with the bake it was planned against.
+    ++m_nav_generation;
+    m_navmesh = std::move(mesh);
+    m_nav_obstacle_count = obstacles.size();
+
+    for (auto e : world.query<NavAgentComponent>()) {
+        const auto* comp = world.get<NavAgentComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (comp == nullptr || t == nullptr || !comp->enabled) {
+            continue;
+        }
+        NavAgentState state;
+        state.goal = Vec3{comp->goal_x, comp->goal_y, comp->goal_z};
+        state.mesh_generation = m_nav_generation;
+        m_nav_agents.emplace(e, std::move(state));
+    }
+
+    NF_LOG_INFO(LogCategory::Core,
+                "Runtime: navigation baked {} polygons / {} regions from {} obstacles "
+                "({} agents bound)",
+                m_navmesh->polygon_count(), m_navmesh->region_count(), obstacles.size(),
+                m_nav_agents.size());
+}
+
+u32 Runtime::step_navmesh(float dt) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene || m_navmesh == nullptr ||
+        !m_navmesh->built()) {
+        return 0;
+    }
+    // The edit-mode freeze: a viewport that is not playing shows a posed crowd,
+    // never a self-walking one. update() already returns early on dt <= 0, so
+    // this guard is for a direct caller.
+    if (!(dt > 0.0f)) {
+        return 0;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    // Re-path tolerance: how far off its corridor an agent may sit before its
+    // path is replanned from where it now stands. A cell, so a waypoint the
+    // agent is still walking towards never reads as "dragged away".
+    const f32 repath_tolerance = std::max(m_navmesh->cell_size(), 0.05f);
+
+    u32 moved = 0;
+    for (auto e : world.query<NavAgentComponent>()) {
+        auto* comp = world.get<NavAgentComponent>(e);
+        auto* t = world.get<scene::Transform>(e);
+        if (comp == nullptr || t == nullptr || !comp->enabled) {
+            continue;
+        }
+        auto it = m_nav_agents.find(e);
+        if (it == m_nav_agents.end()) {
+            continue; // bound at bake time; an agent added later re-bakes
+        }
+        NavAgentState& st = it->second;
+        const Vec3 start{t->local_x, t->local_y, t->local_z};
+        const Vec3 goal{comp->goal_x, comp->goal_y, comp->goal_z};
+
+        bool repath = !st.has_path || st.path.size() < 2 ||
+                      !st.goal.nearly_equals(goal, 1e-4f) ||
+                      st.mesh_generation != m_nav_generation;
+        if (!repath) {
+            // Off the corridor? Then the agent was moved by something other
+            // than this step (an editor drag, a script teleport), and the old
+            // path starts somewhere the agent is not.
+            const Vec3 a = st.path[st.waypoint > 0 ? st.waypoint - 1 : 0];
+            const Vec3 b = st.path[std::min(st.waypoint, st.path.size() - 1)];
+            if (xz_distance_to_segment(start, a, b) > repath_tolerance) {
+                repath = true;
+            }
+        }
+        if (repath) {
+            st.at_goal = false;
+            std::vector<Vec3> path;
+            if (m_navmesh->find_path(start, goal, path) && path.size() >= 2) {
+                st.path = std::move(path);
+                st.waypoint = 1; // waypoint 0 is where the agent already stands
+                st.goal = goal;
+                st.has_path = true;
+                st.mesh_generation = m_nav_generation;
+            } else {
+                // Off the mesh or unreachable: hold position and keep the goal,
+                // so walking back onto the volume resumes without a re-bake.
+                st.path.clear();
+                st.has_path = false;
+                st.goal = goal;
+                continue;
+            }
+        }
+        if (st.at_goal) {
+            continue;
+        }
+
+        const Vec3 target = st.path[st.waypoint];
+        const Vec3 delta = target - start;
+        const f32 dist = delta.length();
+        const f32 step_len = comp->speed * dt;
+        if (dist <= std::max(step_len, comp->arrive_radius)) {
+            // Snap to the waypoint rather than stepping past it: overshooting
+            // would cut a corner the corridor was built to avoid.
+            t->local_x = target.x;
+            t->local_y = target.y;
+            t->local_z = target.z;
+            ++st.waypoint;
+            if (st.waypoint >= st.path.size()) {
+                st.at_goal = true;
+            }
+        } else if (step_len > 0.0f) {
+            const f32 inv = 1.0f / dist;
+            t->local_x = start.x + delta.x * inv * step_len;
+            t->local_y = start.y + delta.y * inv * step_len;
+            t->local_z = start.z + delta.z * inv * step_len;
+        } else {
+            continue; // speed 0 and not there yet: parked, not arrived
+        }
+        t->dirty = true;
+        ++moved;
+    }
+    return moved;
 }
 
 size_t Runtime::particles_alive() const {

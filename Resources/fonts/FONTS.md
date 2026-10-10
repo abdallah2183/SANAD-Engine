@@ -1,4 +1,4 @@
-Fonts vendored for the NOVAForge editor (Phase 15: Arabic RTL UI).
+Fonts vendored for the SANAD editor (Phase 15: Arabic RTL UI).
 
 Amiri-Regular.ttf
   Upstream: https://github.com/aliftype/amiri (Amiri typeface by AlifType)

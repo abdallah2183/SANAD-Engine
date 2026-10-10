@@ -29,7 +29,7 @@
 // ICON_ID is 1 on purpose: it is the first (and only) icon in the exe, and
 // LoadIcon(NULL, MAKEINTRESOURCE(1)) is the documented way to get "the
 // application icon" without a class or a name string.
-IDI_NOVAFORGE_ICON ICON DISCARDABLE "@NOVAForge_ICO@"
+IDI_NOVAFORGE_ICON ICON DISCARDABLE "@SANAD_ICO@"
 
 // FILEVERSION takes four 16-bit fields. CMake's version has three components
 // (major.minor.patch[.tweak]), so the fourth is 0; the pre-release tag has no
@@ -59,15 +59,15 @@ BEGIN
         // build; Explorer renders the tooltip as-is otherwise.
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName",      "NOVAForge"
-            VALUE "FileDescription",  "NOVAForge Engine - Editor"
+            VALUE "CompanyName",      "SANAD"
+            VALUE "FileDescription",  "SANAD Engine - Editor"
             VALUE "FileVersion",      NF_STRVER
-            VALUE "InternalName",     "NOVAForgeEditor"
+            VALUE "InternalName",     "SANADEditor"
             // OriginalFilename is what Windows reports if a user drags the exe
             // into a support ticket. It names the file, not the product, so the
             // beta suffix stays out of it.
-            VALUE "OriginalFilename", "NOVAForgeEditor.exe"
-            VALUE "ProductName",      "NOVAForge Engine"
+            VALUE "OriginalFilename", "SANADEditor.exe"
+            VALUE "ProductName",      "SANAD Engine"
             VALUE "ProductVersion",   NF_STRVER
             // No LegalCopyright: there is no licence text to point at yet, and
             // an empty or invented one is worse than none.

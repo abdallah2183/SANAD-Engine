@@ -1,5 +1,5 @@
 # NFCompilerFlags.cmake
-# Compiler flags for NOVAForge Engine — strict warnings, fast code, no junk.
+# Compiler flags for SANAD Engine — strict warnings, fast code, no junk.
 
 set(NF_WARNING_FLAGS_MSVC
     /W4        # High warning level

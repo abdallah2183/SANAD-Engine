@@ -236,6 +236,28 @@ struct InspectorCache {
     float char_friction = 0.8f;
     float char_wish[3]{};
     bool char_jump = false;
+    // Navigation (Phase 28). The volume is placement plus bake tuning — its
+    // Transform origin is the area corner, so no position is mirrored here. The
+    // agent is config plus the authored goal; the live path is runtime state
+    // and deliberately has no widget at all.
+    bool navm_has = false;
+    float navm_area[3]{20.0f, 8.0f, 20.0f};
+    float navm_cell = 0.5f;
+    float navm_cell_height = 0.25f;
+    float navm_slope = 45.0f;
+    float navm_climb = 0.5f;
+    float navm_headroom = 2.0f;
+    float navm_min_area = 2.0f;
+    float navm_radius = 0.0f;
+    float navm_jump_distance = 4.0f;
+    float navm_jump_height = 1.5f;
+    int navm_max_verts = 6;
+    bool navm_enabled = true;
+    bool nava_has = false;
+    float nava_speed = 4.0f;
+    float nava_goal[3]{};
+    float nava_arrive = 0.25f;
+    bool nava_enabled = true;
     std::string error;
 };
 
@@ -910,7 +932,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     // user's arrangement away on every launch. A scripted run has no ini and
     // therefore always gets the deterministic default.
     {
-        const ImGuiID dockspace_id = ImGui::GetID("NOVAForgeDockSpace");
+        const ImGuiID dockspace_id = ImGui::GetID("SANADDockSpace");
         ImGui::DockSpaceOverViewport(dockspace_id, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         static bool dock_layout_built = false;
         // ImGui loads the ini during the first NewFrame, so by now a restored
@@ -1894,6 +1916,36 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.char_has = false;
                 }
+                if (const auto* navm_comp = w->get<runtime::NavMeshComponent>(sel)) {
+                    ic.navm_has = true;
+                    ic.navm_area[0] = navm_comp->area_x;
+                    ic.navm_area[1] = navm_comp->area_y;
+                    ic.navm_area[2] = navm_comp->area_z;
+                    ic.navm_cell = navm_comp->cell_size;
+                    ic.navm_cell_height = navm_comp->cell_height;
+                    ic.navm_slope = navm_comp->walkable_slope_deg;
+                    ic.navm_climb = navm_comp->walkable_climb;
+                    ic.navm_headroom = navm_comp->walkable_height;
+                    ic.navm_min_area = navm_comp->min_region_area;
+                    ic.navm_radius = navm_comp->agent_radius;
+                    ic.navm_jump_distance = navm_comp->jump_distance;
+                    ic.navm_jump_height = navm_comp->jump_height;
+                    ic.navm_max_verts = static_cast<int>(navm_comp->max_verts_per_poly);
+                    ic.navm_enabled = navm_comp->enabled;
+                } else {
+                    ic.navm_has = false;
+                }
+                if (const auto* nava_comp = w->get<runtime::NavAgentComponent>(sel)) {
+                    ic.nava_has = true;
+                    ic.nava_speed = nava_comp->speed;
+                    ic.nava_goal[0] = nava_comp->goal_x;
+                    ic.nava_goal[1] = nava_comp->goal_y;
+                    ic.nava_goal[2] = nava_comp->goal_z;
+                    ic.nava_arrive = nava_comp->arrive_radius;
+                    ic.nava_enabled = nava_comp->enabled;
+                } else {
+                    ic.nava_has = false;
+                }
             }
             if (!ic.error.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "%s: %s", AV("error").c_str(),
@@ -1944,6 +1996,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<physics::CharacterComponent>(sel) &&
                            ImGui::MenuItem(AV("character").c_str())) {
                     added = app.attach_character(sel, add_err);
+                } else if (!w->has<runtime::NavMeshComponent>(sel) &&
+                           ImGui::MenuItem(AV("navmesh").c_str())) {
+                    added = app.attach_navmesh(sel, add_err);
+                } else if (!w->has<runtime::NavAgentComponent>(sel) &&
+                           ImGui::MenuItem(AV("nav_agent").c_str())) {
+                    added = app.attach_nav_agent(sel, add_err);
                 }
                 if (added) {
                     ic.error.clear();
@@ -3243,6 +3301,137 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                             push_error(app.console(), "Drive character failed", err);
                         } else {
                             ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Navigation volume (Phase 28) ---
+            //
+            // Placement is the entity Transform, so the section edits the bake
+            // only. The empty state offers Attach like every other section;
+            // the mesh itself is baked by the Runtime when the scene is
+            // adopted, which is why there is no "rebuild" button — saving and
+            // re-opening (or pressing Play) is the rebuild.
+            if (ImGui::CollapsingHeader((AV("navmesh") + "###NavMesh").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.navm_has) {
+                    ImGui::TextDisabled("%s", AV("no_navmesh").c_str());
+                    if (ImGui::Button((AV("attach") + "##navmesh").c_str())) {
+                        std::string err;
+                        if (!app.attach_navmesh(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach navmesh failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##navm_enabled").c_str(), &ic.navm_enabled);
+                    ImGui::DragFloat3(AV("nav_area").c_str(), ic.navm_area, 0.1f, 0.01f, 100000.0f);
+                    ImGui::DragFloat(AV("cell_size").c_str(), &ic.navm_cell, 0.01f, 0.01f, 100.0f);
+                    ImGui::DragFloat(AV("cell_height").c_str(), &ic.navm_cell_height, 0.01f, 0.01f,
+                                     100.0f);
+                    ImGui::DragFloat(AV("slope").c_str(), &ic.navm_slope, 0.5f, 0.0f, 90.0f);
+                    ImGui::DragFloat(AV("climb").c_str(), &ic.navm_climb, 0.05f, 0.0f, 100.0f);
+                    ImGui::DragFloat(AV("headroom").c_str(), &ic.navm_headroom, 0.05f, 0.01f,
+                                     1000.0f);
+                    ImGui::DragFloat(AV("min_area").c_str(), &ic.navm_min_area, 0.1f, 0.0f,
+                                     1000000.0f);
+                    ImGui::DragFloat(AV("agent_radius").c_str(), &ic.navm_radius, 0.05f, 0.0f,
+                                     100.0f);
+                    ImGui::DragFloat(AV("jump_distance").c_str(), &ic.navm_jump_distance, 0.1f,
+                                     0.0f, 1000.0f);
+                    ImGui::DragFloat(AV("jump_height").c_str(), &ic.navm_jump_height, 0.1f, 0.0f,
+                                     1000.0f);
+                    ImGui::DragInt(AV("max_verts").c_str(), &ic.navm_max_verts, 1.0f, 3, 64);
+                    if (ImGui::Button((AV("apply") + "##navmesh").c_str())) {
+                        runtime::NavMeshComponent edited;
+                        edited.area_x = ic.navm_area[0];
+                        edited.area_y = ic.navm_area[1];
+                        edited.area_z = ic.navm_area[2];
+                        edited.cell_size = ic.navm_cell;
+                        edited.cell_height = ic.navm_cell_height;
+                        edited.walkable_slope_deg = ic.navm_slope;
+                        edited.walkable_climb = ic.navm_climb;
+                        edited.walkable_height = ic.navm_headroom;
+                        edited.min_region_area = ic.navm_min_area;
+                        edited.agent_radius = ic.navm_radius;
+                        edited.jump_distance = ic.navm_jump_distance;
+                        edited.jump_height = ic.navm_jump_height;
+                        edited.max_verts_per_poly = static_cast<u32>(ic.navm_max_verts);
+                        edited.enabled = ic.navm_enabled;
+                        std::string err;
+                        if (!app.set_navmesh(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Navmesh edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##navmesh").c_str())) {
+                        std::string err;
+                        if (!app.detach_navmesh(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach navmesh failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Navigation agent (Phase 28) ---
+            //
+            // Config plus the authored goal only. The live path is runtime
+            // state: no widget shows it because none should edit it, and the
+            // goal is the one field an author needs to move the walker.
+            if (ImGui::CollapsingHeader((AV("nav_agent") + "###NavAgent").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.nava_has) {
+                    ImGui::TextDisabled("%s", AV("no_nav_agent").c_str());
+                    if (ImGui::Button((AV("attach") + "##nav_agent").c_str())) {
+                        std::string err;
+                        if (!app.attach_nav_agent(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach nav agent failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##nava_enabled").c_str(), &ic.nava_enabled);
+                    ImGui::DragFloat(AV("speed").c_str(), &ic.nava_speed, 0.1f, 0.0f, 1000.0f);
+                    ImGui::DragFloat3(AV("goal").c_str(), ic.nava_goal, 0.1f);
+                    ImGui::DragFloat(AV("arrive_radius").c_str(), &ic.nava_arrive, 0.01f, 0.001f,
+                                     100.0f);
+                    if (ImGui::Button((AV("apply") + "##nav_agent").c_str())) {
+                        runtime::NavAgentComponent edited;
+                        edited.speed = ic.nava_speed;
+                        edited.goal_x = ic.nava_goal[0];
+                        edited.goal_y = ic.nava_goal[1];
+                        edited.goal_z = ic.nava_goal[2];
+                        edited.arrive_radius = ic.nava_arrive;
+                        edited.enabled = ic.nava_enabled;
+                        std::string err;
+                        if (!app.set_nav_agent(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Nav agent edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##nav_agent").c_str())) {
+                        std::string err;
+                        if (!app.detach_nav_agent(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach nav agent failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
                         }
                     }
                 }

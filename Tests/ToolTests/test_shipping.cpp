@@ -474,7 +474,7 @@ NF_TEST(packaged_player_writes_crash_artifacts_inside_its_own_folder) {
     // The readable twin: same stem, and the fields a triager needs.
     NF_CHECK_EQ(reports.front().stem().string(), dumps.front().stem().string());
     const std::string text = read_text(reports.front());
-    NF_CHECK(contains(text, "NOVAForge crash report"));
+    NF_CHECK(contains(text, "SANAD crash report"));
     NF_CHECK(contains(text, "exception:  0xE0000046"));
     NF_CHECK(contains(text, "version:    NFPlayer 0.1"));
     NF_CHECK(contains(text, dumps.front().filename().string()));

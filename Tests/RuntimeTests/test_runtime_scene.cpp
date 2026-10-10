@@ -196,7 +196,7 @@ NF_TEST(scene_light_shadow_round_trip) {
 
     // Old files without the key keep working: shadows default to on.
     NF_CHECK(vfs.write_text("content://Scenes/legacy.nfscene",
-                            "# NOVAForge Scene v1\nversion: 1\nname: Legacy\n"
+                            "# SANAD Scene v1\nversion: 1\nname: Legacy\n"
                             "entity_count: 1\n"
                             "---\n"
                             "entity: 0:0\n"
@@ -251,7 +251,7 @@ NF_TEST(scene_missing_asset_behavior) {
     vfs.mount("content://", tmp);
 
     // Create a scene file manually with a Mesh asset_id that doesn't exist in registry
-    std::string scene_content = "# NOVAForge Scene v1\nversion: 1\nname: MissingAssetTest\nentity_count: 1\n---\nentity: 1:0\n  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)\n  Mesh: asset_id=00000000-0000-0000-0000-000000000000 material=content://Materials/Default\n";
+    std::string scene_content = "# SANAD Scene v1\nversion: 1\nname: MissingAssetTest\nentity_count: 1\n---\nentity: 1:0\n  Transform: local(0,0,0) world(0,0,0) parent(4294967295:0)\n  Mesh: asset_id=00000000-0000-0000-0000-000000000000 material=content://Materials/Default\n";
     vfs.write_text("content://Scenes/missing.nfscene", scene_content);
 
     auto result = load_scene_from_vfs(vfs, "content://Scenes/missing.nfscene");
@@ -298,7 +298,7 @@ NF_TEST(scene_cyclic_hierarchy_rejection) {
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     // Manually craft a scene file with a cycle: entity 1 parent 2, entity 2 parent 1
-    std::string cycle_content = "# NOVAForge Scene v1\nversion: 1\nname: Cycle\nentity_count: 2\n---\nentity: 1:0\n  Transform: local(0,0,0) world(0,0,0) parent(2:0)\n---\nentity: 2:0\n  Transform: local(0,0,0) world(0,0,0) parent(1:0)\n";
+    std::string cycle_content = "# SANAD Scene v1\nversion: 1\nname: Cycle\nentity_count: 2\n---\nentity: 1:0\n  Transform: local(0,0,0) world(0,0,0) parent(2:0)\n---\nentity: 2:0\n  Transform: local(0,0,0) world(0,0,0) parent(1:0)\n";
     vfs.write_text("content://Scenes/cycle.nfscene", cycle_content);
     auto result = load_scene_from_vfs(vfs, "content://Scenes/cycle.nfscene");
     NF_CHECK(!result.success);
@@ -312,7 +312,7 @@ NF_TEST(scene_version_rejection) {
     auto tmp = std::filesystem::temp_directory_path() / "nf_scene_version";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
-    vfs.write_text("content://Scenes/old.nfscene", "# NOVAForge Scene v1\nversion: 999\nname: Old\nentity_count: 0\n");
+    vfs.write_text("content://Scenes/old.nfscene", "# SANAD Scene v1\nversion: 999\nname: Old\nentity_count: 0\n");
     auto result = load_scene_from_vfs(vfs, "content://Scenes/old.nfscene");
     NF_CHECK(!result.success);
     NF_CHECK(result.error.find("Unsupported scene version") != std::string::npos);

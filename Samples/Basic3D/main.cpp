@@ -58,7 +58,7 @@ SampleConfig parse_args(int argc, char** argv) {
         std::string_view a = argv[i];
         if (a == "--help") {
             c.help = true;
-            std::cout << "NOVAForge Basic3D (GBuffer + CSM + local shadows)\n"
+            std::cout << "SANAD Basic3D (GBuffer + CSM + local shadows)\n"
                          "  --frames N          Render N frames then exit (0 = until closed)\n"
                          "  --validation        Request Vulkan validation layers\n"
                          "  --heightmap <path>  PGM heightmap instead of procedural noise\n"
@@ -99,7 +99,7 @@ int run(const SampleConfig& cfg) {
     auto sdir = shader_dir();
     if (sdir.empty()) { NF_LOG_FATAL(LogCategory::Core, "Basic3D: shader dir not found"); return -1; }
 
-    WindowDesc wdesc{}; wdesc.width=1280; wdesc.height=720; wdesc.title="NOVAForge — Basic3D (GBuffer + CSM + Local Shadows)"; wdesc.vsync=true;
+    WindowDesc wdesc{}; wdesc.width=1280; wdesc.height=720; wdesc.title="SANAD — Basic3D (GBuffer + CSM + Local Shadows)"; wdesc.vsync=true;
     Window window;
     if (!window.create(wdesc)) { NF_LOG_FATAL(LogCategory::Platform, "Failed to create window"); return -1; }
 

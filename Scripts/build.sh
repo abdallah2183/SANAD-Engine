@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scripts/build.sh — Configure + Build NOVAForge Engine
+# Scripts/build.sh — Configure + Build SANAD Engine
 # Sets up the MSVC environment for cl.exe, rc.exe, mt.exe, then configures and builds.
 #
 # Usage:

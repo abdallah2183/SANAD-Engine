@@ -87,7 +87,7 @@ NF_TEST(material_asset_roundtrip) {
     // Tolerant: unknown keys ignored, missing keys keep defaults.
     rendering::MaterialAsset c;
     NF_CHECK(rendering::MaterialAsset::load_from_text(
-        "# NOVAForge Material v1\nname: Sparse\nfuture_key: 42\nroughness: 0.5\n", c, err));
+        "# SANAD Material v1\nname: Sparse\nfuture_key: 42\nroughness: 0.5\n", c, err));
     NF_CHECK(c.name == "Sparse");
     NF_CHECK_NEAR(c.params.roughness, 0.5f, 1e-6f);
     NF_CHECK_NEAR(c.params.metallic, 0.0f, 1e-6f);
@@ -111,7 +111,7 @@ NF_TEST(material_asset_roundtrip) {
     NF_CHECK(t2.emissive == "content://Textures/Brick_e");
     rendering::MaterialAsset s;
     NF_CHECK(rendering::MaterialAsset::load_from_text(
-        "# NOVAForge Material v1\nname: S\n", s, err));
+        "# SANAD Material v1\nname: S\n", s, err));
     NF_CHECK(s.normal.empty() && s.mrough.empty() && s.occlusion.empty() && s.emissive.empty());
 
     // mip: key round-trips; silence keeps Linear; unknown values are ignored.
@@ -122,12 +122,12 @@ NF_TEST(material_asset_roundtrip) {
     NF_CHECK(m2.mip_mode == rhi::MipMapMode::None);
     rendering::MaterialAsset n;
     NF_CHECK(rendering::MaterialAsset::load_from_text(
-        "# NOVAForge Material v1\nname: N\nmip: nearest\n", n, err));
+        "# SANAD Material v1\nname: N\nmip: nearest\n", n, err));
     NF_CHECK(n.mip_mode == rhi::MipMapMode::Nearest);
     NF_CHECK(c.mip_mode == rhi::MipMapMode::Linear); // sparse text is silent
     rendering::MaterialAsset u;
     NF_CHECK(rendering::MaterialAsset::load_from_text(
-        "# NOVAForge Material v1\nname: U\nmip: bogus\n", u, err));
+        "# SANAD Material v1\nname: U\nmip: bogus\n", u, err));
     NF_CHECK(u.mip_mode == rhi::MipMapMode::Linear);
 }
 
@@ -224,7 +224,7 @@ NF_TEST(material_params_gpu_effect) {
     std::string err;
     NF_CHECK(reg.add(meta, err));
     NF_CHECK(vfs.write_text("content://Materials/Default.nfmat",
-                            "# NOVAForge Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\n"
+                            "# SANAD Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\n")
                  .ok);
@@ -386,7 +386,7 @@ NF_TEST(material_albedo_gpu_effect) {
     const auto bmp = make_bmp_solid(4, 4, 255, 0, 0);
     NF_CHECK(vfs.write_bytes("content://Textures/red.bmp", std::span<const uint8_t>(bmp)).ok);
     NF_CHECK(vfs.write_text("content://Materials/Default.nfmat",
-                            "# NOVAForge Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\n"
+                            "# SANAD Material v1\nname: Default\nbase_color: 0.8 0.8 0.8 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\nalbedo: content://Textures/red.bmp\n")
                  .ok);
@@ -521,7 +521,7 @@ NF_TEST(material_mip_mode_save_reload) {
     vfs.mount("content://", tmp / "Content");
     vfs.mount("cache://", tmp / "Cache");
     NF_CHECK(vfs.write_text("content://Materials/M.nfmat",
-                            "# NOVAForge Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
+                            "# SANAD Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\n")
                  .ok);
@@ -547,7 +547,7 @@ NF_TEST(material_mip_mode_save_reload) {
     // the mip key is then adopted by hot reload (no unsaved edits to protect).
     NF_CHECK(runtime.save_material("content://Materials/M", "content://Materials/M.nfmat", err));
     NF_CHECK(vfs.write_text("content://Materials/M.nfmat",
-                            "# NOVAForge Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
+                            "# SANAD Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\nmip: none\n")
                  .ok);
@@ -578,7 +578,7 @@ NF_TEST(material_mip_mode_command_undo) {
     vfs.mount("content://", tmp / "Content");
     vfs.mount("cache://", tmp / "Cache");
     NF_CHECK(vfs.write_text("content://Materials/M.nfmat",
-                            "# NOVAForge Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
+                            "# SANAD Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\n")
                  .ok);
@@ -634,7 +634,7 @@ NF_TEST(material_live_preview_commit_undo) {
     vfs.mount("content://", tmp / "Content");
     vfs.mount("cache://", tmp / "Cache");
     NF_CHECK(vfs.write_text("content://Materials/M.nfmat",
-                            "# NOVAForge Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
+                            "# SANAD Material v1\nname: M\nbase_color: 0.8 0.8 0.8 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\n")
                  .ok);
@@ -717,7 +717,7 @@ NF_TEST(material_descriptor_set_is_cached) {
     // A real material file, so no gray fallback instance is created and the
     // expected set count is unambiguous.
     NF_CHECK(vfs.write_text("content://Materials/Shared.nfmat",
-                            "# NOVAForge Material v1\nname: Shared\n"
+                            "# SANAD Material v1\nname: Shared\n"
                             "base_color: 0.8 0.2 0.2 1\nmetallic: 0\nroughness: 0.4\n"
                             "ao: 1\nemission: 0 0 0\nemission_strength: 0\n")
                  .ok);
@@ -845,7 +845,7 @@ NF_TEST(render_memory_rows_follow_vulkan_top_left_origin) {
     std::string err;
     NF_CHECK(reg.add(meta, err));
     NF_CHECK(vfs.write_text("content://Materials/Red.nfmat",
-                            "# NOVAForge Material v1\nname: Red\nbase_color: 0.9 0.1 0.1 1\n"
+                            "# SANAD Material v1\nname: Red\nbase_color: 0.9 0.1 0.1 1\n"
                             "metallic: 0\nroughness: 0.4\nao: 1\nemission: 0 0 0\n"
                             "emission_strength: 0\n")
                  .ok);

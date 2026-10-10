@@ -4,7 +4,7 @@
 # Pinned: v5.6.0 (sparse checkout of Jolt/ + Jolt.cmake only; samples, unit
 # tests, assets and docs are NOT vendored).
 #
-# NOVAForge usage: the upstream-maintained `Jolt` target below feeds
+# SANAD usage: the upstream-maintained `Jolt` target below feeds
 # NFPhysics' JoltWorld wrapper (Engine/Physics). The engine's default solver
 # stays first-party; Jolt is the advanced backend for complex meshes/vehicles.
 #

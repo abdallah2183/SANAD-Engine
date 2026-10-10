@@ -30,7 +30,7 @@ using namespace nf::project;
 namespace {
 
 void print_help() {
-    std::cout << "NFAssetCooker — NOVAForge Asset Cooker\n"
+    std::cout << "NFAssetCooker — SANAD Asset Cooker\n"
               << "Usage:\n"
               << "  NFAssetCooker --input <logical> --output <logical> --registry <logical>\n"
               << "  NFAssetCooker --all --registry <logical> [--content <logical>] [--cache <logical>]\n"

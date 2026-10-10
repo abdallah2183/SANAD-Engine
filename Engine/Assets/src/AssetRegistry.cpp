@@ -91,7 +91,7 @@ bool AssetRegistry::save_to_physical(const std::filesystem::path& physical_path,
         return false;
     }
 
-    out << "# NOVAForge Asset Registry\n";
+    out << "# SANAD Asset Registry\n";
     out << "version: " << m_version << "\n";
     out << "count: " << m_entries.size() << "\n";
     for (auto& [id, meta] : m_entries) {
@@ -135,7 +135,7 @@ bool AssetRegistry::load_from_physical(const std::filesystem::path& physical_pat
 
     std::string line;
     // Header
-    if (!std::getline(in, line) || line.rfind("# NOVAForge Asset Registry",0) != 0) {
+    if (!std::getline(in, line) || line.rfind("# SANAD Asset Registry",0) != 0) {
         out_error = "Invalid registry header";
         return false;
     }

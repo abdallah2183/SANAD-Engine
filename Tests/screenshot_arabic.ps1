@@ -1,7 +1,7 @@
 # Tests/screenshot_arabic.ps1 — visual proof for the Arabic-shell work.
 #
 # Drives the REAL binaries (no mocks): seeds settings.json, launches
-# NOVAForgeEditor (launcher shell), clicks nav/radio rows computed from the
+# SANADEditor (launcher shell), clicks nav/radio rows computed from the
 # same layout math as ProjectLauncher.cpp, captures with PrintWindow, then
 # relaunches to prove persistence, resizes, and finally captures the ImGui
 # editor in Arabic (via --frames automation + --arabic / saved language).
@@ -13,7 +13,7 @@
 
 param(
     [string]$OutDir = (Join-Path (Get-Location) 'shots'),
-    [string]$Exe = (Join-Path (Get-Location) 'build/DebugNinja/bin/NOVAForgeEditor.exe'),
+    [string]$Exe = (Join-Path (Get-Location) 'build/DebugNinja/bin/SANADEditor.exe'),
     [switch]$LauncherOnly,
     [switch]$EditorOnly
 )
@@ -56,7 +56,7 @@ function Find-LauncherWindow {
     $cb = {
         param($h, $x)
         [Win32]::GetClassName($h, $sb, 256) | Out-Null
-        if ($sb.ToString() -eq 'NOVAForgeProjectLauncher') { $found += $h }
+        if ($sb.ToString() -eq 'SANADProjectLauncher') { $found += $h }
         return $true
     }.GetNewClosure()
     [Win32]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
@@ -179,7 +179,7 @@ function Invoke-Chord($mod, $key) {
     Start-Sleep -Milliseconds 200
 }
 
-$settingsDir = Join-Path $env:APPDATA 'NOVAForge'
+$settingsDir = Join-Path $env:APPDATA 'SANAD'
 $settingsFile = Join-Path $settingsDir 'settings.json'
 
 function Set-Settings($lang, $maxed) {
@@ -192,7 +192,7 @@ if (-not (Test-Path -LiteralPath $Exe)) { throw "missing exe: $Exe" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 # A stale instance (e.g. the user's live window) would sit on top and swallow
 # every synthetic click while captures show the fresh window — clean slate.
-Get-Process -Name 'NOVAForgeEditor' -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name 'SANADEditor' -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 1
 $s = Get-DpiScale
 Write-Host ("dpi scale: " + $s)
@@ -296,7 +296,7 @@ try {
     # Nine TEMP .nfproj files (the loader prunes missing paths, so fakes must
     # exist) at minimum size: grid drops to 2 columns and the clipped rows
     # announce themselves. Self contained: files + real list restored after.
-    $recentFile = Join-Path $env:LOCALAPPDATA 'NOVAForge/recent_projects.txt'
+    $recentFile = Join-Path $env:LOCALAPPDATA 'SANAD/recent_projects.txt'
     $fakeBak = $recentFile + '.fakebak'
     $fakeDir = Join-Path $env:TEMP 'nf_fakes'
     $hadFake = Test-Path -LiteralPath $recentFile
@@ -358,7 +358,7 @@ finally {
 # --- 5b. Empty library CTA (no recents at all) ----------------------------------
 # Back up the real recent list, launch with none, prove the empty-state CTA
 # (not the no-match line), then restore. try/finally: the backup MUST return.
-$recentFile = Join-Path $env:LOCALAPPDATA 'NOVAForge/recent_projects.txt'
+$recentFile = Join-Path $env:LOCALAPPDATA 'SANAD/recent_projects.txt'
 $recentBak = $recentFile + '.shotbak'
 $hadRecent = Test-Path -LiteralPath $recentFile
 if ($hadRecent) {
@@ -429,7 +429,7 @@ finally {
 }
 
 # --- 7. No strays left behind (task requirement) ---------------------------------
-Get-Process -Name 'NOVAForgeEditor' -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name 'SANADEditor' -ErrorAction SilentlyContinue | Stop-Process -Force
 } # end editor block (skipped with -LauncherOnly)
 Write-Host 'done. shots:'
 Get-ChildItem -LiteralPath $OutDir -Filter '*.png' | ForEach-Object { Write-Host ('  ' + $_.Name) }

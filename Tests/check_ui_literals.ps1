@@ -15,7 +15,7 @@
 # - SI unit symbols (ms/us) are language-neutral and stripped as well.
 #
 # Allowlist (each entry is a deliberate decision, see the test files):
-# - NOVAForge ............ product brand (never translated)
+# - SANAD ............ product brand (never translated)
 # - content:// ........... technical URI prefix (paths, not wording)
 # - Ctrl+/Del ............ physical keyboard shortcuts (printed on the keys)
 # - viewport lit=, Frame %, GPU %, Render CPU, Memory:, session events,
@@ -41,7 +41,7 @@ $imguiId = '##[^\s"]*'
 $unitWord = '\b(ms|us)\b'
 
 $allowLine = @(
-    'NOVAForge',
+    'SANAD',
     'content://',
     'Ctrl\+',
     '"Del"',

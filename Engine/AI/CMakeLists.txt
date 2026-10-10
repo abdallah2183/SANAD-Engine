@@ -1,5 +1,6 @@
-# NFAI — game AI: grid pathfinding, behavior trees, perception, blackboard,
-# and the world-scale simulation budget that decides which actor runs which.
+# NFAI — game AI: grid and voxel navigation, behavior trees, perception,
+# blackboard, and the world-scale simulation budget that decides which actor
+# runs which.
 #
 # CPU-only and deterministic (fixed neighbor order, sequenced heap
 # tie-breaks, fixed sense evaluation order, no RNG): AI decisions replay
@@ -7,6 +8,7 @@
 
 set(NFAI_SOURCES
     src/NavGrid.cpp
+    src/NavMesh.cpp
     src/BehaviorTree.cpp
     src/Perception.cpp
     src/StateMachine.cpp

@@ -140,7 +140,7 @@ NF_TEST(particles_line_rejects_invalid_values) {
     vfs.mount("content://", tmp);
 
     const std::string text =
-        "# NOVAForge Scene v1\n"
+        "# SANAD Scene v1\n"
         "version: 1\n"
         "name: Bad\n"
         "entity_count: 1\n"

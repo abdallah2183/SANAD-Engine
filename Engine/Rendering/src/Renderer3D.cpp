@@ -2202,6 +2202,18 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     RGPassDesc transparency_pass{};
     transparency_pass.name = "Transparency";
     transparency_pass.reads = {rg_shadow, rg_local_shadow};
+    // The blurred SSAO joins the read set for the same reason it joins the
+    // lighting pass's: the forward shader samples it (binding 14) to occlude
+    // the ambient of the surface it is drawing. Without the edge the graph was
+    // free to schedule this pass BEFORE the SSAO pair, and the forward pass
+    // then read a texture that had not been written this frame — a transparent
+    // surface lit by last frame's occlusion (or by the white initial content,
+    // which is what the forward/deferred agreement test measured). The graph
+    // orders this pass after the blur from this edge, and the barrier lands on
+    // it for the same reason.
+    if (ssao_on) {
+        transparency_pass.reads.push_back(m_ssao_blur_handle);
+    }
     transparency_pass.color_attachments = {m_hdr_handle};
     transparency_pass.depth_attachment = m_depth_handle;
     transparency_pass.execute = [&](rhi::CommandBuffer& gcmd) {

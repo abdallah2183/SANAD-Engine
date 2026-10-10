@@ -255,14 +255,14 @@ bool SaveSystem::build_payload(const std::string& slot, Payload& out, std::strin
     }
 
     std::ostringstream modules;
-    modules << "# NOVAForge Save Modules v1\n";
+    modules << "# SANAD Save Modules v1\n";
     modules << "schema_version: " << kSchemaVersion << "\n";
     modules << "module_count: " << module_count << "\n";
     modules << blocks.str();
     out.modules_text = modules.str();
 
     std::ostringstream meta;
-    meta << "# NOVAForge Save v1\n";
+    meta << "# SANAD Save v1\n";
     meta << "schema_version: " << kSchemaVersion << "\n";
     meta << "engine_version: " << engine_version() << "\n";
     meta << "scene: " << scene_ptr->name() << "\n";

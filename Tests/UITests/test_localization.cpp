@@ -71,7 +71,7 @@ bool same_in_both_languages(const std::string& key) {
            // latin_allowed_in_arabic, because the failure it prevents is a
            // hardcoded Latin literal in the launcher's sidebar (which is what
            // shipped: the brand read "سند" while the window title, the .nfproj
-           // filter and the window class all said NOVAForge). Routing the brand
+           // filter and the window class all said SANAD). Routing the brand
            // through a key is what makes ONE string the product name; the value
            // is identical in both languages because a product name is not
            // translated.
@@ -105,7 +105,7 @@ bool latin_allowed_in_arabic(const std::string& key) {
         "rhi_objects",            // RHI is the renderer API's own name
         "frame_selection_hint",   // Home is a physical key
         "frame_all_hint",         // Shift+Home is a physical key chord
-        "err_font_missing_ar",    // Resources/fonts + NOVAForgeEditor.exe: the
+        "err_font_missing_ar",    // Resources/fonts + SANADEditor.exe: the
                                   // paths a user has to type, quoted verbatim
     };
     for (const char* k : kAllowed) {

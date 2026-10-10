@@ -395,7 +395,7 @@ std::string import_filter() {
 
 std::string scene_filter() {
     std::string f;
-    f += "NOVAForge Scene (*.nfscene)\0*.nfscene";
+    f += "SANAD Scene (*.nfscene)\0*.nfscene";
     f += '\0';
     f += "All files (*.*)\0*.*";
     f += '\0';
@@ -888,7 +888,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     if (ImGui::BeginViewportSideBar("##NFToolbar", ImGui::GetMainViewport(), ImGuiDir_Up, toolbar_h,
                                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings)) {
         if (ImGui::BeginMenuBar()) {
-            ImGui::TextDisabled("NOVAForge");
+            ImGui::TextDisabled("SANAD");
             ImGui::SameLine();
             ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
             ImGui::SameLine();

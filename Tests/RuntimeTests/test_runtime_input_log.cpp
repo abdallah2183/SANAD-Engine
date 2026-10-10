@@ -271,7 +271,7 @@ NF_TEST(replay_flag_distinguishes_an_empty_log_from_a_corrupt_one) {
             std::ofstream f(dir / "corrupt.nfinput", std::ios::binary);
             // Frames out of order: deserialize refuses the whole log rather than
             // replaying it at the wrong time.
-            f << "# NOVAForge InputLog v1\nframe_count: 2\n@0 a=1\n@5 b=2\n";
+            f << "# SANAD InputLog v1\nframe_count: 2\n@0 a=1\n@5 b=2\n";
         }
 
         InputLog loaded;
@@ -571,7 +571,7 @@ NF_TEST(a_reordered_input_log_is_refused_not_mis_timed) {
     // Built by hand rather than by mangling the good text, so the wrongness
     // under test is the ordering itself and not an accidental malformed line.
     std::string bad;
-    bad += "# NOVAForge InputLog v1\n";
+    bad += "# SANAD InputLog v1\n";
     bad += "frame_count: 2\n";
     bad += "@1 move_x=2\n";
     bad += "@0 move_x=1\n";
@@ -580,7 +580,7 @@ NF_TEST(a_reordered_input_log_is_refused_not_mis_timed) {
     // The same two frames in the right order load, so it is the ordering that
     // is being refused and not the contents.
     std::string good;
-    good += "# NOVAForge InputLog v1\n";
+    good += "# SANAD InputLog v1\n";
     good += "frame_count: 2\n";
     good += "@0 move_x=1\n";
     good += "@1 move_x=2\n";

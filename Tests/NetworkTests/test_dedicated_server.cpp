@@ -1,11 +1,11 @@
-// NetworkTests — the dedicated server (design §81: NOVAForgeServer builds and
+// NetworkTests — the dedicated server (design §81: SANADServer builds and
 // runs without Graphics, Editor or GPU resources).
 //
 // Two layers, both over real UDP:
 //   1. In-process: DedicatedServer in the test's own address space, with the
 //      test driving pump/tick — deterministic, and the place to assert the
 //      provisioning/refusal/malformed-packet rules.
-//   2. The real binary: the test spawns the built NOVAForgeServer process and
+//   2. The real binary: the test spawns the built SANADServer process and
 //      a PredictedClient connects to it. That is the §81 deliverable itself —
 //      a headless server a client actually talks to — and the only place the
 //      tick-gate pacing (wait for inputs, then step) is exercised across a
@@ -253,7 +253,7 @@ NF_TEST(client_connects_to_the_headless_server_binary) {
     const std::string exe;
 #endif
     if (exe.empty() || !std::filesystem::exists(exe)) {
-        NF_SKIP("NOVAForgeServer binary not built for this configuration");
+        NF_SKIP("SANADServer binary not built for this configuration");
         return;
     }
 

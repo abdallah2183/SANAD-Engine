@@ -275,7 +275,7 @@ bool ProjectDescriptor::save_to_file(const std::filesystem::path& file,
         return false;
     }
 
-    out << "# NOVAForge Project\n";
+    out << "# SANAD Project\n";
     out << "version: " << kCurrentVersion << "\n";
     out << "name: " << m_name << "\n";
     out << "title: " << m_title << "\n";

@@ -284,7 +284,7 @@ Vec2 InputMapper::get_vector(std::string_view action) const {
 
 std::string InputMapper::to_string() const {
     std::string out;
-    out += "# NOVAForge input bindings\n";
+    out += "# SANAD input bindings\n";
     out += "v ";
     out += std::to_string(BindingsVersion);
     out += "\n";

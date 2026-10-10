@@ -1,6 +1,6 @@
 #pragma once
 
-// NF/Core/Types.hpp — Fundamental type definitions for NOVAForge Engine
+// NF/Core/Types.hpp — Fundamental type definitions for SANAD Engine
 
 #include <cstdint>
 #include <cstddef>

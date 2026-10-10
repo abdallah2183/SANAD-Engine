@@ -1,4 +1,4 @@
-# Media shot list — NOVAForge / محرك سَنَد
+# Media shot list — SANAD / محرك سَنَد
 
 Every media file the README references lives here. **Record each one, save it
 into this folder with the exact filename below, and the README picks it up
@@ -34,7 +34,7 @@ README): `shot_editor_en.png`, `shot_editor_ar.png`, `shot_vehicle.png`,
 
 ## Social preview image (repo card)
 
-GitHub shows `Docs/images/novaforge_logo.jpg` as the default social image.
+GitHub shows `Docs/images/sanad_logo.jpg` as the default social image.
 For a custom 1280×640 card, render the logo + one-line tagline on a dark
 background and save it as a PNG/JPG, then set it in **Settings → General →
 Social preview** (or commit an `og:image` the website already references).

@@ -11,10 +11,10 @@ cmake_minimum_required(VERSION 3.24)
 # 0.2.0: the transform-hierarchy upgrade (world rotation and scale now
 # propagate and reach the renderer), asset delete/rename, view framing, and
 # the Godot-style FileSystem dock.
-project(NOVAForge
+project(SANAD
     VERSION 0.2.0
     LANGUAGES C CXX
-    DESCRIPTION "NOVAForge Engine - High-performance cross-platform game engine"
+    DESCRIPTION "SANAD Engine - High-performance cross-platform game engine"
 )
 
 # project(VERSION) accepts NUMBERS only, so a pre-release tag cannot live there.

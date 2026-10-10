@@ -1,4 +1,4 @@
-// Samples/SimpleGame/main.cpp — Cube Collector: simple playable game using NOVAForge engine
+// Samples/SimpleGame/main.cpp — Cube Collector: simple playable game using SANAD engine
 // Uses: NFCore, NFPlatform (Window + InputSystem), NFRHI, NFRendering, NFEcs, NFScene
 // Controls: WASD / Arrows = move, R = restart after game over, ESC = quit
 // Goal: collect golden cubes, avoid the red enemy. 5 coins = next level (enemy faster).
@@ -71,7 +71,7 @@ int run() {
 
     WindowDesc wdesc{};
     wdesc.width = 1280; wdesc.height = 720;
-    wdesc.title = "NOVAForge — Cube Collector | WASD/Arrows move, collect gold, avoid red!";
+    wdesc.title = "SANAD — Cube Collector | WASD/Arrows move, collect gold, avoid red!";
     wdesc.vsync = true;
     Window window;
     if (!window.create(wdesc)) { NF_LOG_FATAL(LogCategory::Platform, "Failed to create window"); return -1; }
@@ -278,9 +278,9 @@ int run() {
             title_clock.reset();
             char buf[256];
             if (gs.game_over)
-                std::snprintf(buf, sizeof(buf), "NOVAForge — GAME OVER! Score=%d Level=%d | press R to restart, ESC to quit", gs.score, gs.level);
+                std::snprintf(buf, sizeof(buf), "SANAD — GAME OVER! Score=%d Level=%d | press R to restart, ESC to quit", gs.score, gs.level);
             else
-                std::snprintf(buf, sizeof(buf), "NOVAForge — Cube Collector | Score=%d Lives=%d Level=%d | WASD/Arrows move", gs.score, gs.lives, gs.level);
+                std::snprintf(buf, sizeof(buf), "SANAD — Cube Collector | Score=%d Lives=%d Level=%d | WASD/Arrows move", gs.score, gs.lives, gs.level);
             window.set_title(buf);
         }
 
