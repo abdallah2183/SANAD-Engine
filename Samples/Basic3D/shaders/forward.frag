@@ -108,6 +108,7 @@ void main() {
     // uv was what got sampled before, and a pane covering a quarter of the
     // screen then read the occlusion of whatever happened to sit at that
     // quarter of the texture: the pane was lit by a stranger's shadow.
-    // TEMP: read the env bake and the SSAO through the forward set and print them.
-    out_color = vec4(texture(env_map, vec2(0.5, 0.25)).rgb * 0.5 +
-                     vec3(texture(ssao_map, vec2(0.5, 0.5)).r, 0.0, 0.0), 1.0);}
+    float ssao = frame.ssao_params.x > 0.5 ? texture(ssao_map, in_screen_uv).r : 1.0;
+    vec3 lit = ambient * ssao + Lo + emissive;
+    out_color = vec4(apply_fog(in_world_pos, lit), matParams.baseColor.a);
+}

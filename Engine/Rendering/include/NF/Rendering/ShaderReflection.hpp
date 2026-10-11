@@ -11,7 +11,7 @@
 //
 //   Shader Reflection → Material Layout → Descriptor Layout
 //
-// This is a minimal parser that handles the shaders used in NOVAForge today
+// This is a minimal parser that handles the shaders used in SANAD today
 // (sampled images, samplers, uniform buffers, push constants, vertex inputs).
 // It is not a full SPIR-V parser, but it is correct for the instructions we
 // emit and it fails gracefully (empty result) on unknown constructs rather than

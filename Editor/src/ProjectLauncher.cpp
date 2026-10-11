@@ -747,9 +747,15 @@ void draw_list_item(const DRAWITEMSTRUCT* dis, const LauncherState* st) {
 
 namespace shell {
 
-// Engine version shown in the sidebar footer. Mirrors the root CMake project
-// version by hand; bump both together.
-constexpr const char* kEngineVersion = "0.1.0";
+// Engine version shown in the sidebar footer, project cards and hero line.
+// Derived from the root project(VERSION) via the NF_ENGINE_VERSION compile
+// definition — NOT a hand-maintained literal. (The previous literal here went
+// stale after any build that did not remember to edit it; the launcher kept
+// advertising an old version. The define is single-source and cannot drift.)
+#ifndef NF_ENGINE_VERSION
+#define NF_ENGINE_VERSION "0.0.0-dev"
+#endif
+constexpr const char* kEngineVersion = NF_ENGINE_VERSION;
 constexpr const char* kRendererName = "Vulkan";
 
 /// Locate Docs/images/<file> by walking up from the module directory (the
@@ -911,6 +917,13 @@ void paint_text(HDC dc, const wchar_t* s, int x, int y, int w, int h, HFONT font
         } else {
             fmt |= DT_RIGHT;
         }
+        // DT_RTLREADING tells DrawTextW the reading order is right-to-left, so
+        // the bidi engine lays out Arabic in logical order and shapes it. It
+        // does NOT mirror the glyphs — it just fixes the paragraph direction
+        // (and keeps punctuation at the correct end). Without it, an RTL
+        // line's Arabic can render with the presentation forms unshaped and
+        // the neutral punctuation drifting to the wrong end.
+        fmt |= DT_RTLREADING;
     }
     ::SetBkMode(dc, TRANSPARENT);
     ::SetTextColor(dc, color);
@@ -1664,16 +1677,23 @@ NewLayout layout_new(const LauncherState* st, int W) {
     const int gw = (cw - gap * (cols - 1)) / cols;
     const int gh = S(st, 150);
     const int gy = S(st, 108);
+    int rows = 1;
     for (int i = 0; i < 6; ++i) {
         const int c = i % cols, r = i / cols;
         L.cards[i] = {x + c * (gw + gap), gy + r * (gh + gap), x + c * (gw + gap) + gw,
                       gy + r * (gh + gap) + gh};
+        rows = std::max(rows, r + 1);
         // One transform for origin + column order (see grid_cell): a bare
         // column swap would keep the LTR origin and slide the row under the
         // RTL sidebar.
         mirror_rect(st, W, L.cards[i]);
     }
-    const int fy = gy + 2 * (gh + gap) + S(st, 44);
+    // The form sits BELOW the last card row, not below a fixed two rows: on a
+    // narrow window the grid reflows to 3+ rows and a hardcoded two-row offset
+    // dropped the name/location fields straight on top of the third row of
+    // cards. Deriving the offset from the actual row count keeps the fields
+    // under the grid at every width.
+    const int fy = gy + rows * (gh + gap) + S(st, 24);
     // On a narrow window the fixed label + Browse widths can push a field's
     // right edge past its left edge (negative width), and Win32 renders an
     // inverted rect as a full-width box that spills over its neighbours — the
@@ -2984,6 +3004,9 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
     if (!g_amiri_path.empty() &&
         ::AddFontResourceExW(g_amiri_path.c_str(), FR_PRIVATE, nullptr) != 0) {
         g_amiri_ok = true;
+    } else {
+        ::OutputDebugStringA("[SANAD] Amiri display font NOT loaded — Arabic "
+                             "headings fall back to Segoe UI\n");
     }
     create_state_fonts(&state);
     state.brush_bg = ::CreateSolidBrush(theme::bg);

@@ -284,6 +284,7 @@ Phases 1–27 complete (foundation → LOD → shadows/sky → audio/glTF → Lu
 - [x] Phases 24–25 — Scene scripting, particles/cloth/character integration
 - [x] Phase 27 — Post-processing stack
 - [x] SSAO · full PBR maps · sky-baked IBL
+- [x] Phase 28 — Navigation wired end to end (navmesh volume in scenes, walkers in the frame, editor authoring)
 
 </details>
 

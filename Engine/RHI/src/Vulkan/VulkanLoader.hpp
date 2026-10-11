@@ -2,7 +2,7 @@
 
 // NF/RHI/Vulkan/VulkanLoader.hpp — Dynamic Vulkan function loading.
 //
-// NOVAForge loads every Vulkan entry point at runtime instead of linking
+// SANAD loads every Vulkan entry point at runtime instead of linking
 // against vulkan-1.lib. Two reasons this matters:
 //
 //   1. Dedicated-server / headless builds (design doc §"Dedicated server

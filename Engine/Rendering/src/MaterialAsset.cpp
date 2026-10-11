@@ -38,8 +38,8 @@ bool MaterialAsset::load_from_text(const std::string& text, MaterialAsset& out, 
     MaterialAsset parsed;
     std::istringstream iss(text);
     std::string line;
-    if (!std::getline(iss, line) || trim_str(line).rfind("# NOVAForge Material", 0) != 0) {
-        out_err = "Not a .nfmat file (missing '# NOVAForge Material' header)";
+    if (!std::getline(iss, line) || trim_str(line).rfind("# SANAD Material", 0) != 0) {
+        out_err = "Not a .nfmat file (missing '# SANAD Material' header)";
         return false;
     }
     while (std::getline(iss, line)) {
@@ -120,7 +120,7 @@ bool MaterialAsset::load_from_text(const std::string& text, MaterialAsset& out, 
 
 std::string MaterialAsset::save_to_text() const {
     char buf[1024];
-    std::string out = "# NOVAForge Material v1\n";
+    std::string out = "# SANAD Material v1\n";
     out += "name: " + name + "\n";
     std::snprintf(buf, sizeof(buf), "base_color: %g %g %g %g\n", static_cast<double>(params.base_color[0]),
                   static_cast<double>(params.base_color[1]), static_cast<double>(params.base_color[2]),
