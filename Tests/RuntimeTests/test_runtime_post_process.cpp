@@ -87,6 +87,12 @@ NF_TEST(scene_post_process_round_trip) {
     pp.tonemap = 1; // ACES
     pp.lut_path = "content://LUTs/teal_orange.png";
     pp.lut_strength = 0.75f;
+    pp.fog_enabled = true;
+    pp.fog_r = 0.55f;
+    pp.fog_g = 0.65f;
+    pp.fog_b = 0.75f;
+    pp.fog_start = 14.0f;
+    pp.fog_end = 55.0f;
     w.add<PostProcessComponent>(e, pp);
 
     std::string err;
@@ -130,6 +136,12 @@ NF_TEST(scene_post_process_round_trip) {
         NF_CHECK(loaded->tonemap == 1);
         NF_CHECK(loaded->lut_path == "content://LUTs/teal_orange.png");
         NF_CHECK_NEAR(loaded->lut_strength, 0.75f, 1e-5f);
+        NF_CHECK(loaded->fog_enabled);
+        NF_CHECK_NEAR(loaded->fog_r, 0.55f, 1e-5f);
+        NF_CHECK_NEAR(loaded->fog_g, 0.65f, 1e-5f);
+        NF_CHECK_NEAR(loaded->fog_b, 0.75f, 1e-5f);
+        NF_CHECK_NEAR(loaded->fog_start, 14.0f, 1e-5f);
+        NF_CHECK_NEAR(loaded->fog_end, 55.0f, 1e-5f);
     }
 
     std::filesystem::remove_all(tmp);
@@ -244,7 +256,8 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
         " saturation=1.5 vignette=0.25 lens=true lens_distortion=0.3 lens_chroma=0.02"
         " dof=true dof_focus=18 dof_range=3.5 dof_radius=7"
         " motion=true motion_intensity=2.5 motion_length=0.07"
-        " exposure=2.25 tonemap=aces lut=content://LUTs/grade.png lut_strength=0.6\n";
+        " exposure=2.25 tonemap=aces lut=content://LUTs/grade.png lut_strength=0.6"
+        " fog=true fog_color(0.7,0.6,0.5) fog_start=12 fog_end=40\n";
     NF_CHECK(vfs.write_text("content://Scenes/Post.nfscene", text).ok);
 
     auto device = rhi::create_device();
@@ -331,6 +344,14 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
                 // which are the renderer's neutral values.
                 NF_CHECK_NEAR(seen.bloom.knee, 0.5f, 1e-5f);
                 NF_CHECK_NEAR(seen.grade.contrast, 1.0f, 1e-5f);
+                // Fog is not in PostFxParams (the lighting pass applies it), so
+                // it is read from the renderer's own state.
+                NF_CHECK(renderer->fog().enabled);
+                NF_CHECK_NEAR(renderer->fog().color.x, 0.7f, 1e-5f);
+                NF_CHECK_NEAR(renderer->fog().color.y, 0.6f, 1e-5f);
+                NF_CHECK_NEAR(renderer->fog().color.z, 0.5f, 1e-5f);
+                NF_CHECK_NEAR(renderer->fog().start, 12.0f, 1e-5f);
+                NF_CHECK_NEAR(renderer->fog().end, 40.0f, 1e-5f);
             }
 
             // A scene that says nothing about post-processing must not ERASE a
@@ -355,6 +376,78 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
         device->wait_idle();
         device->shutdown();
     }
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_fog_keeps_defaults_when_only_the_switch_is_written) {
+    // `fog=true` alone must be a complete line: the colour and band inherit the
+    // renderer's neutral defaults rather than becoming zeroes (which would be a
+    // black wall of haze with a division by zero in the ramp).
+    VirtualFileSystem vfs;
+    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_fog_min";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    NF_CHECK(vfs.write_text("content://Scenes/fog.nfscene",
+                            std::string(kSceneHeader) + "  PostProcess: fog=true\n")
+                 .ok);
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/fog.nfscene");
+    NF_CHECK(result.success);
+    const auto* pp =
+        result.scene->world().get<PostProcessComponent>(result.scene->world().all_entities()[0]);
+    NF_CHECK(pp);
+    if (pp != nullptr) {
+        NF_CHECK(pp->fog_enabled);
+        NF_CHECK_NEAR(pp->fog_r, 0.62f, 1e-5f);
+        NF_CHECK_NEAR(pp->fog_g, 0.66f, 1e-5f);
+        NF_CHECK_NEAR(pp->fog_b, 0.70f, 1e-5f);
+        NF_CHECK_NEAR(pp->fog_start, 60.0f, 1e-5f);
+        NF_CHECK_NEAR(pp->fog_end, 120.0f, 1e-5f);
+    }
+    const std::string text = serialize_scene_to_text(*result.scene);
+    NF_CHECK(text.find("fog=true") != std::string::npos);
+    NF_CHECK(text.find("fog_start=60") != std::string::npos);
+    NF_CHECK(text.find("fog_end=120") != std::string::npos);
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_fog_refuses_an_invalid_colour_or_a_zero_end) {
+    VirtualFileSystem vfs;
+    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_fog_bad";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    NF_CHECK(vfs.write_text("content://Scenes/bad_color.nfscene",
+                            std::string(kSceneHeader) +
+                                "  PostProcess: fog=true fog_color(-1,0,0)\n")
+                 .ok);
+    auto color = load_scene_from_vfs(vfs, "content://Scenes/bad_color.nfscene");
+    NF_CHECK(color.success);
+    NF_CHECK(color.scene->world().get<PostProcessComponent>(
+                  color.scene->world().all_entities()[0]) == nullptr);
+    bool color_warned = false;
+    for (const std::string& warning : color.warnings) {
+        if (warning.find("fog_color=") != std::string::npos) color_warned = true;
+    }
+    NF_CHECK(color_warned);
+
+    NF_CHECK(vfs.write_text("content://Scenes/bad_end.nfscene",
+                            std::string(kSceneHeader) +
+                                "  PostProcess: fog=true fog_end=0\n")
+                 .ok);
+    auto end = load_scene_from_vfs(vfs, "content://Scenes/bad_end.nfscene");
+    NF_CHECK(end.success);
+    NF_CHECK(end.scene->world().get<PostProcessComponent>(
+                  end.scene->world().all_entities()[0]) == nullptr);
+    bool end_warned = false;
+    for (const std::string& warning : end.warnings) {
+        if (warning.find("fog_end=") != std::string::npos) end_warned = true;
+    }
+    NF_CHECK(end_warned);
 
     std::filesystem::remove_all(tmp);
 }

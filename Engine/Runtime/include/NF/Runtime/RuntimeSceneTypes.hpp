@@ -199,6 +199,22 @@ struct PostProcessComponent {
     std::string lut_path;
     /// 0 = off .. 1 = the LUT fully replaces the graded colour.
     float lut_strength = 0.0f;
+
+    // Distance fog. It lives on the post block because that is the entity an
+    // author already opens to shape the frame's atmosphere; the renderer applies
+    // it in the lighting and transparency passes, not in the post chain, but the
+    // scene-facing switch belongs next to exposure/grading. Off by default, and
+    // the default band sits past the template's playable area, so a scene that
+    // never sets fog renders exactly as it did before the fields existed.
+    bool fog_enabled = false;
+    /// Haze tint, linear RGB. Author it as the sky's horizon colour when the
+    /// terrain should fade into that horizon.
+    float fog_r = 0.62f;
+    float fog_g = 0.66f;
+    float fog_b = 0.70f;
+    /// World-space distance where the fade begins / is fully haze.
+    float fog_start = 60.0f;
+    float fog_end = 120.0f;
 };
 
 // Local lights (Phase 26). A scene until now could only carry one directional

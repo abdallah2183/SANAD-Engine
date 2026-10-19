@@ -430,6 +430,18 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
     // cap would mean the same thing as a zero intensity, so both have floors.
     if (!in_range("motion intensity", edit.motion_intensity, 0.0f, 16.0f)) return nullptr;
     if (!in_range("motion max length", edit.motion_max_length, 0.001f, 1.0f)) return nullptr;
+    // Distance fog. The band must describe a fade, not a step; the loader is
+    // permissive because it also reads hand-written files, but the editor is
+    // allowed to say why it refuses a start at/after the end.
+    if (!in_range("fog red", edit.fog_r, 0.0f, 100.0f)) return nullptr;
+    if (!in_range("fog green", edit.fog_g, 0.0f, 100.0f)) return nullptr;
+    if (!in_range("fog blue", edit.fog_b, 0.0f, 100.0f)) return nullptr;
+    if (!in_range("fog start", edit.fog_start, 0.0f, 1.0e6f)) return nullptr;
+    if (!in_range("fog end", edit.fog_end, 0.01f, 1.0e6f)) return nullptr;
+    if (edit.fog_end <= edit.fog_start) {
+        out_err = "fog end must be greater than fog start";
+        return nullptr;
+    }
     // Exposure is opt-in (0 = the renderer's own), and the tonemap operator is
     // a closed set whose -1 means "not authored". Bounds match the scene
     // loader's, so the editor and the loader agree on what a scene may say.

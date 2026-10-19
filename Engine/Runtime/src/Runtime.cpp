@@ -3456,6 +3456,16 @@ void Runtime::extract_post_process() {
                 }
             }
         }
+        // Distance fog is part of the same authored block even though the
+        // renderer applies it in the lighting pass. Clamp the band into order:
+        // a start at or past the end would make the fade divide by zero, and a
+        // hand-edited file is allowed to say something the shader must survive.
+        rendering::Renderer3D::FogParams fog{};
+        fog.enabled = pp->fog_enabled;
+        fog.color = {pp->fog_r, pp->fog_g, pp->fog_b};
+        fog.start = pp->fog_start;
+        fog.end = std::max(pp->fog_start + 0.01f, pp->fog_end);
+        m_renderer->set_fog(fog);
         // Bound every frame: the pointer is a plain store, and it must be
         // re-established after the renderer is recreated.
         m_renderer->set_color_lut(m_lut_view);

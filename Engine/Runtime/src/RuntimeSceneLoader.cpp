@@ -263,6 +263,29 @@ static bool parse_post_process(const std::string& line, PostProcessComponent& ou
     // with no path does nothing, which the writer keeps out of the file.
     out.lut_path = field_value(line, "lut=");
     if (!optional_float_in_range(line, "lut_strength=", 0.0f, 1.0f, out.lut_strength, out_bad)) return false;
+
+    // Distance fog. `fog=true` is the switch; the colour and band keep their
+    // defaults when absent, so a one-key line is a complete line (the same
+    // contract every other stage on this line follows).
+    out.fog_enabled = line.find("fog=true") != std::string::npos;
+    {
+        f32 fr = out.fog_r, fg = out.fog_g, fb = out.fog_b;
+        if (field_vec3(line, "fog_color", fr, fg, fb)) {
+            if (!finite3(fr, fg, fb) || fr < 0.0f || fr > 100.0f || fg < 0.0f || fg > 100.0f ||
+                fb < 0.0f || fb > 100.0f) {
+                out_bad = "fog_color=";
+                return false;
+            }
+            out.fog_r = fr;
+            out.fog_g = fg;
+            out.fog_b = fb;
+        }
+    }
+    if (!optional_float_in_range(line, "fog_start=", 0.0f, 1.0e6f, out.fog_start, out_bad)) return false;
+    // A zero end would make the fade band degenerate; the renderer clamps the
+    // two into order at extraction, but refuse the value that cannot describe a
+    // band at all.
+    if (!optional_float_in_range(line, "fog_end=", 0.01f, 1.0e6f, out.fog_end, out_bad)) return false;
     return true;
 }
 
@@ -1464,6 +1487,9 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                     out << " lut_strength=" << pp->lut_strength;
                 }
             }
+            out << " fog=" << (pp->fog_enabled ? "true" : "false")
+                << " fog_color(" << pp->fog_r << "," << pp->fog_g << "," << pp->fog_b << ")"
+                << " fog_start=" << pp->fog_start << " fog_end=" << pp->fog_end;
             out << "\n";
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);

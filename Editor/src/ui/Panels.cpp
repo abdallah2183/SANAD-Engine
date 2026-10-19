@@ -119,6 +119,10 @@ struct InspectorCache {
     int pp_tonemap = -1;
     char pp_lut_path[256]{};
     float pp_lut_strength = 0.0f;
+    bool pp_fog_enabled = false;
+    float pp_fog_color[3]{0.62f, 0.66f, 0.70f};
+    float pp_fog_start = 60.0f;
+    float pp_fog_end = 120.0f;
     // Scene audio environment (reverb zone / music / ambience bed). Same "has"
     // pattern as the sky and post-processing above: the component is absent
     // until the author asks for it, and an absent component is what keeps the
@@ -1905,6 +1909,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     std::strncpy(ic.pp_lut_path, pp.lut_path.c_str(), sizeof(ic.pp_lut_path) - 1);
                     ic.pp_lut_path[sizeof(ic.pp_lut_path) - 1] = '\0';
                     ic.pp_lut_strength = pp.lut_strength;
+                    ic.pp_fog_enabled = pp.fog_enabled;
+                    ic.pp_fog_color[0] = pp.fog_r;
+                    ic.pp_fog_color[1] = pp.fog_g;
+                    ic.pp_fog_color[2] = pp.fog_b;
+                    ic.pp_fog_start = pp.fog_start;
+                    ic.pp_fog_end = pp.fog_end;
                 }
                 if (const auto* rz = w->get<audio::ReverbZoneComponent>(sel)) {
                     ic.rz_has = true;
@@ -2803,6 +2813,23 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                     ImGui::SliderFloat((AV("lut_strength") + "##pp_lut_strength").c_str(),
                                        &ic.pp_lut_strength, 0.0f, 1.0f);
 
+                    ImGui::Separator();
+                    ImGui::Checkbox((AV("enabled") + "##pp_fog").c_str(), &ic.pp_fog_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("distance_fog").c_str());
+                    ImGui::ColorEdit3((AV("fog_color") + "##pp_fog_color").c_str(),
+                                      ic.pp_fog_color);
+                    ImGui::SliderFloat((AV("fog_start") + "##pp_fog_start").c_str(),
+                                       &ic.pp_fog_start, 0.0f, 500.0f);
+                    ImGui::SliderFloat((AV("fog_end") + "##pp_fog_end").c_str(), &ic.pp_fog_end,
+                                       1.0f, 1000.0f);
+                    // Keep the band ordered while the user drags: the Inspector
+                    // refuses end <= start, and a slider that creates a value the
+                    // same panel rejects is a trap.
+                    if (ic.pp_fog_end <= ic.pp_fog_start) {
+                        ic.pp_fog_end = ic.pp_fog_start + 1.0f;
+                    }
+
                     ImGui::TextDisabled("%s", AV("post_process_hint").c_str());
                     if (ImGui::Button((AV("apply") + "##pp_apply").c_str())) {
                         runtime::PostProcessComponent e{};
@@ -2836,6 +2863,12 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         e.tonemap = ic.pp_tonemap;
                         e.lut_path = ic.pp_lut_path;
                         e.lut_strength = ic.pp_lut_strength;
+                        e.fog_enabled = ic.pp_fog_enabled;
+                        e.fog_r = ic.pp_fog_color[0];
+                        e.fog_g = ic.pp_fog_color[1];
+                        e.fog_b = ic.pp_fog_color[2];
+                        e.fog_start = ic.pp_fog_start;
+                        e.fog_end = ic.pp_fog_end;
                         std::string err;
                         if (!app.set_post_process(sel, e, err)) {
                             ic.error = err;

@@ -412,6 +412,12 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     edit.motion_enabled = true;
     edit.motion_intensity = 2.0f;
     edit.motion_max_length = 0.06f;
+    edit.fog_enabled = true;
+    edit.fog_r = 0.55f;
+    edit.fog_g = 0.65f;
+    edit.fog_b = 0.75f;
+    edit.fog_start = 12.0f;
+    edit.fog_end = 48.0f;
     edit.exposure = 1.75f;
     edit.tonemap = 2; // Reinhard
     edit.lut_path = "content://LUTs/grade.png";
@@ -443,6 +449,12 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
         NF_CHECK(pp->motion_enabled);
         NF_CHECK_NEAR(pp->motion_intensity, 2.0f, 1e-6f);
         NF_CHECK_NEAR(pp->motion_max_length, 0.06f, 1e-6f);
+        NF_CHECK(pp->fog_enabled);
+        NF_CHECK_NEAR(pp->fog_r, 0.55f, 1e-6f);
+        NF_CHECK_NEAR(pp->fog_g, 0.65f, 1e-6f);
+        NF_CHECK_NEAR(pp->fog_b, 0.75f, 1e-6f);
+        NF_CHECK_NEAR(pp->fog_start, 12.0f, 1e-6f);
+        NF_CHECK_NEAR(pp->fog_end, 48.0f, 1e-6f);
         NF_CHECK_NEAR(pp->exposure, 1.75f, 1e-6f);
         NF_CHECK(pp->tonemap == 2);
         NF_CHECK(pp->lut_path == "content://LUTs/grade.png");
@@ -521,6 +533,17 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     runtime::PostProcessComponent zero_cap = edit;
     zero_cap.motion_max_length = 0.0f;
     NF_CHECK(editor::make_post_process_command(scene.world(), e, zero_cap, err) == nullptr);
+
+    // Fog must describe a band: the inspector refuses an inverted or empty one
+    // even though the loader clamps a hand-written file rather than rejecting it.
+    runtime::PostProcessComponent inverted_fog = edit;
+    inverted_fog.fog_end = inverted_fog.fog_start;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, inverted_fog, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent negative_fog = edit;
+    negative_fog.fog_r = -0.1f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, negative_fog, err) == nullptr);
 
     // The tonemap operator is a closed set: -1 (not authored) and 0..3 are the
     // only values, so anything else is refused rather than mapped to one.
