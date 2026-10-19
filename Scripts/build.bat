@@ -16,7 +16,7 @@ setlocal EnableDelayedExpansion
 set BUILD_TYPE=%1
 if "%BUILD_TYPE%"=="" set BUILD_TYPE=Debug
 
-set VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (
     echo [NF] ERROR: vswhere.exe not found. Is Visual Studio installed?
     exit /b 1
@@ -38,7 +38,7 @@ for /f "delims=" %%d in ('dir /b /o-n "%VS_INSTALL%\VC\Tools\MSVC" 2^>nul') do (
 )
 
 REM --- Pick the newest Windows SDK -----------------------------------------
-set SDK_ROOT=C:\Program Files (x86)\Windows Kits\10
+set "SDK_ROOT=C:\Program Files (x86)\Windows Kits\10"
 set SDK_VERSION=
 for /f "delims=" %%d in ('dir /b /o-n "%SDK_ROOT%\Include" 2^>nul') do (
     if "!SDK_VERSION!"=="" (
@@ -47,11 +47,11 @@ for /f "delims=" %%d in ('dir /b /o-n "%SDK_ROOT%\Include" 2^>nul') do (
 )
 
 if "%MSVC_ROOT%"=="" (
-    echo [NF] ERROR: Could not locate an MSVC toolset under %VS_INSTALL%\VC\Tools\MSVC
+    echo [NF] ERROR: Could not locate an MSVC C++ toolset in the Visual Studio installation.
     exit /b 1
 )
 if "%SDK_VERSION%"=="" (
-    echo [NF] ERROR: Could not locate a Windows SDK under %SDK_ROOT%\Include
+    echo [NF] ERROR: Could not locate a Windows 10/11 SDK installation.
     exit /b 1
 )
 
@@ -72,7 +72,7 @@ set "LIBPATH=%MSVC_ROOT%\lib\x64;%SDK_ROOT%\UnionMetadata\%SDK_VERSION%;%SDK_ROO
 echo [NF] cmake: & where cmake
 echo [NF] ninja: & where ninja
 
-set BUILD_DIR=%~dp0..\build\%BUILD_TYPE%
+set "BUILD_DIR=%~dp0..\build\%BUILD_TYPE%"
 
 echo [NF] Configuring...
 cmake -S "%~dp0.." -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
