@@ -62,6 +62,11 @@ public:
     void destroy();
 
     bool should_close() const { return m_should_close; }
+    /// Withdraw a pending close request (the editor's "Cancel" on the unsaved-
+    /// changes prompt). WM_CLOSE is only recorded by the Win32 proc, never
+    /// acted on directly, so clearing the flag really does keep the window
+    /// alive; the next WM_CLOSE asks again.
+    void clear_close_request() { m_should_close = false; }
 
     void poll_events();
     void swap_buffers();

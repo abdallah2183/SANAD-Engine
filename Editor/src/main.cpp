@@ -1128,6 +1128,46 @@ int main(int argc, char** argv) {
             if (!cfg.headless) {
                 window.poll_events();
                 if (window.should_close()) {
+                    if (!app.dirty()) {
+                        break;
+                    }
+                    // Never lose work on close: keep an automatic copy first,
+                    // so even "No" (discard) leaves a file to recover from.
+                    std::string recovery_err;
+                    app.save_copy("cache://EditorRecovery.nfscene", recovery_err);
+                    const int choice = ::MessageBoxW(
+                        static_cast<HWND>(window.native_handle()),
+                        L"المشهد فيه تغييرات غير محفوظة۔\n"
+                        L"Save the scene before closing?\n\n"
+                        L"Yes = Save    No = Discard    Cancel = Back to editing",
+                        L"SANAD Editor", MB_YESNOCANCEL | MB_ICONWARNING);
+                    if (choice == IDCANCEL) {
+                        window.clear_close_request();
+                        continue;
+                    }
+                    if (choice == IDYES) {
+                        std::string save_err;
+                        bool saved = false;
+                        if (app.scene_path().rfind("content://", 0) == 0 ||
+                            app.scene_path().rfind("project://", 0) == 0) {
+                            saved = app.save(save_err);
+                        } else {
+                            // Untitled (or a cache session): never overwrite a
+                            // named scene — write a timestamped one instead.
+                            const auto stamp =
+                                std::chrono::system_clock::now().time_since_epoch().count();
+                            saved = app.save_as("content://Scenes/Recovered_" +
+                                                    std::to_string(stamp) + ".nfscene",
+                                                save_err);
+                        }
+                        if (!saved) {
+                            ::MessageBoxA(static_cast<HWND>(window.native_handle()),
+                                          ("Could not save the scene:\n" + save_err).c_str(),
+                                          "SANAD Editor", MB_OK | MB_ICONERROR);
+                            window.clear_close_request();
+                            continue;
+                        }
+                    }
                     break;
                 }
                 // --resize-test: walk the window through a size cycle. A resize
