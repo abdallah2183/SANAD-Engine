@@ -1196,6 +1196,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 push_error(app.console(), "Delete failed", err);
             }
         }
+        ImGui::SameLine();
+        if (ImGui::Button(AV("duplicate").c_str())) {
+            std::string err;
+            if (!app.duplicate_selection(err)) {
+                push_error(app.console(), "Duplicate failed", err);
+            }
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", "Ctrl+D");
+        }
         if (!has_sel) {
             ImGui::EndDisabled();
         }
@@ -1360,6 +1370,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     std::string err;
                     if (!app.delete_entity(row.entity, err)) {
                         push_error(app.console(), "Delete failed", err);
+                    }
+                }
+                if (ImGui::MenuItem((AV("duplicate") + "   Ctrl+D").c_str())) {
+                    std::string err;
+                    if (!app.duplicate_selection(err)) {
+                        push_error(app.console(), "Duplicate failed", err);
                     }
                 }
                 if (ImGui::MenuItem(AV("save_prefab").c_str())) {
