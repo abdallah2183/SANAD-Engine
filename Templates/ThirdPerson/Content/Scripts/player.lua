@@ -1,32 +1,52 @@
 -- content://Scripts/player.lua
 -- ============================================================
---  سلوك اللاعب — قالب «شخص ثالث» (ThirdPerson)
---  هذا الملف مُرفَق بكيان اللاعب (Player). اضغط «تشغيل» وسترى الكرة
---  تتمايل وتدور في الهواء ثم تهبط نحو الأرض.
+--  Crate Hunter — the playable starter game.
+--
+--  WASD / arrows move the blue sphere. Touch an orange crate to collect it.
+--  Collect both crates to win. Scores are printed to the editor/player log,
+--  which is the honest HUD this demo ships with.
+--
+--  The four engine calls this game is built from:
+--    nf.axis("move_x"/"move_z")  -> -1..1 held input
+--    nf.entity_pos(id, gen)      -> x, y, z (nil when no Transform)
+--    nf.find_entity("CrateA")    -> id, gen (nil when absent)
+--    nf.set_entity_pos(...)      -> move the player / hide a collected crate
 -- ============================================================
---
---  الأفكار التي تحتاجها:
---   1) update(dt) تُنادى كل إطار. dt = الزمن منذ آخر إطار بالثواني.
---   2) self_id / self_gen = معرّف الكيان الذي يحمل هذا السكربت.
---   3) nf.entity_pos(id,gen) -> x,y,z  و  nf.set_entity_pos(id,gen,x,y,z) تحرّكه.
---
---  المتغيّرات (local) فوق update تُحفظ بين الإطارات = ذاكرة السكربت.
 
-local base_y = 1.2      -- ارتفاع اللاعب الأصلي (من المحرّر).
-local range  = 0.6      -- مدى التمايل الرأسي.
-local speed  = 1.0      -- سرعة التمايل (دورات/ثانية).
-
-local clock  = 0        -- ساعة السكربت: الزمن المتراكم.
+local speed = 4.0
+local score = 0
+local targets = { "CrateA", "CrateB" }
+local won = false
 
 function update(dt)
-    clock = clock + dt
-
-    -- اقرأ الموضع الحالي أولًا (nil = الكيان بلا تحويل بعد).
     local x, y, z = nf.entity_pos(self_id, self_gen)
-    if x == nil then return end
+    if not x then return end
 
-    -- تمايل ناعم حول base_y باستخدام موجة جيبية.
-    local new_y = base_y + math.sin(clock * speed * 6.2831853) * range
+    local mx = nf.axis("move_x")
+    local mz = nf.axis("move_z")
+    nf.set_entity_pos(self_id, self_gen,
+        x + mx * speed * dt,
+        y,
+        z + mz * speed * dt)
 
-    nf.set_entity_pos(self_id, self_gen, x, new_y, z)
+    for _, name in ipairs(targets) do
+        local id, gen = nf.find_entity(name)
+        if id then
+            local tx, ty, tz = nf.entity_pos(id, gen)
+            -- A collected crate is parked far below the world; ignore it.
+            if tx and ty and ty > -10 then
+                local dx, dz = tx - x, tz - z
+                if dx * dx + dz * dz < 1.5 * 1.5 then
+                    nf.set_entity_pos(id, gen, 0, -50, 0)
+                    score = score + 1
+                    print("score", score)
+                end
+            end
+        end
+    end
+
+    if score >= #targets and not won then
+        won = true
+        print("YOU WIN")
+    end
 end
