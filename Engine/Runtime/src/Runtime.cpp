@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace nf::runtime {
@@ -1140,6 +1141,20 @@ u32 Runtime::step_script(float dt) {
     if (runnable == 0) {
         return 0;
     }
+    // Scripts read named actions, not devices: the Runtime owns whichever input
+    // source is active (keyboard, replay log) and adapts it to two callbacks.
+    // The callbacks capture the source pointer, which is stable for this update.
+    scripting::ScriptInput input;
+    if (m_input_source != nullptr) {
+        gameplay::IInputSource* source = m_input_source;
+        input.pressed = [source](std::string_view action) {
+            return source->action_pressed(action);
+        };
+        input.axis = [source](std::string_view action) {
+            return source->action_axis(action);
+        };
+    }
+    m_scripts->set_input_source(input);
     m_scripts->update(world, dt);
     m_script_updates += runnable;
     return static_cast<u32>(runnable);

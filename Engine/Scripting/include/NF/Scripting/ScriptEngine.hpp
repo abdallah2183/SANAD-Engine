@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct lua_State;
@@ -37,6 +38,16 @@ namespace nf::scripting {
 
 /// Log routing for nf.log_*: defaults to the engine logger; tests override.
 using LogCallback = std::function<void(const std::string& level, const std::string& message)>;
+
+/// The small input surface scripts may read. It is a pair of callbacks rather
+/// than a device/InputSystem type so NF/Scripting keeps its layering (no
+/// dependency on NFPlatform or NFGameplay): the Runtime owns the real source and
+/// adapts it here. Both callbacks may be empty (headless, or a paused game) and
+/// then every query is false/zero rather than an error.
+struct ScriptInput {
+    std::function<bool(std::string_view action)> pressed;
+    std::function<f32(std::string_view action)> axis;
+};
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).
 class LuaVM {
@@ -94,6 +105,10 @@ private:
 /// bound to `world` (must outlive the VM). Re-installing re-targets.
 void install_ecs_bindings(LuaVM& vm, ecs::World& world);
 
+/// Installs nf.action(name) / nf.axis(name) against `input` (may be null:
+/// every query then reads false/0). Re-installing re-targets.
+void install_input_bindings(LuaVM& vm, const ScriptInput* input);
+
 /// Per-entity game logic. `update(dt)` is looked up in the script's own
 /// environment every tick; missing update() disables the script loudly.
 /// `path` is the authoring-time logical VFS path (e.g.
@@ -117,6 +132,11 @@ public:
     ScriptSystem& operator=(const ScriptSystem&) = delete;
 
     void update(ecs::World& world, float dt);
+
+    /// The live input view for the next update() calls. Copied, so the caller's
+    /// adapter may die as soon as this returns. Pass a default ScriptInput to
+    /// disable input queries.
+    void set_input_source(const ScriptInput& input);
 
     LuaVM& vm() { return *m_vm; }
     void set_instruction_limit(u64 limit);

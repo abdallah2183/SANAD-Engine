@@ -142,6 +142,11 @@ print(string.format("النقاط: %d", score))
 | `nf.entity_pos` | `id, gen` | `x, y, z` | موضع الكيان |
 | `nf.set_entity_pos` | `id, gen, x, y, z` | `bool` | تحرّك الكيان |
 | `nf.entity_alive` | `id, gen` | `bool` | هل الكائن موجود؟ |
+| `nf.find_entity` | `name` | `id, gen` أو `nil` | ابحث عن كائن باسمه |
+| `nf.entity_name` | `id, gen` | نص أو `nil` | اسم الكائن |
+| `nf.entity_count` | — | رقم | عدد الكائنات الحيّة |
+| `nf.action` | `action` | `bool` | هل الفعل مضغوط؟ (`move_forward`، `jump`…) |
+| `nf.axis` | `action` | رقم `-1..1` | محور حركة (`move_x`، `move_z`) |
 | `nf.clamp` | `v, lo, hi` | رقم | حصر قيمة |
 | `nf.lerp` | `a, b, t` | رقم | تنقّل ناعم |
 | `nf.log_info/warn/error` | رسالة | — | اكتب للسجل بمستوى |
@@ -154,6 +159,62 @@ print(string.format("النقاط: %d", score))
 
 ### غير متوفّر (مقصود للأمان)
 `io`، `os`، `require`، `dofile`، `loadfile` — لا ملفات، لا شِلّ، لا حِزَم خارجية.
+
+---
+
+### 7.1 لعبة كاملة: اصطياد الصناديق
+
+هذا سكربت `player.lua` كامل: تحرّك الكرة بـ WASD/الأسهم، والاقتراب من
+`CrateA` أو `CrateB` يجمعها ويزيد النقاط:
+
+```lua
+local speed = 4.0
+local score = 0
+local targets = { "CrateA", "CrateB" }
+local won = false
+
+function update(dt)
+    local x, y, z = nf.entity_pos(self_id, self_gen)
+    if not x then return end
+
+    local mx = nf.axis("move_x")
+    local mz = nf.axis("move_z")
+    nf.set_entity_pos(self_id, self_gen,
+        x + mx * speed * dt, y, z + mz * speed * dt)
+
+    for _, name in ipairs(targets) do
+        local id, gen = nf.find_entity(name)
+        if id then
+            local tx, ty, tz = nf.entity_pos(id, gen)
+            if tx then
+                local dx, dz = tx - x, tz - z
+                if dx * dx + dz * dz < 1.5 * 1.5 then
+                    nf.set_entity_pos(id, gen, 0, -50, 0) -- جمعها
+                    score = score + 1
+                    print("score", score)
+                end
+            end
+        end
+    end
+
+    if score >= #targets and not won then
+        won = true
+        print("YOU WIN")
+    end
+end
+```
+
+اربطه بكيان `Player` في `Main.nfscene`:
+
+```
+Script: lang=lua path=content://Scripts/player.lua
+```
+
+ثم شغّل اللعبة:
+
+```bat
+nf run --project Games\CrateHunter\CrateHunter.nfproj
+```
 
 ---
 

@@ -32,6 +32,8 @@ usize hash_source(const std::string& s) {
 struct ScriptSystem::Impl {
     LuaVM vm;
     u64 instruction_limit = 0;
+    ScriptInput input;
+    bool has_input = false;
     // source hash -> registry ref of the _ENV table (LUA_NOREF = broken).
     std::unordered_map<usize, int> envs;
     std::unordered_map<usize, int> consecutive_errors;
@@ -128,10 +130,16 @@ void ScriptSystem::clear_cache() {
     m_impl->clear();
 }
 
+void ScriptSystem::set_input_source(const ScriptInput& input) {
+    m_impl->input = input;
+    m_impl->has_input = static_cast<bool>(input.pressed) || static_cast<bool>(input.axis);
+}
+
 void ScriptSystem::update(ecs::World& world, float dt) {
     NF_PROFILE_SCOPE("ScriptSystem::update");
     Impl& impl = *m_impl;
     install_ecs_bindings(impl.vm, world);
+    install_input_bindings(impl.vm, impl.has_input ? &impl.input : nullptr);
     impl.vm.set_instruction_limit(impl.instruction_limit);
     lua_State* L = impl.vm.state();
     if (!L) return;
