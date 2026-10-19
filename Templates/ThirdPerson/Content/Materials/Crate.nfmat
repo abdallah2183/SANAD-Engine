@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Crate
+base_color: 0.58 0.32 0.14 1
+metallic: 0
+roughness: 0.70
+ao: 1
+emission: 0 0 0
+emission_strength: 0

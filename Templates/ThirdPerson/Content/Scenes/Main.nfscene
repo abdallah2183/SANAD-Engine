@@ -11,24 +11,25 @@ entity: 1:0
 entity: 2:0
   Name: Sun
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Light: type=Directional dir(-0.4,-1,-0.25) color(1,1,1) intensity=1.1
+  Light: type=Directional dir(-0.4,-1,-0.25) color(1,0.94,0.82) intensity=1.3
 ---
 entity: 3:0
   Name: Sky
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Sky: zenith(0.2,0.42,0.85) horizon(0.62,0.72,0.82) ground(0.09,0.09,0.11) clear(0.03,0.03,0.07) sun_disk=1 sun_glow=1 enabled=true
+  Sky: zenith(0.16,0.34,0.68) horizon(0.68,0.78,0.88) ground(0.08,0.09,0.10) clear(0.04,0.05,0.08) sun_disk=1 sun_glow=1 enabled=true
+  PostProcess: bloom=true bloom_threshold=2.2 bloom_knee=0.5 bloom_intensity=0.6 bloom_radius=1.4 grade=true grade_contrast=1.04 grade_pivot=1.0 grade_temperature=0.05 grade_tint=0.0 grade_gamma=1.0 exposure=1.0 tonemap=aces saturation=1.05 vignette=0.08 fog=true fog_color(0.68,0.78,0.88) fog_start=30 fog_end=110
 ---
 entity: 4:0
   Name: Ground
   Transform: local(0,-0.5,0) world(0,-0.5,0) rot(0,0,0) scale(24,1,24) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Ground
   RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
   Collider: shape=Box half(12,0.5,12)
 ---
 entity: 5:0
   Name: Player
   Transform: local(0,1.2,0) world(0,1.2,0) rot(0,0,0) scale(1.2,1.2,1.2) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Player
   RigidBody: type=Dynamic mass=1 friction=0.600000 restitution=0.350000 linear_damping=0.100000 angular_damping=0.300000 allow_sleep=true
   Collider: shape=Sphere radius=0.6
   Script: lang=lua path=content://Scripts/player.lua
@@ -36,19 +37,19 @@ entity: 5:0
 entity: 6:0
   Name: SpinnerA
   Transform: local(3,1.4,-2) world(3,1.4,-2) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Spinner
   Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0.4 duration=3
 ---
 entity: 7:0
   Name: SpinnerB
   Transform: local(-3,1.4,-2) world(-3,1.4,-2) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Spinner
   Animation: clip=spin speed=1 loop=loop paused=false state_machine=false procedural=spin axis=y turns=1 amplitude=0.4 duration=3
 ---
 entity: 8:0
   Name: CrateA
   Transform: local(2.5,0.75,2.5) world(2.5,0.75,2.5) rot(0,0,0) scale(1.5,1.5,1.5) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Crate
   RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
   Collider: shape=Box half(0.75,0.75,0.75)
   Destructible: chunks=8 seed=305419896 strength=20 damage_threshold=8 blast_radius=2.5 enabled=true
@@ -56,7 +57,7 @@ entity: 8:0
 entity: 9:0
   Name: CrateB
   Transform: local(-2.5,0.75,3) world(-2.5,0.75,3) rot(0,0,0) scale(1.5,1.5,1.5) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Crate
   RigidBody: type=Static mass=0 friction=0.800000 restitution=0.100000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
   Collider: shape=Box half(0.75,0.75,0.75)
   Destructible: chunks=8 seed=193595338 strength=20 damage_threshold=8 blast_radius=2.5 enabled=true
@@ -64,7 +65,7 @@ entity: 9:0
 entity: 10:0
   Name: DropBall
   Transform: local(0,7,-4) world(0,7,-4) rot(0,0,0) scale(0.8,0.8,0.8) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Default
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Ball
   RigidBody: type=Dynamic mass=1.5 friction=0.500000 restitution=0.650000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
   Collider: shape=Sphere radius=0.4
 ---
@@ -72,8 +73,10 @@ entity: 11:0
   Name: StartChime
   Transform: local(0,1,4) world(0,1,4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Audio: buffer=start_chime volume=0.5 pitch=1 looping=false spatial=false autoplay=true tone=523.25 tone_duration=0.6
+  Light: type=Point color(1,0.75,0.45) intensity=2.0 radius=10
 ---
 entity: 12:0
   Name: AmbientHum
   Transform: local(0,2,-4) world(0,2,-4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Audio: buffer=ambience volume=0.15 pitch=1 looping=true spatial=false autoplay=true tone=220 tone_duration=2
+  Light: type=Point color(0.30,0.55,1.0) intensity=1.6 radius=12
