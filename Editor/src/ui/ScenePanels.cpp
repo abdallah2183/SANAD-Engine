@@ -616,6 +616,7 @@ void render_panel(EditorApp& app, const UiFrameStats& stats) {
 
     if (section(AV("viewport").c_str())) {
         ImGui::Checkbox((AV("grid_step").c_str()), &st.show_grid);
+        ImGui::Checkbox((AV("show_navmesh") + "##rsnav").c_str(), &st.show_navmesh);
         ImGui::SetNextItemWidth(150.0f);
         ImGui::DragFloat((AV("grid_step_value") + "###rgrid").c_str(), &st.grid_step, 0.1f, 0.1f,
                          10.0f, "%.2f");

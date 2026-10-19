@@ -384,7 +384,12 @@ NF_TEST(post_stack_prefilter_uses_max_channel_not_luma) {
     // exists for — so the two must disagree here.
     const Vec3 red{2.0f, 0.0f, 0.0f};
     NF_CHECK(bloom_prefilter(red, 1.0f, 0.0f).x > 0.5f);
-    const float luma = 2.0f * 0.2126f;
+    // The luma is measured on the colour the kernel actually saw, not on a
+    // literal: a zero threshold passes the highlight through untouched, and a
+    // constant expression here is exactly what /WX rejects (C4127). What is
+    // being contrasted is behaviour, so the luma has to be a runtime value.
+    const Vec3 passthrough = bloom_prefilter(red, 0.0f, 0.0f);
+    const float luma = passthrough.x * 0.2126f;
     NF_CHECK(luma < 1.0f); // would have been rejected by a luma threshold
 }
 

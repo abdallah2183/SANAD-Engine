@@ -550,6 +550,12 @@ NF_TEST(tone_buffer_rejects_non_positive_input) {
 }
 
 NF_TEST(tone_buffer_defaults_match_engine_constants) {
-    NF_CHECK_EQ(kDefaultSampleRate, 44100u);
-    NF_CHECK_EQ(kDefaultBufferFrames, 1024u);
+    // Both sides are constexpr, so "the engine still defaults to CD audio with a
+    // 1024-frame block" is a statement about the type system, not about a run.
+    // Asserted at compile time: a drifted default now fails the build, and /WX
+    // rejects a constant expression checked at runtime (C4127) besides.
+    static_assert(kDefaultSampleRate == 44100u,
+                  "engine default sample rate drifted from 44100");
+    static_assert(kDefaultBufferFrames == 1024u,
+                  "engine default buffer frames drifted from 1024");
 }

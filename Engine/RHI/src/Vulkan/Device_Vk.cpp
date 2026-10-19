@@ -306,8 +306,7 @@ bool VulkanDevice::init(const DeviceDesc& desc) {
     // create_logical_device() loads the device-level entry points itself:
     // vkGetDeviceQueue is a device function and is needed to finish device
     // setup, so loading cannot be deferred until after it returns.
-    if (!create_logical_device())      return false;
-    if (!create_command_pool())        return false;
+    if (!create_logical_device())      return false;    if (!create_command_pool())        return false;
 
     NF_LOG_INFO(LogCategory::RHI, "Vulkan device initialized [{}] (validation: {})",
                 backend_name(), m_ctx.enable_validation ? "on" : "off");
@@ -317,6 +316,17 @@ bool VulkanDevice::init(const DeviceDesc& desc) {
 void VulkanDevice::shutdown() {
     if (!m_ctx.instance) {
         return; // Not initialized (or already shut down)
+    }
+
+    // Tearing down one device while another is still alive would use the
+    // OTHER device's dispatch for every call below. That is a corrupting
+    // mistake, so it is reported rather than attempted.
+    if (!vulkan_dispatch_owned_by(m_ctx.instance)) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "VulkanDevice::shutdown called while another device owns the entry points — "
+            "teardown skipped to avoid destroying objects through a foreign dispatch");
+        m_ctx.instance = VK_NULL_HANDLE;
+        return;
     }
 
     // Teardown must tolerate a half-built device: init can fail after
@@ -352,8 +362,15 @@ void VulkanDevice::shutdown() {
 
     if (vkDestroyInstance) {
         vkDestroyInstance(m_ctx.instance, nullptr);
-        m_ctx.instance = VK_NULL_HANDLE;
     }
+
+    // Release AFTER vkDestroyInstance: destroying the instance is itself an
+    // instance entry point, so the table this device installed has to stay
+    // live until the driver call that uses it is done. Doing it in the other
+    // order would restore the previous device's table and destroy this
+    // instance through someone else's instance.
+    release_device_functions(m_ctx.instance);
+    m_ctx.instance = VK_NULL_HANDLE;
 }
 
 bool VulkanDevice::create_instance() {
@@ -650,7 +667,7 @@ bool VulkanDevice::create_logical_device() {
     // Device-level entry points only exist once the VkDevice does, and
     // retrieving the queues below requires one of them. Load them here so the
     // ordering is enforced structurally rather than by convention.
-    if (!load_device_functions(m_ctx.device)) {
+    if (!load_device_functions(m_ctx.device, m_ctx.instance)) {
         NF_LOG_ERROR(LogCategory::RHI, "Failed to load Vulkan device functions");
         // The device stays alive on purpose: destroying it would need
         // vkDestroyDevice, which is itself a device function and therefore not

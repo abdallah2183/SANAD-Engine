@@ -1,0 +1,27 @@
+# SANAD Scene v1
+version: 1
+name: Vehicle
+entity_count: 4
+---
+entity: 1:0
+  Name: Camera
+  Transform: local(8,6,-10) world(8,6,-10) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+---
+entity: 2:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.5,-1,-0.3) color(1,1,1) intensity=1
+---
+entity: 3:0
+  Name: Ground
+  Transform: local(0,-0.5,0) world(0,-0.5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=1 friction=0.5 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(50,0.5,50)
+---
+entity: 4:0
+  Name: Car
+  Transform: local(0,2,0) world(0,2,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Vehicle: chassis(0.9,0.5,2.0) mass=1500 wheel_radius=0.35 wheel_width=0.3 track=1.0 wheelbase=1.3 wheel_y=-0.35 steer_deg=22 torque=500 susp_min=0.3 susp_max=0.5 susp_freq=2.0 susp_damping=0.85 tire_peak=1.3 tire_limit=1.05 wheel_inertia=0.9 angular_damping=0.2 brake_torque=1500 handbrake_torque=4000 enabled=true

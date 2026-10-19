@@ -14,6 +14,17 @@
 //
 // The pointers below live in VulkanLoader.cpp and are shared by every Vulkan
 // translation unit in this backend.
+//
+// IMPORTANT (what a crash in RHITests taught us): device-level entry points are
+// only valid for the VkDevice they were resolved from. The globals therefore
+// describe exactly one device — the most recently initialised one that has not
+// been shut down yet. Creating a second device rebinds them to that device, so
+// `release_device_functions()` MUST run when a device goes away, or every later
+// call made through the globals dispatches into freed driver memory. See
+// release_device_functions() below.
+//
+// A device whose instance was created is what the loader tracks: VkInstance and
+// VkDevice are 1:1 here, so the instance handle is the key for both.
 
 #include <NF/Core/Types.hpp>
 
@@ -187,10 +198,29 @@ bool load_vulkan_loader();
 
 /// Resolves all instance-level entry points. Requires a valid VkInstance.
 /// Optional debug functions are allowed to fail silently.
+///
+/// Installs the resolved pointers into the shared globals, remembering what
+/// they held beforehand so a later release can restore them.
 bool load_instance_functions(VkInstance instance);
 
-/// Resolves all device-level entry points. Requires a valid VkDevice.
-bool load_device_functions(VkDevice device);
+/// Resolves all device-level entry points. Requires a valid VkDevice and the
+/// instance it was created from (the loader keys its bookkeeping on the
+/// instance). Same install/remember contract as load_instance_functions.
+bool load_device_functions(VkDevice device, VkInstance instance);
+
+/// Drops one device's entry points and restores the globals to the device that
+/// is still alive beneath it (or to null when none is).
+///
+/// MUST be called from VulkanDevice::shutdown() before the VkInstance is
+/// destroyed, and after the VkDevice is — vkDestroyDevice is itself a device
+/// entry point, so the order matters as much as the call does.
+void release_device_functions(VkInstance instance);
+
+/// True when the entry points currently installed in the globals belong to
+/// `instance`. A device tearing itself down while another is active would
+/// otherwise destroy its objects through the other device's dispatch, so
+/// VulkanDevice::shutdown() reports that instead of doing it silently.
+bool vulkan_dispatch_owned_by(VkInstance instance);
 
 /// Releases the platform Vulkan loader module.
 void unload_vulkan_loader();

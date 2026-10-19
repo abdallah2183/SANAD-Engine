@@ -266,6 +266,18 @@ public:
     bool attach_nav_agent(ecs::Entity e, std::string& out_err);
     bool set_nav_agent(ecs::Entity e, const runtime::NavAgentComponent& na, std::string& out_err);
     bool detach_nav_agent(ecs::Entity e, std::string& out_err);
+    // --- Vehicles (Step 11) ----------------------------------------------------
+    // Same direct-edit shape as navigation: validated at the door, add-or-replace,
+    // and a synchronous vehicle re-bind so the authored car simulates without a
+    // reopen. set_vehicle scrubs live inputs and the Jolt view (session state,
+    // never scene data); set_vehicle_input writes live inputs only, separated
+    // so a tune edit can never wipe or invent intent — same split as character.
+    bool attach_vehicle(ecs::Entity e, std::string& out_err);
+    bool set_vehicle(ecs::Entity e, const physics::VehicleComponent& vc, std::string& out_err);
+    bool detach_vehicle(ecs::Entity e, std::string& out_err);
+    bool set_vehicle_input(ecs::Entity e, f32 throttle, f32 steer, f32 brake, f32 handbrake,
+                           std::string& out_err);
+    bool reset_vehicle_pose(ecs::Entity e, std::string& out_err);
 
     // --- Asset folders (Unity-style Project panel) --------------------------
     // Creates a VFS directory for the browser (content:// or project://, no

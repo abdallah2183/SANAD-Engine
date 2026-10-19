@@ -22,6 +22,7 @@
 #include <NF/Scene/Transform.hpp>
 
 #include <memory>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -45,6 +46,9 @@ public:
             VehicleComponent* vc = world.get<VehicleComponent>(e);
             const scene::Transform* tf = world.get<scene::Transform>(e);
             if (vc == nullptr || tf == nullptr || vc->vehicle != nullptr) continue;
+            // A disabled car is scenery: no body, no constraint, no debug
+            // marker — same rule as a disabled character controller.
+            if (!vc->enabled) continue;
             const Vec3 spawn{tf->local_x, tf->local_y, tf->local_z};
             auto vehicle = std::make_unique<JoltVehicle>(*m_world, vc->config, spawn);
             if (!vehicle->valid()) continue;
@@ -68,8 +72,23 @@ public:
     /// caller owns the tick — see FixedTimestep), then sync poses back.
     /// Call this exactly once per fixed step, matching world.step().
     void update(ecs::World& world) {
-        for (auto& [entity, vehicle] : m_vehicles) {
-            if (!world.is_alive(entity) || vehicle == nullptr) continue;
+        // Sorted by entity, like Runtime::step_physics sorts its characters:
+        // m_vehicles is unordered, and two runs of one multi-car scene must
+        // drive the same car first.
+        std::vector<ecs::Entity> order;
+        order.reserve(m_vehicles.size());
+        for (const auto& [entity, vehicle] : m_vehicles) {
+            (void)vehicle;
+            order.push_back(entity);
+        }
+        std::sort(order.begin(), order.end(), [](ecs::Entity a, ecs::Entity b) {
+            return (a.id != b.id) ? (a.id < b.id) : (a.generation < b.generation);
+        });
+        for (const ecs::Entity entity : order) {
+            const auto it = m_vehicles.find(entity);
+            if (it == m_vehicles.end() || it->second == nullptr) continue;
+            if (!world.is_alive(entity)) continue;
+            auto* vehicle = it->second.get();
             VehicleComponent* vc = world.get<VehicleComponent>(entity);
             if (vc == nullptr) continue;
             // 1. Drive: clamp happens inside, gameplay writes raw [-1,1].

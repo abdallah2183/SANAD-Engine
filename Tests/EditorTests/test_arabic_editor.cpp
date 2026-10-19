@@ -335,7 +335,8 @@ NF_TEST(editor_language_table_has_arabic_for_every_editor_key) {
         "no_sky_settings", "no_such_slot", "nothing_selected", "open", "outliner", "play",
         "position", "prefab", "redo", "rigid_body", "rotation", "save", "save_as",
         "save_game", "scale", "shadow_bias", "shadow_cascades", "shadow_distance",
-        "shadow_strength", "sky", "slot", "stop", "sun_disk", "sun_glow", "transform",
+        "shadow_strength", "show_navmesh", "sky", "slot", "stats_navmesh", "stats_vehicles",
+        "steer", "stop", "sun_disk", "sun_glow", "throttle", "transform", "vehicle",
         "undo", "validation", "view", "viewport", "zenith",
         // G9: Settings > Rendering, and the grid-step slider's visible label.
         "rendering", "no_light_settings", "grid_step_value",

@@ -92,6 +92,11 @@ NF_TEST(udp_fire_and_forget_to_nobody) {
 }
 
 NF_TEST(udp_max_safe_payload_constant) {
-    NF_CHECK(UdpSocket::kMaxSafePayload == 512);
-    NF_CHECK(kIpv4Loopback == 0x7F000001u);
+    // Both are constants of the transport, not consequences of a run: a payload
+    // ceiling that moves must break the build, and /WX rejects a constant
+    // expression checked at runtime (C4127) besides.
+    static_assert(UdpSocket::kMaxSafePayload == 512,
+                  "UDP safe payload ceiling drifted from 512");
+    static_assert(kIpv4Loopback == 0x7F000001u,
+                  "IPv4 loopback constant drifted from 127.0.0.1");
 }

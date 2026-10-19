@@ -278,6 +278,9 @@ struct LauncherState {
     HBRUSH brush_sel = nullptr;
 
     COLORREF status_color = theme::text_dim;
+    // The status line's text, cached for owner drawing (SS_OWNERDRAW asks the
+    // parent to paint the STATIC itself — see draw_status).
+    std::wstring status_text;
     bool list_empty = false;
     int sep_y = 0; // logical client Y of the mid-pane rule (drawn in WM_PAINT)
 
@@ -429,6 +432,7 @@ void refresh_dpi(HWND hwnd, LauncherState* st) {
 void set_status(HWND hwnd, const std::string& text, COLORREF color = theme::error) {
     if (LauncherState* st = state_of(hwnd)) {
         st->status_color = color;
+        st->status_text = widen(text); // owner-draw reads the cache (draw_status)
     }
     ::SetDlgItemTextW(hwnd, kIdStatus, widen(text).c_str());
     if (HWND h = ::GetDlgItem(hwnd, kIdStatus)) {
@@ -520,11 +524,14 @@ void on_create(HWND hwnd) {
 #ifndef NF_TEMPLATE_DIR
 #define NF_TEMPLATE_DIR ""
 #endif
+#ifndef NF_TEMPLATES_ROOT
+#define NF_TEMPLATES_ROOT ""
+#endif
     // The gallery card the user actually chose, resolved through the SAME
     // allow-list the CLI uses. A placeholder or out-of-range index yields the
     // Default template rather than a project with no scene to open.
     std::string create_err;
-    so.template_dir = selected_template_dir(st->selected_template, NF_TEMPLATE_DIR,
+    so.template_dir = selected_template_dir(st->selected_template, NF_TEMPLATES_ROOT,
                                              create_err);
     if (so.template_dir.empty()) {
         // A named template whose folder is missing must not silently scaffold an
@@ -581,8 +588,20 @@ std::string selected_template_dir(int index, const char* templates_root,
         kTemplates[index].template_name[0] != '\0') {
         requested = kTemplates[index].template_name;
     }
+    // Root vs default-dir, exactly as the CLI passes them (Tools/BuildTool):
+    // NF_TEMPLATES_ROOT is the tree the named templates live under,
+    // NF_TEMPLATE_DIR is only the Default template's folder. Substituting one
+    // for the other made every gallery card resolve to a folder that does not
+    // exist (Templates/Default/<Name>), so the create always failed.
+    std::filesystem::path root(templates_root);
+    if (root.empty()) {
+        // Same guard the CLI keeps for a stub build: derive the root from the
+        // Default folder's parent so the define staying behind cannot rebuild
+        // the old broken-path bug silently.
+        root = std::filesystem::path(NF_TEMPLATE_DIR).parent_path();
+    }
     const auto resolved = nf::project::resolve_project_template(
-        requested, std::filesystem::path(templates_root), {}, out_error);
+        requested, root, {}, out_error);
     return resolved.string();
 }
 
@@ -951,6 +970,40 @@ inline void paint_text_key(HDC dc, const char* key, int x, int y, int w, int h, 
                            COLORREF color,
                            UINT fmt = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS) {
     paint_text_u(dc, shell_tr(key), x, y, w, h, font, color, fmt);
+}
+
+// Status line (SS_OWNERDRAW STATIC): background + cached logical text.
+//
+// The status carries MIXED scripts — an Arabic prefix line above an English
+// error/path line — and the native STATIC draw scrambles those runs (screenshot:
+// the Latin path rendered mirrored).  Hand-drawn text goes through the same
+// rules as paint_text: DT_RTLREADING fixes the paragraph direction without
+// mirroring glyphs, so the Latin run inside an Arabic-context line stays in
+// order.  Multi-line (the failure prefix and its detail are separate lines), so
+// no DT_SINGLELINE — word-break wraps a long path instead.
+void draw_status(const DRAWITEMSTRUCT* dis, const LauncherState* st) {
+    RECT rc = dis->rcItem;
+    if (st != nullptr && st->brush_bg != nullptr) {
+        ::FillRect(dis->hDC, &rc, st->brush_bg);
+    }
+    ::SetBkMode(dis->hDC, TRANSPARENT);
+    ::SetTextColor(dis->hDC, st != nullptr ? st->status_color : theme::error);
+    HFONT old = nullptr;
+    if (st != nullptr && st->font_small != nullptr) {
+        old = static_cast<HFONT>(::SelectObject(dis->hDC, st->font_small));
+    }
+    UINT fmt = DT_LEFT | DT_WORDBREAK | DT_NOPREFIX;
+    if (g_shell_rtl) {
+        // Same "V-center only for single-line" omission as paint_text: this is
+        // a small multi-line report, drawn from the top when it overflows.
+        fmt |= DT_RIGHT | DT_RTLREADING;
+    }
+    const wchar_t* s = (st != nullptr && !st->status_text.empty())
+                           ? st->status_text.c_str() : L"";
+    ::DrawTextW(dis->hDC, s, -1, &rc, fmt);
+    if (old != nullptr) {
+        ::SelectObject(dis->hDC, old);
+    }
 }
 
 // Thumbnail blit, aspect-fill into (x,y,w,h). Missing bitmap = vertical
@@ -2415,15 +2468,9 @@ void apply_language(HWND hwnd, LauncherState* st, bool arabic) {
         ::SendMessageW(s, EM_SETCUEBANNER, TRUE,
                        reinterpret_cast<LPARAM>(widen(shell_tr("sh_search_placeholder")).c_str()));
     }
-    // Status line: right-aligned text in RTL (SS_RIGHT), left otherwise.
-    if (HWND h = ::GetDlgItem(hwnd, kIdStatus)) {
-        LONG_PTR style = ::GetWindowLongPtrW(h, GWL_STYLE);
-        style = (style & ~static_cast<LONG_PTR>(SS_TYPEMASK)) |
-                (arabic ? SS_RIGHT : SS_LEFT);
-        ::SetWindowLongPtrW(h, GWL_STYLE, style);
-        ::SetWindowPos(h, nullptr, 0, 0, 0, 0,
-                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-    }
+    // The status line is owner-drawn (see draw_status): alignment flips there
+    // with g_shell_rtl — no SS_RIGHT/SS_LEFT style touch, which would strip the
+    // SS_OWNERDRAW type bits.
     save_language(arabic);
     layout_children(hwnd, st); // EDIT/status rects follow the mirrored layout
     ::InvalidateRect(hwnd, nullptr, TRUE);
@@ -2828,6 +2875,15 @@ LRESULT CALLBACK shell_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                                   ? s2->brush_bg
                                                   : ::GetStockObject(BLACK_BRUSH));
         }
+        case WM_DRAWITEM: {
+            // Owner-draw statics (the status line) report here like the buttons.
+            const DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+            if (dis != nullptr && dis->CtlType == ODT_STATIC && dis->CtlID == kIdStatus) {
+                shell::draw_status(dis, st);
+                return TRUE;
+            }
+            break;
+        }
         case WM_CTLCOLOREDIT: {
             HDC hdc = reinterpret_cast<HDC>(wp);
             LauncherState* s2 = state_of(hwnd);
@@ -3175,9 +3231,11 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
         ::GetClientRect(hwnd, &crc);
         const int cW = crc.right - crc.left;
         const int cH = crc.bottom - crc.top;
-        // Status: right-aligned natively in RTL (hand-drawn text flips in
-        // paint_text; this STATIC is native chrome, so the style flips here).
-        add_control(hwnd, L"STATIC", L"", g_shell_rtl ? SS_RIGHT : SS_LEFT,
+        // Status: OWNERDRAW — mixed Arabic/Latin text scrambles under the
+        // native STATIC draw (draw_status repaints it through DrawTextW's
+        // bidi path instead). Alignment flips inside draw_status with
+        // g_shell_rtl, so no per-language style flip is applied here.
+        add_control(hwnd, L"STATIC", L"", SS_OWNERDRAW,
                     shell::content_x(&state), cH - scale_dpi(&state, 34),
                     shell::content_w(&state, cW), scale_dpi(&state, 22), kIdStatus,
                     state.font_small);

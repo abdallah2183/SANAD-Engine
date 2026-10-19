@@ -447,7 +447,13 @@ NF_TEST(shadow_cascade_config_defaults_are_sane) {
     NF_CHECK(d.caster_extrusion > 0.0f);
     // Default tiling must be memory-neutral against the single 2048x2048 map it
     // replaces: a 2x2 grid of 1024 squares is the same 2048x2048.
-    NF_CHECK_EQ(kShadowTileGrid * kShadowTileGrid, kMaxShadowCascades);
+    //
+    // Both sides are constexpr, so the invariant belongs to the compiler — and
+    // that is the stronger place for it: a layout whose grid no longer holds
+    // one tile per cascade must fail the build, not a suite run. (/WX rejects
+    // the constant expression as a runtime check with C4127.)
+    static_assert(kShadowTileGrid * kShadowTileGrid == kMaxShadowCascades,
+                  "shadow tile grid must hold exactly one tile per cascade");
 }
 
 // ---------------------------------------------------------------------------

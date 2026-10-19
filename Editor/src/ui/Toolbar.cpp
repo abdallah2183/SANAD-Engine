@@ -750,6 +750,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
 
         if (ImGui::BeginMenu(("  " + AV("view")).c_str())) {
             ImGui::MenuItem(AV("grid_step").c_str(), nullptr, &st.show_grid);
+            ImGui::MenuItem(AV("show_navmesh").c_str(), nullptr, &st.show_navmesh);
             ImGui::MenuItem(AV("fps").c_str(), nullptr, &st.show_fps);
             ImGui::MenuItem(AV("validation").c_str(), nullptr, &st.show_validation);
             ImGui::Separator();
@@ -888,7 +889,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     if (ImGui::BeginViewportSideBar("##NFToolbar", ImGui::GetMainViewport(), ImGuiDir_Up, toolbar_h,
                                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings)) {
         if (ImGui::BeginMenuBar()) {
-            ImGui::TextDisabled("SANAD");
+            ImGui::TextColored(theme::rgb(0xD9, 0x9A, 0x2B), "SANAD ENGINE");
             ImGui::SameLine();
             ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
             ImGui::SameLine();

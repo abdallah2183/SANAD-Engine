@@ -1841,6 +1841,56 @@ bool valid_nav_agent_config(const runtime::NavAgentComponent& na, std::string& o
     return true;
 }
 
+// Vehicles (Step 11). The bounds mirror the scene loader's parse_vehicle, so
+// a tune the inspector accepts is a tune the file round-trips — a range that
+// differed between the two would let the UI write a component the loader then
+// refuses.
+bool valid_vehicle_config(const physics::VehicleComponent& vc, std::string& out_err) {
+    const physics::JoltVehicleConfig& c = vc.config;
+    auto extent = [&](f32 v, const char* what) {
+        if (!std::isfinite(v) || v <= 0.0f || v > 10.0f) {
+            out_err = std::string(what) + " must be within (0, 10]";
+            return false;
+        }
+        return true;
+    };
+    if (!extent(c.chassis_half_extents.x, "Chassis half X") ||
+        !extent(c.chassis_half_extents.y, "Chassis half Y") ||
+        !extent(c.chassis_half_extents.z, "Chassis half Z")) {
+        return false;
+    }
+    auto ranged = [&](f32 v, f32 lo, f32 hi, const char* what, const char* range) {
+        if (!std::isfinite(v) || v < lo || v > hi) {
+            out_err = std::string(what) + " must be within " + range;
+            return false;
+        }
+        return true;
+    };
+    if (!ranged(c.chassis_mass, 1.0f, 100000.0f, "Mass", "[1, 100000]")) return false;
+    if (!ranged(c.wheel_radius, 0.05f, 2.0f, "Wheel radius", "[0.05, 2]")) return false;
+    if (!ranged(c.wheel_width, 0.05f, 2.0f, "Wheel width", "[0.05, 2]")) return false;
+    if (!ranged(c.track_half_width, 0.1f, 10.0f, "Track half width", "[0.1, 10]")) return false;
+    if (!ranged(c.wheelbase_half_length, 0.1f, 20.0f, "Wheelbase half length", "[0.1, 20]")) return false;
+    if (!ranged(c.wheel_y, -5.0f, 5.0f, "Wheel attach height", "[-5, 5]")) return false;
+    if (!ranged(c.max_steer_deg, 0.0f, 60.0f, "Max steer", "[0, 60]")) return false;
+    if (!ranged(c.engine_max_torque, 0.0f, 100000.0f, "Engine torque", "[0, 100000]")) return false;
+    if (!ranged(c.suspension_min_length, 0.01f, 5.0f, "Suspension min travel", "[0.01, 5]")) return false;
+    if (!ranged(c.suspension_max_length, 0.01f, 5.0f, "Suspension max travel", "[0.01, 5]")) return false;
+    if (c.suspension_min_length > c.suspension_max_length) {
+        out_err = "Suspension max travel must reach its minimum travel";
+        return false;
+    }
+    if (!ranged(c.suspension_frequency_hz, 0.1f, 20.0f, "Suspension frequency", "[0.1, 20]")) return false;
+    if (!ranged(c.suspension_damping, 0.0f, 5.0f, "Suspension damping", "[0, 5]")) return false;
+    if (!ranged(c.tire_peak_friction, 0.0f, 5.0f, "Tire peak friction", "[0, 5]")) return false;
+    if (!ranged(c.tire_limit_friction, 0.0f, 5.0f, "Tire limit friction", "[0, 5]")) return false;
+    if (!ranged(c.wheel_inertia, 0.01f, 100.0f, "Wheel inertia", "[0.01, 100]")) return false;
+    if (!ranged(c.angular_damping, 0.0f, 5.0f, "Angular damping", "[0, 5]")) return false;
+    if (!ranged(c.max_brake_torque, 0.0f, 50000.0f, "Brake torque", "[0, 50000]")) return false;
+    if (!ranged(c.max_handbrake_torque, 0.0f, 100000.0f, "Handbrake torque", "[0, 100000]")) return false;
+    return true;
+}
+
 } // namespace
 
 bool EditorApp::attach_particles(ecs::Entity e, std::string& out_err) {
@@ -2059,6 +2109,12 @@ bool EditorApp::attach_navmesh(ecs::Entity e, std::string& out_err) {
     }
     w->add<runtime::NavMeshComponent>(e, runtime::NavMeshComponent{});
     after_mutation(e);
+    // The volume is bake input: re-bake now so the viewport debug overlay
+    // draws the mesh the author just placed, not the previous scene's (or
+    // nothing). A no-op for a scene whose volume stays disabled.
+    if (m_runtime != nullptr) {
+        m_runtime->build_scene_navmesh();
+    }
     return true;
 }
 
@@ -2081,6 +2137,10 @@ bool EditorApp::set_navmesh(ecs::Entity e, const runtime::NavMeshComponent& nm,
         w->add<runtime::NavMeshComponent>(e, nm);
     }
     after_mutation(e);
+    // Same re-bake as attach: a resized volume redraws immediately.
+    if (m_runtime != nullptr) {
+        m_runtime->build_scene_navmesh();
+    }
     return true;
 }
 
@@ -2099,6 +2159,11 @@ bool EditorApp::detach_navmesh(ecs::Entity e, std::string& out_err) {
     }
     w->remove<runtime::NavMeshComponent>(e);
     after_mutation(e);
+    // Detaching the volume drops the bake: the overlay must go blank, not keep
+    // drawing the mesh that was just deleted.
+    if (m_runtime != nullptr) {
+        m_runtime->build_scene_navmesh();
+    }
     return true;
 }
 
@@ -2116,6 +2181,11 @@ bool EditorApp::attach_nav_agent(ecs::Entity e, std::string& out_err) {
     }
     w->add<runtime::NavAgentComponent>(e, runtime::NavAgentComponent{});
     after_mutation(e);
+    // Walkers bind at bake time (see step_navmesh): re-bake so an attached
+    // agent shows up in the overlay without a volume touch.
+    if (m_runtime != nullptr) {
+        m_runtime->build_scene_navmesh();
+    }
     return true;
 }
 
@@ -2138,6 +2208,11 @@ bool EditorApp::set_nav_agent(ecs::Entity e, const runtime::NavAgentComponent& n
         w->add<runtime::NavAgentComponent>(e, na);
     }
     after_mutation(e);
+    // Same re-bind as attach: a goal edit before any bake leaves the walker
+    // invisible to the overlay.
+    if (m_runtime != nullptr) {
+        m_runtime->build_scene_navmesh();
+    }
     return true;
 }
 
@@ -2156,6 +2231,155 @@ bool EditorApp::detach_nav_agent(ecs::Entity e, std::string& out_err) {
     }
     w->remove<runtime::NavAgentComponent>(e);
     after_mutation(e);
+    // A detached walker leaves the overlay: re-bind without it.
+    if (m_runtime != nullptr) {
+        m_runtime->build_scene_navmesh();
+    }
+    return true;
+}
+
+// --- Vehicles (Step 11) ------------------------------------------------------
+// Same direct-edit shape as navigation above: validated at the door with the
+// same bounds the loader enforces, add-or-replace, and a synchronous vehicle
+// re-bind so the car the author just placed simulates (and draws, through its
+// Transform) without reopening the scene.
+
+bool EditorApp::attach_vehicle(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<physics::VehicleComponent>(e)) {
+        return true;
+    }
+    w->add<physics::VehicleComponent>(e, physics::VehicleComponent{});
+    after_mutation(e);
+    if (m_runtime != nullptr) {
+        m_runtime->bind_scene_vehicles();
+    }
+    return true;
+}
+
+bool EditorApp::set_vehicle(ecs::Entity e, const physics::VehicleComponent& vc,
+                            std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_vehicle_config(vc, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<physics::VehicleComponent>(e)) {
+        // The tune is authored; live inputs and the Jolt view are session
+        // state. Carrying them across a config edit would drive the retuned
+        // car with a stale foot — or through a dangling pointer.
+        physics::VehicleComponent fresh = vc;
+        fresh.throttle = 0.0f;
+        fresh.steer = 0.0f;
+        fresh.brake = 0.0f;
+        fresh.handbrake = 0.0f;
+        fresh.vehicle = nullptr;
+        *existing = fresh;
+    } else {
+        physics::VehicleComponent fresh = vc;
+        fresh.throttle = 0.0f;
+        fresh.steer = 0.0f;
+        fresh.brake = 0.0f;
+        fresh.handbrake = 0.0f;
+        fresh.vehicle = nullptr;
+        w->add<physics::VehicleComponent>(e, fresh);
+    }
+    after_mutation(e);
+    if (m_runtime != nullptr) {
+        m_runtime->bind_scene_vehicles();
+    }
+    return true;
+}
+
+bool EditorApp::detach_vehicle(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<physics::VehicleComponent>(e)) {
+        out_err = "Entity has no VehicleComponent";
+        return false;
+    }
+    w->remove<physics::VehicleComponent>(e);
+    after_mutation(e);
+    // A detached car leaves the simulation: re-bind without it, or its
+    // JoltVehicle keeps driving a component that no longer exists.
+    if (m_runtime != nullptr) {
+        m_runtime->bind_scene_vehicles();
+    }
+    return true;
+}
+
+bool EditorApp::set_vehicle_input(ecs::Entity e, f32 throttle, f32 steer, f32 brake,
+                                  f32 handbrake, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    auto* comp = w->get<physics::VehicleComponent>(e);
+    if (comp == nullptr) {
+        out_err = "Entity has no VehicleComponent";
+        return false;
+    }
+    // Live input only (never persisted): what gameplay, AI or the debug panel
+    // writes every tick. Separated from set_vehicle so a tune edit can never
+    // wipe or invent intent — same split as set_character_input. Finite and in
+    // range; the drive call clamps anyway, but the door refuses garbage with
+    // a name rather than silently pinning it.
+    if (!std::isfinite(throttle) || throttle < -1.0f || throttle > 1.0f) {
+        out_err = "Throttle must be within [-1, 1]";
+        return false;
+    }
+    if (!std::isfinite(steer) || steer < -1.0f || steer > 1.0f) {
+        out_err = "Steer must be within [-1, 1]";
+        return false;
+    }
+    if (!std::isfinite(brake) || brake < 0.0f || brake > 1.0f) {
+        out_err = "Brake must be within [0, 1]";
+        return false;
+    }
+    if (!std::isfinite(handbrake) || handbrake < 0.0f || handbrake > 1.0f) {
+        out_err = "Handbrake must be within [0, 1]";
+        return false;
+    }
+    comp->throttle = throttle;
+    comp->steer = steer;
+    comp->brake = brake;
+    comp->handbrake = handbrake;
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::reset_vehicle_pose(ecs::Entity e, std::string& out_err) {
+    if (m_runtime == nullptr) {
+        out_err = "No runtime attached";
+        return false;
+    }
+    if (!m_runtime->reset_vehicle(e)) {
+        out_err = "Entity has no bound vehicle";
+        return false;
+    }
     return true;
 }
 
@@ -2912,6 +3136,11 @@ bool EditorApp::play(std::string& out_err) {
     // also the right semantics: a play session begins from the scene state, not
     // from wherever the previous session left the simulation.
     m_runtime->rebuild_physics_from_scene();
+    // Cars from the authored components, for the same reason: a play session
+    // begins from the scene state, and a JoltVehicle bound earlier still sits
+    // at its bind-time pose — without this, Play would teleport every car
+    // back to where it was when its component was last touched.
+    m_runtime->bind_scene_vehicles();
     if (!m_play.play(*m_runtime->edit_scene(), out_err)) {
         return false;
     }
@@ -2936,6 +3165,11 @@ bool EditorApp::stop(std::string& out_err) {
         m_runtime->edit_scene() != nullptr) {
         restore_scene(*m_runtime->edit_scene(), *m_play.snapshot());
         m_runtime->rebuild_physics_from_scene();
+        // Cars back to their pre-play tune and placement: the restore above
+        // scrubs the play session's live inputs and JoltVehicle views, and
+        // the bindings must be rebuilt from the restored components — same
+        // reason physics rebuilds here.
+        m_runtime->bind_scene_vehicles();
         m_runtime->mark_scene_edited();
         m_selection.prune(*world());
         {

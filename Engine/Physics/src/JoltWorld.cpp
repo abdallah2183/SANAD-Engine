@@ -196,16 +196,20 @@ JoltBody create_body_from_shape(JPH::PhysicsSystem& physics, const JPH::ShapeRef
                                 const BodyDesc& desc, bool sensor, bool force_static) {
     JoltBody out;
     if (shape == nullptr) return out;
-    // Kinematic maps to Static here (as in add_body): the wrapper's motion
-    // vocabulary is "static or dynamic", and a body that only moves through
-    // set_linear_velocity() must not be integrated by the solver.
+    // Three motion vocabularies. Dynamic integrates and responds; Kinematic is
+    // moved ONLY through pose/velocity setters (the vehicle world's obstacle
+    // mirrors — solid to contacts, driven by another world's simulation, so it
+    // must not integrate its own motion and must not get a mass override);
+    // Static never moves.
     const bool dynamic = !force_static && desc.type == BodyType::Dynamic;
+    const bool kinematic = !force_static && desc.type == BodyType::Kinematic;
     JPH::BodyCreationSettings settings(
         shape, JPH::RVec3(desc.position.x, desc.position.y, desc.position.z),
         JPH::Quat(desc.orientation.x, desc.orientation.y, desc.orientation.z,
                   desc.orientation.w),
-        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::kMoving : Layers::kNonMoving);
+        dynamic ? JPH::EMotionType::Dynamic
+                : (kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Static),
+        (dynamic || kinematic) ? Layers::kMoving : Layers::kNonMoving);
     settings.mFriction = desc.friction;
     settings.mRestitution = desc.restitution;
     settings.mLinearDamping = desc.linear_damping;
@@ -781,6 +785,19 @@ void JoltWorld::set_angular_velocity(JoltBody handle, const Vec3& velocity) {
     Impl& impl = *m_impl;
     impl.physics.GetBodyInterface().SetAngularVelocity(
         JPH::BodyID(handle.id), JPH::Vec3(velocity.x, velocity.y, velocity.z));
+}
+
+void JoltWorld::set_pose(JoltBody handle, const Vec3& position, const Quat& orientation) {
+    if (!is_alive(handle)) return;
+    // Activate, not Deactivate: the point of a teleported mirror is the
+    // contacts it forms in the NEXT step, and a deactivated body collides with
+    // nothing. Jolt stores (x, y, z, w) in the same order as nf::Quat (state()).
+    Impl& impl = *m_impl;
+    impl.physics.GetBodyInterface().SetPositionAndRotation(
+        JPH::BodyID(handle.id),
+        JPH::RVec3(position.x, position.y, position.z),
+        JPH::Quat(orientation.x, orientation.y, orientation.z, orientation.w),
+        JPH::EActivation::Activate);
 }
 
 void JoltWorld::apply_impulse(JoltBody handle, const Vec3& impulse) {

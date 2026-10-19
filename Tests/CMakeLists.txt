@@ -183,9 +183,14 @@ add_executable(RuntimeTests
     # declares `NavMesh:` / `NavAgent:` is baked, walked by update() and
     # observable, with no game code calling the navmesh directly.
     RuntimeTests/test_runtime_nav_agents.cpp
+    # Step 11: Jolt arcade cars. JoltVehicle and the JoltWorld vehicle API are
+    # unit-tested in PhysicsTests; this file is the Rule 0 half — a scene that
+    # merely declares `Vehicle:` is bound, driven by update() from live inputs
+    # and written back into its Transform, with no game code spawning bodies.
+    RuntimeTests/test_runtime_vehicles.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI)
+target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)
 nf_target_set_warnings(RuntimeTests)
 
 # --- Physics tests (shapes, broadphase, narrowphase, solver, determinism) ---
@@ -534,6 +539,10 @@ if(NF_BUILD_EDITOR)
         # Phase 28: navigation authoring (attach / validated edit / detach +
         # the save/load round trip), same contract as test_wiring_editor.cpp.
         EditorTests/test_nav_editor.cpp
+        # Step 11: vehicle authoring (attach / validated tune / live-only debug
+        # drive / detach), plus the play/stop preservation the PlayMode
+        # copiers now guarantee for vehicles and navigation alike.
+        EditorTests/test_vehicle_editor.cpp
     )
     target_include_directories(EditorTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

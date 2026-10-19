@@ -37,6 +37,11 @@ struct EditorUiSettings {
     // (see draw_ground_grid).
     bool show_grid = false;
     float grid_step = 1.0f;
+    // Navigation debug overlay (Step 8): the baked mesh outlines plus every
+    // bound agent's remaining route, projected over the viewport image like
+    // the ground grid. Off by default for the same reason the grid is: a debug
+    // layer must never compete with the geometry it annotates.
+    bool show_navmesh = false;
     bool show_fps = true;
     bool show_validation = true;
     bool show_profiler = false;
@@ -46,9 +51,10 @@ struct EditorUiSettings {
     float snap_rotate = 15.0f;
     float snap_scale = 0.25f;
     // Accent colour (the one accent the whole UI uses)
-    float accent_r = 0.298f;
-    float accent_g = 0.553f;
-    float accent_b = 1.000f;
+    // SANAD brand gold (#D99A2B): selection, active tools and primary actions.
+    float accent_r = 0.851f;
+    float accent_g = 0.604f;
+    float accent_b = 0.169f;
     // Export dialog memory
     int export_format = 5;        // MeshFormat::Glb — one self-contained file
     bool export_whole_scene = true;

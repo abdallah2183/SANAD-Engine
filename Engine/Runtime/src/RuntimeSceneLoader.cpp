@@ -380,6 +380,51 @@ static bool parse_nav_agent(const std::string& line, NavAgentComponent& out, std
     return true;
 }
 
+static bool parse_vehicle(const std::string& line, physics::VehicleComponent& out,
+                          std::string& out_bad) {
+    // A drivable car: configuration only. throttle/steer/brake/handbrake are
+    // live inputs and the JoltVehicle pointer is session state — none of the
+    // five is parsed here, same rule as Character's wish_dir/jump.
+    physics::JoltVehicleConfig& cfg = out.config;
+    f32 cx = cfg.chassis_half_extents.x, cy = cfg.chassis_half_extents.y, cz = cfg.chassis_half_extents.z;
+    if (field_vec3(line, "chassis", cx, cy, cz)) {
+        if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(cz) ||
+            cx <= 0.0f || cx > 10.0f || cy <= 0.0f || cy > 10.0f || cz <= 0.0f || cz > 10.0f) {
+            out_bad = "chassis";
+            return false;
+        }
+        cfg.chassis_half_extents = Vec3(cx, cy, cz);
+    }
+    if (!optional_float_in_range(line, "mass=", 1.0f, 100000.0f, cfg.chassis_mass, out_bad)) return false;
+    if (!optional_float_in_range(line, "wheel_radius=", 0.05f, 2.0f, cfg.wheel_radius, out_bad)) return false;
+    if (!optional_float_in_range(line, "wheel_width=", 0.05f, 2.0f, cfg.wheel_width, out_bad)) return false;
+    if (!optional_float_in_range(line, "track=", 0.1f, 10.0f, cfg.track_half_width, out_bad)) return false;
+    if (!optional_float_in_range(line, "wheelbase=", 0.1f, 20.0f, cfg.wheelbase_half_length, out_bad)) return false;
+    // Attachment height is chassis-local and usually negative (wheels hang
+    // below the body), so the range admits both signs.
+    if (!optional_float_in_range(line, "wheel_y=", -5.0f, 5.0f, cfg.wheel_y, out_bad)) return false;
+    if (!optional_float_in_range(line, "steer_deg=", 0.0f, 60.0f, cfg.max_steer_deg, out_bad)) return false;
+    if (!optional_float_in_range(line, "torque=", 0.0f, 100000.0f, cfg.engine_max_torque, out_bad)) return false;
+    if (!optional_float_in_range(line, "susp_min=", 0.01f, 5.0f, cfg.suspension_min_length, out_bad)) return false;
+    if (!optional_float_in_range(line, "susp_max=", 0.01f, 5.0f, cfg.suspension_max_length, out_bad)) return false;
+    // A minimum travel past the maximum is a spring that can never extend:
+    // refuse the pair rather than simulate it.
+    if (cfg.suspension_min_length > cfg.suspension_max_length) {
+        out_bad = "susp_max";
+        return false;
+    }
+    if (!optional_float_in_range(line, "susp_freq=", 0.1f, 20.0f, cfg.suspension_frequency_hz, out_bad)) return false;
+    if (!optional_float_in_range(line, "susp_damping=", 0.0f, 5.0f, cfg.suspension_damping, out_bad)) return false;
+    if (!optional_float_in_range(line, "tire_peak=", 0.0f, 5.0f, cfg.tire_peak_friction, out_bad)) return false;
+    if (!optional_float_in_range(line, "tire_limit=", 0.0f, 5.0f, cfg.tire_limit_friction, out_bad)) return false;
+    if (!optional_float_in_range(line, "wheel_inertia=", 0.01f, 100.0f, cfg.wheel_inertia, out_bad)) return false;
+    if (!optional_float_in_range(line, "angular_damping=", 0.0f, 5.0f, cfg.angular_damping, out_bad)) return false;
+    if (!optional_float_in_range(line, "brake_torque=", 0.0f, 50000.0f, cfg.max_brake_torque, out_bad)) return false;
+    if (!optional_float_in_range(line, "handbrake_torque=", 0.0f, 100000.0f, cfg.max_handbrake_torque, out_bad)) return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
 // Axis back to the single-letter form the loader reads. Only the three
 // cardinal axes are writable; anything else collapses to Y, which matches the
 // loader's own default and keeps save/load a fixed point.
@@ -1165,6 +1210,18 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 } else {
                     scene->world().add<NavAgentComponent>(e, std::move(comp));
                 }
+            } else if (line.rfind("  Vehicle:",0)==0) {
+                // A drivable car: configuration only. The four drive inputs
+                // are live state (same rule as Character's wish_dir/jump) and
+                // the JoltVehicle pointer is session state — none is parsed.
+                physics::VehicleComponent comp;
+                std::string bad;
+                if (!parse_vehicle(line, comp, bad)) {
+                    result.warnings.push_back("Vehicle line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<physics::VehicleComponent>(e, std::move(comp));
+                }
             } else {
                 result.warnings.push_back("Unknown component line: " + line);
             }
@@ -1625,6 +1682,34 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " arrive=" << agent->arrive_radius
                 << " enabled=" << (agent->enabled ? "true" : "false") << "\n";
         }
+        // Vehicle: config only — the four drive inputs are live gameplay state
+        // and the JoltVehicle pointer is session state, so neither is scene
+        // data (same rule as Character's wish_dir/jump/grounded).
+        const auto* vehicle = scene_obj.world().get<physics::VehicleComponent>(e);
+        if (vehicle) {
+            const physics::JoltVehicleConfig& cfg = vehicle->config;
+            out << "  Vehicle: chassis(" << cfg.chassis_half_extents.x << ","
+                << cfg.chassis_half_extents.y << "," << cfg.chassis_half_extents.z << ")"
+                << " mass=" << cfg.chassis_mass
+                << " wheel_radius=" << cfg.wheel_radius
+                << " wheel_width=" << cfg.wheel_width
+                << " track=" << cfg.track_half_width
+                << " wheelbase=" << cfg.wheelbase_half_length
+                << " wheel_y=" << cfg.wheel_y
+                << " steer_deg=" << cfg.max_steer_deg
+                << " torque=" << cfg.engine_max_torque
+                << " susp_min=" << cfg.suspension_min_length
+                << " susp_max=" << cfg.suspension_max_length
+                << " susp_freq=" << cfg.suspension_frequency_hz
+                << " susp_damping=" << cfg.suspension_damping
+                << " tire_peak=" << cfg.tire_peak_friction
+                << " tire_limit=" << cfg.tire_limit_friction
+                << " wheel_inertia=" << cfg.wheel_inertia
+                << " angular_damping=" << cfg.angular_damping
+                << " brake_torque=" << cfg.max_brake_torque
+                << " handbrake_torque=" << cfg.max_handbrake_torque
+                << " enabled=" << (vehicle->enabled ? "true" : "false") << "\n";
+        }
     }
     return out.str();
 }
@@ -1750,6 +1835,18 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         // component, so there is nothing to scrub here — the component itself
         // is pure configuration plus the authored goal.
         dst.add<NavAgentComponent>(de, *na);
+    }
+    if (const auto* vc = src.get<physics::VehicleComponent>(se)) {
+        // Live inputs (throttle/steer/brake/handbrake) are per-session, and
+        // the JoltVehicle view points at another world's simulation: a merge
+        // that carried either would drive a fresh car with a stale foot.
+        physics::VehicleComponent fresh = *vc;
+        fresh.throttle = 0.0f;
+        fresh.steer = 0.0f;
+        fresh.brake = 0.0f;
+        fresh.handbrake = 0.0f;
+        fresh.vehicle = nullptr;
+        dst.add<physics::VehicleComponent>(de, fresh);
     }
 }
 

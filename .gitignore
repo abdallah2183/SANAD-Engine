@@ -72,6 +72,11 @@ __pycache__/
 Samples/MedievalVillage/Content/Medieval/Meshes/
 Samples/MedievalVillage/Content/Medieval/Textures/
 
+# Local audit/scratch: QA extractions of the portable build, patch backups,
+# logo concepts. The committed tree is the source of truth; nothing here is
+# needed to build, and it contains copies of shipped binaries.
+.work/
+
 # Session scratch: build logs, probes
 build_out.txt
 editor_tests_out.txt

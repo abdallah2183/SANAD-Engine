@@ -55,7 +55,10 @@ std::vector<f32> mix_one(const AudioVolumeSettings& settings, BusId bus,
 // ---------------------------------------------------------------------------
 
 NF_TEST(bus_names_round_trip_for_every_bus) {
-    NF_CHECK_EQ(kBusCount, 5u);
+    // A bus added without a name here must fail the build, not this loop — and
+    // `expected` below is sized from kBusCount, so the two can only drift
+    // apart. (/WX rejects the constant expression as a runtime check: C4127.)
+    static_assert(kBusCount == 5u, "bus count drifted from the five named buses");
     const char* expected[kBusCount] = {"master", "music", "sfx", "ambience",
                                        "voice"};
     for (u32 i = 0; i < kBusCount; ++i) {

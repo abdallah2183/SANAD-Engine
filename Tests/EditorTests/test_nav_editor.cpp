@@ -14,6 +14,7 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Editor/Console.hpp>
 #include <NF/Editor/EditorApp.hpp>
+#include <NF/Editor/ToolbarUi.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
@@ -251,6 +252,80 @@ NF_TEST(editor_every_add_menu_component_attaches_nav_entries) {
     ecs::World& world = runtime.edit_scene()->world();
     NF_CHECK(world.has<runtime::NavMeshComponent>(e));
     NF_CHECK(world.has<runtime::NavAgentComponent>(e));
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(editor_nav_debug_overlay_reads_the_live_bake) {
+    // Step 8: the viewport overlay consumes Runtime::nav_debug_snapshot().
+    // The volume mutators re-bake synchronously, so the overlay reads a live
+    // mesh while authoring — no reopen, no play press. Detaching drops the
+    // bake and the snapshot goes blank with it.
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+
+    const auto tmp = nav_temp_dir("nf_ed_nav_debug");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    std::string err;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+
+    // Off by default: a debug layer must never compete with the geometry it
+    // annotates until the author asks for it. Pinned at the type level —
+    // ui_settings() itself lives in the editor shell, outside what tests link.
+    NF_CHECK(!editor::EditorUiSettings{}.show_navmesh);
+
+    NF_CHECK(app.create_entity("Volume", ecs::kInvalidEntity, err));
+    const ecs::Entity volume = app.stack().last_target();
+    NF_CHECK(volume.valid());
+    runtime::NavMeshComponent nm;
+    nm.area_x = 12.0f;
+    nm.area_y = 8.0f;
+    nm.area_z = 12.0f;
+    NF_CHECK(app.set_navmesh(volume, nm, err));
+    NF_CHECK(app.runtime()->navmesh_built());
+    runtime::NavDebugSnapshot snap = app.runtime()->nav_debug_snapshot();
+    NF_CHECK(snap.has_mesh);
+    NF_CHECK(!snap.mesh_polygons.empty());
+    NF_CHECK(snap.agents.empty());
+
+    NF_CHECK(app.create_entity("Walker", ecs::kInvalidEntity, err));
+    const ecs::Entity walker = app.stack().last_target();
+    NF_CHECK(walker.valid());
+    runtime::NavAgentComponent na;
+    na.goal_x = 10.0f;
+    na.goal_z = 10.0f;
+    NF_CHECK(app.set_nav_agent(walker, na, err));
+    snap = app.runtime()->nav_debug_snapshot();
+    NF_CHECK_EQ(snap.agents.size(), static_cast<size_t>(1));
+    const runtime::NavDebugAgent& a = snap.agents[0];
+    NF_CHECK(a.entity == walker);
+    NF_CHECK_NEAR(a.goal.x, 10.0f, 1e-6f);
+    NF_CHECK_NEAR(a.goal.z, 10.0f, 1e-6f);
+    // Posed, never stepped (edit freeze): the marker and the goal ring draw,
+    // but there is no route yet.
+    const auto* wt = runtime.edit_scene()->world().get<scene::Transform>(walker);
+    NF_CHECK(wt != nullptr);
+    if (wt != nullptr) {
+        NF_CHECK_NEAR(a.position.x, wt->local_x, 1e-6f);
+        NF_CHECK_NEAR(a.position.z, wt->local_z, 1e-6f);
+    }
+    NF_CHECK(!a.has_path);
+
+    // Detaching the volume drops the bake: blank overlay, not a stale mesh.
+    NF_CHECK(app.detach_navmesh(volume, err));
+    NF_CHECK(!app.runtime()->navmesh_built());
+    NF_CHECK(!app.runtime()->nav_debug_snapshot().has_mesh);
 
     std::filesystem::remove_all(tmp);
 }

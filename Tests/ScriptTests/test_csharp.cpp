@@ -86,9 +86,12 @@ NF_TEST(csharp_marshal_string_buffer) {
 }
 
 NF_TEST(csharp_marshal_layout_and_names) {
-    NF_CHECK(sizeof(NetVec3) == 12);
-    NF_CHECK(sizeof(HostApi) == sizeof(void*));
-    NF_CHECK(sizeof(CSharpEntity) == 8); // C# long, fixed width both sides
+    // The ABI crossing is a property of the types, not of a run: the managed
+    // mirror declares LayoutKind.Sequential, so a size that moves must fail the
+    // build. (/WX rejects the constants as runtime checks, C4127.)
+    static_assert(sizeof(NetVec3) == 12, "NetVec3 must stay three 32-bit floats");
+    static_assert(sizeof(HostApi) == sizeof(void*), "HostApi must stay one pointer");
+    static_assert(sizeof(CSharpEntity) == 8, "CSharpEntity must stay one C# long");
     NF_CHECK(csharp_type_name("NFGameScript", "NF.GameScript.NFSandbox") ==
              "NF.GameScript.NFSandbox, NFGameScript");
     NetVec3 v{1.0f, 2.0f, 3.0f};

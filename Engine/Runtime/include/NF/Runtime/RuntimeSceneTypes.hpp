@@ -1,11 +1,20 @@
 #pragma once
 
 #include <NF/Assets/AssetId.hpp>
+#include <NF/Core/Math.hpp>
 #include <NF/Core/Types.hpp>
+#include <NF/ECS/Entity.hpp>
 
 #include <string>
+#include <vector>
 
-namespace nf::runtime {
+namespace nf {
+
+namespace ai {
+class NavMesh;
+} // namespace ai
+
+namespace runtime {
 
 // Components used in the Runtime Scene (.nfscene v1)
 // These are explicit, not generic reflection, for v0.1
@@ -353,6 +362,49 @@ struct NavAgentComponent {
     bool enabled = true;
 };
 
+/// One agent's live navigation state, as the viewport debug draw needs it.
+/// A plain copy out of the runtime: position from the entity's Transform, the
+/// authored goal from the component, the route from the bound path state.
+/// Session state only — never saved, like the path itself.
+struct NavDebugAgent {
+    /// The agent's entity: the one stable key every agent has, and what the
+    /// snapshot sorts by (the runtime's live map is unordered).
+    ecs::Entity entity{};
+    Vec3 position{};
+    Vec3 goal{};
+    /// Remaining route: waypoints from the one currently walked to, to the
+    /// goal. Empty when the agent has no path (off the mesh, unreachable, or
+    /// never stepped since adopt).
+    std::vector<Vec3> path;
+    bool has_path = false;
+    bool at_goal = false;
+};
+
+/// Everything the navigation debug overlay draws, in one const call. Empty
+/// (`has_mesh` false, no agents) when the scene carries no baked volume, so
+/// the overlay draws nothing instead of a stale previous scene's mesh.
+/// Agents are sorted by entity id: the runtime's live map is unordered, and an
+/// overlay whose draw order flickers with pointer hashes is a flicker no test
+/// can pin and no author can read.
+struct NavDebugSnapshot {
+    bool has_mesh = false;
+    /// Bake generation the paths were planned against (see Runtime's
+    /// m_nav_generation): a snapshot whose mesh was rebaked mid-frame is
+    /// still self-consistent because planning and copying happen together.
+    u64 mesh_generation = 0;
+    /// Polygon outlines as vertex loops, one inner vector per polygon, in mesh
+    /// order. The overlay strokes every loop edge.
+    std::vector<std::vector<Vec3>> mesh_polygons;
+    std::vector<NavDebugAgent> agents;
+};
+
+/// The mesh's polygon outlines as flat endpoint pairs (two Vec3 per edge, in
+/// polygon order). Pure: the draw layer projects these with the viewport
+/// camera, so the enumeration itself is testable without a window, a device
+/// or ImGui. Shared edges appear once per polygon that owns them — the overlay
+/// draws both strokes, which reads as a slightly brighter internal line.
+std::vector<Vec3> nav_debug_mesh_edge_points(const ai::NavMesh& mesh);
+
 /// A breakable object authored in the scene (Phase 19, design doc §41
 /// "Breakable meshes / Fracture assets / Debris / Impulses").
 ///
@@ -389,4 +441,5 @@ struct DestructibleComponent {
     bool enabled = true;
 };
 
-} // namespace nf::runtime
+} // namespace runtime
+} // namespace nf

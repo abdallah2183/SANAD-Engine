@@ -467,3 +467,125 @@ NF_TEST(edit_freeze_holds_the_agent_still) {
     }
     NF_CHECK_EQ(env.runtime->nav_agents_at_goal(), static_cast<size_t>(0));
 }
+
+NF_TEST(nav_debug_snapshot_empty_without_a_volume) {
+    // No NavMesh line: no bake, no agents, and the snapshot must be empty —
+    // the overlay draws nothing rather than a stale previous scene's mesh.
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    auto s = std::make_unique<Scene>("Quiet");
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/Quiet.nfscene");
+    env.runtime->update(kDt);
+
+    NF_CHECK(!env.runtime->navmesh_built());
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    NF_CHECK(!snap.has_mesh);
+    NF_CHECK(snap.mesh_polygons.empty());
+    NF_CHECK(snap.agents.empty());
+}
+
+NF_TEST(nav_debug_snapshot_matches_the_bake_before_any_step) {
+    // Adopted but never stepped (the editor's edit freeze): the mesh is there
+    // to draw, the agent is posed with a goal but no route yet.
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    auto s = std::make_unique<Scene>("Authored");
+    add_nav_scene(*s);
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/Authored.nfscene");
+
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    NF_CHECK(snap.has_mesh);
+    NF_CHECK_EQ(snap.mesh_polygons.size(), env.runtime->navmesh_polygon_count());
+    NF_CHECK(!snap.mesh_polygons.empty());
+    NF_CHECK_EQ(snap.agents.size(), static_cast<size_t>(1));
+    const NavDebugAgent& a = snap.agents[0];
+    NF_CHECK_NEAR(a.position.x, 1.0f, 1e-6f);
+    NF_CHECK_NEAR(a.position.z, 1.0f, 1e-6f);
+    NF_CHECK_NEAR(a.goal.x, 10.0f, 1e-6f);
+    NF_CHECK_NEAR(a.goal.z, 10.0f, 1e-6f);
+    // Never stepped: planned by nobody, so no route — the overlay draws the
+    // posed agent and its goal ring, but no path.
+    NF_CHECK(!a.has_path);
+    NF_CHECK(a.path.empty());
+    NF_CHECK(!a.at_goal);
+}
+
+NF_TEST(nav_debug_snapshot_carries_the_live_route_while_walking) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    auto s = std::make_unique<Scene>("Patrol");
+    add_nav_scene(*s);
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/Patrol.nfscene");
+
+    for (int i = 0; i < 30; ++i) {
+        env.runtime->update(kDt);
+    }
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    NF_CHECK(snap.has_mesh);
+    NF_CHECK_EQ(snap.agents.size(), static_cast<size_t>(1));
+    const NavDebugAgent& a = snap.agents[0];
+    // Thirty steps at 3 m/s: under way but not arrived (the full walk is
+    // ~5.7 s), so the route exists and still has legs in it.
+    NF_CHECK(a.has_path);
+    NF_CHECK(a.path.size() >= 2u);
+    NF_CHECK(!a.at_goal);
+    // The route ends at the authored goal, and the walker has left its start.
+    const Vec3& last = a.path.back();
+    NF_CHECK_NEAR(last.x, 10.0f, 0.30f);
+    NF_CHECK_NEAR(last.z, 10.0f, 0.30f);
+    NF_CHECK(a.position.x > 1.0f + 0.5f);
+    // Same order every read: the overlay must not flicker between agents.
+    const NavDebugSnapshot again = env.runtime->nav_debug_snapshot();
+    NF_CHECK_EQ(again.agents.size(), snap.agents.size());
+    for (size_t i = 0; i < snap.agents.size(); ++i) {
+        NF_CHECK(again.agents[i].entity == snap.agents[i].entity);
+    }
+}
+
+NF_TEST(nav_debug_edge_points_cover_every_polygon_edge_once_per_owner) {
+    // The pure enumerator the overlay strokes: two endpoints per edge, in
+    // polygon order, shared edges once per owning polygon.
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    auto s = std::make_unique<Scene>("Authored");
+    add_nav_scene(*s);
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/Authored.nfscene");
+    NF_CHECK(env.runtime->navmesh_built());
+
+    const ai::NavMesh* mesh = env.runtime->navmesh();
+    NF_CHECK(mesh != nullptr);
+    if (mesh == nullptr) {
+        return;
+    }
+    const std::vector<Vec3> edges = nav_debug_mesh_edge_points(*mesh);
+    size_t want = 0;
+    for (u32 i = 0; i < mesh->polygon_count(); ++i) {
+        want += mesh->polygon(i).verts.size();
+    }
+    NF_CHECK(!edges.empty());
+    NF_CHECK_EQ(edges.size(), want * 2u);
+    // Every polygon's first vertex opens an edge: no polygon is skipped.
+    for (u32 i = 0; i < mesh->polygon_count(); ++i) {
+        const Vec3& v0 = mesh->polygon(i).verts[0];
+        bool found = false;
+        for (size_t e = 0; e < edges.size(); e += 2) {
+            if (edges[e].nearly_equals(v0, 1e-6f)) {
+                found = true;
+                break;
+            }
+        }
+        NF_CHECK(found);
+    }
+}

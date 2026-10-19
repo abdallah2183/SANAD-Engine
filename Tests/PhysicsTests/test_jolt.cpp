@@ -112,6 +112,42 @@ NF_TEST(jolt_set_velocity_moves_bodies) {
     NF_CHECK(st.position.x > 2.0f); // flew sideways instead of dropping straight
 }
 
+NF_TEST(jolt_kinematic_body_moves_only_through_set_pose) {
+    JoltWorld world;
+    NF_CHECK(world.add_body(static_plane()).valid());
+
+    // Created kinematic: posed where it was asked and gravity is not its
+    // mover — a kinematic slab hangs exactly where the creator put it while a
+    // dynamic ball beside it keeps falling. One integrated, one not.
+    BodyDesc slab;
+    slab.type = BodyType::Kinematic;
+    slab.shape = Shape::make_box(Vec3{1.0f, 0.25f, 1.0f});
+    slab.position = Vec3{6, 4, 0};
+    const JoltBody platform = world.add_body(slab);
+    NF_CHECK(platform.valid());
+
+    BodyDesc ball;
+    ball.shape = Shape::make_sphere(0.25f);
+    ball.position = Vec3{3, 6, 0};
+    const JoltBody b = world.add_body(ball);
+    NF_CHECK(b.valid());
+
+    step(world, 60);
+    NF_CHECK_NEAR(world.state(platform).position.x, 6.0f, 1e-4f);
+    NF_CHECK_NEAR(world.state(platform).position.y, 4.0f, 1e-4f);
+    NF_CHECK(world.state(b).position.y < 6.0f);
+
+    // set_pose is THE mover: teleport the slab next to the resting ball, arm
+    // its velocity, and the following steps carry the ball sideways — pushed
+    // by a body that cannot itself be pushed.
+    world.set_pose(platform, Vec3{3.4f, 0.35f, 0.0f}, Quat::identity());
+    NF_CHECK_NEAR(world.state(platform).position.x, 3.4f, 1e-4f);
+    NF_CHECK_NEAR(world.state(platform).position.y, 0.35f, 1e-4f);
+    world.set_linear_velocity(platform, Vec3{2, 0, 0});
+    step(world, 120);
+    NF_CHECK(world.state(b).position.x > 3.0f);
+}
+
 NF_TEST(jolt_determinism_same_steps_same_state) {
     auto run = [] {
         JoltWorld world;

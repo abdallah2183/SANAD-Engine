@@ -388,6 +388,15 @@ public:
     /// Dead or invalid handles are a no-op.
     void set_angular_velocity(JoltBody handle, const Vec3& velocity);
 
+    /// Teleports a body to an explicit pose, activating it (so the solver's
+    /// contacts wake against the moved body). Exists for KINEMATIC mirrors: a
+    /// body of the vehicle world that shadows another world's simulated body
+    /// poses itself here each step, and its velocity setters (above) arm the
+    /// motion contacts read. Valid on any non-sensor body; dead or invalid
+    /// handles are a no-op. Orientation must be normalized (the engine's Quat
+    /// keeps its own rotations normalized, so callers have nothing to do).
+    void set_pose(JoltBody handle, const Vec3& position, const Quat& orientation);
+
     /// Applies an impulse at the body's centre of mass: the linear velocity
     /// changes by impulse / mass and the body does not spin. Units are N*s, so
     /// `impulse = mass * desired_velocity` needs no frame rate — unlike a force,

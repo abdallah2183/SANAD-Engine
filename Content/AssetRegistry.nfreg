@@ -1,6 +1,6 @@
 # SANAD Asset Registry
 version: 1
-count: 3
+count: 4
 ---
 id: 49cb7905-ece6-4426-8c57-e2460ac79136
 type: Material
@@ -23,5 +23,13 @@ type: Mesh
 logical: content://Meshes/cube.nfmesh
 cooked: cache://Meshes/cube.nfmesh
 fingerprint: deef258cf95adca8
+format: nfmesh-v1
+version: 1
+---
+id: 80a6ede9-3c83-4203-9bb1-5efa4d1fdf5c
+type: Mesh
+logical: content://Meshes/sphere.nfmesh
+cooked: cache://Meshes/sphere.nfmesh
+fingerprint: 01ee68225b2b70f2
 format: nfmesh-v1
 version: 1

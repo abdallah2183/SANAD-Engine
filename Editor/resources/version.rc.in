@@ -10,6 +10,7 @@
 // nobody remembered to touch it in.
 //
 // Two resources live here and nowhere else:
+// The icon source is Editor/resources/SANAD.ico and is rebuilt with this resource.
 //
 //   ICON     The application icon. Before this the editor shipped with the
 //            default blank application glyph, so the title bar, the taskbar and

@@ -94,7 +94,38 @@ tonemap: hdr + intensity * (level0 + level1 + level2 + level3) / 4 ◀─┘
   refusal of out-of-range and non-finite values with the same bounds the loader
   uses.
 
-## Explicitly out of scope
+## Follow-up completion — the deferred stages land
+
+The three items below were deferred above because each needed data the
+renderer did not keep. That data now exists, end to end:
+
+- **Lens effects, depth of field, motion blur.** `PostFxParams` grows `LensParams`
+  / `DofParams` / `MotionParams` (each neutral-by-default and exactly identity),
+  with CPU mirrors (`lens_sample_uv`, `dof_coc`, the reprojection smear,
+  `apply_color_lut`) and the stages implemented in `tonemap.frag`, in the order
+  lens → DoF → motion → LUT. Motion blur is camera-motion only from depth
+  reprojection — a velocity attachment the deferred path does not write, which
+  is stated in the shader rather than silently approximated.
+- **Colour-grading LUT.** A `kLutSize³` strip resolved through the VFS into the
+  tonemap set (binding 7), strength folded to 0 when no LUT is bound so an
+  unbound LUT is exactly identity.
+- **`exposure` and the tonemap mode as scene data.** Opt-in sentinels on the
+  component (`exposure = 0`, `tonemap = -1` mean "the scene says nothing"), so
+  the renderer's own setting — and the golden pixels pinned to it — survive an
+  un-authored scene. Written to the file only when authored.
+
+Scene (`PostProcess:` keys with per-key range validation), runtime
+(`extract_post_process`, LUT resolved through the path-keyed texture cache only
+on change), and editor (validated factory, inspector sections, undo removes an
+untouched block, EN/AR keys) follow the same Rule 0 pattern as the original
+phase. Coverage: `test_post_stack.cpp` 46 tests (CPU mirrors + GPU
+image-change tests per stage), round-trip + push tests on the runtime side.
+
+Measured 2026-10-12 on this machine (clean `/W4 /WX` build): full sweep
+**26 suites, 1843 passed / 0 failed / 2 skipped** — `RHITests` 275/275,
+`RuntimeTests` 120/120, `EditorTests` 265/265.
+
+## Explicitly out of scope (original phase — now landed, see above)
 
 - **Depth of field, motion blur and lens effects.** §206 lists them; each needs
   data the renderer does not currently keep (a depth-of-field circle of

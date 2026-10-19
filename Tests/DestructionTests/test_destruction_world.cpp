@@ -871,7 +871,12 @@ NF_TEST(destruction_material_presets_scale_up_in_strength) {
     // The table is ordered brittle -> stubborn, so a walkthrough is the
     // assertion that the shipped values are monotone: glass < wood < stone <
     // steel. A reorder would break a level that picked materials by name.
-    NF_CHECK(std::size(kFractureMaterials) >= 4u);
+    //
+    // The size gate is compile-time (the table is a fixed array), so it is
+    // asserted at compile time — a preset going missing is a build failure, not
+    // a suite failure, and /WX rejects the constant as a runtime check (C4127).
+    static_assert(std::size(kFractureMaterials) >= 4u,
+                  "fracture material presets: expected at least glass/wood/stone/steel");
     for (std::size_t i = 1u; i < std::size(kFractureMaterials); ++i) {
         NF_CHECK(kFractureMaterials[i].strength_scale >
                  kFractureMaterials[i - 1u].strength_scale);

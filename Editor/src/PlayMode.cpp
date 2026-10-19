@@ -98,6 +98,28 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
             fresh.grounded = false;
             dw.add<physics::CharacterComponent>(de, fresh);
         }
+        if (const auto* nm = sw.get<runtime::NavMeshComponent>(se)) {
+            // Pure configuration (the bake is rebuilt from it), nothing live.
+            dw.add<runtime::NavMeshComponent>(de, *nm);
+        }
+        if (const auto* na = sw.get<runtime::NavAgentComponent>(se)) {
+            // Pure configuration plus the authored goal (the path lives
+            // beside the component in the runtime, never inside it).
+            dw.add<runtime::NavAgentComponent>(de, *na);
+        }
+        if (const auto* vc = sw.get<physics::VehicleComponent>(se)) {
+            // Tune only: live inputs are per-session and the JoltVehicle view
+            // points at another world's simulation. A clone that carried
+            // either would drive a fresh car with a stale foot — or worse,
+            // through a dangling pointer.
+            physics::VehicleComponent fresh = *vc;
+            fresh.throttle = 0.0f;
+            fresh.steer = 0.0f;
+            fresh.brake = 0.0f;
+            fresh.handbrake = 0.0f;
+            fresh.vehicle = nullptr;
+            dw.add<physics::VehicleComponent>(de, fresh);
+        }
     }
     // Pass 2: remap parents.
     for (ecs::Entity se : sw.all_entities()) {
@@ -346,6 +368,24 @@ void copy_entity_all(const ecs::World& sw, ecs::Entity se, ecs::World& dw, ecs::
         fresh.jump = false;
         fresh.grounded = false;
         dw.add<physics::CharacterComponent>(de, fresh);
+    }
+    if (const auto* nm = sw.get<runtime::NavMeshComponent>(se)) {
+        dw.add<runtime::NavMeshComponent>(de, *nm);
+    }
+    if (const auto* na = sw.get<runtime::NavAgentComponent>(se)) {
+        dw.add<runtime::NavAgentComponent>(de, *na);
+    }
+    if (const auto* vc = sw.get<physics::VehicleComponent>(se)) {
+        // Same scrub as the snapshot clone above: tune crosses, live state
+        // does not. Without this, Stop restores a component whose JoltVehicle
+        // view points at the play session's torn-down world.
+        physics::VehicleComponent fresh = *vc;
+        fresh.throttle = 0.0f;
+        fresh.steer = 0.0f;
+        fresh.brake = 0.0f;
+        fresh.handbrake = 0.0f;
+        fresh.vehicle = nullptr;
+        dw.add<physics::VehicleComponent>(de, fresh);
     }
 }
 

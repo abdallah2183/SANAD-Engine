@@ -2683,6 +2683,18 @@ NF_TEST(forward_pass_renders_an_opaque_surface_like_the_deferred_path) {
                 NF_CHECK(meshes.upload_all(*f.device));
                 const SceneSpec s = base_spec();
                 renderer.set_ambient(0.25f);
+                // SSAO is a function of the GBUFFER, not of the material: it is
+                // baked from depth+normal, and in the forward frame the cube
+                // never entered the gbuffer (alpha < 1 routes it to the
+                // transparency pass), so the forward frame's SSAO at these
+                // pixels is the sky's (~1.0) while the deferred frame's is
+                // the cube face's. That is correct behaviour for a real pane
+                // — screen-space occlusion belongs to what is on screen —
+                // but it is not what this test measures. This test pins the
+                // BRDF agreement between the paths, so SSAO stays off here;
+                // the SSAO sampling itself is pinned by
+                // transparent_pane_blends_over_opaque_geometry.
+                renderer.set_ssao_enabled(false);
                 PBRMaterialParams p = s.material;
                 p.base_color[3] = alpha;
                 const MaterialHandle m = renderer.materials().create_instance(

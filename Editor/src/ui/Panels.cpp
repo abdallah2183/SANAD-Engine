@@ -258,6 +258,34 @@ struct InspectorCache {
     float nava_goal[3]{};
     float nava_arrive = 0.25f;
     bool nava_enabled = true;
+    // Vehicles (Step 11). Mirrors of the tune; Apply forwards the whole
+    // struct through EditorApp. The four *_in fields are the debug-drive
+    // inputs (live only, like the character's wish_dir/jump).
+    bool veh_has = false;
+    bool veh_enabled = true;
+    float veh_chassis[3]{0.9f, 0.5f, 2.0f};
+    float veh_mass = 1500.0f;
+    float veh_wheel_radius = 0.35f;
+    float veh_wheel_width = 0.3f;
+    float veh_track = 0.9f;
+    float veh_wheelbase = 1.3f;
+    float veh_wheel_y = -0.35f;
+    float veh_steer = 30.0f;
+    float veh_torque = 500.0f;
+    float veh_susp_min = 0.30f;
+    float veh_susp_max = 0.50f;
+    float veh_susp_freq = 1.5f;
+    float veh_susp_damping = 0.5f;
+    float veh_tire_peak = 1.2f;
+    float veh_tire_limit = 1.0f;
+    float veh_inertia = 0.9f;
+    float veh_angular_damping = 0.2f;
+    float veh_brake = 1500.0f;
+    float veh_handbrake = 4000.0f;
+    float veh_throttle_in = 0.0f;
+    float veh_steer_in = 0.0f;
+    float veh_brake_in = 0.0f;
+    float veh_handbrake_in = 0.0f;
     std::string error;
 };
 
@@ -491,6 +519,72 @@ void draw_ground_grid(ImDrawList* dl, const ImVec2& min, const ImVec2& max, cons
             const bool on_axis = grid_cell_is_world_axis(i, spacing);
             const ImU32 col = on_axis ? (along_z ? axis_z : axis_x) : line_col;
             dl->AddLine(a, b, col, on_axis ? 1.4f : 1.0f);
+        }
+    }
+}
+
+// --- Navigation debug overlay (Step 8) ---------------------------------------
+//
+// The baked mesh outlines plus every bound agent's remaining route, projected
+// over the viewport image like the ground grid above: drawn, not composited,
+// with the same "a segment with an endpoint behind the camera is skipped
+// whole" rule. Read-only in every direction — it consumes
+// Runtime::nav_debug_snapshot() and writes no scene, no component, no runtime
+// state — so there is nothing to undo, save or localise inside the draw.
+//
+// Colours follow the grid's philosophy (quiet annotation, not competing
+// geometry): mesh edges sit at grid-like alpha, agent routes ride the accent
+// warm side so a route reads against both the mesh and the floor, and arrived
+// agents dim to the mesh colour because their story is over.
+void draw_navmesh_overlay(ImDrawList* dl, const ImVec2& min, const ImVec2& max, const Mat4& view_proj,
+                          const runtime::NavDebugSnapshot& snap) {
+    if (!snap.has_mesh) {
+        return;
+    }
+    const ImU32 mesh_col = IM_COL32(110, 220, 180, 42);
+    const ImU32 route_col = IM_COL32(255, 196, 110, 200);
+    const ImU32 route_done_col = IM_COL32(110, 220, 180, 110);
+    const ImU32 goal_col = IM_COL32(255, 196, 110, 220);
+    for (const std::vector<Vec3>& loop : snap.mesh_polygons) {
+        if (loop.size() < 3) {
+            continue; // degenerate: the snapshot keeps the loop, the draw skips it
+        }
+        for (usize v = 0; v < loop.size(); ++v) {
+            const Vec3& a3 = loop[v];
+            const Vec3& b3 = loop[(v + 1) % loop.size()];
+            ImVec2 a{}, b{};
+            if (!project_to_viewport(view_proj, a3.x, a3.y, a3.z, min, max, a) ||
+                !project_to_viewport(view_proj, b3.x, b3.y, b3.z, min, max, b)) {
+                continue;
+            }
+            dl->AddLine(a, b, mesh_col, 1.0f);
+        }
+    }
+    for (const runtime::NavDebugAgent& agent : snap.agents) {
+        const ImU32 col = agent.at_goal ? route_done_col : route_col;
+        // Remaining route as a polyline through the unconsumed waypoints. The
+        // agent's own marker is the first joint: the line starts where the
+        // walker stands, not where the plan started.
+        Vec3 prev = agent.position;
+        for (const Vec3& wp : agent.path) {
+            ImVec2 a{}, b{};
+            if (project_to_viewport(view_proj, prev.x, prev.y, prev.z, min, max, a) &&
+                project_to_viewport(view_proj, wp.x, wp.y, wp.z, min, max, b)) {
+                dl->AddLine(a, b, col, 2.0f);
+            }
+            prev = wp;
+        }
+        // Agent marker + goal ring. An agent with no path (off the mesh,
+        // unreachable) still gets both: a walker with nowhere to go is
+        // exactly what this overlay exists to show.
+        ImVec2 pa{}, pg{};
+        if (project_to_viewport(view_proj, agent.position.x, agent.position.y, agent.position.z,
+                                min, max, pa)) {
+            dl->AddCircleFilled(pa, 3.5f, col, 12);
+        }
+        if (project_to_viewport(view_proj, agent.goal.x, agent.goal.y, agent.goal.z, min, max,
+                                pg)) {
+            dl->AddCircle(pg, 5.0f, goal_col, 16, 1.5f);
         }
     }
 }
@@ -1425,6 +1519,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                              ui_settings().grid_step, kGridHalfExtent, app.view_pivot()[0],
                              app.view_pivot()[2]);
         }
+        // Navigation debug overlay beside the grid: the baked mesh outlines
+        // plus every bound agent's remaining route, through the same camera.
+        // Same no-persistence contract as the grid — a View toggle, off by
+        // default, read-only over the runtime's debug snapshot.
+        if (ui_settings().show_navmesh && have_cam && app.runtime() != nullptr) {
+            const ImVec2 mn = ImGui::GetItemRectMin();
+            const ImVec2 mx = ImGui::GetItemRectMax();
+            draw_navmesh_overlay(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
+                                 app.runtime()->nav_debug_snapshot());
+        }
         // The gizmo hover for this frame: a click on it routes to a handle
         // press (no re-pick), anywhere else to the pick press below.
         GizmoHandle gizmo_hover = GizmoHandle::None;
@@ -1462,9 +1566,19 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                         .c_str());
                 ImGui::TextDisabled("%s", AVF("stats_cloths", rt->cloth_count()).c_str());
                 ImGui::TextDisabled("%s", AVF("stats_characters", rt->character_count()).c_str());
+                ImGui::TextDisabled("%s", AVF("stats_vehicles", rt->vehicle_count()).c_str());
                 if (const ai::AIWorld* ai = rt->ai_world()) {
                     ImGui::TextDisabled("%s", AVF("stats_ai", ai->actors().size()).c_str());
                 }
+                // Navigation, beside the AI line: what the bake produced and
+                // whether the walkers are arriving. Reads the bake, not the
+                // components — a count of components cannot tell an unbaked
+                // volume from a working one (see the inspector's live stats).
+                ImGui::TextDisabled(
+                    "%s",
+                    AVF("stats_navmesh", rt->navmesh_polygon_count(), rt->nav_agents_at_goal(),
+                        rt->nav_agent_count())
+                        .c_str());
             }
             ImGui::End();
         }
@@ -1946,6 +2060,37 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.nava_has = false;
                 }
+                if (const auto* veh_comp = w->get<physics::VehicleComponent>(sel)) {
+                    ic.veh_has = true;
+                    ic.veh_enabled = veh_comp->enabled;
+                    ic.veh_chassis[0] = veh_comp->config.chassis_half_extents.x;
+                    ic.veh_chassis[1] = veh_comp->config.chassis_half_extents.y;
+                    ic.veh_chassis[2] = veh_comp->config.chassis_half_extents.z;
+                    ic.veh_mass = veh_comp->config.chassis_mass;
+                    ic.veh_wheel_radius = veh_comp->config.wheel_radius;
+                    ic.veh_wheel_width = veh_comp->config.wheel_width;
+                    ic.veh_track = veh_comp->config.track_half_width;
+                    ic.veh_wheelbase = veh_comp->config.wheelbase_half_length;
+                    ic.veh_wheel_y = veh_comp->config.wheel_y;
+                    ic.veh_steer = veh_comp->config.max_steer_deg;
+                    ic.veh_torque = veh_comp->config.engine_max_torque;
+                    ic.veh_susp_min = veh_comp->config.suspension_min_length;
+                    ic.veh_susp_max = veh_comp->config.suspension_max_length;
+                    ic.veh_susp_freq = veh_comp->config.suspension_frequency_hz;
+                    ic.veh_susp_damping = veh_comp->config.suspension_damping;
+                    ic.veh_tire_peak = veh_comp->config.tire_peak_friction;
+                    ic.veh_tire_limit = veh_comp->config.tire_limit_friction;
+                    ic.veh_inertia = veh_comp->config.wheel_inertia;
+                    ic.veh_angular_damping = veh_comp->config.angular_damping;
+                    ic.veh_brake = veh_comp->config.max_brake_torque;
+                    ic.veh_handbrake = veh_comp->config.max_handbrake_torque;
+                    ic.veh_throttle_in = veh_comp->throttle;
+                    ic.veh_steer_in = veh_comp->steer;
+                    ic.veh_brake_in = veh_comp->brake;
+                    ic.veh_handbrake_in = veh_comp->handbrake;
+                } else {
+                    ic.veh_has = false;
+                }
             }
             if (!ic.error.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "%s: %s", AV("error").c_str(),
@@ -2002,6 +2147,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<runtime::NavAgentComponent>(sel) &&
                            ImGui::MenuItem(AV("nav_agent").c_str())) {
                     added = app.attach_nav_agent(sel, add_err);
+                } else if (!w->has<physics::VehicleComponent>(sel) &&
+                           ImGui::MenuItem(AV("vehicle").c_str())) {
+                    added = app.attach_vehicle(sel, add_err);
                 }
                 if (added) {
                     ic.error.clear();
@@ -3432,6 +3580,137 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         } else {
                             ic.error.clear();
                             ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Vehicle (Step 11) ---
+            //
+            // The tune (chassis, wheels, suspension, tires, torques) plus the
+            // debug drive. Config applies through set_vehicle (which re-binds
+            // the car); the four inputs apply live-only through
+            // set_vehicle_input, like the character's wish_dir/jump — driving
+            // from the inspector never touches the file.
+            if (ImGui::CollapsingHeader((AV("vehicle") + "###Vehicle").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.veh_has) {
+                    ImGui::TextDisabled("%s", AV("no_vehicle").c_str());
+                    if (ImGui::Button((AV("attach") + "##vehicle").c_str())) {
+                        std::string err;
+                        if (!app.attach_vehicle(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach vehicle failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##veh_enabled").c_str(), &ic.veh_enabled);
+                    ImGui::DragFloat3(AV("chassis").c_str(), ic.veh_chassis, 0.05f, 0.01f,
+                                      10.0f);
+                    ImGui::DragFloat(AV("mass").c_str(), &ic.veh_mass, 10.0f, 1.0f, 100000.0f);
+                    ImGui::DragFloat(AV("wheel_radius").c_str(), &ic.veh_wheel_radius, 0.01f,
+                                      0.05f, 2.0f);
+                    ImGui::DragFloat(AV("wheel_width").c_str(), &ic.veh_wheel_width, 0.01f,
+                                      0.05f, 2.0f);
+                    ImGui::DragFloat(AV("track_width").c_str(), &ic.veh_track, 0.05f, 0.1f,
+                                      10.0f);
+                    ImGui::DragFloat(AV("wheelbase").c_str(), &ic.veh_wheelbase, 0.05f, 0.1f,
+                                      20.0f);
+                    ImGui::DragFloat(AV("wheel_height").c_str(), &ic.veh_wheel_y, 0.05f, -5.0f,
+                                      5.0f);
+                    ImGui::DragFloat(AV("steer_angle").c_str(), &ic.veh_steer, 0.5f, 0.0f,
+                                      60.0f);
+                    ImGui::DragFloat(AV("engine_torque").c_str(), &ic.veh_torque, 10.0f, 0.0f,
+                                      100000.0f);
+                    ImGui::DragFloat(AV("susp_min").c_str(), &ic.veh_susp_min, 0.01f, 0.01f,
+                                      5.0f);
+                    ImGui::DragFloat(AV("susp_max").c_str(), &ic.veh_susp_max, 0.01f, 0.01f,
+                                      5.0f);
+                    ImGui::DragFloat(AV("susp_freq").c_str(), &ic.veh_susp_freq, 0.05f, 0.1f,
+                                      20.0f);
+                    ImGui::DragFloat(AV("damping").c_str(), &ic.veh_susp_damping, 0.05f, 0.0f,
+                                      5.0f);
+                    ImGui::DragFloat(AV("tire_peak").c_str(), &ic.veh_tire_peak, 0.05f, 0.0f,
+                                      5.0f);
+                    ImGui::DragFloat(AV("tire_limit").c_str(), &ic.veh_tire_limit, 0.05f, 0.0f,
+                                      5.0f);
+                    ImGui::DragFloat(AV("wheel_inertia").c_str(), &ic.veh_inertia, 0.05f,
+                                      0.01f, 100.0f);
+                    ImGui::DragFloat(AV("angular_damping").c_str(), &ic.veh_angular_damping,
+                                      0.05f, 0.0f, 5.0f);
+                    ImGui::DragFloat(AV("brake_torque").c_str(), &ic.veh_brake, 10.0f, 0.0f,
+                                      50000.0f);
+                    ImGui::DragFloat(AV("handbrake_torque").c_str(), &ic.veh_handbrake, 10.0f,
+                                      0.0f, 100000.0f);
+                    if (ImGui::Button((AV("apply") + "##vehicle").c_str())) {
+                        physics::VehicleComponent edited;
+                        edited.enabled = ic.veh_enabled;
+                        edited.config.chassis_half_extents =
+                            Vec3(ic.veh_chassis[0], ic.veh_chassis[1], ic.veh_chassis[2]);
+                        edited.config.chassis_mass = ic.veh_mass;
+                        edited.config.wheel_radius = ic.veh_wheel_radius;
+                        edited.config.wheel_width = ic.veh_wheel_width;
+                        edited.config.track_half_width = ic.veh_track;
+                        edited.config.wheelbase_half_length = ic.veh_wheelbase;
+                        edited.config.wheel_y = ic.veh_wheel_y;
+                        edited.config.max_steer_deg = ic.veh_steer;
+                        edited.config.engine_max_torque = ic.veh_torque;
+                        edited.config.suspension_min_length = ic.veh_susp_min;
+                        edited.config.suspension_max_length = ic.veh_susp_max;
+                        edited.config.suspension_frequency_hz = ic.veh_susp_freq;
+                        edited.config.suspension_damping = ic.veh_susp_damping;
+                        edited.config.tire_peak_friction = ic.veh_tire_peak;
+                        edited.config.tire_limit_friction = ic.veh_tire_limit;
+                        edited.config.wheel_inertia = ic.veh_inertia;
+                        edited.config.angular_damping = ic.veh_angular_damping;
+                        edited.config.max_brake_torque = ic.veh_brake;
+                        edited.config.max_handbrake_torque = ic.veh_handbrake;
+                        std::string err;
+                        if (!app.set_vehicle(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Vehicle edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##vehicle").c_str())) {
+                        std::string err;
+                        if (!app.detach_vehicle(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach vehicle failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                    // Debug drive: live inputs only (never persisted), so a
+                    // level's road can be test-driven without gameplay code.
+                    ImGui::SliderFloat(AV("throttle").c_str(), &ic.veh_throttle_in, -1.0f, 1.0f);
+                    ImGui::SliderFloat(AV("steer").c_str(), &ic.veh_steer_in, -1.0f, 1.0f);
+                    ImGui::SliderFloat(AV("brake").c_str(), &ic.veh_brake_in, 0.0f, 1.0f);
+                    ImGui::SliderFloat(AV("handbrake").c_str(), &ic.veh_handbrake_in, 0.0f,
+                                        1.0f);
+                    if (ImGui::Button((AV("drive") + "##vehicle").c_str())) {
+                        std::string err;
+                        if (!app.set_vehicle_input(sel, ic.veh_throttle_in, ic.veh_steer_in,
+                                                   ic.veh_brake_in, ic.veh_handbrake_in, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Drive vehicle failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("reset_vehicle") + "##vehicle").c_str())) {
+                        std::string err;
+                        if (!app.reset_vehicle_pose(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Reset vehicle failed", err);
+                        } else {
+                            ic.error.clear();
                         }
                     }
                 }

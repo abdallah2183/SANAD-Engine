@@ -73,6 +73,14 @@
 
 namespace {
 
+void show_startup_error(const char* message) {
+#ifdef _WIN32
+    ::MessageBoxA(nullptr, message, "SANAD Engine — Startup Error", MB_OK | MB_ICONERROR);
+#else
+    (void)message;
+#endif
+}
+
 struct EditorConfig {
     // Empty means "not specified": a project's startup scene is used when one
     // is open, otherwise the historical default.
@@ -536,8 +544,13 @@ void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::
 }
 
 // Resolves the ImGui overlay shader directory (compiled define first,
-// then well-known build/source locations).
+// then the self-contained package beside the executable, followed by
+// well-known source/build locations).
 std::filesystem::path resolve_imgui_shader_dir() {
+    const std::filesystem::path packaged("Shaders/EditorImGui");
+    if (std::filesystem::exists(packaged / "imgui_vert.spv")) {
+        return packaged;
+    }
 #ifdef NF_EDITOR_IMGUI_SHADER_DIR
     {
         const std::filesystem::path p = NF_EDITOR_IMGUI_SHADER_DIR;
@@ -546,7 +559,8 @@ std::filesystem::path resolve_imgui_shader_dir() {
         }
     }
 #endif
-    const std::array<std::filesystem::path, 4> candidates{
+    const std::array<std::filesystem::path, 5> candidates{
+        std::filesystem::path("Shaders/EditorImGui"),
         std::filesystem::path("build/DebugNinja/Shaders/EditorImGui"),
         std::filesystem::path("build/debug/Shaders/EditorImGui"),
         std::filesystem::path("Editor/shaders"),
@@ -752,6 +766,9 @@ int main(int argc, char** argv) {
         wdesc.maximized = (cfg.max_frames == 0);
         if (!window.create(wdesc)) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to create window");
+            show_startup_error("SANAD Engine could not create its window.\n\n"
+                              "Check that you are running Windows 10 or newer and that"
+                              " the graphics driver is installed.");
             nf::JobSystem::instance().shutdown();
             nf::platform_shutdown();
             return 1;
@@ -761,6 +778,9 @@ int main(int argc, char** argv) {
     auto device = nf::rhi::create_device();
     if (!device) {
         NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to create device");
+        show_startup_error("SANAD Engine could not load a Vulkan graphics device.\n\n"
+                          "Install or update your GPU driver, then try again."
+                          " The package requires a Vulkan-capable GPU.");
         return 1;
     }
     nf::rhi::DeviceDesc ddesc{};
@@ -772,6 +792,9 @@ int main(int argc, char** argv) {
     ddesc.disable_validation = !cfg.validation;
     if (!device->init(ddesc)) {
         NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to init device");
+        show_startup_error("SANAD Engine could not initialize Vulkan.\n\n"
+                          "Update your NVIDIA/AMD/Intel graphics driver and restart"
+                          " the application.");
         return 1;
     }
     NF_LOG_INFO(nf::LogCategory::Editor, "Device: {} validation={}", device->backend_name(),
@@ -792,6 +815,9 @@ int main(int argc, char** argv) {
         swapchain = device->create_swapchain(sc);
         if (!swapchain) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Failed to create swapchain");
+            show_startup_error("SANAD Engine initialized Vulkan but could not create"
+                              " a display surface.\n\nCheck the graphics driver and"
+                              " desktop display configuration.");
             device->shutdown();
             return 1;
         }

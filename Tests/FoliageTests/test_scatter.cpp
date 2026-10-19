@@ -578,7 +578,13 @@ NF_TEST(wind_displacement_scales_with_the_instance_and_is_pure) {
 NF_TEST(instance_struct_is_the_instance_buffer_element) {
     // The shader reads this as an array of floats; a surprise pad would shift
     // every attribute after the first instance.
-    NF_CHECK_EQ(sizeof(FoliageInstance), 32u);
+    //
+    // The size is a property of the type, so it belongs to the compiler: an
+    // added field now fails the build, and /WX rejects the constant as a
+    // runtime check (C4127) besides. The default values below are the runtime
+    // half and stay checks.
+    static_assert(sizeof(FoliageInstance) == 32u,
+                  "FoliageInstance must stay 32 bytes for the shader's float array");
     FoliageInstance i{};
     NF_CHECK_EQ(i.type_index, 0u);
     NF_CHECK_EQ(i.lod, 0u);

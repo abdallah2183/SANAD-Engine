@@ -55,6 +55,9 @@ struct VehicleComponent {
     /// slide rather than stopping the car, so it is a separate channel from
     /// brake even though both live in [0, 1].
     f32 handbrake = 0.0f;
+    /// Off: the car keeps its placement and its tune but never simulates — the
+    /// "parked showroom" state, and what keeps a cutscene's hero car still.
+    bool enabled = true;
     /// Runtime-only: the physics vehicle, created when the body spawns. Not
     /// serialized (a handle from a previous session is meaningless).
     JoltVehicle* vehicle = nullptr;

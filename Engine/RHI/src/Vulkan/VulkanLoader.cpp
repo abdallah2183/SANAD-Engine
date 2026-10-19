@@ -92,6 +92,101 @@ void load_opt_dev_fn(Fn& dst, PFN_vkGetDeviceProcAddr gdpa, VkDevice device, con
 
 } // namespace
 
+namespace {
+
+// --- Per-device dispatch ownership -----------------------------------------
+//
+// A device-level entry point is only valid for the VkDevice it was resolved
+// from, so the shared globals cannot describe two devices at once. These
+// snapshots keep the tables each device installed, in the order the devices
+// were initialised: the back of the vector is what the globals currently hold,
+// and tearing a device down restores whatever is beneath it.
+//
+// The crash this fixes: a second device is created and destroyed (the RHI
+// hardening test does exactly that), and every entry point the first device
+// then calls was still pointing into the dead device's dispatch structures —
+// an access violation several tests later, in code that had never changed.
+
+/// Named-field snapshot of every instance entry point. Fields are named rather
+/// than indexed, so adding one to the X-macro lists above needs no second list
+/// to keep in step.
+struct InstanceTable {
+#define NF_VK_FIELD(fn) PFN_##fn fn = nullptr;
+    NF_VK_INSTANCE_FUNCS(NF_VK_FIELD)
+    NF_VK_INSTANCE_FUNCS_OPTIONAL(NF_VK_FIELD)
+#undef NF_VK_FIELD
+};
+
+/// Same, for every device entry point.
+struct DeviceTable {
+#define NF_VK_FIELD(fn) PFN_##fn fn = nullptr;
+    NF_VK_DEVICE_FUNCS(NF_VK_FIELD)
+    NF_VK_DEVICE_FUNCS_OPTIONAL(NF_VK_FIELD)
+#undef NF_VK_FIELD
+};
+
+/// One live device: the instance that keys it, and the tables it installed.
+struct LoadedDevice {
+    VkInstance instance = VK_NULL_HANDLE;
+    InstanceTable instance_fns;
+    DeviceTable device_fns;
+};
+
+/// Devices in initialisation order. back() is the active one.
+std::vector<LoadedDevice> g_devices;
+
+void capture_instance_table(InstanceTable& out) {
+#define NF_VK_FIELD(fn) out.fn = fn;
+    NF_VK_INSTANCE_FUNCS(NF_VK_FIELD)
+    NF_VK_INSTANCE_FUNCS_OPTIONAL(NF_VK_FIELD)
+#undef NF_VK_FIELD
+}
+
+void install_instance_table(const InstanceTable& in) {
+#define NF_VK_FIELD(fn) fn = in.fn;
+    NF_VK_INSTANCE_FUNCS(NF_VK_FIELD)
+    NF_VK_INSTANCE_FUNCS_OPTIONAL(NF_VK_FIELD)
+#undef NF_VK_FIELD
+}
+
+void capture_device_table(DeviceTable& out) {
+#define NF_VK_FIELD(fn) out.fn = fn;
+    NF_VK_DEVICE_FUNCS(NF_VK_FIELD)
+    NF_VK_DEVICE_FUNCS_OPTIONAL(NF_VK_FIELD)
+#undef NF_VK_FIELD
+}
+
+void install_device_table(const DeviceTable& in) {
+#define NF_VK_FIELD(fn) fn = in.fn;
+    NF_VK_DEVICE_FUNCS(NF_VK_FIELD)
+    NF_VK_DEVICE_FUNCS_OPTIONAL(NF_VK_FIELD)
+#undef NF_VK_FIELD
+}
+
+/// Re-installs the active device's tables (or clears them when none is left).
+void apply_active_device() {
+    if (g_devices.empty()) {
+        const InstanceTable no_instance{};
+        const DeviceTable no_device{};
+        install_instance_table(no_instance);
+        install_device_table(no_device);
+        return;
+    }
+    install_instance_table(g_devices.back().instance_fns);
+    install_device_table(g_devices.back().device_fns);
+}
+
+/// Finds the entry for `instance`, or nullptr. The instance is the key because
+/// a device and its instance are created and destroyed together.
+LoadedDevice* find_device(VkInstance instance) {
+    for (auto& d : g_devices) {
+        if (d.instance == instance) return &d;
+    }
+    return nullptr;
+}
+
+} // namespace
+
 // --- Loader ---------------------------------------------------------------
 
 bool load_vulkan_loader() {
@@ -147,11 +242,23 @@ bool load_vulkan_loader() {
 
 void unload_vulkan_loader() {
 #ifdef _WIN32
+    // A live device's entry points live inside vulkan-1.dll. Freeing the
+    // library out from under them is the same use-after-free as the dispatch
+    // bug above, so the only safe time to unload is with no device loaded.
+    if (!g_devices.empty()) {
+        NF_LOG_WARN(LogCategory::RHI,
+            "unload_vulkan_loader skipped: {} device(s) still hold resolved entry points",
+            g_devices.size());
+        return;
+    }
     if (g_vulkan_module) {
         FreeLibrary(g_vulkan_module);
         g_vulkan_module = nullptr;
     }
 #else
+    if (!g_devices.empty()) {
+        return;
+    }
     if (g_vulkan_module) {
         dlclose(g_vulkan_module);
         g_vulkan_module = nullptr;
@@ -164,6 +271,11 @@ bool is_vulkan_loader_loaded() {
     return g_vulkan_module != nullptr;
 }
 
+bool vulkan_dispatch_owned_by(VkInstance instance) {
+    if (g_devices.empty()) return instance == VK_NULL_HANDLE;
+    return g_devices.back().instance == instance;
+}
+
 // --- Instance functions ---------------------------------------------------
 
 bool load_instance_functions(VkInstance instance) {
@@ -172,8 +284,16 @@ bool load_instance_functions(VkInstance instance) {
         return false;
     }
 
-    bool failed = false;
+    // Take ownership of the globals for this instance. A re-initialising
+    // device keeps its existing slot rather than pushing a second one.
+    LoadedDevice* slot = find_device(instance);
+    if (!slot) {
+        g_devices.push_back(LoadedDevice{});
+        slot = &g_devices.back();
+        slot->instance = instance;
+    }
 
+    bool failed = false;
     failed |= !load_fn(vkDestroyInstance,                        vkGetInstanceProcAddr, instance, "vkDestroyInstance");
     failed |= !load_fn(vkGetDeviceProcAddr,                       vkGetInstanceProcAddr, instance, "vkGetDeviceProcAddr");
     failed |= !load_fn(vkEnumeratePhysicalDevices,                vkGetInstanceProcAddr, instance, "vkEnumeratePhysicalDevices");
@@ -201,14 +321,38 @@ bool load_instance_functions(VkInstance instance) {
     load_opt_fn(vkCreateDebugUtilsMessengerEXT,    vkGetInstanceProcAddr, instance, "vkCreateDebugUtilsMessengerEXT");
     load_opt_fn(vkDestroyDebugUtilsMessengerEXT,   vkGetInstanceProcAddr, instance, "vkDestroyDebugUtilsMessengerEXT");
 
+    capture_instance_table(slot->instance_fns);
+    NF_LOG_DEBUG(LogCategory::RHI, "Vulkan instance entry points installed ({} device(s) live)",
+                 g_devices.size());
     return true;
+}
+
+void release_device_functions(VkInstance instance) {
+    for (auto it = g_devices.begin(); it != g_devices.end(); ++it) {
+        if (it->instance != instance) continue;
+        g_devices.erase(it);
+        // Whatever device is left beneath this one becomes the active one
+        // again; with none left, the globals are cleared so a stray call fails
+        // on a null pointer instead of dispatching into a dead device.
+        apply_active_device();
+        NF_LOG_DEBUG(LogCategory::RHI, "Vulkan entry points released ({} device(s) live)",
+                     g_devices.size());
+        return;
+    }
 }
 
 // --- Device functions -----------------------------------------------------
 
-bool load_device_functions(VkDevice device) {
+bool load_device_functions(VkDevice device, VkInstance instance) {
     if (!vkGetDeviceProcAddr) {
         NF_LOG_ERROR(LogCategory::RHI, "load_device_functions called before instance init");
+        return false;
+    }
+
+    LoadedDevice* slot = find_device(instance);
+    if (!slot) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "load_device_functions: instance was never registered — call load_instance_functions first");
         return false;
     }
 
@@ -300,10 +444,13 @@ bool load_device_functions(VkDevice device) {
 
     // Optional: object naming + command buffer labels (profiling aids).
     load_opt_dev_fn(vkSetDebugUtilsObjectNameEXT,   vkGetDeviceProcAddr, device, "vkSetDebugUtilsObjectNameEXT");
-    load_opt_dev_fn(vkCmdBeginDebugUtilsLabelEXT,   vkGetDeviceProcAddr, device, "vkCmdBeginDebugUtilsLabelEXT");
-    load_opt_dev_fn(vkCmdEndDebugUtilsLabelEXT,     vkGetDeviceProcAddr, device, "vkCmdEndDebugUtilsLabelEXT");
-    load_opt_dev_fn(vkCmdInsertDebugUtilsLabelEXT,  vkGetDeviceProcAddr, device, "vkCmdInsertDebugUtilsLabelEXT");
+    load_opt_dev_fn(vkCmdBeginDebugUtilsLabelEXT,  vkGetDeviceProcAddr, device, "vkCmdBeginDebugUtilsLabelEXT");
+    load_opt_dev_fn(vkCmdEndDebugUtilsLabelEXT,    vkGetDeviceProcAddr, device, "vkCmdEndDebugUtilsLabelEXT");
+    load_opt_dev_fn(vkCmdInsertDebugUtilsLabelEXT, vkGetDeviceProcAddr, device, "vkCmdInsertDebugUtilsLabelEXT");
 
+    capture_device_table(slot->device_fns);
+    NF_LOG_DEBUG(LogCategory::RHI, "Vulkan device entry points installed ({} device(s) live)",
+                 g_devices.size());
     return true;
 }
 

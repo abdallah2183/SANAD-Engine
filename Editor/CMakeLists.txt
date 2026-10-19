@@ -104,6 +104,12 @@ target_compile_definitions(SANADEditor PRIVATE
     # template and the compiled renderer shaders live — the same definitions the
     # `nf` CLI receives.
     "NF_TEMPLATE_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Default\""
+    # The templates ROOT the New Project gallery resolves the chosen card
+    # through — the same define the `nf` CLI receives. NF_TEMPLATE_DIR above
+    # is only the Default template's folder; passing it as the root made the
+    # launcher look for e.g. Templates/Default/Platformer2D (never on disk),
+    # so every gallery create failed with "not available at ...".
+    "NF_TEMPLATES_ROOT=\"${CMAKE_SOURCE_DIR}/Templates\""
     "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
     # The launcher shows the engine version in its sidebar, on the project cards
     # and in the hero line. It used to keep its own hand-maintained copy of the

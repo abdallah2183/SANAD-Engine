@@ -111,5 +111,37 @@ passes (it failed before).
 * Per-agent crowd steering on the navmesh: `AIWorld`'s budget decides *which*
   actors think; this phase decided *where they walk*. Composing them is design,
   not wiring.
-* Live path debugging in the viewport: the mesh is a per-scene artefact baked on
-  adopt; a debug draw is a renderer feature, not a scene one.
+
+## Follow-up — live path debugging in the viewport (Step 8)
+
+The debug draw turned out not to need a renderer feature at all: the viewport
+already draws the ground grid and the transform gizmo as projected ImGui lines
+over the frame image, and the nav overlay follows the same path — no render
+pass, no pipeline, no depth buffer involved.
+
+* **Seam:** `Runtime::nav_debug_snapshot()` (const, one call) copies the baked
+  polygon loops plus every bound agent's position, goal and remaining route
+  (from the waypoint currently walked to, not from the plan start). Empty when
+  the scene has no volume, so the overlay draws nothing rather than a stale
+  mesh. Agents sorted by entity id — the live map is unordered, and the
+  destruction retire list is sorted for the same reason.
+* **Draw:** `draw_navmesh_overlay` beside `draw_ground_grid` in Panels.cpp,
+  through the same `project_to_viewport` (same behind-camera rule), gated on
+  `View > Navigation debug` (off by default, like the grid), with viewport
+  stats lines (`NavMesh polygons`, `agents at goal`) reading the bake.
+* **Live while authoring:** the six nav mutators (`attach/set/detach` for both
+  volume and agent) re-bake synchronously — walkers bind at bake time, so an
+  agent edit re-binds without a volume touch — and the overlay reads the live
+  bake with no reopen and no play press. Transform drags and obstacle moves
+  refresh on the next mutator touch, open or play (same rule physics follows:
+  no live rebuild on edit).
+* **Tests:** `test_runtime_nav_agents.cpp` ×4 (empty without a volume,
+  bake-before-step, live route while walking + order stability, edge
+  enumerator coverage) and `test_nav_editor.cpp` ×1 (toggle default, live
+  bake through the mutators, blank after detach).
+* **Measured 2026-10-12 on this machine (clean `/W4 /WX` build):** full sweep
+  **26 suites, 1848 passed / 0 failed / 2 skipped** (the 2 skips are
+  pre-existing environment gates: the opt-in 1M-entity benchmark and the
+  physical-gamepad poll) — `RuntimeTests` 124/124, `EditorTests` 266/266
+  (incl. the 2 new Arabic keys), editor headless 60f exit 0 with 0 validation
+  errors and 0 RHI leaks.

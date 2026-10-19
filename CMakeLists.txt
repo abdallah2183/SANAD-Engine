@@ -21,7 +21,7 @@ project(SANAD
 # It gets its own line next to the version instead of being smeared into a
 # hand-copied string somewhere, and NF_VERSION_STRING composes the two. Set it
 # empty for a final release; the "-suffix" disappears with it.
-set(NF_VERSION_SUFFIX "")
+set(NF_VERSION_SUFFIX "beta.1")
 if(NF_VERSION_SUFFIX STREQUAL "")
     set(NF_VERSION_STRING "${PROJECT_VERSION}")
 else()

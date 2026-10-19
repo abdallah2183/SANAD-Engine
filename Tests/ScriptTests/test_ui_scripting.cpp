@@ -264,10 +264,16 @@ using CSVolumeFn = float (*)(void* api, const u8* bus, int len);
 
 NF_TEST(ui_csharp_abi_layout_is_sequential_and_user_first) {
     // The managed mirror is LayoutKind.Sequential, so field order and the
-    // zero offset of `user` are the whole contract.
-    NF_CHECK(std::is_standard_layout_v<UiHostApi>);
-    NF_CHECK(offsetof(UiHostApi, user) == 0);
-    NF_CHECK(sizeof(UiHostApi) == sizeof(void*) + 9 * sizeof(void*));
+    // zero offset of `user` are the whole contract — and that contract is about
+    // the type, not about a run. Asserted at compile time: a field added or
+    // moved now fails the build. (/WX rejects the constants as runtime checks,
+    // C4127.) The live api.user below is the runtime half.
+    static_assert(std::is_standard_layout_v<UiHostApi>,
+                  "UiHostApi must stay standard-layout for the managed mirror");
+    static_assert(offsetof(UiHostApi, user) == 0,
+                  "UiHostApi::user must stay the first field");
+    static_assert(sizeof(UiHostApi) == sizeof(void*) + 9 * sizeof(void*),
+                  "UiHostApi must stay one pointer plus nine slots");
 
     GameFlow flow;
     UiHostApi api = make_ui_host_api(flow);

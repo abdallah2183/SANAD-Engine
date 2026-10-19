@@ -186,6 +186,13 @@ std::filesystem::path Runtime::resolve_shader_dir() const {
             return via_project.value;
         }
     }
+    // A shipped package is self-contained and keeps Shaders/ beside the player.
+    // Prefer that relative path before any compile-time build-tree path, because
+    // a developer may have the original build directory on the same machine.
+    const std::filesystem::path packaged("Shaders/Basic3D");
+    if (std::filesystem::exists(packaged)) {
+        return packaged;
+    }
     // In-repo fallback: the compile-time define (set by the build), then paths
     // relative to the working directory, then content://, then the two known
     // build trees. Extracted from ensure_renderer_initialized_for so the GPU
@@ -468,6 +475,10 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // (a no-op for a scene with no NavMesh line).
     m_nav_agents.clear();
     build_scene_navmesh();
+    // Vehicles are a per-scene artefact on the same terms: the previous
+    // scene's Jolt world, statics and cars die with it, and the new one binds
+    // its own (a teardown for a scene with no Vehicle line).
+    bind_scene_vehicles();
     // The previous scene's bindings and shards do not carry over. Assets stay
     // (the game registered them), but which entities are breakable and what is
     // flying around belongs to this scene.
@@ -574,6 +585,10 @@ void Runtime::update(float dt) {
     // whether the frame took 5 ms or 50. The render path then only reads the
     // transforms physics produced.
     step_physics(dt);
+    // Cars simulate in their own Jolt world on the same fixed-clock terms:
+    // drive inputs armed, Jolt solves, chassis poses land in the Transforms
+    // before anything downstream reads them. No-op without a bound car.
+    step_vehicles(dt);
     // Contacts are read straight after the step they belong to: the solver's
     // manifolds are only valid until the next step, and a hit landed this frame
     // has to be able to spawn its shards in the step_destruction below. A
@@ -1603,6 +1618,385 @@ u32 Runtime::step_navmesh(float dt) {
     return moved;
 }
 
+void Runtime::bind_scene_vehicles() {
+    // Teardown first, unconditionally: the system before the world (its
+    // JoltVehicles point into it), the static handles before the world (same
+    // order destruction tears down in). Stale component views are cleared
+    // with the bindings — a view of a dead JoltVehicle is exactly the
+    // dangling-view bug VehicleSystem's ownership rules exist to prevent.
+    m_vehicle_system.reset();
+    if (m_vehicle_world) {
+        for (const physics::JoltBody& body : m_vehicle_statics) {
+            m_vehicle_world->remove_body(body);
+        }
+        for (const VehicleObstacle& obstacle : m_vehicle_obstacles) {
+            m_vehicle_world->remove_body(obstacle.mirror);
+        }
+    }
+    m_vehicle_statics.clear();
+    m_vehicle_obstacles.clear();
+    m_vehicle_world.reset();
+    m_vehicle_clock.reset();
+    // Spin belongs to the binding, not the scene: a wheel that spun carrying one
+    // world's simulation must not surface in the next one, and a fresh bind
+    // starts visuals from parked. (Like the clock: reset on every path.)
+    m_vehicle_wheel_spin.clear();
+    m_wheel_mesh = rendering::StaticMeshHandle{};
+    // Same for replication state: a session's ids and tick stream end here.
+    m_vehicle_net_ids.clear();
+    m_vehicle_net_ticks.clear();
+    if (m_scene_data_ptr && m_scene_data_ptr->scene) {
+        auto& w = m_scene_data_ptr->scene->world();
+        for (auto e : w.query<physics::VehicleComponent>()) {
+            if (auto* vc = w.get<physics::VehicleComponent>(e)) {
+                vc->vehicle = nullptr;
+            }
+        }
+    }
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    bool any_enabled = false;
+    for (auto e : world.query<physics::VehicleComponent>()) {
+        const auto* vc = world.get<physics::VehicleComponent>(e);
+        if (vc != nullptr && vc->enabled) {
+            any_enabled = true;
+            break;
+        }
+    }
+    if (!any_enabled) {
+        return; // no car: no Jolt world, no cost, no statics
+    }
+    auto jolt = std::make_unique<physics::JoltWorld>();
+    if (!jolt->valid()) {
+        NF_LOG_ERROR(LogCategory::Core, "Runtime: vehicles disabled, Jolt world unavailable");
+        return;
+    }
+    // Level geometry the cars drive on: the scene's STATIC rigid bodies, in
+    // world space (propagated first, so parented platforms land correctly).
+    // Bodies the ENGINE SOLVER simulates (Dynamic, Kinematic) stay with the
+    // engine — a body simulated twice is two bodies disagreeing about where it
+    // is (same rule as the debris statics). What they get here instead is a
+    // KINEMATIC MIRROR (below): a solid obstacle the car collides with, driven
+    // from the solver's pose, integrating no motion of its own. Entities
+    // carrying a VehicleComponent are skipped: the chassis is its own Jolt
+    // body, and a second shell on top of it is a wall the car can never leave.
+    scene::propagate_transforms(world);
+    for (auto e : world.query<physics::RigidBodyComponent>()) {
+        const auto* rb = world.get<physics::RigidBodyComponent>(e);
+        const auto* collider = world.get<physics::ColliderComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (rb == nullptr || collider == nullptr || t == nullptr) {
+            continue;
+        }
+        if (world.has<physics::VehicleComponent>(e)) {
+            continue;
+        }
+        if (rb->type == physics::BodyType::Static) {
+            physics::BodyDesc desc;
+            desc.type = physics::BodyType::Static;
+            desc.shape = collider->shape;
+            desc.position = Vec3(t->world_x, t->world_y, t->world_z);
+            desc.orientation = scene::quat_from_euler_xyz_degrees(t->rot_x, t->rot_y, t->rot_z);
+            const physics::JoltBody body = jolt->add_body(desc);
+            if (body.valid()) {
+                m_vehicle_statics.push_back(body);
+            }
+            continue;
+        }
+        // Dynamic / Kinematic scene bodies: solid moving obstacles. The pose
+        // AUTHORITY is the engine solver's body (rb->body), not the Transform:
+        // a mirror spawned from a Transform that the solver has already moved
+        // starts a frame behind, opening a one-step tunnel the car can slip
+        // through. Bodies the solver never got (rebuild failed or ran without
+        // physics) have no pose authority, so they mirror nothing.
+        if (!rb->body.valid() || !m_physics) {
+            continue;
+        }
+        const physics::BodyState state = m_physics->state(rb->body);
+        physics::BodyDesc desc;
+        desc.type = physics::BodyType::Kinematic;
+        desc.shape = collider->shape;
+        desc.position = state.position;
+        desc.orientation = state.orientation;
+        desc.friction = rb->friction;
+        desc.restitution = rb->restitution;
+        const physics::JoltBody mirror = jolt->add_body(desc);
+        if (mirror.valid()) {
+            m_vehicle_obstacles.push_back(VehicleObstacle{rb->body, mirror});
+        }
+    }
+    m_vehicle_world = std::move(jolt);
+    m_vehicle_system = std::make_unique<physics::VehicleSystem>(*m_vehicle_world);
+    m_vehicle_system->startup(world);
+    NF_LOG_INFO(LogCategory::Core,
+                "Runtime: vehicles bound ({} cars, {} static colliders, {} obstacle mirrors)",
+                m_vehicle_system->vehicle_count(), m_vehicle_statics.size(),
+                m_vehicle_obstacles.size());
+}
+
+u32 Runtime::step_vehicles(float dt) {
+    if (!m_vehicle_world || !m_vehicle_system || !m_vehicle_world->valid() ||
+        !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    // The edit-mode freeze: a viewport that is not playing shows parked cars,
+    // never self-driving ones. update() already returns early on dt <= 0, so
+    // this guard is for a direct caller.
+    if (!(dt > 0.0f)) {
+        return 0;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    const u32 steps = m_vehicle_clock.advance(dt);
+    for (u32 i = 0; i < steps; ++i) {
+        const float h = m_vehicle_clock.step();
+        // Obstacle mirrors follow their solver bodies BEFORE the step: the car
+        // contacts what the engine world says is true now, at the pose the
+        // solver reports after its own step (step_physics precedes
+        // step_vehicles in update()), so a crate falling this frame is solid
+        // exactly where it landed. Velocities ride along so contacts push the
+        // car with the obstacle's motion instead of treating a translating
+        // slab as a teleporting wall. One-way: nothing here writes back into
+        // m_physics, so the solver's determinism is untouched.
+        if (m_physics) {
+            for (const VehicleObstacle& obstacle : m_vehicle_obstacles) {
+                const physics::BodyState src = m_physics->state(obstacle.source);
+                m_vehicle_world->set_pose(obstacle.mirror, src.position, src.orientation);
+                m_vehicle_world->set_linear_velocity(obstacle.mirror, src.linear_velocity);
+            }
+        }
+        // Drive inputs in, then Jolt solves — the VehicleDemo's own protocol
+        // (update() before step()).
+        m_vehicle_system->update(world);
+        m_vehicle_world->step(h);
+        // Wheel-spin integration, on the simulation clock: Jolt exposes the
+        // wheels' angular velocity but never an accumulated angle, so the roll
+        // the render world shows is integrated here with the SAME h each step
+        // was solved at. Integrate against the states AFTER the step: one step
+        // of lag on a visual is invisible; spinning before Jolt moved the
+        // bodies would let the wheel appear to roll where the chassis is not.
+        for (auto e : world.query<physics::VehicleComponent>()) {
+            const auto* vc = world.get<physics::VehicleComponent>(e);
+            if (vc == nullptr || vc->vehicle == nullptr) {
+                continue;
+            }
+            WheelSpin& spin = m_vehicle_wheel_spin[e];
+            const std::vector<physics::JoltWheelState> states =
+                vc->vehicle->wheel_states();
+            for (usize w = 0; w < states.size() && w < spin.angle.size(); ++w) {
+                spin.angle[w] += states[w].angular_velocity * h;
+            }
+        }
+    }
+    if (steps == 0) {
+        return 0;
+    }
+    // One trailing sync so the Transforms render where the last step ended up,
+    // not one step behind it. drive() only arms driver inputs, so re-applying
+    // them here is idempotent — the poses are what this pass is for.
+    m_vehicle_system->update(world);
+    return steps;
+}
+
+bool Runtime::reset_vehicle(ecs::Entity e) {
+    if (!m_vehicle_system || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    if (!world.is_alive(e)) {
+        return false;
+    }
+    const auto* t = world.get<scene::Transform>(e);
+    if (t == nullptr) {
+        return false;
+    }
+    // In place: upright where it stands. The demo resets to a remembered
+    // spawn, but the scene persists no spawn pose — the Transform is the only
+    // placement the format knows.
+    m_vehicle_system->reset(e, world, Vec3{t->local_x, t->local_y, t->local_z});
+    return true;
+}
+
+size_t Runtime::vehicle_count() const {
+    return m_vehicle_system ? m_vehicle_system->vehicle_count() : 0u;
+}
+
+size_t Runtime::vehicle_obstacle_count() const {
+    return m_vehicle_obstacles.size();
+}
+
+// --- Vehicle network replication (Step 14) ------------------------------------
+
+void Runtime::assign_vehicle_net_id(ecs::Entity e, u32 net_id) {
+    // Net id 0 is unwireable (decode_vehicle_snapshot rejects it), so refusing
+    // the assignment here keeps collect/apply from ever minting a record the
+    // format itself would bounce later.
+    if (!e.valid() || net_id == 0u) {
+        return;
+    }
+    m_vehicle_net_ids[e] = net_id;
+}
+
+bool Runtime::collect_vehicle_net_states(std::vector<VehicleNetRecord>& out) const {
+    out.clear();
+    if (!m_vehicle_world || !m_vehicle_system || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false; // no bind: nothing in this world is authoritative
+    }
+    const auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<physics::VehicleComponent>()) {
+        const auto* vc = world.get<physics::VehicleComponent>(e);
+        if (vc == nullptr || vc->vehicle == nullptr || !world.is_alive(e)) {
+            continue;
+        }
+        const auto it = m_vehicle_net_ids.find(e);
+        if (it == m_vehicle_net_ids.end()) {
+            continue; // a car without a wire identity is not replicated
+        }
+        VehicleNetRecord rec;
+        rec.net_id = it->second;
+        rec.state = vc->vehicle->chassis_state();
+        out.push_back(rec);
+    }
+    return true;
+}
+
+u32 Runtime::apply_vehicle_net_states(const std::vector<VehicleNetRecord>& in, u32 tick) {
+    u32 applied = 0;
+    // Tick 0 is "nothing has stepped yet" on every side of the protocol
+    // (snapshot tick defaults to 0) — it can never be a NEWER correction.
+    if (tick == 0u || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (const VehicleNetRecord& rec : in) {
+        if (rec.net_id == 0u) {
+            continue;
+        }
+        // Assignments are entity -> net id; apply walks the other way. Car
+        // counts are table-small, so the reverse scan is free.
+        ecs::Entity target = ecs::kInvalidEntity;
+        for (const auto& [entity, net] : m_vehicle_net_ids) {
+            if (net == rec.net_id && world.is_alive(entity)) {
+                target = entity;
+                break;
+            }
+        }
+        if (!target.valid()) {
+            continue;
+        }
+        auto* vc = world.get<physics::VehicleComponent>(target);
+        if (vc == nullptr || vc->vehicle != nullptr) {
+            // Not a ghost here: a car this world simulates writes its own pose
+            // every step, and foreign authority arriving through a packet
+            // would fight it to a visible standstill.
+            continue;
+        }
+        u32& last = m_vehicle_net_ticks[target];
+        if (last >= tick) {
+            continue; // stale or duplicate correction
+        }
+        auto* tf = world.get<scene::Transform>(target);
+        if (tf == nullptr) {
+            continue;
+        }
+        // Exactly the writeback VehicleSystem::update does for a locally
+        // simulated chassis: position into the transform's local slot, heading
+        // into euler degrees. The renderer only reads transforms, so a remote
+        // car and a local one are indistinguishable two frames later.
+        tf->local_x = rec.state.position.x;
+        tf->local_y = rec.state.position.y;
+        tf->local_z = rec.state.position.z;
+        scene::euler_xyz_degrees_from_quat(rec.state.rotation, tf->rot_x, tf->rot_y, tf->rot_z);
+        tf->dirty = true;
+        last = tick;
+        ++applied;
+    }
+    return applied;
+}
+
+bool Runtime::vehicle_wheel_states(ecs::Entity e, std::vector<physics::JoltWheelState>& out) const {
+    out.clear();
+    if (!m_vehicle_system || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false;
+    }
+    const auto& world = m_scene_data_ptr->scene->world();
+    if (!world.is_alive(e)) {
+        return false;
+    }
+    const auto* vc = world.get<physics::VehicleComponent>(e);
+    if (vc == nullptr || vc->vehicle == nullptr) {
+        return false;
+    }
+    out = vc->vehicle->wheel_states();
+    return true;
+}
+
+std::vector<Vec3> nav_debug_mesh_edge_points(const ai::NavMesh& mesh) {
+    std::vector<Vec3> out;
+    const u32 n = mesh.polygon_count();
+    for (u32 i = 0; i < n; ++i) {
+        const ai::NavPoly& poly = mesh.polygon(i);
+        const usize vcount = poly.verts.size();
+        // A polygon with fewer than 3 vertices is degenerate input the
+        // polygoniser should never have produced; skipping it keeps a corrupt
+        // bake from drawing nonsense rather than crashing on wraparound.
+        if (vcount < 3) {
+            continue;
+        }
+        for (usize v = 0; v < vcount; ++v) {
+            out.push_back(poly.verts[v]);
+            out.push_back(poly.verts[(v + 1) % vcount]);
+        }
+    }
+    return out;
+}
+
+NavDebugSnapshot Runtime::nav_debug_snapshot() const {
+    NavDebugSnapshot snap;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene || m_navmesh == nullptr ||
+        !m_navmesh->built()) {
+        return snap; // no volume: the overlay draws nothing, not stale data
+    }
+    snap.has_mesh = true;
+    snap.mesh_generation = m_nav_generation;
+    const u32 n = m_navmesh->polygon_count();
+    snap.mesh_polygons.reserve(n);
+    for (u32 i = 0; i < n; ++i) {
+        snap.mesh_polygons.push_back(m_navmesh->polygon(i).verts);
+    }
+    const auto& world = m_scene_data_ptr->scene->world();
+    snap.agents.reserve(m_nav_agents.size());
+    for (const auto& [entity, st] : m_nav_agents) {
+        NavDebugAgent a;
+        a.entity = entity;
+        if (const auto* t = world.get<scene::Transform>(entity); t != nullptr) {
+            a.position = Vec3{t->local_x, t->local_y, t->local_z};
+        }
+        if (const auto* comp = world.get<NavAgentComponent>(entity); comp != nullptr) {
+            a.goal = Vec3{comp->goal_x, comp->goal_y, comp->goal_z};
+        }
+        // The route from the waypoint currently walked to: the travelled legs
+        // are history, and drawing them would paint the path the agent has
+        // already consumed as if it still had to walk it.
+        if (st.has_path && !st.path.empty()) {
+            const usize from = std::min(st.waypoint > 0 ? st.waypoint - 1 : usize{0}, st.path.size() - 1);
+            a.path.assign(st.path.begin() + static_cast<std::ptrdiff_t>(from), st.path.end());
+        }
+        a.has_path = st.has_path && !a.path.empty();
+        a.at_goal = st.at_goal;
+        snap.agents.push_back(std::move(a));
+    }
+    // The live map is unordered: sort by entity id, the one stable key every
+    // agent has, so the overlay draws — and a test reads — the same order
+    // every frame. (The destruction retire list is sorted for the same reason.)
+    std::sort(snap.agents.begin(), snap.agents.end(), [](const NavDebugAgent& a, const NavDebugAgent& b) {
+        if (a.entity.id != b.entity.id) return a.entity.id < b.entity.id;
+        return a.entity.generation < b.entity.generation;
+    });
+    return snap;
+}
+
 size_t Runtime::particles_alive() const {
     size_t alive = 0;
     for (const auto& [entity, system] : m_particles) {
@@ -2553,6 +2947,114 @@ void Runtime::build_debris_render_world(rendering::RenderWorld& out) {
     }
 }
 
+void Runtime::build_vehicle_wheels_render_world(rendering::RenderWorld& out) {
+    if (!m_vehicle_world || !m_vehicle_system || !m_vehicle_world->valid() ||
+        !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    if (!m_mesh_library) {
+        return;
+    }
+    ensure_default_material();
+
+    // One shared unit cube for every wheel of every car, scaled in the pose
+    // matrix — the flattened-cube tire the VehicleDemo draws, so the scene car
+    // and the demo car look related. Built lazily on the first wheel frame (the
+    // shard_mesh pattern): a headless runtime has no device, upload fails, the
+    // handle stays invalid and wheels simply do not draw instead of crashing.
+    if (!m_wheel_mesh.valid()) {
+        auto mesh = rendering::StaticMesh::create_cube(1.0f);
+        if (mesh == nullptr || !mesh->upload(m_device)) {
+            return;
+        }
+        const rendering::StaticMeshHandle handle = m_mesh_library->add(std::move(mesh));
+        if (!handle.valid()) {
+            return;
+        }
+        m_wheel_mesh = handle;
+    }
+    const rendering::StaticMesh* wheel_mesh = m_mesh_library->get(m_wheel_mesh);
+    if (wheel_mesh == nullptr || !wheel_mesh->is_uploaded()) {
+        return;
+    }
+
+    constexpr float kRadToDeg = 57.2957795f;
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<scene::Transform, physics::VehicleComponent>()) {
+        const auto* vc = world.get<physics::VehicleComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (vc == nullptr || !vc->enabled || vc->vehicle == nullptr || t == nullptr) {
+            continue;
+        }
+        const std::vector<physics::JoltWheelState> states = vc->vehicle->wheel_states();
+        if (states.empty()) {
+            continue;
+        }
+        // The chassis orientation, re-read from the Transform the vehicle sync
+        // wrote this frame — the wheels must roll with a pitched or rocking
+        // body, not stay axis-aligned to the world while the car rotates.
+        const Quat chassis = scene::quat_from_euler_xyz_degrees(t->rot_x, t->rot_y, t->rot_z);
+        const WheelSpin* spin = nullptr;
+        if (const auto it = m_vehicle_wheel_spin.find(e); it != m_vehicle_wheel_spin.end()) {
+            spin = &it->second;
+        }
+        for (usize w = 0; w < states.size(); ++w) {
+            const physics::JoltWheelState& st = states[w];
+            // Steer first, then spin (R = Ry * Rx, the convention
+            // quat_from_euler_xyz_degrees applies to (x=spin, y=steer)): a
+            // steered wheel rolls around the STEERED axis, which is exactly
+            // euler-x euler-y nesting. Same orientation the demo parks on its
+            // wheel entities — spin on X, steer on Y — read from the same
+            // JoltWheelState, so the scene car rolls like the demo car.
+            const f32 spin_deg =
+                (spin != nullptr && w < spin->angle.size()) ? spin->angle[w] * kRadToDeg : 0.0f;
+            const Quat wheel_local = scene::quat_from_euler_xyz_degrees(
+                spin_deg, st.steer_angle * kRadToDeg, 0.0f);
+            // width along X (the spin axis), diameter along Y and Z: the cube
+            // spans +/-0.5 per axis, so scale = the tire's real extents.
+            const f32 radius = vc->config.wheel_radius;
+            const f32 width = vc->config.wheel_width;
+            // compose_quat_scale_mat4 = T * R * S, the one canonical transform
+            // to a row-vector Mat4; the state's position is the wheel CENTER
+            // in world space (suspension travel already applied), so no
+            // chassis offset is added here.
+            const Mat4 m = scene::compose_quat_scale_mat4(
+                st.position, chassis * wheel_local, Vec3{width, radius * 2.0f, radius * 2.0f});
+
+            rendering::RenderObject ro{};
+            ro.id = 0; // not an entity: wheels are render-only, picking reports none
+            ro.visible = true;
+            ro.world = m;
+            ro.mesh_handle = m_wheel_mesh;
+            ro.material_handle = m_default_material;
+            ro.lod = 0;
+            // Culling bounds through the same matrix the draw will use — the
+            // wheels spin every frame, so the cube's corners are transformed
+            // and re-boxed (the debris path's corner walk, unchanged).
+            const rendering::AABB lb = wheel_mesh->bounds();
+            Vec3 corners[8] = {
+                { lb.min_x, lb.min_y, lb.min_z }, { lb.max_x, lb.min_y, lb.min_z },
+                { lb.min_x, lb.max_y, lb.min_z }, { lb.max_x, lb.max_y, lb.min_z },
+                { lb.min_x, lb.min_y, lb.max_z }, { lb.max_x, lb.min_y, lb.max_z },
+                { lb.min_x, lb.max_y, lb.max_z }, { lb.max_x, lb.max_y, lb.max_z },
+            };
+            Vec3 mn = st.position;
+            Vec3 mx = st.position;
+            for (const Vec3& c : corners) {
+                const Vec3 wpos = m.transform_point(c);
+                mn.x = std::min(mn.x, wpos.x); mn.y = std::min(mn.y, wpos.y); mn.z = std::min(mn.z, wpos.z);
+                mx.x = std::max(mx.x, wpos.x); mx.y = std::max(mx.y, wpos.y); mx.z = std::max(mx.z, wpos.z);
+            }
+            ro.bounds = rendering::AABB{ mn.x, mn.y, mn.z, mx.x, mx.y, mx.z };
+            const rendering::BoundingSphere ls = wheel_mesh->bounding_sphere();
+            const Vec3 sc = m.transform_point({ ls.cx, ls.cy, ls.cz });
+            ro.sphere = rendering::BoundingSphere{ sc.x, sc.y, sc.z,
+                ls.radius * std::max({width, radius * 2.0f}) };
+            out.objects.push_back(std::move(ro));
+        }
+    }
+}
+
 u32 Runtime::step_physics(float frame_delta) {
     if (!m_physics || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return 0;
@@ -3024,6 +3526,7 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
         out.objects.push_back(std::move(ro));
     }
     build_debris_render_world(out);
+    build_vehicle_wheels_render_world(out);
 
     NF_LOG_TRACE(LogCategory::Core, "Runtime: built render world with {} objects (meshes={})", out.objects.size(),
                  m_mesh_library->size());

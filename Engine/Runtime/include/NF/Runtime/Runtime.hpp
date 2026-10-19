@@ -19,6 +19,7 @@
 #include <NF/Physics/PhysicsWorld.hpp>
 #include <NF/Physics/JoltWorld.hpp>
 #include <NF/Physics/JoltDebrisSink.hpp>
+#include <NF/Physics/VehicleSystem.hpp>
 #include <NF/Destruction/DestructionWorld.hpp>
 #include <NF/Destruction/FractureAsset.hpp>
 #include <NF/Animation/Components.hpp>
@@ -39,6 +40,7 @@
 #include <NF/AI/AIWorld.hpp>
 #include <NF/AI/NavMesh.hpp>
 
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -450,6 +452,82 @@ public:
     /// Obstacles the last bake carved (static box colliders seen at build time).
     [[nodiscard]] size_t navmesh_obstacle_count() const { return m_nav_obstacle_count; }
 
+    // --- Vehicles (Step 11 — Jolt arcade cars in the frame and the scene) ---
+    //
+    // The deterministic solver cannot do vehicles (no VehicleConstraint), so
+    // cars live in their own JoltWorld — the same "dedicated world" pattern
+    // destruction uses for shards, for the same reason: one world's bodies
+    // must never be simulated twice.
+    //
+    // The scene declares the tune (VehicleComponent::config); the frame steps
+    // it; the editor authors it. Drive inputs are live-only (written straight
+    // into the component by gameplay or the editor's debug drive, never
+    // saved), like Character's wish_dir/jump.
+
+    /// (Re)builds the vehicle world from the scene's enabled VehicleComponents:
+    /// a fresh JoltWorld, the level's static colliders synced into it, and one
+    /// JoltVehicle per car. Called on scene adopt; a scene with no enabled
+    /// car tears everything down, like every other per-scene artefact here.
+    /// Also the right call after restoring a pre-play snapshot (Stop), which
+    /// is why it is public and idempotent rather than adopt-private.
+    void bind_scene_vehicles();
+    /// Steps every bound car on the fixed vehicle clock: drive inputs in, Jolt
+    /// solves, chassis poses land in the entities' Transforms. Only advances
+    /// on dt > 0 (callers go through update(), which enforces it).
+    u32 step_vehicles(f32 dt);
+    /// Uprights the car in place and zeroes its velocity (the R key in the
+    /// demo). A recovered car must not keep rendering on its roof while the
+    /// physics says it is upright — see VehicleSystem::reset.
+    bool reset_vehicle(ecs::Entity e);
+    /// Bound cars right now.
+    [[nodiscard]] size_t vehicle_count() const;
+    /// Moving-obstacle mirrors currently bound (one per simulated scene body in
+    /// the vehicle world). A test-facing count, not a gameplay knob.
+    [[nodiscard]] size_t vehicle_obstacle_count() const;
+
+    // --- Vehicle network replication (Step 14) --------------------------------
+    //
+    // The engine-side half of the VehicleSnapshot pipeline. Runtime speaks
+    // ENGINE types only (`physics::JoltBodyState`); the bridge to the wire —
+    // net id ↔ net::VehicleNetState, encode/decode, sockets — is the session
+    // owner's job (game layer), the same split that lets NFNetworking stay
+    // free of engine worlds. Contract: a car WITHOUT a net id is not
+    // replicated, and the wire never carries net id 0.
+
+    /// One car's chassis on the wire: the engine solver's pose + velocity.
+    struct VehicleNetRecord {
+        u32 net_id = 0;
+        physics::JoltBodyState state{};
+    };
+
+    /// Assigns the wire identity a car replicates under (a server uses its own
+    /// entity ids; a client what the session manifest says). Rebinding a scene
+    /// clears every assignment — sessions own ids, scenes do not.
+    void assign_vehicle_net_id(ecs::Entity e, u32 net_id);
+
+    /// One record per bound car that HAS a net id, read at the last step
+    /// (`chassis_state()` is a read, so a collection costs nothing to the sim).
+    /// The tick lives on the snapshot the session builds from these.
+    bool collect_vehicle_net_states(std::vector<VehicleNetRecord>& out) const;
+
+    /// Applies REMOTE chassis poses. A record is skipped when it carries no
+    /// known net id, when its assignment died, when the target car is
+    /// SIMULATED BY THIS WORLD (applying authority to a body this world owns
+    /// is a fight this world loses), or when its tick is not newer than the
+    /// last one accepted for that entity (`tick == 0` never applies). Writes
+    /// the ghost's Transform exactly as VehicleSystem writes a simulated one.
+    /// Returns the number of poses actually applied.
+    u32 apply_vehicle_net_states(const std::vector<VehicleNetRecord>& in, u32 tick);
+    /// Per-wheel render state for one car (pose, steer, spin, contact) — what
+    /// wheel meshes and dust effects pose from. False when the car has no live
+    /// vehicle.
+    bool vehicle_wheel_states(ecs::Entity e, std::vector<physics::JoltWheelState>& out) const;
+    /// The navigation debug snapshot: mesh outlines plus every bound agent's
+    /// live route, copied out together so the overlay draws one consistent
+    /// frame. Empty when the scene has no baked volume. Agents sorted by
+    /// entity id (the live map is unordered); see NavDebugSnapshot.
+    [[nodiscard]] NavDebugSnapshot nav_debug_snapshot() const;
+
     /// The input source handed to modules. Non-owning; null means no input, and
     /// modules are expected to check.
     void set_input_source(gameplay::IInputSource* source) { m_input_source = source; }
@@ -796,6 +874,70 @@ private:
     std::unique_ptr<destruction::DestructionWorld>     m_destruction;
     physics::FixedTimestep                             m_debris_clock{1.0f / 60.0f, 8};
     bool                                               m_destruction_enabled = false;
+
+    // Vehicles (Step 11). Same dedicated-world pattern as destruction, for the
+    // same reason: the deterministic solver has no VehicleConstraint, and one
+    // world's bodies must never be simulated twice.
+    //
+    // Declaration order is the teardown contract (members destroy in reverse):
+    // the world is declared FIRST so the system — whose JoltVehicles point
+    // into it — dies before it does. The static bodies are plain handles, so
+    // the vector may sit anywhere; it is cleared before the world on every
+    // teardown path, like m_debris_statics.
+    //
+    // Own fixed clock, same 1/60 convention as the other two simulations: a
+    // shared accumulator would couple budgets that have nothing to do with
+    // each other.
+    std::unique_ptr<physics::JoltWorld>                m_vehicle_world;
+    std::unique_ptr<physics::VehicleSystem>            m_vehicle_system;
+    std::vector<physics::JoltBody>                     m_vehicle_statics;
+    /// Moving-obstacle mirrors (Step 13). One pair per scene body the engine
+    /// solver simulates as Dynamic or Kinematic: the mirror is a KINEMATIC
+    /// Jolt body in the vehicle world, teleported to the source body's solver
+    /// pose every step. One-way coupling, stated plainly: the car bounces off
+    /// the mirror, but the car can never push the source body — the source
+    /// belongs to the deterministic engine solver and a second simulation of
+    /// it ("push the mirror, mirror pushes back") is two bodies disagreeing,
+    /// the same rule the statics comment below carries. The mirror integrates
+    /// no motion of its own, so nothing here is simulated twice.
+    struct VehicleObstacle {
+        physics::BodyHandle source; // the engine solver's body (pose authority)
+        physics::JoltBody   mirror; // kinematic shadow in the vehicle world
+    };
+    std::vector<VehicleObstacle>                       m_vehicle_obstacles;
+    /// Replication (Step 14): wire id → car, and the last ACCEPTED tick per
+    /// car (freshness gate, mirror of VehicleGhostClient's correction gate).
+    /// Both die with the bind — a session's ids and a remote authority's tick
+    /// stream have no meaning across a scene remap.
+    std::unordered_map<ecs::Entity, u32>               m_vehicle_net_ids;
+    std::unordered_map<ecs::Entity, u32>               m_vehicle_net_ticks;
+    physics::FixedTimestep                             m_vehicle_clock{1.0f / 60.0f, 8};
+    /// Integrated wheel-spin angle (radians) per vehicle and wheel. Jolt exposes
+    /// the wheels' angular VELOCITY (JoltWheelState) but not an accumulated
+    /// angle, so the visual roll is integrated on the runtime side — with the
+    /// fixed-step h each step was solved at, which keeps the spin a function of
+    /// simulated time, not of frame pacing. Visual-only state: like the chassis
+    /// pose, nothing here is saved to a scene file, and a fresh bind resets it.
+    ///
+    /// The count is four because the physics rig is: two axles × two sides
+    /// (JoltWorld's vehicle creation order [FL, FR, RL, RR]) — not a per-model
+    /// axle table. A rig change would have to change this constant with it.
+    struct WheelSpin {
+        std::array<f32, 4> angle{};
+    };
+    std::unordered_map<ecs::Entity, WheelSpin>          m_vehicle_wheel_spin;
+    /// One shared unit-cube wheel mesh, scaled per wheel by the vehicle's own
+    /// radius/width in the pose matrix — the same flattened-cube tire the
+    /// VehicleDemo draws. Built lazily on the first wheel frame (like
+    /// shard_mesh) so headless runs simply render nothing rather than fail.
+    rendering::StaticMeshHandle                        m_wheel_mesh;
+    /// Emits the render objects for the bound vehicles' wheels, posed from
+    /// `vehicle_wheel_states` like the demo poses its wheel entities. Called
+    /// from build_render_world so wheels, chassis and debris are all drawn
+    /// from the same world the renderer sees. Render-only, exactly like the
+    /// shard path: no ECS entities, so the outliner, the PlayMode snapshot and
+    /// the scene serializer never see wheels — and a save never gains them.
+    void build_vehicle_wheels_render_world(rendering::RenderWorld& out);
     /// Cooked assets, owned by the runtime (the "asset table" a
     /// DestructibleComponent's asset_index indexes).
     std::vector<destruction::FractureAsset>            m_fracture_assets;
