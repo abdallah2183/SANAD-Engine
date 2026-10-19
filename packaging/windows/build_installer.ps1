@@ -1,4 +1,4 @@
-﻿# build_installer.ps1 - stage the release, zip a portable, compile the Setup EXE.
+# build_installer.ps1 - stage the release, zip a portable, compile the Setup EXE.
 #
 # Windows-only by design: the installer targets Windows 10+ x64 (see
 # packaging/windows/SANAD.iss: ArchitecturesAllowed=x64compatible,
@@ -76,6 +76,15 @@ foreach ($b in $needBins) {
     Copy-Item $p $stage
     Write-Host ("  {0,-22} {1,8:N1} MB" -f $b, ((Get-Item $p).Length / 1MB))
 }
+# The CLI + import/cook tools ship too: "make a game" needs `nf build`, and a
+# demo without the asset cooker cannot bring a model into the project.
+foreach ($b in @('nf.exe', 'NFAssetCooker.exe', 'NFModelImporter.exe')) {
+    $p = Join-Path $build "bin\$b"
+    if (Test-Path $p) {
+        Copy-Item $p $stage
+        Write-Host ("  {0,-22} {1,8:N1} MB" -f $b, ((Get-Item $p).Length / 1MB))
+    }
+}
 
 # --- Shaders: ship EditorImGui + Basic3D next to the exe ----------------------
 # The editor bakes an ABSOLUTE build-tree shader path; the portable folder works
@@ -92,12 +101,22 @@ foreach ($d in @('EditorImGui', 'Basic3D')) {
 Write-Host ("  Shaders/                {0,8} .spv  (EditorImGui + Basic3D)" -f $shaderCount)
 if ($shaderCount -eq 0) { throw 'No shaders staged - build the release first.' }
 
-# --- Project templates ("New project" scaffolds from Templates/Default) -------
-$tpl = Join-Path $repo 'Templates\Default'
-if (-not (Test-Path $tpl)) { throw 'Templates/Default is missing - "New project" would have nothing to copy.' }
-Copy-Item (Join-Path $tpl '*') (Join-Path $stage 'Templates') -Recurse -Force
+# --- Project templates --------------------------------------------------------
+# EVERY template folder, not the contents of Default: the launcher resolves
+# <exe>/Templates/<Name> and the gallery offers ThirdPerson, FPSStarter and
+# Platformer2D. The old layout put Default's files directly under Templates/,
+# so on a machine without the developer's build tree every card failed with
+# "template not available" — the packaged New Project could not create anything.
+$tplRoot = Join-Path $repo 'Templates'
+if (-not (Test-Path (Join-Path $tplRoot 'Default'))) {
+    throw 'Templates/Default is missing - "New project" would have nothing to copy.'
+}
+Get-ChildItem $tplRoot -Directory | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $stage 'Templates') -Recurse -Force
+}
 $n = (Get-ChildItem (Join-Path $stage 'Templates') -Recurse -File).Count
-Write-Host ("  Templates/              {0,8} files" -f $n)
+$tplNames = (Get-ChildItem (Join-Path $stage 'Templates') -Directory | Select-Object -ExpandProperty Name) -join ', '
+Write-Host ("  Templates/              {0,8} files  ({1})" -f $n, $tplNames)
 
 # --- Docs: the .md the launcher OPENS + the images it LOADS as card thumbnails
 $docsDst = Join-Path $stage 'Docs'

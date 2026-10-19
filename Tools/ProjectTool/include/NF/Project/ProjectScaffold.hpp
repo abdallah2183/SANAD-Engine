@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace nf::project {
 
@@ -13,6 +14,35 @@ namespace nf::project {
 /// impossible by construction.
 inline constexpr std::array<std::string_view, 4> kProjectTemplateNames{
     "Default", "ThirdPerson", "FPSStarter", "Platformer2D"};
+
+/// Picks the templates root to resolve `template_name` from.
+///
+/// A build bakes NF_TEMPLATES_ROOT as an absolute path in the developer's tree.
+/// A portable package has no such path, so callers pass candidates in priority
+/// order (override, baked path, <exe>/Templates, <exe>/../Templates, Default's
+/// parent) and this picks the first one that really contains the template.
+/// Failing that it names the first existing candidate so an error points at a
+/// directory the user can inspect. Pure and header-inline so tests (and both
+/// the launcher and `nf`) share exactly one ordering.
+inline std::filesystem::path choose_template_root(
+    const std::vector<std::filesystem::path>& candidates, std::string_view template_name) {
+    if (candidates.empty()) {
+        return {};
+    }
+    std::error_code ec;
+    const std::filesystem::path requested(template_name);
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_directory(candidate / requested, ec)) {
+            return candidate;
+        }
+    }
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_directory(candidate, ec)) {
+            return candidate;
+        }
+    }
+    return candidates.front();
+}
 
 /// Human-readable valid-name list used in CLI errors and help-facing callers.
 std::string project_template_name_list();

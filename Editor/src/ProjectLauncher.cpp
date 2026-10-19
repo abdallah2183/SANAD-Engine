@@ -130,6 +130,18 @@ std::string env_var(const char* name) {
     return std::string(buf, n);
 }
 
+/// Directory of the running editor. Used to resolve data that ships beside the
+/// executable (Templates/, Docs/, Resources/) in a portable package, where the
+/// compile-time absolute paths of the developer's build tree do not exist.
+std::filesystem::path launcher_module_dir() {
+    wchar_t mod[MAX_PATH * 2] = {};
+    const DWORD n = ::GetModuleFileNameW(nullptr, mod, MAX_PATH * 2);
+    if (n == 0 || n >= MAX_PATH * 2) {
+        return {};
+    }
+    return std::filesystem::path(mod).parent_path();
+}
+
 // --- Arabic shell: RTL switch + translated/shaped text -----------------------
 // ONE consistent RTL approach for the whole shell: manual coordinate mirroring
 // (NOT WS_EX_LAYOUTRTL). Paint and hit-testing already share layout helpers,
@@ -599,13 +611,48 @@ std::string selected_template_dir(int index, const char* templates_root,
     // NF_TEMPLATE_DIR is only the Default template's folder. Substituting one
     // for the other made every gallery card resolve to a folder that does not
     // exist (Templates/Default/<Name>), so the create always failed.
-    std::filesystem::path root(templates_root);
-    if (root.empty()) {
-        // Same guard the CLI keeps for a stub build: derive the root from the
-        // Default folder's parent so the define staying behind cannot rebuild
-        // the old broken-path bug silently.
-        root = std::filesystem::path(NF_TEMPLATE_DIR).parent_path();
+    //
+    // The compile-time root is an ABSOLUTE path in the developer's build tree.
+    // In the portable demo that path does not exist, so every card failed with
+    // "template not available" — the package could not create a project at
+    // all. Candidates are tried in order; the first one that actually contains
+    // the requested template wins:
+    //   1. SANAD_TEMPLATES_ROOT (explicit override, packaging/QA)
+    //   2. NF_TEMPLATES_ROOT (developer tree)
+    //   3. <exe>/Templates          (portable zip: editor beside Templates/)
+    //   4. <exe>/../Templates       (editor under bin/)
+    //   5. the Default folder's parent (stub-build guard)
+    std::vector<std::filesystem::path> roots;
+    const auto add_root = [&roots](std::filesystem::path candidate) {
+        if (candidate.empty()) {
+            return;
+        }
+        for (const auto& seen : roots) {
+            if (seen == candidate) {
+                return;
+            }
+        }
+        roots.push_back(std::move(candidate));
+    };
+    if (const std::string env = env_var("SANAD_TEMPLATES_ROOT"); !env.empty()) {
+        add_root(env);
     }
+    if (templates_root != nullptr && templates_root[0] != '\0') {
+        add_root(templates_root);
+    }
+    if (const std::filesystem::path module = launcher_module_dir(); !module.empty()) {
+        add_root(module / "Templates");
+        add_root(module.parent_path() / "Templates");
+    }
+    add_root(std::filesystem::path(NF_TEMPLATE_DIR).parent_path());
+    if (roots.empty()) {
+        roots.emplace_back(std::filesystem::current_path());
+    }
+
+    // Selection order lives in the header so EditorTests can pin it: a package
+    // must never resolve against a build-tree path that only exists on the
+    // developer's machine.
+    const std::filesystem::path root = nf::project::choose_template_root(roots, requested);
     const auto resolved = nf::project::resolve_project_template(
         requested, root, {}, out_error);
     return resolved.string();

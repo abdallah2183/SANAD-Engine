@@ -177,6 +177,32 @@ NF_TEST(launcher_settings_json_round_trip) {
     NF_CHECK(!back.start_here);
 }
 
+// A portable package ships <exe>/Templates; the compile-time root is an
+// absolute build-tree path that does not exist there. The resolver must pick
+// the candidate that really contains the requested template, never the baked
+// path just because it is first.
+NF_TEST(launcher_template_root_prefers_a_candidate_that_contains_the_template) {
+    const auto tmp = std::filesystem::temp_directory_path() / "nf_template_root_test";
+    std::error_code ec;
+    std::filesystem::remove_all(tmp, ec);
+    std::filesystem::create_directories(tmp / "build_tree", ec); // exists, empty
+    std::filesystem::create_directories(tmp / "package" / "Templates" / "ThirdPerson", ec);
+    std::filesystem::create_directories(tmp / "package" / "Templates" / "Default", ec);
+
+    const std::vector<std::filesystem::path> candidates{
+        tmp / "missing_build_tree", tmp / "build_tree", tmp / "package" / "Templates"};
+    NF_CHECK(nf::project::choose_template_root(candidates, "ThirdPerson") ==
+             tmp / "package" / "Templates");
+    NF_CHECK(nf::project::choose_template_root(candidates, "Default") ==
+             tmp / "package" / "Templates");
+    // Nothing contains this one: name the first real directory, not the bogus
+    // baked path, so the error message is inspectable.
+    NF_CHECK(nf::project::choose_template_root(candidates, "NotATemplate") == tmp / "build_tree");
+    NF_CHECK(nf::project::choose_template_root({}, "Default").empty());
+
+    std::filesystem::remove_all(tmp, ec);
+}
+
 // The gallery's default card is the playable 3D starter. It used to default to
 // the "blank" card, which scaffolds a scene with no character — a first
 // project that cannot answer "what do I do now".

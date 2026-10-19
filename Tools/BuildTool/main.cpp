@@ -37,6 +37,18 @@
     #define NF_BASIC3D_SHADER_DIR ""
 #endif
 
+#include <cstdlib>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace nf;
 using namespace nf::project;
 
@@ -136,6 +148,52 @@ bool open_project(const std::filesystem::path& project_file,
     return true;
 }
 
+/// Directory of the running nf.exe. A portable package resolves its templates
+/// from <exe>/Templates, because the compile-time root points into the build
+/// tree and does not exist on a user's machine.
+std::filesystem::path executable_dir() {
+#ifdef _WIN32
+    char buf[MAX_PATH] = {};
+    const DWORD n = ::GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+        return {};
+    }
+    return std::filesystem::path(buf).parent_path();
+#else
+    return std::filesystem::current_path();
+#endif
+}
+
+// Same priority order as the editor launcher (see choose_template_root).
+std::vector<std::filesystem::path> template_root_candidates() {
+    std::vector<std::filesystem::path> roots;
+    const auto add = [&roots](std::filesystem::path candidate) {
+        if (!candidate.empty()) {
+            roots.push_back(std::move(candidate));
+        }
+    };
+#ifdef _WIN32
+    char env_buf[MAX_PATH * 4] = {};
+    const DWORD env_len =
+        ::GetEnvironmentVariableA("SANAD_TEMPLATES_ROOT", env_buf, sizeof(env_buf));
+    if (env_len > 0 && env_len < sizeof(env_buf)) {
+        add(std::string(env_buf, env_len));
+    }
+#else
+    if (const char* env = std::getenv("SANAD_TEMPLATES_ROOT"); env != nullptr && *env != '\0') {
+        add(env);
+    }
+#endif
+    add(NF_TEMPLATES_ROOT);
+    const std::filesystem::path dir = executable_dir();
+    if (!dir.empty()) {
+        add(dir / "Templates");
+        add(dir.parent_path() / "Templates");
+    }
+    add(std::filesystem::path(NF_TEMPLATE_DIR).parent_path());
+    return roots;
+}
+
 int cmd_new(const std::string& dir,
             const std::string& name_in,
             bool template_requested,
@@ -160,18 +218,21 @@ int cmd_new(const std::string& dir,
     }
 
     std::string err;
+    const auto template_roots = template_root_candidates();
     if (template_requested) {
         opts.template_dir = resolve_project_template(
-            template_name, std::filesystem::path(NF_TEMPLATES_ROOT),
+            template_name, choose_template_root(template_roots, template_name),
             std::filesystem::path(NF_TEMPLATE_DIR), err);
         if (opts.template_dir.empty()) {
             std::cerr << "nf new: " << err << "\n";
             return 1;
         }
     } else {
-        // Preserve the original no-flag path exactly. An empty configured
-        // template directory still creates a valid bare project.
-        opts.template_dir = std::string(NF_TEMPLATE_DIR);
+        // Default template, resolved the same way. An empty configured template
+        // directory still creates a valid bare project.
+        const std::filesystem::path root_dir = choose_template_root(template_roots, "Default");
+        opts.template_dir = root_dir.empty() ? std::filesystem::path(NF_TEMPLATE_DIR)
+                                             : root_dir / "Default";
     }
 
     if (!scaffold_project(opts, err)) {

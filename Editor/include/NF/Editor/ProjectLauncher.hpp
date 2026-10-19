@@ -24,6 +24,8 @@
 // EditorTests can pin them without a window or a filesystem dialog.
 // ProjectLauncher.cpp is a thin Win32 shell over them.
 
+#include <NF/Project/ProjectScaffold.hpp> // choose_template_root (packaged builds)
+
 #include <algorithm>
 #include <array>
 #include <cctype>
