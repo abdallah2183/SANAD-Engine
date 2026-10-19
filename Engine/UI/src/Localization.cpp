@@ -53,6 +53,7 @@ constexpr Entry kEntries[] = {
     // A4/A3: the outliner's Delete button and the Edit-menu Delete item were
     // raw Latin literals with no key at all, so the Arabic UI showed "Delete".
     {"delete", "Delete", "حذف"},
+    {"duplicate", "Duplicate", "تكرار"},
     {"direction", "Direction", "الاتجاه"},
     {"directional_light", "Directional Light", "الإضاءة الاتجاهية"},
     {"enabled", "Enabled", "مفعّل"},

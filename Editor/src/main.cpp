@@ -1391,6 +1391,13 @@ int main(int argc, char** argv) {
                     if (key_down(VK_CONTROL) && key_edge('E')) {
                         nf::editor::ui_settings().show_export = true;
                     }
+                    if (key_down(VK_CONTROL) && key_edge('D') &&
+                        app.selection().has_selection()) {
+                        std::string e;
+                        if (!app.duplicate_selection(e)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Duplicate: {}", e);
+                        }
+                    }
                     if (key_edge(VK_DELETE) && app.selection().has_selection()) {
                         // Immediate, undoable delete (A4). This used to only ARM a
                         // pending delete that then waited on an inline Confirm

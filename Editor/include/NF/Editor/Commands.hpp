@@ -78,6 +78,42 @@ private:
     ecs::Entity m_created = ecs::kInvalidEntity;
 };
 
+// Duplicates one or more entities, including their child subtrees, as ONE undo
+// step. A snapshot of the selected subtrees is taken at capture time, so redo
+// still works after the originals have been deleted: the command never reads
+// the live source world on apply. Root copies get a unique "(n)" name and a
+// small X offset so they are visible instead of sitting exactly on top of the
+// original; selection is the root copies, not every descendant.
+class DuplicateEntitiesCommand : public ICommand {
+public:
+    // `selected` may contain a parent and one of its children: descendants of a
+    // selected ancestor are folded into that ancestor's subtree, never copied
+    // twice. Returns nullptr with out_err when nothing valid is selected.
+    static std::unique_ptr<DuplicateEntitiesCommand> capture(
+        const scene::Scene& scene, const std::vector<ecs::Entity>& selected, std::string& out_err);
+
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override { return "Duplicate"; }
+    ecs::Entity target() const override {
+        return m_created_roots.empty() ? ecs::kInvalidEntity : m_created_roots.front();
+    }
+    const std::vector<ecs::Entity>& created_roots() const { return m_created_roots; }
+
+private:
+    DuplicateEntitiesCommand() = default;
+
+    struct Root {
+        ecs::Entity snapshot = ecs::kInvalidEntity;
+        ecs::Entity parent = ecs::kInvalidEntity;
+    };
+
+    std::unique_ptr<scene::Scene> m_snapshot;
+    std::vector<Root> m_roots;
+    std::vector<ecs::Entity> m_created_roots;
+    std::vector<ecs::Entity> m_created_all;
+};
+
 // Deletes an entity, snapshotting its components and child links.
 // Undo restores an identical entity (possibly under a new handle).
 class DeleteEntityCommand : public ICommand {

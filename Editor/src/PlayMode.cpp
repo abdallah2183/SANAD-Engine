@@ -1,4 +1,5 @@
 #include <NF/Editor/PlayMode.hpp>
+#include <NF/Editor/SceneCopy.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
@@ -303,90 +304,7 @@ std::optional<ecs::Entity> find_by_name(const scene::Scene& scene, const std::st
 namespace {
 
 void copy_entity_all(const ecs::World& sw, ecs::Entity se, ecs::World& dw, ecs::Entity de) {
-    if (const auto* t = sw.get<scene::Transform>(se)) {
-        dw.add<scene::Transform>(de, *t);
-    }
-    if (const auto* n = sw.get<scene::NameComponent>(se)) {
-        dw.add<scene::NameComponent>(de, *n);
-    }
-    if (const auto* m = sw.get<runtime::MeshComponent>(se)) {
-        dw.add<runtime::MeshComponent>(de, *m);
-    }
-    if (const auto* c = sw.get<runtime::CameraComponent>(se)) {
-        dw.add<runtime::CameraComponent>(de, *c);
-    }
-    if (const auto* l = sw.get<runtime::DirectionalLight>(se)) {
-        dw.add<runtime::DirectionalLight>(de, *l);
-    }
-    if (const auto* pl = sw.get<runtime::PointLightComponent>(se)) {
-        dw.add<runtime::PointLightComponent>(de, *pl);
-    }
-    if (const auto* sl = sw.get<runtime::SpotLightComponent>(se)) {
-        dw.add<runtime::SpotLightComponent>(de, *sl);
-    }
-    if (const auto* s = sw.get<runtime::SkyComponent>(se)) {
-        dw.add<runtime::SkyComponent>(de, *s);
-    }
-    if (const auto* pp = sw.get<runtime::PostProcessComponent>(se)) {
-        dw.add<runtime::PostProcessComponent>(de, *pp);
-    }
-    if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
-        dw.add<scene::PrefabLinkComponent>(de, *p);
-    }
-    if (const auto* rb = sw.get<physics::RigidBodyComponent>(se)) {
-        physics::RigidBodyComponent fresh = *rb;
-        fresh.body = physics::BodyHandle{};
-        dw.add<physics::RigidBodyComponent>(de, fresh);
-    }
-    if (const auto* col = sw.get<physics::ColliderComponent>(se)) {
-        dw.add<physics::ColliderComponent>(de, *col);
-    }
-    if (const auto* d = sw.get<runtime::DestructibleComponent>(se)) {
-        dw.add<runtime::DestructibleComponent>(de, *d);
-    }
-    if (const auto* a = sw.get<animation::AnimationComponent>(se)) {
-        dw.add<animation::AnimationComponent>(de, *a);
-    }
-    if (const auto* au = sw.get<audio::AudioComponent>(se)) {
-        dw.add<audio::AudioComponent>(de, *au);
-    }
-    if (const auto* g = sw.get<gameplay::GameplayModuleComponent>(se)) {
-        dw.add<gameplay::GameplayModuleComponent>(de, *g);
-    }
-    if (const auto* sc = sw.get<scripting::ScriptComponent>(se)) {
-        dw.add<scripting::ScriptComponent>(de, *sc);
-    }
-    if (const auto* pc = sw.get<vfx::ParticleComponent>(se)) {
-        dw.add<vfx::ParticleComponent>(de, *pc);
-    }
-    if (const auto* cc = sw.get<physics::ClothComponent>(se)) {
-        dw.add<physics::ClothComponent>(de, *cc);
-    }
-    if (const auto* ch = sw.get<physics::CharacterComponent>(se)) {
-        physics::CharacterComponent fresh = *ch;
-        fresh.wish_dir = Vec3{0.0f, 0.0f, 0.0f};
-        fresh.jump = false;
-        fresh.grounded = false;
-        dw.add<physics::CharacterComponent>(de, fresh);
-    }
-    if (const auto* nm = sw.get<runtime::NavMeshComponent>(se)) {
-        dw.add<runtime::NavMeshComponent>(de, *nm);
-    }
-    if (const auto* na = sw.get<runtime::NavAgentComponent>(se)) {
-        dw.add<runtime::NavAgentComponent>(de, *na);
-    }
-    if (const auto* vc = sw.get<physics::VehicleComponent>(se)) {
-        // Same scrub as the snapshot clone above: tune crosses, live state
-        // does not. Without this, Stop restores a component whose JoltVehicle
-        // view points at the play session's torn-down world.
-        physics::VehicleComponent fresh = *vc;
-        fresh.throttle = 0.0f;
-        fresh.steer = 0.0f;
-        fresh.brake = 0.0f;
-        fresh.handbrake = 0.0f;
-        fresh.vehicle = nullptr;
-        dw.add<physics::VehicleComponent>(de, fresh);
-    }
+    copy_entity_components(sw, se, dw, de);
 }
 
 } // namespace

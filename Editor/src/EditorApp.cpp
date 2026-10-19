@@ -520,6 +520,41 @@ bool EditorApp::delete_entity(ecs::Entity e, std::string& out_err) {
     return true;
 }
 
+bool EditorApp::duplicate_selection(std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    if (m_runtime == nullptr || m_runtime->edit_scene() == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    if (!m_selection.has_selection()) {
+        out_err = "Select at least one entity to duplicate";
+        return false;
+    }
+    auto cmd = DuplicateEntitiesCommand::capture(*m_runtime->edit_scene(), m_selection.all(), out_err);
+    if (!cmd) {
+        return false;
+    }
+    DuplicateEntitiesCommand* raw = cmd.get();
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(ecs::kInvalidEntity);
+    // after_mutation() only auto-selects a single touched entity; a duplicate
+    // selects every root copy, which is what the user just created.
+    m_selection.clear();
+    for (ecs::Entity copy : raw->created_roots()) {
+        if (w->is_alive(copy)) {
+            m_selection.add(copy);
+        }
+    }
+    return true;
+}
+
 bool EditorApp::rename_entity(ecs::Entity e, const std::string& new_name, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;

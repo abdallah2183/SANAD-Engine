@@ -737,6 +737,12 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                     push_error_console(app, "Delete failed", err);
                 }
             }
+            if (ImGui::MenuItem(AV("duplicate").c_str(), "Ctrl+D", false, has_sel)) {
+                std::string err;
+                if (!app.duplicate_selection(err)) {
+                    push_error_console(app, "Duplicate failed", err);
+                }
+            }
             if (ImGui::MenuItem(AV("save_prefab").c_str(), nullptr, false, has_sel)) {
                 std::string err;
                 const ecs::Entity sel = app.selection().primary();

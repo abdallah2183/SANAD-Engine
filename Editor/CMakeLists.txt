@@ -18,6 +18,8 @@ set(NFEDITOR_CORE_SOURCES
     src/Selection.cpp
     src/Outliner.cpp
     src/Commands.cpp
+    src/SceneCopy.cpp
+    src/DuplicateCommand.cpp
     src/AssetBrowser.cpp
     src/Inspector.cpp
     src/Gizmo.cpp

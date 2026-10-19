@@ -111,6 +111,10 @@ public:
     // broken (the Confirm button was easy to miss) while Ctrl+Z was already
     // there. Callers use delete_entity directly.
     bool delete_entity(ecs::Entity e, std::string& out_err);
+    /// Duplicates every selected root and its children as one undo step. The
+    /// root copies are offset slightly and selected; their names get a unique
+    /// "(n)" suffix. Fails while playing, like every structural edit.
+    bool duplicate_selection(std::string& out_err);
     bool rename_entity(ecs::Entity e, const std::string& new_name, std::string& out_err);
     bool set_transform(ecs::Entity e, const TransformEdit& edit, std::string& out_err);
     bool reparent(ecs::Entity e, ecs::Entity new_parent, std::string& out_err);

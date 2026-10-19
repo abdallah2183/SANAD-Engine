@@ -1,0 +1,103 @@
+#include <NF/Editor/SceneCopy.hpp>
+
+#include <NF/Animation/Components.hpp>
+#include <NF/Audio/Components.hpp>
+#include <NF/Gameplay/Components.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Runtime/RuntimeSceneTypes.hpp>
+#include <NF/Scene/NameComponent.hpp>
+#include <NF/Scene/PrefabLink.hpp>
+#include <NF/Scene/Transform.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Vfx/Components.hpp>
+
+namespace nf::editor {
+
+void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World& dst,
+                            ecs::Entity to) {
+    if (const auto* t = src.get<scene::Transform>(from)) {
+        dst.add<scene::Transform>(to, *t);
+    }
+    if (const auto* n = src.get<scene::NameComponent>(from)) {
+        dst.add<scene::NameComponent>(to, *n);
+    }
+    if (const auto* m = src.get<runtime::MeshComponent>(from)) {
+        dst.add<runtime::MeshComponent>(to, *m);
+    }
+    if (const auto* c = src.get<runtime::CameraComponent>(from)) {
+        dst.add<runtime::CameraComponent>(to, *c);
+    }
+    if (const auto* l = src.get<runtime::DirectionalLight>(from)) {
+        dst.add<runtime::DirectionalLight>(to, *l);
+    }
+    if (const auto* pl = src.get<runtime::PointLightComponent>(from)) {
+        dst.add<runtime::PointLightComponent>(to, *pl);
+    }
+    if (const auto* sl = src.get<runtime::SpotLightComponent>(from)) {
+        dst.add<runtime::SpotLightComponent>(to, *sl);
+    }
+    if (const auto* s = src.get<runtime::SkyComponent>(from)) {
+        dst.add<runtime::SkyComponent>(to, *s);
+    }
+    if (const auto* pp = src.get<runtime::PostProcessComponent>(from)) {
+        dst.add<runtime::PostProcessComponent>(to, *pp);
+    }
+    if (const auto* p = src.get<scene::PrefabLinkComponent>(from)) {
+        dst.add<scene::PrefabLinkComponent>(to, *p);
+    }
+    if (const auto* rb = src.get<physics::RigidBodyComponent>(from)) {
+        physics::RigidBodyComponent fresh = *rb;
+        fresh.body = physics::BodyHandle{};
+        dst.add<physics::RigidBodyComponent>(to, fresh);
+    }
+    if (const auto* col = src.get<physics::ColliderComponent>(from)) {
+        dst.add<physics::ColliderComponent>(to, *col);
+    }
+    if (const auto* d = src.get<runtime::DestructibleComponent>(from)) {
+        dst.add<runtime::DestructibleComponent>(to, *d);
+    }
+    if (const auto* a = src.get<animation::AnimationComponent>(from)) {
+        dst.add<animation::AnimationComponent>(to, *a);
+    }
+    if (const auto* au = src.get<audio::AudioComponent>(from)) {
+        dst.add<audio::AudioComponent>(to, *au);
+    }
+    if (const auto* g = src.get<gameplay::GameplayModuleComponent>(from)) {
+        dst.add<gameplay::GameplayModuleComponent>(to, *g);
+    }
+    if (const auto* sc = src.get<scripting::ScriptComponent>(from)) {
+        dst.add<scripting::ScriptComponent>(to, *sc);
+    }
+    if (const auto* pc = src.get<vfx::ParticleComponent>(from)) {
+        dst.add<vfx::ParticleComponent>(to, *pc);
+    }
+    if (const auto* cc = src.get<physics::ClothComponent>(from)) {
+        dst.add<physics::ClothComponent>(to, *cc);
+    }
+    if (const auto* ch = src.get<physics::CharacterComponent>(from)) {
+        physics::CharacterComponent fresh = *ch;
+        fresh.wish_dir = Vec3{0.0f, 0.0f, 0.0f};
+        fresh.jump = false;
+        fresh.grounded = false;
+        dst.add<physics::CharacterComponent>(to, fresh);
+    }
+    if (const auto* nm = src.get<runtime::NavMeshComponent>(from)) {
+        dst.add<runtime::NavMeshComponent>(to, *nm);
+    }
+    if (const auto* na = src.get<runtime::NavAgentComponent>(from)) {
+        dst.add<runtime::NavAgentComponent>(to, *na);
+    }
+    if (const auto* vc = src.get<physics::VehicleComponent>(from)) {
+        // Tune crosses, live state does not. Without this, a duplicate or a Stop
+        // restore would hold a JoltVehicle view into a world that is gone.
+        physics::VehicleComponent fresh = *vc;
+        fresh.throttle = 0.0f;
+        fresh.steer = 0.0f;
+        fresh.brake = 0.0f;
+        fresh.handbrake = 0.0f;
+        fresh.vehicle = nullptr;
+        dst.add<physics::VehicleComponent>(to, fresh);
+    }
+}
+
+} // namespace nf::editor
