@@ -14,6 +14,16 @@
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/RHI/RHI.hpp>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -130,6 +140,17 @@ int Application::run() {
                 NF_LOG_INFO(LogCategory::Platform, "Window resized to {}x{}", w, h);
             }
         });
+#ifdef _WIN32
+        // Take the foreground from the editor that launched us. The editor
+        // grants the right with AllowSetForegroundWindow; doing it here, on our
+        // own window, avoids the editor enumerating windows from a background
+        // thread — a pattern code-integrity policy flags, and it stopped the
+        // editor from launching at all.
+        if (void* native = window.native_handle()) {
+            ::ShowWindow(static_cast<HWND>(native), SW_RESTORE);
+            ::SetForegroundWindow(static_cast<HWND>(native));
+        }
+#endif
     }
 
     // Device and swapchain

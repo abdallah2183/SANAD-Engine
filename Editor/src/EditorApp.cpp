@@ -29,7 +29,6 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <thread>
 
 namespace nf::editor {
 
@@ -3223,47 +3222,6 @@ bool EditorApp::stop(std::string& out_err) {
     return m_play.stop(out_err);
 }
 
-#ifdef _WIN32
-namespace {
-
-struct PlayerWindowSearch {
-    DWORD pid = 0;
-    HWND found = nullptr;
-};
-
-BOOL CALLBACK find_player_window(HWND hwnd, LPARAM lparam) {
-    auto* search = reinterpret_cast<PlayerWindowSearch*>(lparam);
-    DWORD pid = 0;
-    ::GetWindowThreadProcessId(hwnd, &pid);
-    if (pid == search->pid && ::IsWindowVisible(hwnd) != 0 &&
-        ::GetWindow(hwnd, GW_OWNER) == nullptr) {
-        search->found = hwnd;
-        return FALSE; // first visible top-level window is the game
-    }
-    return TRUE;
-}
-
-/// The player is launched detached, so Windows is free to put its window
-/// behind the editor — which reads as "Play did nothing". Ask for it by pid
-/// for up to five seconds, then restore + focus it. Called from a detached
-/// thread because launch_game runs on the UI thread and must not block it.
-void focus_player_window(DWORD pid) {
-    for (int attempt = 0; attempt < 50; ++attempt) {
-        PlayerWindowSearch search;
-        search.pid = pid;
-        ::EnumWindows(find_player_window, reinterpret_cast<LPARAM>(&search));
-        if (search.found != nullptr) {
-            ::ShowWindow(search.found, SW_RESTORE);
-            ::SetForegroundWindow(search.found);
-            return;
-        }
-        ::Sleep(100);
-    }
-}
-
-} // namespace
-#endif
-
 bool EditorApp::launch_game(std::string& out_err) {
     if (m_runtime == nullptr || m_runtime->edit_scene() == nullptr) {
         out_err = "No scene open";
@@ -3350,16 +3308,13 @@ bool EditorApp::launch_game(std::string& out_err) {
         out_err = "Could not start the game player (error " + std::to_string(GetLastError()) + ")";
         return false;
     }
+    // Let the player take the foreground for its own window. The player calls
+    // SetForegroundWindow once its window exists; the editor deliberately does
+    // not enumerate windows or spawn a watcher thread — that pattern tripped
+    // this machine's code-integrity policy and the editor would not launch.
+    ::AllowSetForegroundWindow(pi.dwProcessId);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-
-#ifdef _WIN32
-    // Detached so a hidden/behind window cannot read as a dead Play button.
-    const DWORD player_pid = pi.dwProcessId;
-    std::thread([player_pid] { focus_player_window(player_pid); }).detach();
-    NF_LOG_INFO(LogCategory::Editor, "Game launched (pid {}) from {} — close the game window to stop",
-                player_pid, session_logical);
-#endif
 
     m_console.push(LogMessage{LogLevel::Info, LogCategory::Editor,
                               "Game launched from " + session_logical +
