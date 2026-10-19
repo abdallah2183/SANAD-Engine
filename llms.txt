@@ -1,0 +1,41 @@
+# SANAD Engine
+
+> Native C++23 + Vulkan 3D game engine and editor with a full Arabic RTL UI.
+> A game is a .nfproj project built by the `nf` CLI, not an HTML/web project.
+
+## Start here
+
+- [AGENTS.md](AGENTS.md): hard rules for coding agents; read before writing code.
+- [Docs/AI_Game_Guide.md](Docs/AI_Game_Guide.md): executable workflow, scene format, Lua API, complete mini-game.
+- [README.md](README.md): build, features, screenshots, download.
+
+## Make a game
+
+```
+build_nf.bat Release
+build\Release\bin\nf.exe new Games\MyGame --name MyGame --template ThirdPerson
+build\Release\bin\nf.exe run --project Games\MyGame\MyGame.nfproj
+```
+
+Verify headlessly:
+
+```
+build\Release\bin\nf.exe run --project Games\MyGame\MyGame.nfproj --frames 120 --headless --validation
+```
+
+Acceptance is exit code 0 and `Validation errors: 0`.
+
+## Do not
+
+- Do not create index.html, CSS, JavaScript, package.json, Electron, or a web server.
+- Do not create a Unity/Godot/Unreal project.
+- Do not edit Engine/ for a gameplay task.
+
+## Key paths
+
+- Engine: `Engine/`
+- Editor: `Editor/`
+- CLI (`nf`): `Tools/BuildTool/main.cpp`
+- Templates: `Templates/`
+- Lua API: `Docs/AI_Game_Guide.md` and `Docs/Lua_Scripting_Ar.md`
+- Built binaries: `build/Release/bin/`

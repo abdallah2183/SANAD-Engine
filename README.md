@@ -81,6 +81,22 @@ nf.exe build --project MyGame\MyGame.nfproj
 cd MyGame\dist && NFPlayer.exe
 ```
 
+## 🤖 Using an AI coding agent
+
+SANAD is built to be driven by an agent, not replaced by a web toy. If you point
+Claude Code, Codex, Cursor, or another coding agent at this repository:
+
+- It reads [`AGENTS.md`](AGENTS.md) automatically; `CLAUDE.md`, `.cursor/rules/`,
+  and `llms.txt` are entry points for the common tools.
+- `nf guide` prints the same hard rule and workflow in the terminal.
+- Every project created by `nf new` gets its own `AGENTS.md`, so an agent opened
+  in the **game folder** also knows what to do.
+- The executable recipe is in [`Docs/AI_Game_Guide.md`](Docs/AI_Game_Guide.md):
+  create a `.nfproj`, edit `.nfscene` + Lua, then `nf run`.
+
+**The hard rule:** a SANAD game is a native `.nfproj` built with `nf` — never an
+`index.html`, a web server, or a Unity/Godot project.
+
 ## 🎬 See it in action
 
 [![Watch the 43-second demo](Docs/images/demo_poster.png)](Docs/media/demo.mp4)

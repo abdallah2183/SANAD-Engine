@@ -82,6 +82,22 @@ nf.exe build --project MyGame\MyGame.nfproj
 cd MyGame\dist && NFPlayer.exe
 ```
 
+## 🤖 استخدام وكيل ذكاء اصطناعي
+
+سَنَد مصمّم ليقوده وكيل برمجي، لا ليُستبدل بلعبة ويب. إذا فتحت Claude Code أو
+Codex أو Cursor أو أي وكيل على هذا الريبو:
+
+- سيقرأ [`AGENTS.md`](AGENTS.md) تلقائيًا؛ و`CLAUDE.md` و`.cursor/rules/`
+  و`llms.txt` مداخل للأدوات الشائعة.
+- `nf guide` يطبع نفس القاعدة وسير العمل في الطرفية.
+- كل مشروع ينشئه `nf new` يحصل على `AGENTS.md` خاص به، فالوكيل المفتوح داخل
+  **مجلد اللعبة** يعرف أيضًا ماذا يفعل.
+- الوصفة القابلة للتنفيذ في [`Docs/AI_Game_Guide.md`](Docs/AI_Game_Guide.md):
+  أنشئ `.nfproj`، عدّل `.nfscene` وLua، ثم `nf run`.
+
+**القاعدة الصارمة:** لعبة سَنَد هي `.nfproj` أصلية تُبنى بـ`nf` — وليست
+`index.html` أو خادم ويب أو مشروع Unity/Godot.
+
 ## 🎬 شاهدها تعمل
 
 [![شاهد الفيديو](Docs/images/demo_poster.png)](Docs/media/demo.mp4)

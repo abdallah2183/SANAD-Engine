@@ -73,10 +73,50 @@ void print_help() {
               << "                                   [--replay <log>] [--input-log <out>] [--replay-strict]\n"
               << "                                   build, then launch the player\n"
               << "  nf verify [--project <file>]     check every cooked asset is present\n"
+              << "  nf guide                        print the coding-agent game guide\n"
               << "  nf --help | --version\n"
               << "\n"
               << "Without --project, the current directory (and its parents) is searched\n"
               << "for a single .nfproj.\n";
+}
+
+// The terminal-sized version of AGENTS.md. Agents often run `nf --help` before
+// they read repository files; putting the hard rule here is what stops a
+// "make a game" request from turning into an index.html.
+void print_agent_guide() {
+    std::cout << R"GUIDE(SANAD Engine — agent guide
+
+SANAD IS A NATIVE C++23 + VULKAN ENGINE. A game is a .nfproj project, not a web
+page. Do NOT create index.html, CSS/JS, package.json, Electron, or a web server.
+
+1. Build once (engine repo root):
+     build_nf.bat Release
+
+2. Create a playable project:
+     nf new Games\MyGame --name MyGame --template ThirdPerson
+
+3. Edit gameplay:
+     Games\MyGame\Content\Scenes\Main.nfscene
+     Games\MyGame\Content\Scripts\player.lua
+
+4. Build, run, and verify:
+     nf build --project Games\MyGame\MyGame.nfproj
+     nf run   --project Games\MyGame\MyGame.nfproj
+     nf run   --project Games\MyGame\MyGame.nfproj --frames 120 --headless --validation
+
+   Acceptance: exit code 0 and "Validation errors: 0". A folder of files is not
+   acceptance.
+
+Lua gameplay API:
+  update(dt), self_id, self_gen
+  nf.entity_pos / nf.set_entity_pos / nf.entity_alive
+  nf.find_entity("CrateA") / nf.entity_name / nf.entity_count
+  nf.action("move_forward") / nf.axis("move_x")
+  nf.clamp / nf.lerp / print
+
+Read AGENTS.md and Docs/AI_Game_Guide.md for the scene format and a complete
+playable collect-the-crates example.
+)GUIDE";
 }
 
 // The directory the running executable lives in. The player is built beside
@@ -422,6 +462,10 @@ int main(int argc, char** argv) {
     }
     if (command == "--version" || command == "-v") {
         std::cout << kVersion << "\n";
+        return 0;
+    }
+    if (command == "guide" || command == "ai") {
+        print_agent_guide();
         return 0;
     }
 

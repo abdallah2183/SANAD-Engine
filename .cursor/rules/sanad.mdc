@@ -1,0 +1,16 @@
+---
+description: SANAD native game engine rules (no HTML games)
+alwaysApply: true
+---
+
+SANAD is a native C++23 + Vulkan game engine. A game is a `.nfproj` project with
+`.nfscene` text scenes and Lua gameplay, built by the `nf` CLI.
+
+- **Never** create HTML/CSS/JavaScript, `index.html`, `package.json`, Electron, a
+  web server, or a Unity/Godot/Unreal project when asked to make a game.
+- Create projects with `nf new Games\<Name> --template ThirdPerson`.
+- Edit `Content/Scenes/*.nfscene` and `Content/Scripts/*.lua`.
+- Verify with `nf run --project <file> --frames 120 --headless --validation`;
+  acceptance is exit code 0 and `Validation errors: 0`.
+- Read `AGENTS.md` and `Docs/AI_Game_Guide.md` before starting.
+- Do not edit `Engine/` for a gameplay task.
