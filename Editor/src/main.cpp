@@ -116,6 +116,9 @@ struct EditorConfig {
     // swapchain, its image views and the UI framebuffers — the whole class of
     // lifetime bugs that only shows up when a human drags the window edge.
     bool resize_test = false;
+    // --no-start-here: suppress the first-run guide. Deterministic captures and
+    // automation runs want the scene, not an onboarding card on top of it.
+    bool no_start_here = false;
 };
 
 // Writes an RGBA8 buffer as a 24-bit BMP.
@@ -220,6 +223,8 @@ EditorConfig parse_args(int argc, char** argv) {
             c.no_ibl = true;
         } else if (arg == "--no-ssao") {
             c.no_ssao = true;
+        } else if (arg == "--no-start-here") {
+            c.no_start_here = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("SANADEditor (Phase 5)\n"
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
@@ -237,7 +242,8 @@ EditorConfig parse_args(int argc, char** argv) {
                         "  --no-automation   With --frames, do not drive the UI automation\n"
                         "                      harness (deterministic captures)\n"
                         "  --no-ibl          Light with the scalar ambient (pre-IBL look)\n"
-                        "  --no-ssao         Skip ambient occlusion (pre-SSAO look)");
+                        "  --no-ssao         Skip ambient occlusion (pre-SSAO look)\n"
+                        "  --no-start-here   Start without the first-run guide (captures)");
             std::exit(0);
         }
     }
@@ -831,6 +837,13 @@ int main(int argc, char** argv) {
         nf::editor::EditorApp app(vfs, registry, manager, console);
         app.attach_runtime(&runtime);
         app.set_project(active_project_path, active_project_name);
+        // The "Start Here" guide is a session choice, not imgui.ini state (the
+        // editor suppresses the ini for deterministic layout). Closing the guide
+        // writes this launcher setting; a restart honours it.
+        nf::editor::ui_settings().show_start_here = nf::editor::load_settings().start_here;
+        if (cfg.no_start_here) {
+            nf::editor::ui_settings().show_start_here = false;
+        }
         if (app.has_project()) {
             NF_LOG_INFO(nf::LogCategory::Editor, "Editor opened in project '{}'", app.project_name());
         }

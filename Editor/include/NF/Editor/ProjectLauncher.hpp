@@ -162,12 +162,16 @@ struct LauncherSettings {
     bool maximized = true;
     int width = 1180;
     int height = 720;
+    // Auto-open the editor's "Start Here" guide. The user turns it off by
+    // closing the guide; Help > Start Here reopens it for the session without
+    // forcing it back on at the next launch.
+    bool start_here = true;
 };
 
 /// Serialises settings to the exact JSON shape load/save use. Pure and inline
 /// so tests can pin the round trip without touching %APPDATA%.
 inline std::string settings_to_json(const LauncherSettings& s) {
-    // Hand-built: the shape is fixed (four fields) and pulling in a JSON
+    // Hand-built: the shape is fixed (five fields) and pulling in a JSON
     // library for it would be a dependency for a string concat.
     std::string out = "{\"language\":\"";
     out += (s.arabic ? "ar" : "en");
@@ -177,6 +181,8 @@ inline std::string settings_to_json(const LauncherSettings& s) {
     out += std::to_string(s.width);
     out += ",\"height\":";
     out += std::to_string(s.height);
+    out += ",\"start_here\":";
+    out += (s.start_here ? "true" : "false");
     out += "}";
     return out;
 }
@@ -190,6 +196,9 @@ inline LauncherSettings settings_from_json(const std::string& json) {
     }
     if (json.find("\"maximized\":false") != std::string::npos) {
         s.maximized = false;
+    }
+    if (json.find("\"start_here\":false") != std::string::npos) {
+        s.start_here = false;
     }
     // Minimal integer scan for "width":<n> / "height":<n> (strtol-free so the
     // header stays dependency-free; malformed numbers keep defaults).

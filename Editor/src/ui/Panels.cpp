@@ -5,6 +5,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <NF/Editor/UiShell.hpp>
 #include <NF/Editor/ToolbarUi.hpp>
+#include <NF/Editor/ProjectLauncher.hpp> // start_here choice persisted with the shell settings
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Editor/AudioPreview.hpp>
@@ -1055,6 +1056,10 @@ void draw_start_here(EditorApp& app) {
     ImGui::End();
     if (!open) {
         st.show_start_here = false;
+        // Persist the dismissal so the guide does not reopen on every launch.
+        LauncherSettings saved = load_settings();
+        saved.start_here = false;
+        save_settings(saved);
     }
 }
 

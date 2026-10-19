@@ -3038,6 +3038,12 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
 
     LauncherState state;
     state.recent = &recent_projects;
+    // First run has no projects to list. Landing on the empty Projects grid
+    // made "where do I start?" a real question; go straight to the New Project
+    // page (template gallery + name + location) when there is nothing to open.
+    if (recent_projects.empty()) {
+        state.page = ShellPage::NewProject;
+    }
     state.new_dir = known_documents_dir();
     state.status_color = theme::text_dim;
 

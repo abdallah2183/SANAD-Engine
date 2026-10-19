@@ -168,17 +168,28 @@ NF_TEST(launcher_settings_json_round_trip) {
     s.maximized = false;
     s.width = 1600;
     s.height = 900;
+    s.start_here = false;
     const LauncherSettings back = settings_from_json(settings_to_json(s));
     NF_CHECK(back.arabic);
     NF_CHECK(!back.maximized);
     NF_CHECK(back.width == 1600);
     NF_CHECK(back.height == 900);
+    NF_CHECK(!back.start_here);
+}
+
+// The gallery's default card is the playable 3D starter. It used to default to
+// the "blank" card, which scaffolds a scene with no character — a first
+// project that cannot answer "what do I do now".
+NF_TEST(launcher_default_card_is_the_playable_third_person_template) {
+    NF_CHECK(kLauncherTemplateCards[3].enabled);
+    NF_CHECK(std::string(kLauncherTemplateCards[3].template_name) == "ThirdPerson");
 }
 
 NF_TEST(launcher_settings_json_defaults_are_english_maximized) {
     const LauncherSettings s = settings_from_json("");
     NF_CHECK(!s.arabic);
     NF_CHECK(s.maximized);
+    NF_CHECK(s.start_here); // a fresh install shows the guide
     const LauncherSettings garbage = settings_from_json("{oops");
     NF_CHECK(!garbage.arabic);
     NF_CHECK(garbage.maximized);
