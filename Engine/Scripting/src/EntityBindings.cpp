@@ -150,6 +150,26 @@ int l_axis(lua_State* L) {
     return 1;
 }
 
+int l_set_entity_scale(lua_State* L) {
+    ecs::World* w = bound_world(L);
+    ecs::Entity e;
+    if (!check_entity(L, 1, e) || !w) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    scene::Transform* t = w->get<scene::Transform>(e);
+    if (!t) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    t->scale_x = static_cast<float>(luaL_checknumber(L, 3));
+    t->scale_y = static_cast<float>(luaL_checknumber(L, 4));
+    t->scale_z = static_cast<float>(luaL_checknumber(L, 5));
+    t->dirty = true;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int l_self(lua_State* L) {
     // Set by ScriptSystem before each update() call (registry singletons:
     // script execution is single-threaded, so no state leaks between calls).
@@ -178,6 +198,8 @@ void install_ecs_bindings(LuaVM& vm, ecs::World& world) {
     lua_setfield(L, -2, "entity_pos");
     lua_pushcfunction(L, l_set_entity_pos);
     lua_setfield(L, -2, "set_entity_pos");
+    lua_pushcfunction(L, l_set_entity_scale);
+    lua_setfield(L, -2, "set_entity_scale");
     lua_pushcfunction(L, l_find_entity);
     lua_setfield(L, -2, "find_entity");
     lua_pushcfunction(L, l_entity_name);

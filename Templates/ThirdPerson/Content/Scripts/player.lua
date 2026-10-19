@@ -16,6 +16,7 @@
 local speed = 4.0
 local score = 0
 local targets = { "CrateA", "CrateB" }
+local collected = {}
 local won = false
 
 function update(dt)
@@ -31,13 +32,16 @@ function update(dt)
 
     for _, name in ipairs(targets) do
         local id, gen = nf.find_entity(name)
-        if id then
+        if id and not collected[name] then
             local tx, ty, tz = nf.entity_pos(id, gen)
-            -- A collected crate is parked far below the world; ignore it.
-            if tx and ty and ty > -10 then
+            if tx then
                 local dx, dz = tx - x, tz - z
                 if dx * dx + dz * dz < 1.5 * 1.5 then
-                    nf.set_entity_pos(id, gen, 0, -50, 0)
+                    -- Static crate bodies snap their Transform back from the
+                    -- physics step, so moving one does not hide it. A zero
+                    -- scale is a Transform write the body does not own.
+                    nf.set_entity_scale(id, gen, 0.001, 0.001, 0.001)
+                    collected[name] = true
                     score = score + 1
                     print("score", score)
                 end

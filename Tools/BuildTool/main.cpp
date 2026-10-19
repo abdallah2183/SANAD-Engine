@@ -109,7 +109,7 @@ page. Do NOT create index.html, CSS/JS, package.json, Electron, or a web server.
 
 Lua gameplay API:
   update(dt), self_id, self_gen
-  nf.entity_pos / nf.set_entity_pos / nf.entity_alive
+  nf.entity_pos / nf.set_entity_pos / nf.set_entity_scale / nf.entity_alive
   nf.find_entity("CrateA") / nf.entity_name / nf.entity_count
   nf.action("move_forward") / nf.axis("move_x")
   nf.clamp / nf.lerp / print

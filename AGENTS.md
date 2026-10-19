@@ -104,6 +104,7 @@ self_id, self_gen                 -- the running entity
 nf.self()                         -- id, gen
 nf.entity_pos(id, gen)            -- x, y, z, or nil
 nf.set_entity_pos(id, gen, x,y,z)
+nf.set_entity_scale(id, gen, sx,sy,sz)  -- zero hides a static crate
 nf.entity_alive(id, gen)
 nf.find_entity("CrateA")          -- id, gen, or nil
 nf.entity_name(id, gen)

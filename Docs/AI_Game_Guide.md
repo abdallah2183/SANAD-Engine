@@ -125,6 +125,7 @@ Every script must define `update(dt)`. `dt` is seconds since the previous frame.
 | `nf.self()` | `id, gen` |
 | `nf.entity_pos(id, gen)` | `x, y, z`, or `nil` when the entity has no Transform |
 | `nf.set_entity_pos(id, gen, x, y, z)` | move the entity; returns bool |
+| `nf.set_entity_scale(id, gen, sx, sy, sz)` | scale the entity (zero hides a static crate) |
 | `nf.entity_alive(id, gen)` | is the entity still alive |
 | `nf.find_entity("CrateA")` | `id, gen`, or `nil` |
 | `nf.entity_name(id, gen)` | name string, or `nil` |
@@ -148,6 +149,7 @@ Replace `Content/Scripts/player.lua` with:
 local speed = 4.0
 local score = 0
 local targets = { "CrateA", "CrateB" }
+local collected = {}
 local won = false
 
 function update(dt)
@@ -163,12 +165,15 @@ function update(dt)
 
     for _, name in ipairs(targets) do
         local id, gen = nf.find_entity(name)
-        if id then
+        if id and not collected[name] then
             local tx, ty, tz = nf.entity_pos(id, gen)
             if tx then
                 local dx, dz = tx - x, tz - z
                 if dx * dx + dz * dz < 1.5 * 1.5 then
-                    nf.set_entity_pos(id, gen, 0, -50, 0) -- collected
+                    -- A static crate body restores its position, so hide it by
+                    -- scale and remember that this crate was collected.
+                    nf.set_entity_scale(id, gen, 0.001, 0.001, 0.001)
+                    collected[name] = true
                     score = score + 1
                     print("score", score)
                 end

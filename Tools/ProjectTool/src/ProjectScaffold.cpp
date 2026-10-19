@@ -71,6 +71,7 @@ self_id, self_gen                 -- the entity running this script
 nf.self()                         -- same, returns id, gen
 nf.entity_pos(id, gen)            -- x, y, z (nil when no Transform)
 nf.set_entity_pos(id, gen, x,y,z)
+nf.set_entity_scale(id, gen, sx,sy,sz)  -- zero hides a static crate
 nf.entity_alive(id, gen)
 nf.find_entity("CrateA")          -- id, gen, or nil
 nf.entity_name(id, gen)
@@ -94,6 +95,7 @@ print(...)                        -- goes to the engine log
 local speed = 4.0
 local score = 0
 local targets = { "CrateA", "CrateB" }
+local collected = {}
 
 function update(dt)
     local x, y, z = nf.entity_pos(self_id, self_gen)
@@ -105,12 +107,13 @@ function update(dt)
 
     for _, name in ipairs(targets) do
         local id, gen = nf.find_entity(name)
-        if id then
+        if id and not collected[name] then
             local tx, ty, tz = nf.entity_pos(id, gen)
             if tx then
                 local dx, dz = tx - x, tz - z
                 if dx * dx + dz * dz < 1.5 * 1.5 then
-                    nf.set_entity_pos(id, gen, 0, -50, 0) -- collected
+                    nf.set_entity_scale(id, gen, 0.001, 0.001, 0.001)
+                    collected[name] = true
                     score = score + 1
                     print("score", score)
                     if score == #targets then

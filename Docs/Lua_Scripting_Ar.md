@@ -141,6 +141,7 @@ print(string.format("النقاط: %d", score))
 | `nf.self()` | — | `id, gen` | معرّف الكيان الحالي |
 | `nf.entity_pos` | `id, gen` | `x, y, z` | موضع الكيان |
 | `nf.set_entity_pos` | `id, gen, x, y, z` | `bool` | تحرّك الكيان |
+| `nf.set_entity_scale` | `id, gen, sx, sy, sz` | `bool` | تغيير حجم الكيان (صفر يخفيه) |
 | `nf.entity_alive` | `id, gen` | `bool` | هل الكائن موجود؟ |
 | `nf.find_entity` | `name` | `id, gen` أو `nil` | ابحث عن كائن باسمه |
 | `nf.entity_name` | `id, gen` | نص أو `nil` | اسم الكائن |
@@ -171,6 +172,7 @@ print(string.format("النقاط: %d", score))
 local speed = 4.0
 local score = 0
 local targets = { "CrateA", "CrateB" }
+local collected = {}
 local won = false
 
 function update(dt)
@@ -184,12 +186,15 @@ function update(dt)
 
     for _, name in ipairs(targets) do
         local id, gen = nf.find_entity(name)
-        if id then
+        if id and not collected[name] then
             local tx, ty, tz = nf.entity_pos(id, gen)
             if tx then
                 local dx, dz = tx - x, tz - z
                 if dx * dx + dz * dz < 1.5 * 1.5 then
-                    nf.set_entity_pos(id, gen, 0, -50, 0) -- جمعها
+                    -- الجسم الساكن يعيد Transform الخاص به، لذا نخفي الصندوق
+                    -- بالحجم ونتذكر أنه جُمع.
+                    nf.set_entity_scale(id, gen, 0.001, 0.001, 0.001)
+                    collected[name] = true
                     score = score + 1
                     print("score", score)
                 end
