@@ -120,7 +120,8 @@ Write-Host ("  Templates/              {0,8} files  ({1})" -f $n, $tplNames)
 
 # --- Docs: the .md the launcher OPENS + the images it LOADS as card thumbnails
 $docsDst = Join-Path $stage 'Docs'
-foreach ($src in @('Docs\Blender_Pipeline.md', 'Docs\Tutorial_Ar.md')) {
+foreach ($src in @('Docs\Getting_Started_Ar.md', 'Docs\Tutorial_Ar.md', 'Docs\Lua_Scripting_Ar.md',
+                   'Docs\Asset_Import.md', 'Docs\Blender_Pipeline.md')) {
     $p = Join-Path $repo $src
     if (Test-Path $p) { Copy-Item $p $docsDst -Force }
 }
@@ -146,28 +147,58 @@ Write-Host '  Resources/fonts/    Amiri-Regular.ttf (REQUIRED)'
 # --- Icon + README ------------------------------------------------------------
 Copy-Item (Join-Path $repo 'Editor\resources\SANAD.png') $stage -Force
 $readme = @"
-SANAD Engine $version (Windows x64)
-=======================================
+SANAD Engine $version (Windows x64) - demo build
+================================================
 WHAT THIS IS
-    The editor, a Release build (optimised, no debug asserts).
-
-RUNNING IT (installed)
-    Start Menu -> SANAD Engine -> SANAD Editor, or the desktop shortcut.
-    That opens the project launcher: pick or create a project and the editor opens on it.
+    The SANAD editor and tools, a Release build (optimised, no debug asserts).
+    Arabic-first UI (full RTL), English available from Settings.
 
 RUNNING IT (portable zip)
     Extract the zip anywhere and double-click SANADEditor.exe.
+
+YOUR FIRST GAME IN FIVE MINUTES
+    1. Create New Project -> pick "Third-Person Starter" -> name it -> Create Project.
+       (The project opens in the editor with a ground, a character and crates.)
+    2. The "Start Here" card in the viewport lists the same path:
+       1) New scene   2) Add ground   3) Play.  Close it when you know the way.
+    3. Shape the scene: drag the red/green/blue arrows (W/E/R move/rotate/scale),
+       add cubes/ground from the toolbar, or drag a mesh from the Assets browser.
+    4. Press the arrow at the far right of the toolbar (Play). The game opens in
+       its own window: WASD or arrow keys to move, Space to jump. Close that
+       window to stop. The editor keeps running.
+    5. Ctrl+S saves. Closing a scene with unsaved changes asks
+       Save / Discard / Cancel, and always leaves cache://EditorRecovery.nfscene.
+
+MAKE A STANDALONE BUILD
+    nf new MyGame --template ThirdPerson
+    nf build --project MyGame\MyGame.nfproj
+    MyGame\dist\NFPlayer.exe
+    (nf.exe, NFAssetCooker.exe and NFModelImporter.exe ship beside the editor.)
+
+TEMPLATES
+    Default, ThirdPerson, FPSStarter, Platformer2D. They live in Templates\
+    next to the editor and are copied into each new project.
 
 WHAT IT NEEDS FROM YOUR MACHINE
     * Windows 10 or newer, 64-bit. This build is Windows-only.
     * A Vulkan-capable GPU driver. The loader (vulkan-1.dll) ships with the
       driver, NOT with this package, and is deliberately not bundled. The
-      installer warns if it cannot find one, and the editor tells you plainly
-      at startup if it is still missing.
+      editor tells you plainly at startup if it is missing.
     * Nothing else. The MSVC runtime is linked statically.
+
+DOCS
+    Docs\Getting_Started_Ar.md   - من وين أبدأ (Arabic)
+    Docs\Tutorial_Ar.md          - 20-minute tutorial (Arabic)
+    Docs\Lua_Scripting_Ar.md     - scripting reference (Arabic)
+    Docs\Asset_Import.md         - models, materials, textures
+    README-repo.md, ROADMAP.md   - the repository docs
 
 WHERE THE VERSION NUMBER COMES FROM
     One place: project(VERSION) and NF_VERSION_SUFFIX in CMakeLists.txt.
+
+REPORTING A PROBLEM
+    Include the console output (the editor logs every Vulkan/asset error) and
+    the exact step that failed.
 "@
 $readme | Set-Content -Path (Join-Path $stage 'README.txt') -Encoding UTF8
 Write-Host '  README.txt + SANAD.png'
