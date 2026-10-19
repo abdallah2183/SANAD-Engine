@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Pants
+base_color: 0.13 0.15 0.20 1
+metallic: 0.0
+roughness: 0.8
+ao: 1
+emission: 0 0 0
+emission_strength: 0

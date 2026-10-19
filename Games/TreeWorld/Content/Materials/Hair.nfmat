@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Hair
+base_color: 0.10 0.07 0.05 1
+metallic: 0.0
+roughness: 0.85
+ao: 1
+emission: 0 0 0
+emission_strength: 0

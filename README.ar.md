@@ -112,6 +112,19 @@ Codex أو Cursor أو أي وكيل على هذا الريبو:
 |:---:|:---:|
 | <img src="Docs/images/shot_vehicle.png" alt="ديمو المركبات" width="420"> | <img src="Docs/images/shot_save_guard.png" alt="حوار الحفظ قبل الإغلاق" width="420"> |
 
+## 🎮 لعبة تجريبية: TreeWorld
+
+لعبة كاملة مبنية ببيانات سَنَد فقط — مستكشف منخفض التفاصيل يمشي في غابة ضبابية
+ويجمع خمس يراعات. المصدر والمشهد وLua والمواد والصور الإجرائية في
+[`Games/TreeWorld`](Games/TreeWorld)؛ الأسلوب low-poly لأنه لا توجد حزمة أصول
+غابة ممسوحة ضوئيًا بعد.
+
+<img src="Games/TreeWorld/Screenshot.png" alt="TreeWorld — غابة ضبابية وشخصية بمنظور الشخص الثالث" width="860">
+
+```bat
+build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
+```
+
 ## ✨ جديد في 0.2.0
 
 - واجهة محرر محايدة: لون واحد للحالة بدل تلوين كل زر.

@@ -1,0 +1,195 @@
+# SANAD Asset Registry
+version: 1
+count: 24
+---
+id: 85cdd6f6-8666-4a95-ad39-796ef66967ae
+type: Material
+logical: content://Materials/Ball.nfmat
+cooked: cache://Materials/Ball.nfmat
+fingerprint: f13f5ad67f12a597
+format: nfmat-v1
+version: 1
+---
+id: e9e69ec0-63aa-42e1-9932-0cedd21d34d6
+type: Material
+logical: content://Materials/Default.nfmat
+cooked: cache://Materials/Default.nfmat
+fingerprint: 1849d88050e59671
+format: nfmat-v1
+version: 1
+---
+id: 5a269421-aca8-446c-a0ff-af978b5be0cc
+type: Material
+logical: content://Materials/Stone.nfmat
+cooked: cache://Materials/Stone.nfmat
+fingerprint: 58001c7ae7f9dbe1
+format: nfmat-v1
+version: 1
+---
+id: dc5192da-22b5-4690-b6a9-81a36a419a11
+type: Material
+logical: content://Materials/Glow.nfmat
+cooked: cache://Materials/Glow.nfmat
+fingerprint: 0c958a4d8d6b08b7
+format: nfmat-v1
+version: 1
+---
+id: ad8bf1b7-bc4b-4352-b533-7b48c15fc527
+type: Material
+logical: content://Materials/Ground.nfmat
+cooked: cache://Materials/Ground.nfmat
+fingerprint: 17d6f0cf29c94f3e
+format: nfmat-v1
+version: 1
+---
+id: a8fe0594-4f3f-41d9-a15a-dd46d8e6a03d
+type: Script
+logical: content://Scripts/explorer.lua
+cooked: cache://Scripts/explorer.lua
+fingerprint: fc2a7f6c827edbab
+format: lua-v1
+version: 1
+---
+id: 9a6074a4-26c7-4c48-bb4c-2512127e5e41
+type: Material
+logical: content://Materials/Crate.nfmat
+cooked: cache://Materials/Crate.nfmat
+fingerprint: 3e7e356ca44b5a71
+format: nfmat-v1
+version: 1
+---
+id: ffcc3816-57e5-496b-96ba-ae6858013dde
+type: Material
+logical: content://Materials/Hair.nfmat
+cooked: cache://Materials/Hair.nfmat
+fingerprint: 1178156a11133690
+format: nfmat-v1
+version: 1
+---
+id: 30f915ba-360c-498d-978f-e6710ca02c99
+type: Material
+logical: content://Materials/LeavesLight.nfmat
+cooked: cache://Materials/LeavesLight.nfmat
+fingerprint: 4a65a1e2e594f33a
+format: nfmat-v1
+version: 1
+---
+id: d2a524c8-014e-46c1-bed5-b269c87cce4b
+type: Material
+logical: content://Materials/Player.nfmat
+cooked: cache://Materials/Player.nfmat
+fingerprint: a0b701f3d2f7f078
+format: nfmat-v1
+version: 1
+---
+id: 99e4ca4c-18da-4848-8b8e-c95dd3e6361b
+type: Material
+logical: content://Materials/Shirt.nfmat
+cooked: cache://Materials/Shirt.nfmat
+fingerprint: 666b496a832c6488
+format: nfmat-v1
+version: 1
+---
+id: 6e6b8897-e8fd-4d3a-a32f-81079021078f
+type: Material
+logical: content://Materials/Skin.nfmat
+cooked: cache://Materials/Skin.nfmat
+fingerprint: f976e5d29eba952b
+format: nfmat-v1
+version: 1
+---
+id: 6635acfc-1f63-4b8c-9191-f8e3afa21e0f
+type: Material
+logical: content://Materials/Spinner.nfmat
+cooked: cache://Materials/Spinner.nfmat
+fingerprint: e70216673c4f7c3c
+format: nfmat-v1
+version: 1
+---
+id: f04e488b-4dc8-414b-baee-e3c50e8829ad
+type: Mesh
+logical: content://Meshes/cube.nfmesh
+cooked: cache://Meshes/cube.nfmesh
+fingerprint: deef258cf95adca8
+format: nfmesh-v1
+version: 1
+---
+id: 3d8f8b09-3e06-448e-94d4-c4c5a1921bc6
+type: Mesh
+logical: content://Meshes/sphere.nfmesh
+cooked: cache://Meshes/sphere.nfmesh
+fingerprint: 01ee68225b2b70f2
+format: nfmesh-v1
+version: 1
+---
+id: 37d1715a-435a-4880-b456-948fa8b25a08
+type: Script
+logical: content://Scripts/player.lua
+cooked: cache://Scripts/player.lua
+fingerprint: 2acec0ca8ea3c728
+format: lua-v1
+version: 1
+---
+id: 17c5cf5b-9779-41bc-855d-9990ea40511e
+type: Material
+logical: content://Materials/Pants.nfmat
+cooked: cache://Materials/Pants.nfmat
+fingerprint: 34fdd4d622182e44
+format: nfmat-v1
+version: 1
+---
+id: 74122a2d-fd11-4229-8f12-76d6799d1aed
+type: Material
+logical: content://Materials/Bark.nfmat
+cooked: cache://Materials/Bark.nfmat
+fingerprint: a2b717532edc9029
+format: nfmat-v1
+version: 1
+---
+id: 27a76ed4-4558-48b6-b2c8-1bfbcd9ee4ec
+type: Material
+logical: content://Materials/Leaves.nfmat
+cooked: cache://Materials/Leaves.nfmat
+fingerprint: 86993bf27015c94f
+format: nfmat-v1
+version: 1
+---
+id: fface6fc-1d56-4b78-b968-1e3db6951abf
+type: Material
+logical: content://Materials/Path.nfmat
+cooked: cache://Materials/Path.nfmat
+fingerprint: 806b9167108d6d92
+format: nfmat-v1
+version: 1
+---
+id: 3bc3229e-0c53-4599-adf9-ff4ffa89f8d6
+type: Texture
+logical: content://Textures/Bark.png
+cooked: cache://Textures/Bark.png
+fingerprint: 4812bd9c05bb23b0
+format: img-v1
+version: 1
+---
+id: 343900fb-4026-44c3-b92c-a9fda7314b4d
+type: Texture
+logical: content://Textures/Leaves.png
+cooked: cache://Textures/Leaves.png
+fingerprint: 8136a7f78d0ce5aa
+format: img-v1
+version: 1
+---
+id: 91010446-8069-48fb-b343-9259567c5eaa
+type: Material
+logical: content://Materials/Grass.nfmat
+cooked: cache://Materials/Grass.nfmat
+fingerprint: 70ffd391877dfe97
+format: nfmat-v1
+version: 1
+---
+id: 663f3046-5448-4746-b7a4-47ca4baae00d
+type: Scene
+logical: content://Scenes/Main.nfscene
+cooked: cache://Scenes/Main.nfscene
+fingerprint: 30c4c997ff5a2a16
+format: nfscene-v1
+version: 1

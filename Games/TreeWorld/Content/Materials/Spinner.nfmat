@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Spinner
+base_color: 0.16 0.55 0.52 1
+metallic: 0.40
+roughness: 0.30
+ao: 1
+emission: 0 0 0
+emission_strength: 0

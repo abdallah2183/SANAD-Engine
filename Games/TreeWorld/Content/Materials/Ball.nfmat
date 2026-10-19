@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Ball
+base_color: 0.85 0.52 0.12 1
+metallic: 0.25
+roughness: 0.22
+ao: 1
+emission: 0 0 0
+emission_strength: 0

@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Player
+base_color: 0.12 0.35 0.78 1
+metallic: 0.15
+roughness: 0.38
+ao: 1
+emission: 0 0 0
+emission_strength: 0

@@ -1,0 +1,14 @@
+# SANAD Project
+version: 1
+name: TreeWorld
+title: TreeWorld
+startup_scene: content://Scenes/Main.nfscene
+window_width: 1280
+window_height: 720
+
+# Mounts. Relative paths resolve against this file's directory.
+mount: project:// -> .
+mount: content:// -> Content
+mount: cache:// -> Cache
+mount: shaders:// -> Shaders
+mount: saves:// -> Saves

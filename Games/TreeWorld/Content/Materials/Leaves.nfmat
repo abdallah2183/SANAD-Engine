@@ -1,0 +1,9 @@
+# SANAD Material v1
+name: Leaves
+base_color: 0.07 0.20 0.09 1
+metallic: 0.0
+roughness: 0.84
+ao: 1
+emission: 0 0 0
+emission_strength: 0
+albedo: content://Textures/Leaves.png

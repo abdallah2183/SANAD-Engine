@@ -1,0 +1,9 @@
+# SANAD Material v1
+name: Bark
+base_color: 0.22 0.13 0.07 1
+metallic: 0.0
+roughness: 0.92
+ao: 1
+emission: 0 0 0
+emission_strength: 0
+albedo: content://Textures/Bark.png

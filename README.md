@@ -111,6 +111,20 @@ Claude Code, Codex, Cursor, or another coding agent at this repository:
 |:---:|:---:|
 | <img src="Docs/images/shot_vehicle.png" alt="Vehicle demo with car and crates" width="420"> | <img src="Docs/images/shot_save_guard.png" alt="Save / Discard / Cancel close guard" width="420"> |
 
+## 🎮 Sample game: TreeWorld
+
+A complete playable game built entirely from SANAD data — a low-poly explorer
+walking a misty forest, collecting five fireflies. Source, scene, Lua, materials,
+and procedural textures live in [`Games/TreeWorld`](Games/TreeWorld); the style
+is deliberately low-poly because the engine ships primitive meshes, not a scanned
+forest pack.
+
+<img src="Games/TreeWorld/Screenshot.png" alt="TreeWorld — misty forest with a third-person explorer" width="860">
+
+```bat
+build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
+```
+
 ## ✨ What's in 0.2.0
 
 - **Neutral, focused editor UI** — state uses one blue accent instead of decorating

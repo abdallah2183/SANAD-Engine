@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Stone
+base_color: 0.33 0.35 0.33 1
+metallic: 0.0
+roughness: 0.88
+ao: 1
+emission: 0 0 0
+emission_strength: 0

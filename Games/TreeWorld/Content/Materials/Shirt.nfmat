@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Shirt
+base_color: 0.10 0.30 0.55 1
+metallic: 0.0
+roughness: 0.55
+ao: 1
+emission: 0 0 0
+emission_strength: 0
