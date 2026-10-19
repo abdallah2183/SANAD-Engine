@@ -60,8 +60,8 @@ Grab the portable build from the [0.2.0 release](https://github.com/abdallah2183
 
 | File | What to do |
 |:---|:---|
-| `SANAD-0.2.0-Windows-x64-Portable.zip` | Extract anywhere → run `SANADEditor.exe` |
-| `SANAD_Engine_0.2.0_Demo.mp4` | The 43-second demo video (also in `Docs/media/`) |
+| [`SANAD-0.2.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD-0.2.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
+| [`SANAD_Engine_0.2.0_Demo.mp4`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD_Engine_0.2.0_Demo.mp4) | The 43-second demo video (also in `Docs/media/`) |
 
 > [!NOTE]
 > There is **no installer in this demo** and no code signing yet. Windows may show

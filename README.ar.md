@@ -61,8 +61,8 @@
 
 | الملف | ماذا تفعل |
 |:---|:---|
-| `SANAD-0.2.0-Windows-x64-Portable.zip` | فك الضغط في أي مكان → شغّل `SANADEditor.exe` |
-| `SANAD_Engine_0.2.0_Demo.mp4` | فيديو الديمو (43 ثانية) |
+| [`SANAD-0.2.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD-0.2.0-Windows-x64-Portable.zip) | فك الضغط في أي مكان → شغّل `SANADEditor.exe` |
+| [`SANAD_Engine_0.2.0_Demo.mp4`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD_Engine_0.2.0_Demo.mp4) | فيديو الديمو (43 ثانية) |
 
 > [!NOTE]
 > **لا يوجد مثبّت في هذا الديمو** ولا توقيع بعد. قد تظهر رسالة "ناشر غير معروف".
