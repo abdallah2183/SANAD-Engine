@@ -771,6 +771,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             if (ImGui::MenuItem(AV("profiler").c_str(), nullptr, &profiler)) {
                 ui_settings().show_profiler = profiler;
             }
+            ImGui::MenuItem(AV("viewport_stats").c_str(), nullptr, &st.show_viewport_stats);
             ImGui::EndMenu();
         }
 
@@ -818,6 +819,13 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         }
 
         if (ImGui::BeginMenu(("  " + AV("help")).c_str())) {
+            if (ImGui::MenuItem(AV("start_here_menu").c_str())) {
+                st.show_start_here = true;
+            }
+            if (ImGui::MenuItem(AV("shortcuts").c_str(), "F1")) {
+                st.show_shortcuts = true;
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem(AV("about").c_str())) {
                 st.show_about = true;
             }
@@ -886,8 +894,14 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     // (which is what a plain window at y = 0 does) is the other classic way to
     // make a toolbar feel broken.
     const float toolbar_h = ImGui::GetFrameHeight() + 10.0f;
+    // ImGuiWindowFlags_MenuBar is REQUIRED: BeginMenuBar() returns false on a
+    // window without it (imgui_widgets.cpp: `if (!(window->Flags &
+    // ImGuiWindowFlags_MenuBar)) return false;`). Without the flag the strip was
+    // reserved but every button — New, Open, Ground, Play — silently never
+    // drew, which is why the editor looked like a viewport with no tools.
     if (ImGui::BeginViewportSideBar("##NFToolbar", ImGui::GetMainViewport(), ImGuiDir_Up, toolbar_h,
-                                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings)) {
+                                    ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar |
+                                        ImGuiWindowFlags_NoSavedSettings)) {
         if (ImGui::BeginMenuBar()) {
             ImGui::TextColored(theme::rgb(0xD9, 0x9A, 0x2B), "SANAD ENGINE");
             ImGui::SameLine();

@@ -124,6 +124,23 @@ constexpr Entry kEntries[] = {
     {"add_quad", "Add Quad", "إضافة مستطيل"},
     {"add_sky", "Add Sky", "إضافة سماء"},
     {"add_sphere", "Add Sphere", "إضافة كرة"},
+    // First-run guide (Panels.cpp draw_start_here) and the viewport stats toggle.
+    {"start_here_title", "Start here — your first game", "ابدأ من هنا — أول لعبة لك"},
+    {"start_here_intro",
+     "Three steps take you from an open editor to a running game. Reopen this window from "
+     "Help > Start Here.",
+     "ثلاث خطوات تنقلك من محرر مفتوح إلى لعبة تعمل۔ يمكنك فتح هذه النافذة من مساعدة > ابدأ من هنا۔"},
+    {"start_here_step1", "1 — New scene (ground, sun, camera)",
+                         "١ — مشهد جديد (أرضية وشمس وكاميرا)"},
+    {"start_here_step2", "2 — Add a ground plane", "٢ — إضافة أرضية"},
+    {"start_here_step3", "3 — Play the game", "٣ — تشغيل اللعبة"},
+    {"start_here_tip",
+     "Right-drag to look around, the wheel to zoom, W/E/R to move, rotate and scale. Drag a "
+     "mesh from Assets into the viewport to place it.",
+     "اسحب بالزر الأيمن للنظر حول المشهد، وبعجلة الفأرة للتقريب، وبمفاتيح W/E/R للتحريك "
+     "والتدوير والتحجيم۔ اسحب مجسمًا من الأصول إلى منفذ العرض لوضعه۔"},
+    {"start_here_menu", "Start Here", "ابدأ من هنا"},
+    {"viewport_stats", "Viewport stats", "إحصاءات العرض"},
     {"assets_count", "assets", "أصل"},
     {"autosave_interval", "Autosave interval (s)", "فاصل الحفظ التلقائي (ث)"},
     {"browse", "Browse...", "استعراض..۔"},
@@ -367,8 +384,11 @@ constexpr Entry kEntries[] = {
     {"sh_tpl_nature", "Nature Exploration", "استكشاف الطبيعة"},
     {"sh_tpl_platformer", "Core Platformer", "منصات أساسي"},
     {"sh_tpl_arena", "FPS Arena", "ساحة تصويب"},
-    {"sh_tpl_side", "Side-Scroller Starter", "بداية التمرير الجانبي"},
-    {"sh_tpl_blank", "Blank Scene", "مشهد فارغ"},
+    // The card names must match the folder they scaffold: sh_tpl_side points at
+    // the ThirdPerson template (a 3D character), not a 2D side-scroller, and
+    // sh_tpl_blank points at Default, which already ships a ground and a cube.
+    {"sh_tpl_side", "Third-Person Starter", "بداية منظور ثالث"},
+    {"sh_tpl_blank", "Starter Scene", "مشهد جاهز"},
     {"sh_tpl_marine", "Marine Environment", "بيئة بحرية"},
     {"sh_setup", "Project Setup", "إعداد المشروع"},
     {"sh_name_label", "Project Name:", "اسم المشروع:"},
@@ -449,8 +469,10 @@ constexpr Entry kEntries[] = {
     {"sh_tpl_nature_desc", "Open-world foliage and terrain sample.", "عيّنة عالم مفتوح بعشب وتضاريس۔"},
     {"sh_tpl_platformer_desc", "Side-view jumping and platforms.", "قفز ومنصات بعرض جانبي۔"},
     {"sh_tpl_arena_desc", "First-person arena combat.", "قتال ساحة بمنظور أول۔"},
-    {"sh_tpl_side_desc", "2D side-scroller starter.", "بداية لعبة تمرير جانبي ثنائية الأبعاد۔"},
-    {"sh_tpl_blank_desc", "Empty scene with the default setup.", "مشهد فارغ بالإعداد الافتراضي۔"},
+    {"sh_tpl_side_desc", "A 3D character you walk around a level.",
+                          "شخصية ثلاثية الأبعاد تتجول بها في مستوى۔"},
+    {"sh_tpl_blank_desc", "Ground, cube and sun — a room to build in.",
+                           "أرضية ومكعب وشمس — مساحة تبني فيها۔"},
     {"sh_tpl_marine_desc", "Underwater world and vehicles.", "عالم تحت الماء ومركبات۔"},
     {"sh_confirm_clear_title", "Clear recent list", "مسح القائمة الأخيرة"},
     {"sh_confirm_clear_text", "Forget all recent projects? This cannot be undone.",

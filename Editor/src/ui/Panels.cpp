@@ -1010,6 +1010,54 @@ bool draw_reflected_field(ReflectedObjectView& view, usize index) {
 
 } // namespace
 
+// --- Start Here guide -------------------------------------------------------
+// A first launch used to be a viewport, four panels and no instruction. Three
+// buttons cover the whole beginner path — new scene, ground, play — and each
+// one goes through the same EditorApp call the menu does, so the guide cannot
+// drift into a second, broken implementation of "New".
+void draw_start_here(EditorApp& app) {
+    EditorUiSettings& st = ui_settings();
+    if (!st.show_start_here) {
+        return;
+    }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowSize(ImVec2(450.0f, 0.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(
+        ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+        ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    bool open = true;
+    if (ImGui::Begin((AV("start_here_title") + "###NFStartHere").c_str(), &open,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("%s", AV("start_here_intro").c_str());
+        ImGui::Spacing();
+        // Negative width = fill the window; the panel is auto-resizing, so the
+        // three buttons share one deliberate column instead of three sizes.
+        const ImVec2 wide(-1.0f, 0.0f);
+        std::string err;
+        if (ImGui::Button((AV("start_here_step1") + "##nf_sh_1").c_str(), wide)) {
+            if (!app.new_scene(err)) {
+                push_error(app.console(), "New scene failed", err);
+            }
+        }
+        if (ImGui::Button((AV("start_here_step2") + "##nf_sh_2").c_str(), wide)) {
+            if (!app.create_primitive(PrimitiveKind::Ground, ecs::kInvalidEntity, err)) {
+                push_error(app.console(), "Add ground failed", err);
+            }
+        }
+        if (ImGui::Button((AV("start_here_step3") + "##nf_sh_3").c_str(), wide)) {
+            if (!app.launch_game(err)) {
+                push_error(app.console(), "Play failed", err);
+            }
+        }
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", AV("start_here_tip").c_str());
+    }
+    ImGui::End();
+    if (!open) {
+        st.show_start_here = false;
+    }
+}
+
 UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     UiIntents intents;
 
@@ -1543,8 +1591,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         }
         // Live simulation overlay: what the frame actually stepped, for the
         // "is anything running" glance. Counts come straight from the Runtime
-        // getters, so a wired system shows up here the moment it binds.
-        if (app.runtime() != nullptr) {
+        // getters, so a wired system shows up here the moment it binds. Off by
+        // default: a first launch should show the scene, not a census card over
+        // its corner (View > Viewport stats brings it back).
+        if (app.runtime() != nullptr && ui_settings().show_viewport_stats) {
             runtime::Runtime* rt = app.runtime();
             const ImVec2 img_mn = ImGui::GetItemRectMin();
             ImGui::SetNextWindowPos(ImVec2(img_mn.x + 8.0f, img_mn.y + 8.0f), ImGuiCond_Always);
@@ -4229,6 +4279,8 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
         ImGui::End();
         ImGui::PopStyleColor();
     }
+
+    draw_start_here(app);
 
     return intents;
 }

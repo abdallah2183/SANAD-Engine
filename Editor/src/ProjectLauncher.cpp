@@ -291,7 +291,10 @@ struct LauncherState {
     int hover_btn = -1;   // page-local button index under cursor
     std::string search;   // Projects filter (mirrors the search EDIT)
     int selected_recent = 0; // featured project = filtered[selected_recent]
-    int selected_template = 4; // template gallery index (4 = Blank Scene)
+    // ThirdPerson (index 3), not the old "blank" default: a first project that
+    // already contains a ground, a controllable character and crates answers
+    // "how do I make a game" better than an empty scene does.
+    int selected_template = 3; // template gallery index (3 = ThirdPerson)
     bool arabic_ui = false;  // Settings choice, returned in result
     // Thumbnails: engine screenshots shipped in Docs/images, resolved at
     // startup by walking up from the module path. Order: game, vehicle,

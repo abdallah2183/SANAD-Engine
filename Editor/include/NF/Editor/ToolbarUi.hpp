@@ -45,6 +45,15 @@ struct EditorUiSettings {
     bool show_fps = true;
     bool show_validation = true;
     bool show_profiler = false;
+    // The debug census card that floats over the viewport (entities, scripts,
+    // particles, navmesh…). It used to draw unconditionally, and on a first
+    // launch it covers the corner of the very scene the user is trying to look
+    // at. Debug information is one click away in View, not the default view.
+    bool show_viewport_stats = false;
+    // The "start here" guide: three buttons that take a brand-new user from an
+    // open editor to a scene with a ground and a running game. Opened on
+    // startup, closable, and reopenable from Help.
+    bool show_start_here = true;
     // Snapping (applied to the gizmo when Snap is on)
     bool snap_enabled = false;
     float snap_move = 0.5f;
