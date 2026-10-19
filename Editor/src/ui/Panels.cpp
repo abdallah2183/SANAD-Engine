@@ -1033,7 +1033,17 @@ void draw_start_here(EditorApp& app) {
         ImGui::Spacing();
         // Negative width = fill the window; the panel is auto-resizing, so the
         // three buttons share one deliberate column instead of three sizes.
+        // Outline, not fill: the guide is the one place three actions must read
+        // as a path, and a filled brand color would compete with Play/active
+        // tool state elsewhere. A blue hairline + white label is unambiguous
+        // and stays "plain" (the old gold fill was the thing being complained
+        // about).
         const ImVec2 wide(-1.0f, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::alpha(theme::accent(), 0.16f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::alpha(theme::accent(), 0.28f));
+        ImGui::PushStyleColor(ImGuiCol_Border, theme::accent());
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
         std::string err;
         if (ImGui::Button((AV("start_here_step1") + "##nf_sh_1").c_str(), wide)) {
             if (!app.new_scene(err)) {
@@ -1050,6 +1060,8 @@ void draw_start_here(EditorApp& app) {
                 push_error(app.console(), "Play failed", err);
             }
         }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
         ImGui::Spacing();
         ImGui::TextWrapped("%s", AV("start_here_tip").c_str());
     }
@@ -1517,10 +1529,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                     .c_str(),
                                 space_label.c_str(), AV("shift_click_multi").c_str());
         }
-        if (stats.viewport_lit != 0) {
+        // Lit-pixel counter: a renderer diagnostic, English on purpose (same
+        // decision as the profiler block below). It sits behind the same
+        // View > Viewport stats toggle as the census card — a number nobody
+        // asked for does not belong in the default viewport header.
+        if (stats.viewport_lit != 0 && ui_settings().show_viewport_stats) {
             ImGui::SameLine();
-            // Lit-pixel counter: a renderer diagnostic, English on purpose
-            // (same decision as the profiler block below).
             ImGui::Text("viewport lit=%u", static_cast<unsigned>(stats.viewport_lit));
         }
         // Live viewport image: the offscreen Runtime target, sampled through

@@ -574,12 +574,14 @@ ImVec4 theme::accent() {
 void apply_ui_accent(const EditorUiSettings& settings) {
     ImGuiStyle& style = ImGui::GetStyle();
     const ImVec4 accent(settings.accent_r, settings.accent_g, settings.accent_b, 1.0f);
-    style.Colors[ImGuiCol_Header] = ImVec4(accent.x, accent.y, accent.z, 0.35f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(accent.x, accent.y, accent.z, 0.55f);
-    style.Colors[ImGuiCol_HeaderActive] = ImVec4(accent.x, accent.y, accent.z, 0.75f);
-    style.Colors[ImGuiCol_Button] = ImVec4(accent.x, accent.y, accent.z, 0.40f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(accent.x, accent.y, accent.z, 0.60f);
-    style.Colors[ImGuiCol_ButtonActive] = ImVec4(accent.x, accent.y, accent.z, 0.85f);
+    // Neutral controls, accent only on state. Same rule as apply_forge_theme:
+    // the accent must be a highlight, never the fill of every button/header.
+    style.Colors[ImGuiCol_Header] = theme::rgb(0x26, 0x30, 0x42);
+    style.Colors[ImGuiCol_HeaderHovered] = theme::rgb(0x2E, 0x3A, 0x50);
+    style.Colors[ImGuiCol_HeaderActive] = ImVec4(accent.x, accent.y, accent.z, 0.45f);
+    style.Colors[ImGuiCol_Button] = theme::rgb(0x2A, 0x2F, 0x37);
+    style.Colors[ImGuiCol_ButtonHovered] = theme::rgb(0x35, 0x3C, 0x47);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(accent.x, accent.y, accent.z, 0.30f);
     style.Colors[ImGuiCol_CheckMark] = accent;
     style.Colors[ImGuiCol_SliderGrab] = ImVec4(accent.x, accent.y, accent.z, 0.70f);
     style.Colors[ImGuiCol_SliderGrabActive] = accent;
@@ -903,7 +905,9 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                                     ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar |
                                         ImGuiWindowFlags_NoSavedSettings)) {
         if (ImGui::BeginMenuBar()) {
-            ImGui::TextColored(theme::rgb(0xD9, 0x9A, 0x2B), "SANAD ENGINE");
+            // Neutral wordmark: the brand was the last gold hold-out, and a
+            // colored label competed with the actual state (Play, active tool).
+            ImGui::TextColored(theme::text_primary(), "SANAD ENGINE");
             ImGui::SameLine();
             ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
             ImGui::SameLine();

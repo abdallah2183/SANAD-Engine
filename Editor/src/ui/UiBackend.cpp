@@ -246,7 +246,9 @@ void apply_forge_theme() {
 
     // Text.
     c[ImGuiCol_Text] = theme::text_primary();
-    c[ImGuiCol_TextDisabled] = theme::text_faint();
+    // One step brighter than text_faint: most secondary labels (stats, hints,
+    // paths) use TextDisabled, and at #6B7382 they vanished into the panel.
+    c[ImGuiCol_TextDisabled] = theme::rgb(0x7C, 0x85, 0x95);
     c[ImGuiCol_TextSelectedBg] = tint(0.35f);
     c[ImGuiCol_InputTextCursor] = accent;
 
@@ -261,16 +263,23 @@ void apply_forge_theme() {
     c[ImGuiCol_ScrollbarGrabHovered] = theme::rgb(0x47, 0x50, 0x5E);
     c[ImGuiCol_ScrollbarGrabActive] = theme::rgb(0x55, 0x60, 0x6F);
 
-    // Accent family: selection, headers, primary buttons, sliders.
+    // Accent family: ONLY selection, active state and the few genuinely
+    // "primary" surfaces carry it. Buttons and section headers are neutral
+    // controls; tinting them with the accent (the old gold at 35-85%) turned
+    // every panel into a wall of brown and made active states indistinct.
     c[ImGuiCol_CheckMark] = accent;
     c[ImGuiCol_SliderGrab] = tint(0.75f);
     c[ImGuiCol_SliderGrabActive] = accent;
-    c[ImGuiCol_Button] = tint(0.35f);
-    c[ImGuiCol_ButtonHovered] = tint(0.55f);
-    c[ImGuiCol_ButtonActive] = tint(0.80f);
-    c[ImGuiCol_Header] = tint(0.28f);
-    c[ImGuiCol_HeaderHovered] = tint(0.48f);
-    c[ImGuiCol_HeaderActive] = tint(0.68f);
+    c[ImGuiCol_Button] = theme::rgb(0x2A, 0x2F, 0x37);
+    c[ImGuiCol_ButtonHovered] = theme::rgb(0x35, 0x3C, 0x47);
+    c[ImGuiCol_ButtonActive] = tint(0.30f);
+    // Selected rows and section headers still need to read as "chosen". A
+    // neutral gray was nearly invisible against the panel (#22262D vs #1B1E24
+    // in a screenshot), so headers use a cool blue-gray and the held state
+    // carries the accent. No warmth: this must not drift back to brown.
+    c[ImGuiCol_Header] = theme::rgb(0x26, 0x30, 0x42);
+    c[ImGuiCol_HeaderHovered] = theme::rgb(0x2E, 0x3A, 0x50);
+    c[ImGuiCol_HeaderActive] = tint(0.45f);
     c[ImGuiCol_Separator] = theme::rgb(0x2B, 0x31, 0x3A);
     c[ImGuiCol_SeparatorHovered] = tint(0.55f);
     c[ImGuiCol_SeparatorActive] = accent;
@@ -287,7 +296,7 @@ void apply_forge_theme() {
     // Tabs: an unselected tab melts into the panel; the selected one lifts and
     // carries an accent overline (the 1.93 "selected tab" affordance).
     c[ImGuiCol_Tab] = theme::surface();
-    c[ImGuiCol_TabHovered] = tint(0.35f);
+    c[ImGuiCol_TabHovered] = theme::rgb(0x2A, 0x2F, 0x37);
     c[ImGuiCol_TabSelected] = theme::rgb(0x26, 0x2C, 0x35);
     c[ImGuiCol_TabSelectedOverline] = accent;
     c[ImGuiCol_TabDimmed] = theme::surface_sunken();

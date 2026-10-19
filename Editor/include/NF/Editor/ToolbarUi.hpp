@@ -60,10 +60,14 @@ struct EditorUiSettings {
     float snap_rotate = 15.0f;
     float snap_scale = 0.25f;
     // Accent colour (the one accent the whole UI uses)
-    // SANAD brand gold (#D99A2B): selection, active tools and primary actions.
-    float accent_r = 0.851f;
-    float accent_g = 0.604f;
-    float accent_b = 0.169f;
+    // Clean blue (#4C8DFF): selection, active tools and primary actions. The
+    // old gold (#D99A2B) was applied to every button and header at 35-85%
+    // alpha, which read as brown fills across the whole editor and buried the
+    // interface in its own accent. Neutral controls + one blue highlight keeps
+    // the UI legible; the Settings picker still overrides this.
+    float accent_r = 0.298f;
+    float accent_g = 0.553f;
+    float accent_b = 1.000f;
     // Export dialog memory
     int export_format = 5;        // MeshFormat::Glb — one self-contained file
     bool export_whole_scene = true;

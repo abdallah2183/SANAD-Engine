@@ -75,10 +75,13 @@ constexpr COLORREF list_bg = RGB(20, 20, 26);
 constexpr COLORREF border = RGB(55, 55, 66);
 constexpr COLORREF text = RGB(236, 236, 242);
 constexpr COLORREF text_dim = RGB(145, 145, 160);
-constexpr COLORREF accent = RGB(255, 136, 51);   // forge orange
-constexpr COLORREF accent_hi = RGB(255, 165, 95);
-constexpr COLORREF accent_lo = RGB(220, 110, 30);
-constexpr COLORREF on_accent = RGB(22, 14, 8);
+// One accent for the whole product: clean blue (#4C8DFF), the same value the
+// editor theme defaults to. The old forge orange was a second identity that
+// only the shell used, so launcher and editor disagreed about "primary".
+constexpr COLORREF accent = RGB(76, 141, 255);
+constexpr COLORREF accent_hi = RGB(110, 164, 255);
+constexpr COLORREF accent_lo = RGB(59, 116, 219);
+constexpr COLORREF on_accent = RGB(255, 255, 255);
 constexpr COLORREF sel_bg = RGB(44, 44, 54);
 constexpr COLORREF sel_bar = accent;
 constexpr COLORREF error = RGB(255, 110, 110);
