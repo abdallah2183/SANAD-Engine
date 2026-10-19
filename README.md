@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Docs/images/banner.png" alt="SANAD Engine — Arabic-first 3D game engine" width="100%">
+<img src="Docs/images/banner.png" alt="SANAD Engine — Arabic-first 3D game engine, with TreeWorld running" width="100%">
 
 # SANAD Engine · محرك سَنَد
 
@@ -14,6 +14,7 @@
 <a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
 <a href="#"><img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square"></a>
 <a href="#"><img alt="1,875 tests passing" src="https://img.shields.io/badge/tests-1%2C875%20passing-brightgreen?style=flat-square"></a>
+<a href="AGENTS.md"><img alt="AI-ready workflow" src="https://img.shields.io/badge/AI--ready-agents-6f42c1?style=flat-square"></a>
 <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-orange?style=flat-square"></a>
 
 <br>
@@ -48,6 +49,9 @@
   and a **Start Here** guide that gets a new user to a playable scene.
 - **Built like an engine.** C++23, a Vulkan 1.2+ RHI, a data-oriented sparse-set
   ECS, a DAG RenderGraph, and strict module layering enforced in CI.
+- **AI-ready, not AI-washed.** The repo, the CLI, and every generated project
+  carry the same executable contract, so an agent makes a native `.nfproj`
+  instead of drifting into a web stub.
 - **End-to-end workflow.** Create a project, add objects, press **Play**, save with
   a close guard and recovery copy, then package a standalone player.
 - **Open source.** Apache-2.0 — use it, learn from it, or build on it.
@@ -124,6 +128,26 @@ forest pack.
 ```bat
 build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
+
+> [!NOTE]
+> TreeWorld lives on **`main`** and is built from source. The packaged **0.2.0**
+> portable zip below predates it, so use `build_nf.bat Release` (or a newer
+> release) to play the sample.
+
+## 🧪 Latest on `main` (after 0.2.0)
+
+- **Agent-ready from the first command.** `AGENTS.md`, `CLAUDE.md`, Cursor rules,
+  `llms.txt`, a per-project `AGENTS.md`, and `nf guide` all teach an AI the same
+  native scene/Lua workflow — no HTML fallback.
+- **Lua gameplay that can finish a game.** Named actions (`nf.action`), analog
+  axes (`nf.axis`), entity lookup (`nf.find_entity`), names, counts, positions,
+  scales, and alive checks.
+- **A playable starter.** `nf new --template ThirdPerson` now creates **Crate
+  Hunter** — a real collect-and-win game, not a walk-around scene.
+- **Editor safety.** Subtree duplicate (`Ctrl+D`) and a recovery draft with
+  **File → Recover Last Draft**.
+- **Authored atmosphere.** Distance fog in `PostProcess:`, plus the TreeWorld
+  sample with PBR materials, shadows, bloom, and ACES grading.
 
 ## ✨ What's in 0.2.0
 
@@ -270,6 +294,7 @@ Run from `build\Release\bin\`; most accept `--frames N` for bounded runs.
 |:---|:---|
 | `NFSampleCliffStory` — حكاية الجرف | Complete 2D story-climb on `NFScene2D` (65 ledges, dusk→night, shaped Arabic text) |
 | `NFSampleVehicleDemo` | Jolt vehicle, chase camera, destructible crates |
+| [`Games/TreeWorld`](Games/TreeWorld) | Full game source: third-person movement, fog, PBR materials, five collectibles |
 | Others | Triangle, Basic3D, Water, Audio, Animation, GameUI, RuntimeScene, MedievalVillage, … |
 
 ## 📁 Project structure
@@ -277,6 +302,7 @@ Run from `build\Release\bin\`; most accept `--frames N` for bounded runs.
 ```
 Engine/        Core, RHI (Vulkan), Rendering, ECS, Scene, Physics, Audio, AI, … (23 subsystems)
 Editor/        ImGui editor + Arabic launcher
+Games/         Complete sample games (TreeWorld)
 Tools/         nf CLI, AssetCooker, ModelImporter, Player, ProjectTool
 Samples/       Playable demos (CliffStory, VehicleDemo, …)
 Templates/     Starter projects (Default, ThirdPerson, FPSStarter, Platformer2D)
@@ -307,7 +333,15 @@ Fork → branch → build → zero validation errors → pull request. Issues ta
 **نداء للمبدعين العرب:** نرحّب بمبرمجي C++ والرسوميات والفيزياء والصوتيات
 واجهات المحرر وكتّاب التوثيق — المشروع مصمّم طبقيًا ليتّسع للجميع.
 
-Details: [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Details: [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) ·
+[SECURITY.md](SECURITY.md).
+
+## 🔐 Security
+
+Report vulnerabilities privately through GitHub's **Security → Report a
+vulnerability** flow. Please do not open a public issue with a working exploit.
+The full policy, supported versions, and the unsigned-binary caveat are in
+[`SECURITY.md`](SECURITY.md).
 
 ## 📜 License & acknowledgements
 

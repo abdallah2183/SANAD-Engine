@@ -14,6 +14,7 @@
 <a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
 <a href="#"><img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square"></a>
 <a href="#"><img alt="1,875 اختبارًا ناجحًا" src="https://img.shields.io/badge/tests-1%2C875%20passing-brightgreen?style=flat-square"></a>
+<a href="AGENTS.md"><img alt="سير عمل جاهز للوكلاء" src="https://img.shields.io/badge/AI--ready-agents-6f42c1?style=flat-square"></a>
 
 <br>
 
@@ -49,6 +50,8 @@
   يوصل المستخدم الجديد إلى مشهد قابل للتشغيل.
 - **مبني كمحرك.** C++23، واجهة Vulkan 1.2+، ECS موجّه بالبيانات، وRenderGraph
   على شكل DAG، مع فرض طبقات صارم.
+- **جاهز للذكاء الاصطناعي، لا مجرد شعار.** الريبو وCLI وكل مشروع جديد يحملون
+  نفس العقد القابل للتنفيذ، فيبني الوكيل `.nfproj` أصليًا بدل الانحراف إلى ويب.
 - **سير عمل كامل.** أنشئ مشروعًا، أضف مجسمات، اضغط **Play**، احفظ بأمان مع نسخة
   استرداد، ثم اصنع لاعبًا مستقلًا.
 - **مفتوح المصدر.** Apache-2.0.
@@ -125,6 +128,24 @@ Codex أو Cursor أو أي وكيل على هذا الريبو:
 build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
 
+> [!NOTE]
+> لعبة TreeWorld على فرع **`main`** وتُبنى من المصدر. حزمة **0.2.0** المحمولة
+> سبقتها؛ استخدم `build_nf.bat Release` (أو إصدارًا أحدث) لتشغيل اللعبة.
+
+## 🧪 أحدث ما في `main` (بعد 0.2.0)
+
+- **جاهز للوكلاء من أول أمر.** `AGENTS.md` و`CLAUDE.md` وقواعد Cursor و`llms.txt`
+  و`AGENTS.md` لكل مشروع و`nf guide` تعلّم الوكيل نفس سير العمل الأصلي —
+  بلا HTML.
+- **Lua يكفي لإنهاء لعبة.** أفعال مسمّاة (`nf.action`)، محاور (`nf.axis`)، بحث عن
+  الكيانات (`nf.find_entity`)، أسماء وعدد ومواضع ومقاييس وفحص حياة.
+- **قالب يلعب فورًا.** `nf new --template ThirdPerson` ينشئ **Crate Hunter**:
+  لعبة جمع وفوز حقيقية، لا مشهد تمشية.
+- **أمان المحرر.** نسخ شجرة كاملة (`Ctrl+D`) ومسودة استرداد عبر
+  **File → Recover Last Draft**.
+- **أجواء مؤلّفة.** ضباب مسافة في `PostProcess:`، ولعبة TreeWorld بمواد PBR
+  وظلال وBloom وتصحيح ACES.
+
 ## ✨ جديد في 0.2.0
 
 - واجهة محرر محايدة: لون واحد للحالة بدل تلوين كل زر.
@@ -174,7 +195,7 @@ build_nf.bat Release
 
 ```bat
 build\Release\bin\SANADEditor.exe
-build\Release\bin\RuntimeTests.exe
+build\Release\bin\NFPlayer.exe
 ```
 
 <details>
@@ -214,6 +235,7 @@ NFPlayer.exe
 ```
 Engine/        23 نظامًا: Core، RHI، Rendering، ECS، Scene، Physics، Audio، AI…
 Editor/        محرر ImGui + المشغّل العربي
+Games/         ألعاب كاملة (TreeWorld)
 Tools/         nf CLI، AssetCooker، ModelImporter، Player، ProjectTool
 Samples/       ديمو قابل للتشغيل (CliffStory، VehicleDemo…)
 Templates/     مشاريع البداية
@@ -240,7 +262,13 @@ Fork → فرع → بناء → صفر أخطاء validation → Pull Request. 
 **`good first issue`** مناسبة للمبتدئين (توثيق، أمثلة، تجربة المحرر).
 
 نرحّب بمبرمجي C++ والرسوميات والفيزياء والصوتيات وواجهات المحرر وكتّاب
-التوثيق. التفاصيل: [CONTRIBUTING.md](CONTRIBUTING.md).
+التوثيق. التفاصيل: [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+## 🔐 الأمان
+
+أبلغ عن الثغرات بشكل خاص عبر **Security → Report a vulnerability** في GitHub.
+لا تفتح Issue عامًا يحتوي على استغلال فعّال. السياسة الكاملة والإصدارات المدعومة
+وتنبيه الملفات غير الموقّعة في [`SECURITY.md`](SECURITY.md).
 
 ## 📜 الترخيص والشكر
 
