@@ -3250,10 +3250,13 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
                     state.font_small);
     }
 
-    state.page = ShellPage::Projects;
+    // Do NOT snap back to Projects here: launch() already picked New Project
+    // when the recent list is empty, and this reset was silently overriding it
+    // (the empty library still landed on a Projects page with nothing to open).
     shell::layout_children(hwnd, &state);
-    if (HWND s = ::GetDlgItem(hwnd, kIdSearch)) {
-        ::SetFocus(s);
+    if (HWND focus = ::GetDlgItem(hwnd, state.page == ShellPage::Projects ? kIdSearch
+                                                                         : kIdNewName)) {
+        ::SetFocus(focus);
     }
 
     MSG msg{};
