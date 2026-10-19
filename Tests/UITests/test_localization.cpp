@@ -95,6 +95,7 @@ bool latin_allowed_in_arabic(const std::string& key) {
         "no_clips",          // quotes the `Animation:` scene-file token
         "viewport_hint_drag",
         "viewport_hint_dragging", // W/E/R + Esc are physical keys
+        "start_here_tip",         // W/E/R are physical keys, quoted verbatim
         "press_to_start",         // Enter is a physical key
         "status_unsaved",         // Ctrl+S is a physical key chord
         "sh_help_notes_sub",      // ROADMAP.md is a filename quoted verbatim
