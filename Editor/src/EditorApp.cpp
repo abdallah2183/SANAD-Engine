@@ -12,6 +12,7 @@
 #include <NF/Scene/Transform.hpp>
 #include <NF/Gameplay/Components.hpp>
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
+#include <NF/Core/Logger.hpp>
 
 // CreateProcessW for launching the game player next to the editor. The defines
 // come first: engine headers above do not pull <windows.h>, and NOMINMAX keeps
@@ -331,7 +332,7 @@ bool EditorApp::build_default_scene(scene::Scene& scene, std::string& out_err) {
         w.add<scene::NameComponent>(e, scene::NameComponent{"Ground"});
         runtime::MeshComponent mc;
         mc.mesh_id = ground_id;
-        mc.material = runtime::kDefaultMaterialPath;
+        mc.material = ensure_ground_material();
         w.add<runtime::MeshComponent>(e, mc);
         physics::RigidBodyComponent rb;
         rb.type = physics::BodyType::Static;
@@ -804,9 +805,49 @@ bool EditorApp::ensure_primitive_asset(PrimitiveKind kind, assets::AssetId& out_
         out_err = "Registry rejected primitive mesh: " + aerr;
         return false;
     }
+    // Persist the entry. Without this the primitive resolves this session (the
+    // registry is in memory) and vanishes after a restart: the scene stores the
+    // cooked mesh's AssetId, and a fresh editor reading the old registry answers
+    // "AssetId not found" — the ground of a brand-new scene simply disappears.
+    // Saving is best-effort: a read-only content mount must still get a scene.
+    std::string reg_err;
+    if (!m_registry.save(m_vfs, "content://AssetRegistry.nfreg", reg_err)) {
+        NF_LOG_WARN(nf::LogCategory::Editor,
+                    "Primitive '{}' registered in memory but 'content://AssetRegistry.nfreg' "
+                    "could not be saved: {}",
+                    logical, reg_err);
+    }
     out_id = id;
     m_manager.load_mesh(out_id);
     return true;
+}
+
+std::string EditorApp::ensure_ground_material() {
+    constexpr const char* kPath = "content://Materials/Ground.nfmat";
+    const auto existing = m_vfs.exists(kPath);
+    if (existing.ok && existing.value) {
+        return kPath;
+    }
+    // Same line-based format Default.nfmat uses, so the Inspector and the
+    // material library parse it with no second code path. Neutral warm gray
+    // with a matte finish: the floor should recede, not glow.
+    static constexpr char kText[] =
+        "# SANAD Material v1\n"
+        "name: Ground\n"
+        "base_color: 0.30 0.32 0.35 1\n"
+        "metallic: 0\n"
+        "roughness: 0.9\n"
+        "ao: 1\n"
+        "emission: 0 0 0\n"
+        "emission_strength: 0\n"
+        "mip: linear\n";
+    const auto written = m_vfs.write_text(kPath, kText);
+    if (!written.ok) {
+        // Read-only content mount (or a full disk): the scene still has to be
+        // created, so fall back to the material every build ships.
+        return runtime::kDefaultMaterialPath;
+    }
+    return kPath;
 }
 
 bool EditorApp::create_primitive(PrimitiveKind kind, ecs::Entity parent, std::string& out_err) {
@@ -825,7 +866,8 @@ bool EditorApp::create_primitive(PrimitiveKind kind, ecs::Entity parent, std::st
 
     runtime::MeshComponent mc;
     mc.mesh_id = id;
-    mc.material = runtime::kDefaultMaterialPath;
+    mc.material = (kind == PrimitiveKind::Ground) ? ensure_ground_material()
+                                                  : runtime::kDefaultMaterialPath;
 
     // Placement per kind: everything lands ON the ground plane (top surface
     // y = 0), which is what makes a freshly created scene navigable without a

@@ -147,6 +147,11 @@ public:
     // entry, so the id an entity stores still resolves next session. Existing
     // assets are reused by path, never duplicated.
     bool ensure_primitive_asset(PrimitiveKind kind, assets::AssetId& out_id, std::string& out_err);
+    // The neutral ground material, written to content://Materials/Ground.nfmat
+    // on first use. The Default material is authored red (it exists for the
+    // material-edit demo), and a 60 m red floor reads as a rendering bug to a
+    // first-time user. Returns Default if the content tree is not writable.
+    std::string ensure_ground_material();
     // Asset + entity in ONE undo step (create and place together).
     bool create_primitive(PrimitiveKind kind, ecs::Entity parent, std::string& out_err);
     bool create_directional_light(ecs::Entity parent, std::string& out_err);

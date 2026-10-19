@@ -77,6 +77,15 @@ std::shared_ptr<MeshHandle> AssetManager::load_mesh_sync(AssetId id) {
     if (!meta) return handle;
 
     auto vfs_result = m_vfs.read_bytes(meta->cooked_path);
+    if (!vfs_result.ok && meta->logical_path != meta->cooked_path) {
+        // A freshly scaffolded project has Content/ but an empty Cache/ until
+        // `nf cook` runs. The editor opens the project before that, so a
+        // cooked-path-only read renders a brand-new template as an empty scene
+        // ("mesh asset ... failed: cache://Meshes/cube.nfmesh"). The authored
+        // mesh IS the cooked format (.nfmesh), so read it directly; shipping
+        // builds still prefer the cooked copy.
+        vfs_result = m_vfs.read_bytes(meta->logical_path);
+    }
     if (!vfs_result.ok) {
         handle->state = AssetState::Failed;
         handle->error = vfs_result.error;
@@ -109,17 +118,22 @@ std::shared_ptr<MeshHandle> AssetManager::load_mesh_sync(AssetId id) {
 }
 
 void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<MeshHandle> handle) {
-    // Capture the cooked path and id by value; the job outlives `meta`.
+    // Capture the paths and id by value; the job outlives `meta`.
     std::string cooked_path = meta.cooked_path;
+    std::string authored_path = meta.logical_path;
     AssetId id = meta.id;
 
-    auto do_load = [this, cooked_path, id, handle]() {
+    auto do_load = [this, cooked_path, authored_path, id, handle]() {
         // A sync load may have already finalized this handle. Never overwrite a
         // terminal state from a worker.
         if (handle->state != AssetState::Loading) {
             return;
         }
         auto vfs_result = m_vfs.read_bytes(cooked_path);
+        if (!vfs_result.ok && authored_path != cooked_path) {
+            // Same un-cooked-project fallback the sync path documents above.
+            vfs_result = m_vfs.read_bytes(authored_path);
+        }
         if (!vfs_result.ok) {
             handle->state = AssetState::Failed;
             handle->error = vfs_result.error;

@@ -1,14 +1,6 @@
 # SANAD Asset Registry
 version: 1
-count: 4
----
-id: 49cb7905-ece6-4426-8c57-e2460ac79136
-type: Material
-logical: content://Materials/Default.nfmat
-cooked: cache://Materials/Default.nfmat
-fingerprint: 80ced994f0e362d9
-format: nfmat-v1
-version: 1
+count: 5
 ---
 id: e6a82a96-9f52-4e34-b1a7-eee248199ead
 type: Scene
@@ -16,6 +8,14 @@ logical: content://Scenes/Example.nfscene
 cooked: cache://Scenes/Example.nfscene
 fingerprint: ec84c8472b65aa13
 format: nfscene-v1
+version: 1
+---
+id: 49cb7905-ece6-4426-8c57-e2460ac79136
+type: Material
+logical: content://Materials/Default.nfmat
+cooked: cache://Materials/Default.nfmat
+fingerprint: 80ced994f0e362d9
+format: nfmat-v1
 version: 1
 ---
 id: f04e488b-4dc8-414b-baee-e3c50e8829ad
@@ -31,5 +31,13 @@ type: Mesh
 logical: content://Meshes/sphere.nfmesh
 cooked: cache://Meshes/sphere.nfmesh
 fingerprint: 01ee68225b2b70f2
+format: nfmesh-v1
+version: 1
+---
+id: 00a77558-db8c-4929-ad55-afeb64d4af4b
+type: Mesh
+logical: content://Meshes/ground.nfmesh
+cooked: cache://Meshes/ground.nfmesh
+fingerprint: 
 format: nfmesh-v1
 version: 1

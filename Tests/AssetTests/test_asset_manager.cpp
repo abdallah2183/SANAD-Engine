@@ -58,6 +58,50 @@ NF_TEST(asset_loading_cooked_nfmesh) {
     std::filesystem::remove_all(tmp);
 }
 
+// A project scaffolded by `nf new` has Content/ but an empty Cache/ until the
+// first `nf cook`. The editor opens it before that, so a cooked-path-only read
+// turned a brand-new template into an empty scene. The authored mesh is the
+// cooked format, so the loader must fall back to content://.
+NF_TEST(asset_loading_falls_back_to_the_authored_mesh_without_a_cache) {
+    const GpuFixture& f = require_gpu();
+    (void)f;
+    VirtualFileSystem vfs;
+    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_authored_only_test";
+    std::filesystem::create_directories(tmp / "Content" / "Meshes");
+    std::filesystem::create_directories(tmp / "Cache" / "Meshes");
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+
+    auto cube = rendering::StaticMesh::create_cube(1.0f);
+    AssetId id = AssetId::generate();
+    const std::string logical = "content://Meshes/cube.nfmesh";
+    const std::string cooked = "cache://Meshes/cube.nfmesh";
+    auto asset = rendering::make_mesh_asset(*cube, id, logical);
+    std::vector<uint8_t> bytes;
+    asset->save_to_bytes(bytes);
+    // Authored copy only: nothing was cooked.
+    NF_CHECK(vfs.write_bytes(logical, std::span<const uint8_t>(bytes)).ok);
+    NF_CHECK(!vfs.exists(cooked).value);
+
+    AssetRegistry reg;
+    AssetMetadata meta;
+    meta.id = id;
+    meta.type = AssetType::Mesh;
+    meta.logical_path = logical;
+    meta.cooked_path = cooked;
+    meta.fingerprint = "authored-only";
+    meta.format = "nfmesh-v1";
+    std::string err;
+    NF_CHECK(reg.add(meta, err));
+
+    AssetManager mgr(vfs, reg);
+    auto handle = mgr.load_mesh_sync(id);
+    NF_CHECK(handle && handle->state == AssetState::Ready);
+    NF_CHECK(handle->asset && handle->asset->vertices.size() == 24);
+
+    std::filesystem::remove_all(tmp);
+}
+
 // CPU-only since Phase 11, W1: AssetManager no longer uploads, so this test no
 // longer needs a device -- and therefore runs everywhere instead of skipping.
 NF_TEST(asset_cache_identity) {

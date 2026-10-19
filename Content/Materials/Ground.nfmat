@@ -1,0 +1,9 @@
+# SANAD Material v1
+name: Ground
+base_color: 0.30 0.32 0.35 1
+metallic: 0
+roughness: 0.9
+ao: 1
+emission: 0 0 0
+emission_strength: 0
+mip: linear
