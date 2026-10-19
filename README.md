@@ -1,237 +1,240 @@
 <div align="center">
 
-  <img src="Docs/images/sanad_logo.jpg" alt="SANAD Engine logo" width="140" />
+<img src="Docs/images/banner.png" alt="SANAD Engine — Arabic-first 3D game engine" width="100%">
 
-  # SANAD Engine | محرك سَنَد
+# SANAD Engine · محرك سَنَد
 
-  **A modern C++23 + Vulkan 3D game engine — with an Arabic-first editor.**
-  <br>
-  محرك ألعاب ثلاثي الأبعاد حديث بلغة C++23 ومكتبة Vulkan — ومحرر يتكلّم العربية.
+**A modern C++23 + Vulkan 3D game engine — with an Arabic-first editor.**
+<br>
+محرك ألعاب ثلاثي الأبعاد مكتوب بـ C++23 وVulkan — ومحرر يتكلم العربية من أول يوم.
 
-  <a href="https://github.com/abdallah2183/SANAD-Engine/releases"><img alt="Release" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?include_prereleases&style=flat-square&label=release"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square"></a>
-  <a href="#"><img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=flat-square&logo=c%2B%2B"></a>
-  <a href="#"><img alt="Vulkan" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
-  <a href="#"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square"></a>
-  <a href=".github/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square&logo=githubactions"></a>
-  <a href="#"><img alt="Tests" src="https://img.shields.io/badge/tests-1848-brightgreen?style=flat-square"></a>
-  <a href="CONTRIBUTING.md"><img alt="Contributions" src="https://img.shields.io/badge/contributions-welcome-orange.svg?style=flat-square"></a>
+<a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0"><img alt="Release 0.2.0" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
+<a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+<a href="#"><img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=flat-square&logo=c%2B%2B"></a>
+<a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
+<a href="#"><img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square"></a>
+<a href="#"><img alt="1,875 tests passing" src="https://img.shields.io/badge/tests-1%2C875%20passing-brightgreen?style=flat-square"></a>
+<a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-orange?style=flat-square"></a>
 
-  <br>
+<br>
 
-  [Download](https://github.com/abdallah2183/SANAD-Engine/releases) ·
-  [Live Showcase](https://abdallah2183.github.io/SANAD-Engine/) ·
-  [Docs](Docs/) ·
-  [العربية](README.ar.md) ·
-  <!-- TODO: Discord/community link if one is created -->
+[**Download 0.2.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0) ·
+[**Watch the 43s demo**](Docs/media/demo.mp4) ·
+[**Docs**](Docs/) ·
+[**العربية**](README.ar.md)
 
-  <br>
+<br>
 
-  <!-- TODO: record editor hero GIF -> Docs/media/hero.gif (see Docs/media/README.md) -->
-  <img src="Docs/media/hero.gif" alt="SANAD editor in action" width="720">
+<img src="Docs/media/hero.gif" alt="SANAD editor building a scene, then the vehicle demo running" width="860">
 
 </div>
 
 ---
 
+> [!IMPORTANT]
+> **0.2.0 is a public demo, not a beta.** It ships as a **portable Windows x64 zip**.
+> The executables are **unsigned** — Windows Smart App Control or WDAC may block
+> them; if that happens, check the signature/policy warning rather than disabling
+> your security settings. A Vulkan-capable GPU driver is required.
+
 ## 🌟 Why SANAD?
 
-- **Arabic-first, not Arabic-later.** The editor ships a UCD-verified Arabic text shaper (contextual forms, lam-alef ligatures, full bidi) with the Amiri font and complete EN/AR localization — first-class, not a bolt-on.
-- **Modern by construction.** C++23, Vulkan 1.2+ low-overhead RHI, a data-oriented sparse-set ECS, and a DAG RenderGraph.
-- **Real physics & real destruction.** Deterministic solver + Jolt 5.6 backend (vehicles, ragdolls, CCD) plus a fracture/damage world with debris budgets.
-- **Beginner-runnable.** `nf new` produces a project whose starter script is already wired to a visible entity and moves on the first run — see [Getting Started](Docs/Getting_Started_Ar.md).
-- **Zero-validation bar.** CI builds and runs the full suite (1848 tests) with a software Vulkan device.
+- **Arabic-first, not Arabic-later.** The editor ships a UCD-verified Arabic text
+  shaper (contextual forms, lam-alef ligatures, full bidi), the Amiri font, and a
+  complete English/Arabic UI. The launcher, editor, guide, and save prompts are all
+  usable in Arabic.
+- **A real editor, not a demo shell.** Docking layout, scene outliner, reflected
+  inspector, translate/rotate/scale gizmos, undo/redo, asset browser, hot reload,
+  and a **Start Here** guide that gets a new user to a playable scene.
+- **Built like an engine.** C++23, a Vulkan 1.2+ RHI, a data-oriented sparse-set
+  ECS, a DAG RenderGraph, and strict module layering enforced in CI.
+- **End-to-end workflow.** Create a project, add objects, press **Play**, save with
+  a close guard and recovery copy, then package a standalone player.
+- **Open source.** Apache-2.0 — use it, learn from it, or build on it.
 
----
+## 🚀 Quick start
 
-## 📑 Table of Contents
+### 1. Download
 
-- [See it in action](#-see-it-in-action)
-- [Quick Start](#-quick-start)
-- [Features](#-features)
-- [Architecture](#-architecture)
-- [Build from Source](#-build-from-source)
-- [Make a Game](#-make-a-game)
-- [Samples](#-samples)
-- [Project Structure](#-project-structure)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License & Acknowledgements](#-license--acknowledgements)
+Grab the portable build from the [0.2.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0):
 
----
-
-## 🎬 See it in action
-
-<!-- Every file here must be recorded — see Docs/media/README.md for the shot list,
-     resolution, fps and size budget. Alt text on every image. -->
-
-| | |
-|:---:|:---|
-| **Arabic RTL editor**<br>Contextual shaping, lam-alef, bidi.<br><!-- TODO: record -> Docs/media/editor_rtl.gif --><br>![Arabic RTL editor](Docs/media/editor_rtl.gif) | **Deferred PBR / shadows / IBL**<br>GGX, cascaded shadows, sky-baked IBL.<br><!-- TODO: record -> Docs/media/rendering.gif --><br>![Deferred PBR rendering](Docs/media/rendering.gif) |
-| **Vehicle demo**<br>Jolt vehicle + destructible crates.<br><!-- TODO: record -> Docs/media/vehicle.gif --><br>![Vehicle demo](Docs/media/vehicle.gif) | **CliffStory 2D**<br>حكاية الجرف — 65 ledges, dusk→night.<br><!-- TODO: record -> Docs/media/cliffstory.gif --><br>![CliffStory sample](Docs/media/cliffstory.gif) |
-
-Static captures (available today): [editor EN](Docs/images/shot_editor_en.png) · [editor AR](Docs/images/shot_editor_ar.png) · [vehicle](Docs/images/shot_vehicle.png) · [game](Docs/images/shot_game.png)
-
----
-
-## 🚀 Quick Start
-
-Download the latest release for **Windows 10/11 x64**, then run it.
-
-| File | How to use |
+| File | What to do |
 |:---|:---|
-| `SANAD-*-Setup.exe` (recommended) | Double-click → wizard (English / العربية) → Start Menu shortcut |
-| `SANAD-*-Portable.zip` | Extract anywhere → run `SANADEditor.exe` |
+| `SANAD-0.2.0-Windows-x64-Portable.zip` | Extract anywhere → run `SANADEditor.exe` |
+| `SANAD_Engine_0.2.0_Demo.mp4` | The 43-second demo video (also in `Docs/media/`) |
+
+> [!NOTE]
+> There is **no installer in this demo** and no code signing yet. Windows may show
+> "Unknown publisher". The release is Windows 10/11 x64 only.
+
+### 2. Make something in 30 seconds
+
+1. `SANADEditor.exe` → **Create New Project**
+2. Pick **Third-Person**, name it, press **Create**
+3. The scene opens with a Start Here guide → press **Play** (or `Ctrl+P`)
+
+### 3. Or use the CLI
 
 ```bat
-:: build your first game in three commands
-nf.exe new MyGame --template ThirdPerson
+nf.exe new MyGame --name MyGame --template ThirdPerson
 nf.exe build --project MyGame\MyGame.nfproj
 cd MyGame\dist && NFPlayer.exe
 ```
 
-> [!NOTE]
-> A Vulkan-capable GPU driver is required. `vulkan-1.dll` ships **with the driver, not the package** (a bundled loader older than the driver causes black screens). The editor reports plainly if it is missing.
+## 🎬 See it in action
 
-> [!WARNING]
-> This release is **Windows x64 only** — no Linux/macOS yet.
+[![Watch the 43-second demo](Docs/images/demo_poster.png)](Docs/media/demo.mp4)
 
----
+*43 seconds, no voice-over: launcher → editor → build → Play → save guard → portable package.*
 
-## ✨ Features
+| Launcher (Arabic) | Editor (Arabic RTL) |
+|:---:|:---:|
+| <img src="Docs/images/shot_launcher_ar.png" alt="Arabic project launcher with templates" width="420"> | <img src="Docs/images/shot_editor_ar.png" alt="Arabic RTL editor with outliner, viewport and inspector" width="420"> |
 
-| Category | What it does |
+| Vehicle demo | Work protection |
+|:---:|:---:|
+| <img src="Docs/images/shot_vehicle.png" alt="Vehicle demo with car and crates" width="420"> | <img src="Docs/images/shot_save_guard.png" alt="Save / Discard / Cancel close guard" width="420"> |
+
+## ✨ What's in 0.2.0
+
+- **Neutral, focused editor UI** — state uses one blue accent instead of decorating
+  every control, so the viewport stays the star.
+- **Arabic RTL everywhere** — menus, panels, tooltips, onboarding, and the save
+  prompt; text is shaped, not reversed.
+- **No work loss** — closing a dirty scene asks **Save / Discard / Cancel**, and a
+  recovery copy is written before the editor exits.
+- **Play that behaves** — the standalone player restores and focuses its own
+  window instead of opening behind the editor.
+- **Portable templates** — the packaged editor finds its templates next to the
+  executable, so a fresh folder can create a Third-Person project without the dev
+  tree.
+- **Docs that match the build** — [demo notes](Docs/Demo_Release.md),
+  [release notes](RELEASE_NOTES_0.2.0.md), and a five-minute quick start.
+
+## 🧱 Features
+
+| Area | What it does |
 |:---|:---|
-| **Rendering** | Vulkan 1.2+ low-overhead backend, DAG RenderGraph, deferred PBR (GBuffer, GGX, cascaded shadows, procedural sky), sky-baked IBL (split-sum), SSAO (half-res + bilateral blur), post stack (bloom, grading, tonemap, vignette), GPU picking, LOD |
-| **Physics** | Deterministic solver (impulses, SAT, friction) + Jolt 5.6 backend (vehicles, ragdolls, queries, CCD, heightfields, compound bodies) + PBD cloth |
-| **Scripting** | Sandboxed Lua 5.4 (`nf.*` API, entity bindings) + C# via .NET 10 hosting |
-| **Audio** | 3D spatial audio (WASAPI); WAV/OGG/MP3/FLAC import |
-| **Networking** | UDP + reliable channel, snapshots, authoritative server, client prediction & reconciliation |
-| **Gameplay & AI** | Tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh with obstacle-aware pathfinding |
-| **Destruction** | Fracture assets, damage world with budgets, Jolt debris sink |
-| **2D (`NFScene2D`)** | CPU-only: cameras, sprite batcher, tile chunks, 2D physics, A* |
-| **Editor** | ImGui docking shell, outliner, reflected inspector, gizmos, undo/redo, **Arabic RTL UI** |
-| **Tools** | `nf` CLI (`new/build/verify/run`), AssetCooker, ModelImporter, Player, ProjectTool |
+| **Rendering** | Vulkan 1.2+ RHI, DAG RenderGraph, deferred PBR (GGX), cascaded shadows, procedural sky, sky-baked IBL, SSAO, bloom/grading/tonemap, GPU picking, LOD |
+| **Editor** | ImGui docking shell, outliner, reflected inspector, gizmos, undo/redo, asset browser, Start Here guide, Arabic RTL UI |
+| **Physics** | Deterministic solver plus Jolt Physics (vehicles, ragdolls, CCD, heightfields, compound bodies), PBD cloth |
+| **Scripting** | Sandboxed Lua 5.4 (`nf.*` API, entity bindings) and C# via a .NET 10 sandbox host |
+| **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
+| **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
+| **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
+| **Gameplay** | Tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh |
+| **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
-<summary><b>Full feature detail</b></summary>
+<summary><b>Quality gates</b></summary>
 
-- **Assets:** one reader for `.gltf/.glb/.obj/.stl/.ply/.nfmesh` → `.nfmesh`, with materials & textures ([Asset_Import.md](Docs/Asset_Import.md)).
-- **Animation:** clips, state machine with cross-fade, procedural clips, two-bone IK.
-- **Arabic UI:** UCD-verified shaper (forms, lam-alef, bidi), Amiri font, full EN/AR localization.
-- Quality gates: clean `/W4 /WX` build, 0 Vulkan validation errors, 0 RHI leaks, end-to-end project test (create → build → package → run standalone).
+- Clean MSVC `/W4 /WX` build.
+- **26 test suites, 1,875 passed / 0 failed / 2 skipped** on Windows x64 (Release).
+- 0 Vulkan validation errors and 0 leaked RHI objects in the editor acceptance run.
+- End-to-end check: create a project with `nf`, build it, package it, and run the
+  shipped player without the dev-tree shaders.
 
 </details>
-
----
 
 ## 🏗 Architecture
 
 ```mermaid
 flowchart TD
-    Editor["SANAD Editor<br/>(ImGui + Win32 Docking)"]
-    Player["NFPlayer (Standalone)"]
-    Editor --> Runtime["NFRuntime<br/>(World & Stepping)"]
+    Editor["SANAD Editor<br/>(ImGui + Win32 docking)"]
+    Player["NFPlayer<br/>(standalone runtime)"]
+    Editor --> Runtime["NFRuntime<br/>(world & stepping)"]
     Player --> Runtime
-    Runtime --> Rendering["NFRendering (PBR)"]
-    Runtime --> Physics["NFPhysics (Jolt)"]
-    Runtime --> Audio["NFAudio (3D)"]
-    Runtime --> AI["NFAI (NavMesh)"]
-    Rendering --> ECS["NFEcs (Sparse-Set)"]
+    Runtime --> Rendering["NFRendering<br/>(deferred PBR)"]
+    Runtime --> Physics["NFPhysics<br/>(Jolt)"]
+    Runtime --> Audio["NFAudio<br/>(3D)"]
+    Runtime --> AI["NFAI<br/>(NavMesh)"]
+    Rendering --> ECS["NFEcs<br/>(sparse-set)"]
     Physics --> ECS
     Audio --> ECS
     AI --> ECS
-    ECS --> Jobs["NFJobs (Work-Stealing)"]
-    Jobs --> RHI["NFRHI (Vulkan 1.2+)"]
-    RHI --> Core["NFCore (Allocators, Math, SIMD, Logging, UUID)"]
+    ECS --> Jobs["NFJobs<br/>(work-stealing)"]
+    Jobs --> RHI["NFRHI<br/>(Vulkan 1.2+)"]
+    RHI --> Core["NFCore<br/>(allocators, math, SIMD, logging, UUID)"]
     subgraph Platform["NFPlatform (Win32)"]
         RHI
     end
 ```
 
-<details>
-<summary><b>ASCII fallback</b></summary>
+Strict layering is checked by `Scripts/check_layering.sh` in CI.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│               SANAD Editor (ImGui + Win32 Docking)          │
-├───────────────────────────────┬─────────────────────────────────┤
-│    Gameplay Module Registry   │      NFPlayer Standalone        │
-├───────────────────────────────┴─────────────────────────────────┤
-│                   NFRuntime (World & Stepping)                  │
-├──────────────────────┬─────────────────────────┬────────────────┤
-│  NFRendering (PBR)   │   NFPhysics (Jolt)       │ NFAudio (3D)   │
-├──────────────────────┴─────────────────────────┴────────────────┤
-│         NFEcs (Sparse-Set) & NFScene (Hierarchical Graph)       │
-├─────────────────────────────────────────────────────────────────┤
-│            NFJobs (Work-Stealing Multi-threaded Graph)          │
-├─────────────────────────────────────────────────────────────────┤
-│    NFRHI (Vulkan 1.2+ Low Overhead) & NFPlatform (Win32)        │
-├─────────────────────────────────────────────────────────────────┤
-│     NFCore (Custom Allocators, Pure Math, SIMD, Logging, UUID)  │
-└─────────────────────────────────────────────────────────────────┘
-```
+## 🔧 Build from source
 
-</details>
+**Prerequisites:** Windows 10/11 x64, Visual Studio 2022 (or newer) with the
+**Desktop development with C++** workload, CMake 3.25+, Ninja, and the Vulkan SDK
+1.3+ (`glslc` on `PATH`).
 
-Strict layering is enforced by `Scripts/check_layering.sh` in CI.
-
----
-
-## 🔧 Build from Source
-
-**Prerequisites:** Windows 10/11 x64 · Visual Studio 2022/2026 (MSVC + C++23) · CMake 3.25+ · Ninja · Vulkan SDK 1.3+ (`glslc` on `PATH`).
-
-```bash
+```bat
 git clone https://github.com/abdallah2183/SANAD-Engine.git
 cd SANAD-Engine
-build_nf.bat
+build_nf.bat Release
 ```
 
-Run / test:
+The script discovers Visual Studio with `vswhere`, sets up MSVC + the Windows SDK,
+configures CMake, and builds. No machine-specific paths are required.
 
 ```bat
-.\build\DebugNinja\bin\SANADEditor.exe
-.\build\DebugNinja\bin\RuntimeTests.exe
+:: run the editor
+build\Release\bin\SANADEditor.exe
+
+:: run one test suite
+build\Release\bin\RuntimeTests.exe
 ```
 
 <details>
-<summary><b>Manual CMake build</b></summary>
+<summary><b>Manual CMake / presets</b></summary>
 
-```bash
-cmake -S . -B build/DebugNinja -G Ninja -DCMAKE_BUILD_TYPE=Debug ^
+```bat
+cmake --preset release
+cmake --build build/release
+```
+
+Or configure by hand:
+
+```bat
+cmake -S . -B build\release -G Ninja -DCMAKE_BUILD_TYPE=Release ^
       -DNF_BUILD_TESTS=ON -DNF_BUILD_SAMPLES=ON -DNF_BUILD_TOOLS=ON -DNF_BUILD_EDITOR=ON
-cmake --build build/DebugNinja --parallel
+cmake --build build\release --parallel
 ```
 
 </details>
 
-Release + installer EXE (what the GitHub Release ships):
+> [!NOTE]
+> The release script `packaging/windows/build_installer.ps1` can produce an Inno
+> Setup installer on a machine that has Inno Setup. The 0.2.0 demo intentionally
+> ships the portable zip only.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging/windows/build_installer.ps1
-```
-
----
-
-## 🎮 Make a Game
+## 🎮 Make a game
 
 ```bat
-.\build\DebugNinja\bin\nf.exe new MyGame --name MyGame --template ThirdPerson
-.\build\DebugNinja\bin\nf.exe build --project MyGame\MyGame.nfproj
-cd MyGame\dist && .\NFPlayer.exe
+:: 1. create a project from a template
+build\Release\bin\nf.exe new MyGame --name MyGame --template ThirdPerson
+
+:: 2. build a standalone package
+build\Release\bin\nf.exe build --project MyGame\MyGame.nfproj
+
+:: 3. run the packaged player
+cd MyGame\dist
+NFPlayer.exe
 ```
 
-- Import models via `File > Import`, or `NFModelImporter.exe` ([formats](Docs/Asset_Import.md)).
-- Blender characters: export with the shipped add-on ([pipeline](Docs/Blender_Pipeline.md)).
-- New here? [20-minute Arabic tutorial](Docs/Tutorial_Ar.md) · [من وين أبدأ](Docs/Getting_Started_Ar.md) · [Lua scripting](Docs/Lua_Scripting_Ar.md).
-- Templates: `Default`, `ThirdPerson`, `FPSStarter`, `Platformer2D`.
+- Import models with **File → Import** or `NFModelImporter.exe`
+  ([formats](Docs/Asset_Import.md)).
+- Blender characters: use the shipped add-on
+  ([pipeline](Docs/Blender_Pipeline.md)).
+- New here? [Getting Started (AR)](Docs/Getting_Started_Ar.md) ·
+  [20-minute tutorial (AR)](Docs/Tutorial_Ar.md) ·
+  [Lua scripting (AR)](Docs/Lua_Scripting_Ar.md).
 
----
+Templates: `Default`, `ThirdPerson`, `FPSStarter`, `Platformer2D`.
 
 ## 🧩 Samples
 
-Run from `build/*/bin/`; most accept `--frames N` for bounded runs.
+Run from `build\Release\bin\`; most accept `--frames N` for bounded runs.
 
 | Sample | Shows |
 |:---|:---|
@@ -239,81 +242,56 @@ Run from `build/*/bin/`; most accept `--frames N` for bounded runs.
 | `NFSampleVehicleDemo` | Jolt vehicle, chase camera, destructible crates |
 | Others | Triangle, Basic3D, Water, Audio, Animation, GameUI, RuntimeScene, MedievalVillage, … |
 
----
-
-## 📁 Project Structure
+## 📁 Project structure
 
 ```
-Engine/        Core, RHI (Vulkan), Rendering, ECS, Scene, Physics, Audio, AI, …  # 23 subsystems
-Editor/        ImGui editor + project launcher (Arabic RTL UI)
+Engine/        Core, RHI (Vulkan), Rendering, ECS, Scene, Physics, Audio, AI, … (23 subsystems)
+Editor/        ImGui editor + Arabic launcher
 Tools/         nf CLI, AssetCooker, ModelImporter, Player, ProjectTool
 Samples/       Playable demos (CliffStory, VehicleDemo, …)
 Templates/     Starter projects (Default, ThirdPerson, FPSStarter, Platformer2D)
-Tests/         26 suites, run via Scripts/run_tests.sh
-Docs/          Guides, plans, full design doc, media shot list
-Shaders→build/ SPIR-V compiled at build time, shipped beside the exe
-packaging/     Windows installer (Inno Setup) + portable zip builder
-website/       Interactive showcase site
+Tests/         26 suites
+Docs/          Guides, design doc, release notes
+ThirdParty/    Jolt, Dear ImGui, Lua, miniaudio, stb, cgltf
+packaging/     Installer + portable zip scripts
+website/       Showcase site source
 ```
-
----
 
 ## 🗺 Roadmap
 
-Phases 1–27 complete (foundation → LOD → shadows/sky → audio/glTF → Lua+C# → Jolt+netcode → 2D layer → destruction → cascades → SSAO → PBR maps → IBL). Recent: **SSAO**, **full PBR texture maps**, **sky-baked IBL**.
+Phases 1–28 are in the tree (rendering, editor, physics, scripting, networking,
+2D, destruction, cascaded shadows, SSAO, PBR maps, sky IBL, navmesh). The demo
+release focuses on the workflow a new user actually touches.
 
-<details>
-<summary><b>Phase checklist</b></summary>
+Next up: signed Windows builds, an installer in the release, Linux exploration,
+and more first-party samples.
 
-- [x] Phases 1–3 — Core, Vulkan RHI, Jobs, ECS
-- [x] Phases 4–6 — ImGui editor, inspector, asset browser, undo/redo
-- [x] Phases 7–8 — Deferred PBR, RenderGraph, materials
-- [x] Phases 9–10 — Deterministic physics, skeletal animation, 3D audio
-- [x] Phase 11 — Layering, advanced save, world streaming
-- [x] Phase 12 — Mesh LOD & streaming
-- [x] Phase 13 — Directional shadows + procedural sky
-- [x] Phase 14 — MiniAudio + glTF 2.0 import
-- [x] Phase 15 — Lua + C# scripting, Arabic RTL editor
-- [x] Phase 16 — Jolt physics + multiplayer
-- [x] Phase 17 — Body & joint replication
-- [x] Phase 18 — 2D layer (`NFScene2D`)
-- [x] Phase 19 — Destruction
-- [x] Phase 20 — Cascaded shadow maps
-- [x] Phase 21 — Local point/spot shadows
-- [x] Phase 22 — AI core (perception, state machines, utility AI)
-- [x] Phases 24–25 — Scene scripting, particles/cloth/character integration
-- [x] Phase 27 — Post-processing stack
-- [x] SSAO · full PBR maps · sky-baked IBL
-- [x] Phase 28 — Navigation wired end to end (navmesh volume in scenes, walkers in the frame, editor authoring)
-
-</details>
-
-Full history and next phases: [ROADMAP.md](ROADMAP.md) · full design: [Docs/SANAD_Engine_Complete_Design.md](Docs/SANAD_Engine_Complete_Design.md).
-
----
+Full history: [ROADMAP.md](ROADMAP.md) ·
+design: [Docs/SANAD_Engine_Complete_Design.md](Docs/SANAD_Engine_Complete_Design.md).
 
 ## 🤝 Contributing
 
-Fork → branch → build → zero validation errors → pull request.
+Fork → branch → build → zero validation errors → pull request. Issues tagged
+**`good first issue`** are beginner-friendly (docs, samples, editor UX).
 
-Looking for a place to start? Issues tagged **`good first issue`** are beginner-friendly (docs, samples, editor UX). Details: [CONTRIBUTING.md](CONTRIBUTING.md).
+**نداء للمبدعين العرب:** نرحّب بمبرمجي C++ والرسوميات والفيزياء والصوتيات
+واجهات المحرر وكتّاب التوثيق — المشروع مصمّم طبقيًا ليتّسع للجميع.
 
-**نداء للمبدعين العرب:** نرحّب بمبرمجي C++ والرسوميات والفيزياء والصوتيات وواجهات المحرر وكتّاب التوثيق — المشروع مصمّم طبقياً ليتّسع للجميع.
+Details: [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
----
-
-## 📜 License & Acknowledgements
+## 📜 License & acknowledgements
 
 Apache License 2.0 — see [LICENSE](LICENSE).
 
-Built on: **Jolt Physics**, **Dear ImGui**, **Amiri** font, **Lua 5.4**, **miniaudio**, **stb**, **cgltf**, **.NET** (C# hosting), **Vulkan SDK**.
+Built on **Jolt Physics**, **Dear ImGui**, **Amiri**, **Lua 5.4**, **miniaudio**,
+**stb**, **cgltf**, the **.NET** runtime, and the **Vulkan SDK**.
 
 <br>
 
 <div align="center">
 
-<!-- TODO: verify repo slug before enabling -->
-<a href="https://star-history.com/#abdallah2183/SANAD-Engine&Date"><img alt="Star History" src="https://api.star-history.com/svg?repos=abdallah2183/SANAD-Engine&type=Date"></a>
-<a href="https://contrib.rocks"><img alt="Contributors" src="https://contrib.rocks/image?repo=abdallah2183/SANAD-Engine"></a>
+<a href="https://star-history.com/#abdallah2183/SANAD-Engine&Date">
+  <img alt="Star history" src="https://api.star-history.com/svg?repos=abdallah2183/SANAD-Engine&type=Date" width="600">
+</a>
 
 </div>
