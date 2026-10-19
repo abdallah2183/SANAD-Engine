@@ -120,8 +120,8 @@ Write-Host ("  Templates/              {0,8} files  ({1})" -f $n, $tplNames)
 
 # --- Docs: the .md the launcher OPENS + the images it LOADS as card thumbnails
 $docsDst = Join-Path $stage 'Docs'
-foreach ($src in @('Docs\Getting_Started_Ar.md', 'Docs\Tutorial_Ar.md', 'Docs\Lua_Scripting_Ar.md',
-                   'Docs\Asset_Import.md', 'Docs\Blender_Pipeline.md')) {
+foreach ($src in @('Docs\Demo_Release.md', 'Docs\Getting_Started_Ar.md', 'Docs\Tutorial_Ar.md',
+                   'Docs\Lua_Scripting_Ar.md', 'Docs\Asset_Import.md', 'Docs\Blender_Pipeline.md')) {
     $p = Join-Path $repo $src
     if (Test-Path $p) { Copy-Item $p $docsDst -Force }
 }
@@ -187,6 +187,7 @@ WHAT IT NEEDS FROM YOUR MACHINE
     * Nothing else. The MSVC runtime is linked statically.
 
 DOCS
+    Docs\Demo_Release.md         - ما في هذه النسخة والقيود المعروفة
     Docs\Getting_Started_Ar.md   - من وين أبدأ (Arabic)
     Docs\Tutorial_Ar.md          - 20-minute tutorial (Arabic)
     Docs\Lua_Scripting_Ar.md     - scripting reference (Arabic)
