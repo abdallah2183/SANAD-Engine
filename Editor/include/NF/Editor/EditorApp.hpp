@@ -81,6 +81,12 @@ public:
     bool save_as(const std::string& logical_path, std::string& out_err);
     // Saves a copy without touching path/dirty (automation + tests).
     bool save_copy(const std::string& logical_path, std::string& out_err);
+    // Recovery: a draft written before a scene switch (and by the shell before
+    // the close prompt). `recover_last_draft()` opens it as an UNTITLED dirty
+    // scene, so the user can Save As instead of overwriting a named scene.
+    bool write_recovery_copy(std::string& out_err);
+    bool has_recovery_copy() const;
+    bool recover_last_draft(std::string& out_err);
     bool dirty() const { return m_dirty || materials_dirty(); }
     bool scene_dirty() const { return m_dirty; }
     const std::string& scene_path() const { return m_scene_path; }

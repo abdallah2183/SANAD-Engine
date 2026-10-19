@@ -510,6 +510,7 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_delete_selection.cpp
         EditorTests/test_duplicate.cpp
         EditorTests/test_fog_scene.cpp
+        EditorTests/test_recovery.cpp
         EditorTests/test_asset_filter.cpp
         EditorTests/test_drag_drop.cpp
         EditorTests/test_save_load.cpp

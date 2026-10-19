@@ -99,6 +99,7 @@ constexpr Entry kEntries[] = {
     {"position", "Position", "الموضع"},
     {"prefab", "Prefab", "القالب الجاهز"},
     {"redo", "Redo", "إعادة"},
+    {"recover_draft", "Recover Last Draft", "استعادة آخر مسودة"},
     {"rigid_body", "Rigid Body", "الجسم الصلب"},
     {"rotation", "Rotation", "الدوران"},
     {"save", "Save", "حفظ"},

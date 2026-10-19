@@ -387,6 +387,13 @@ bool EditorApp::new_scene(std::string& out_err) {
         out_err = "Stop play mode before creating a scene";
         return false;
     }
+    if (dirty()) {
+        std::string rec_err;
+        if (!write_recovery_copy(rec_err)) {
+            out_err = "Could not save a recovery copy before creating a scene: " + rec_err;
+            return false;
+        }
+    }
     // A drag armed on the old world must not survive the switch: entity ids
     // recycle, so the stale handle could alias a different entity.
     {
@@ -428,6 +435,13 @@ bool EditorApp::open_scene(const std::string& logical_path, std::string& out_err
     if (m_play.playing()) {
         out_err = "Stop play mode before opening a scene";
         return false;
+    }
+    if (dirty()) {
+        std::string rec_err;
+        if (!write_recovery_copy(rec_err)) {
+            out_err = "Could not save a recovery copy before opening a scene: " + rec_err;
+            return false;
+        }
     }
     {
         std::string dummy;
@@ -479,6 +493,54 @@ bool EditorApp::save_copy(const std::string& logical_path, std::string& out_err)
     if (!runtime::save_scene_to_vfs(m_vfs, logical_path, *s, out_err)) {
         return false;
     }
+    return true;
+}
+
+bool EditorApp::write_recovery_copy(std::string& out_err) {
+    if (m_runtime == nullptr || m_runtime->edit_scene() == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    return save_copy("cache://EditorRecovery.nfscene", out_err);
+}
+
+bool EditorApp::has_recovery_copy() const {
+    const auto found = m_vfs.exists("cache://EditorRecovery.nfscene");
+    return found.ok && found.value;
+}
+
+bool EditorApp::recover_last_draft(std::string& out_err) {
+    if (m_runtime == nullptr) {
+        out_err = "Runtime not attached";
+        return false;
+    }
+    if (m_play.playing()) {
+        out_err = "Stop play mode before recovering a draft";
+        return false;
+    }
+    if (!has_recovery_copy()) {
+        out_err = "No recovery draft exists";
+        return false;
+    }
+    {
+        std::string dummy;
+        viewport_abort_drag(dummy);
+    }
+    if (!m_runtime->load_scene("cache://EditorRecovery.nfscene", out_err)) {
+        return false;
+    }
+    // The draft has no user-chosen path: it must never overwrite the named
+    // scene it was copied from. Save As is the only way out, so the scene is
+    // marked dirty and its path cleared.
+    m_scene_path.clear();
+    m_stack.clear();
+    m_selection.clear();
+    m_outliner = OutlinerState{};
+    m_dirty = true;
+    if (scene::Scene* s = m_runtime->edit_scene()) {
+        s->set_name("Recovered Draft");
+    }
+    rebuild_hot_watch();
     return true;
 }
 

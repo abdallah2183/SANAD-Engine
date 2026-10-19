@@ -699,6 +699,14 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
             ImGui::Separator();
+            if (ImGui::MenuItem(AV("recover_draft").c_str(), nullptr, false,
+                                app.has_recovery_copy())) {
+                std::string err;
+                if (!app.recover_last_draft(err)) {
+                    push_error_console(app, "Recover draft failed", err);
+                }
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem((AV("import_model") + "   Ctrl+I").c_str())) {
                 st.show_import = true;
             }
