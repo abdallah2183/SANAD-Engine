@@ -11,6 +11,34 @@
 
 namespace nf::rhi {
 
+namespace {
+
+/// Bytes one texel of `format` occupies. Used to check that a
+/// buffer-to-texture copy actually fits in its source buffer. Returns 0 for
+/// formats whose size is not a fixed number of bytes (block-compressed
+/// textures), because there is no meaningful per-texel bound for them.
+u32 bytes_per_texel(Format format) {
+    switch (format) {
+        case Format::R8_UNorm:            return 1;
+        case Format::R8G8_UNorm:          return 2;
+        case Format::R8G8B8A8_UNorm:      return 4;
+        case Format::R8G8B8A8_sRGB:       return 4;
+        case Format::B8G8R8A8_UNorm:      return 4;
+        case Format::R16G16B16A16_SFloat: return 8;
+        case Format::R32_SFloat:          return 4;
+        case Format::R32G32_SFloat:       return 8;
+        case Format::R32G32B32_SFloat:    return 12;
+        case Format::R32G32B32A32_SFloat: return 16;
+        case Format::D16_UNorm:           return 2;
+        case Format::D32_SFloat:          return 4;
+        case Format::D24_UNorm_S8_UInt:   return 4;
+        case Format::D32_SFloat_S8_UInt:  return 8;
+        default:                          return 0;
+    }
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Command buffer
 // ---------------------------------------------------------------------------
@@ -137,6 +165,36 @@ void VulkanCommandBuffer::begin_render_pass(const RenderPass& pass, const Frameb
     begin_info.clearValueCount = static_cast<u32>(clear_values.size());
     begin_info.pClearValues = clear_values.data();
 
+    // The pass declares the layout its attachments are in when it starts.
+    // The images have to ACTUALLY be in that layout: a pass that declares
+    // COLOR_ATTACHMENT_OPTIMAL while the image is still UNDEFINED is
+    // undefined behaviour, and the render graph's pre-pass barrier (which
+    // puts the image in COLOR_ATTACHMENT_OPTIMAL) is what makes the two
+    // agree. This check keeps the agreement true for the callers that do
+    // not go through the graph.
+    const VkImageLayout initial_color = vk_pass.initial_color_layout();
+    for (Texture* tex : vk_fb.color_attachments()) {
+        auto* vk_tex = static_cast<VulkanTexture*>(tex);
+        if (!vk_tex->valid() || vk_tex->layout() == initial_color) continue;
+        // PRESENT_SRC cannot be reached with a barrier; a pass that expects
+        // a presented image (the UI overlay over the swapchain) finds it
+        // there already.
+        if (initial_color == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) continue;
+        transition_image_layout(vk_tex->image(), vk_tex->layout(), initial_color,
+                                VK_IMAGE_ASPECT_COLOR_BIT, vk_tex->mip_levels());
+        vk_tex->set_layout(initial_color);
+    }
+    if (Texture* depth = vk_fb.depth_attachment()) {
+        auto* vk_tex = static_cast<VulkanTexture*>(depth);
+        const VkImageLayout initial_depth = vk_pass.initial_depth_layout();
+        if (vk_tex->valid() && vk_tex->layout() != initial_depth) {
+            transition_image_layout(vk_tex->image(), vk_tex->layout(), initial_depth,
+                                    aspect_for_format(vk_tex->format()),
+                                    vk_tex->mip_levels());
+            vk_tex->set_layout(initial_depth);
+        }
+    }
+
     vkCmdBeginRenderPass(m_cmd, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
     // The pass transitions its attachments implicitly. Record that so later
@@ -163,6 +221,11 @@ void VulkanCommandBuffer::bind_pipeline(const Pipeline& pipeline) {
 
     // Remembered so push_constants() can supply the layout Vulkan requires.
     m_current_layout = vk_pipeline.layout();
+    // Also remembered so the descriptor-set and push-constant calls can be
+    // checked against what this pipeline actually declares.
+    m_current_set_layout = vk_pipeline.set_layout();
+    m_current_push_offset = vk_pipeline.push_constant_offset();
+    m_current_push_size = vk_pipeline.push_constant_size();
 }
 
 void VulkanCommandBuffer::bind_vertex_buffers(std::span<const Buffer* const> buffers) {
@@ -209,6 +272,19 @@ void VulkanCommandBuffer::bind_descriptor_sets(const DescriptorSetLayout& layout
     }
 
     if (sets.empty()) return;
+
+    // The layout the caller names is the contract it believes it is
+    // binding; the pipeline's own layout is what the command buffer
+    // actually binds (vkCmdBindDescriptorSets needs the pipeline layout).
+    // A mismatch means the shader reads a binding the pipeline never
+    // declared — undefined behaviour that is silent on some drivers and a
+    // validation error on others. The bind still happens: refusing it would
+    // turn a wrong-layout bug into a blank frame.
+    if (vk_layout.handle() != m_current_set_layout) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "bind_descriptor_sets: the given layout does not match the bound "
+            "pipeline's descriptor set layout");
+    }
 
     std::vector<VkDescriptorSet> vk_sets;
     vk_sets.reserve(sets.size());
@@ -267,6 +343,22 @@ void VulkanCommandBuffer::push_constants(ShaderStage stages, u32 offset, u32 siz
     if (stage_bits & static_cast<u16>(ShaderStage::Fragment)) visibility |= VK_SHADER_STAGE_FRAGMENT_BIT;
     if (stage_bits & static_cast<u16>(ShaderStage::Compute))  visibility |= VK_SHADER_STAGE_COMPUTE_BIT;
     if (stage_bits & static_cast<u16>(ShaderStage::Geometry)) visibility |= VK_SHADER_STAGE_GEOMETRY_BIT;
+
+    // The push must fit inside the range the pipeline layout declared:
+    // a write past it is a validation error, and on some drivers it
+    // scribbles over whatever follows the range.
+    if (m_current_push_size == 0) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "push_constants called but the bound pipeline declares no push constants");
+        return;
+    }
+    if (offset < m_current_push_offset ||
+        offset + size > m_current_push_offset + m_current_push_size) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "push_constants range {}+{} does not fit the pipeline's push constant range {}+{}",
+            offset, size, m_current_push_offset, m_current_push_size);
+        return;
+    }
 
     vkCmdPushConstants(m_cmd, m_current_layout, visibility, offset, size, data);
 }
@@ -333,6 +425,34 @@ void VulkanCommandBuffer::copy_buffer_to_texture(const Buffer& src, Texture& dst
                                                  u32 tex_w, u32 tex_h) {
     const auto& vk_src = static_cast<const VulkanBuffer&>(src);
     auto& vk_dst = static_cast<VulkanTexture&>(dst);
+
+    // Bounds check BEFORE anything is recorded: a copy that reads past the
+    // end of the source buffer or writes outside the destination image is
+    // undefined behaviour on the GPU (an out-of-bounds read is not clamped,
+    // it is a device fault at best), and the failure surfaces far away from
+    // the call that caused it. Refusing the copy keeps the error next to
+    // its cause.
+    const u32 texel_size = bytes_per_texel(vk_dst.format());
+    if (texel_size == 0) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "copy_buffer_to_texture: format {} has no computable texel size",
+            static_cast<int>(vk_dst.format()));
+        return;
+    }
+    const u64 needed = static_cast<u64>(tex_w) * static_cast<u64>(tex_h) *
+                       static_cast<u64>(texel_size);
+    if (static_cast<u64>(buffer_offset) + needed > static_cast<u64>(vk_src.size())) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "copy_buffer_to_texture: source buffer holds {} bytes, the copy needs {}",
+            vk_src.size(), static_cast<u64>(buffer_offset) + needed);
+        return;
+    }
+    if (tex_x + tex_w > vk_dst.width() || tex_y + tex_h > vk_dst.height()) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "copy_buffer_to_texture: region {}x{} at ({},{}) does not fit the {}x{} texture",
+            tex_w, tex_h, tex_x, tex_y, vk_dst.width(), vk_dst.height());
+        return;
+    }
 
     const bool is_depth = (vk_dst.format() == Format::D16_UNorm ||
                            vk_dst.format() == Format::D32_SFloat ||
@@ -484,8 +604,14 @@ void VulkanCommandBuffer::transition_texture_for_sampling(Texture& texture) {
     const VkImageAspectFlags aspect = is_depth ? VK_IMAGE_ASPECT_DEPTH_BIT
                                                : VK_IMAGE_ASPECT_COLOR_BIT;
 
+    // Every mip level of the image has to end up shader-readable: the
+    // view of a mipped texture spans ALL of them, so a transition that only
+    // covered level 0 left the rest of the view pointing at an image that
+    // is still in its old layout — a sampling error that only shows on the
+    // mips the shader actually picks.
     transition_image_layout(vk_tex.image(), current,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, aspect);
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, aspect,
+                            vk_tex.mip_levels());
 
     vk_tex.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
@@ -513,11 +639,56 @@ void VulkanCommandBuffer::barrier_texture(Texture& texture, ImageUsage before, I
                            vk_tex.format() == Format::D32_SFloat ||
                            vk_tex.format() == Format::D24_UNorm_S8_UInt ||
                            vk_tex.format() == Format::D32_SFloat_S8_UInt);
-    VkImageLayout old_layout = usage_to_layout(before);
-    VkImageLayout new_layout = usage_to_layout(after);
 
-    // If before is None (Undefined), use the texture's current tracked layout
-    if (before == ImageUsage::None) old_layout = vk_tex.layout();
+    // The OLD layout is the image's real, tracked layout — not a layout
+    // derived from the caller's usage hint. The hint says how the caller
+    // believes the image was used; the tracker says where the image
+    // actually is. Barriering from the hint produced (old, new) pairs the
+    // driver never saw, which on some drivers silently discards the image
+    // and on others is a validation error.
+    const VkImageLayout old_layout = vk_tex.layout();
+    const VkImageLayout new_layout = usage_to_layout(after);
+
+    // The source access mask and stage still come from the declared
+    // previous usage: that is the write the transition has to be ordered
+    // against. `before == None` means "the caller does not know", and the
+    // layout pair alone has to carry the barrier (the historical
+    // behaviour).
+    //
+    // The hint is only trusted when it agrees with the image's real
+    // layout: an access mask that contradicts the old layout (a colour
+    // attachment write on an image that is really shader-readable) is a
+    // validation error, and the tracked layout is the truth about what
+    // happened to the image.
+    VkAccessFlags src_access = 0;
+    VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    const VkImageLayout hint_layout = usage_to_layout(before);
+    const bool hint_usable = before != ImageUsage::None &&
+                             old_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
+                             (old_layout == hint_layout ||
+                              old_layout == VK_IMAGE_LAYOUT_GENERAL);
+    if (hint_usable) {
+        if (has_usage(before, ImageUsage::ColorAtt)) {
+            src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        } else if (has_usage(before, ImageUsage::DepthAtt)) {
+            src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        } else if (has_usage(before, ImageUsage::Sampled)) {
+            src_access = VK_ACCESS_SHADER_READ_BIT;
+            src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else if (has_usage(before, ImageUsage::TransferDst)) {
+            src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (has_usage(before, ImageUsage::TransferSrc)) {
+            src_access = VK_ACCESS_TRANSFER_READ_BIT;
+            src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (has_usage(before, ImageUsage::Storage)) {
+            src_access = VK_ACCESS_SHADER_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        }
+    }
+
     const VkImageAspectFlags aspect_barrier =
         is_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     if (old_layout == new_layout) {
@@ -538,7 +709,7 @@ void VulkanCommandBuffer::barrier_texture(Texture& texture, ImageUsage before, I
             barrier.image = vk_tex.image();
             barrier.subresourceRange.aspectMask = aspect_barrier;
             barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.levelCount = vk_tex.mip_levels();
             barrier.subresourceRange.baseArrayLayer = 0;
             barrier.subresourceRange.layerCount = 1;
             barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -553,7 +724,8 @@ void VulkanCommandBuffer::barrier_texture(Texture& texture, ImageUsage before, I
     }
 
     const VkImageAspectFlags aspect = is_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    transition_image_layout(vk_tex.image(), old_layout, new_layout, aspect);
+    transition_image_layout(vk_tex.image(), old_layout, new_layout, aspect,
+                            vk_tex.mip_levels(), src_access, src_stage);
     vk_tex.set_layout(new_layout);
 }
 
@@ -593,14 +765,50 @@ void VulkanCommandBuffer::copy_texture_to_buffer(const Texture& src, Buffer& dst
     vkCmdCopyImageToBuffer(m_cmd, vk_src.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            vk_dst.handle(), 1, &region);
 
-    // The copy leaves the image in TRANSFER_SRC_OPTIMAL; record that so the
-    // next transition knows where it stands.
-    vk_src.set_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    // The copy left the image in TRANSFER_SRC_OPTIMAL, which a sampler may
+    // not read. Put it back where it was: the texture is usually sampled or
+    // rendered into again right after the readback, and a texture left in
+    // the transfer layout is an illegal layout for that use. The tracker
+    // follows, so the next transition starts from the truth.
+    //
+    // Two layouts need special care: an image that was never used has no
+    // contents worth restoring (it becomes shader-readable instead), and a
+    // presented image cannot be restored to PRESENT_SRC with a barrier — it
+    // goes back to UNDEFINED, which a swapchain image survives because it
+    // is rewritten every frame anyway.
+    VkImageLayout restore_layout = old_layout;
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        restore_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    } else if (old_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+        restore_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    transition_image_layout(vk_src.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            restore_layout, aspect);
+    vk_src.set_layout(restore_layout);
 }
 
 void VulkanCommandBuffer::transition_image_layout(VkImage image, VkImageLayout old_layout,
                                                   VkImageLayout new_layout,
-                                                  VkImageAspectFlags aspect) {
+                                                  VkImageAspectFlags aspect,
+                                                  u32 level_count,
+                                                  VkAccessFlags src_access_override,
+                                                  VkPipelineStageFlags src_stage_override) {
+    // A presented image cannot be transitioned with a barrier: the spec only
+    // allows PRESENT_SRC to be paired with itself (VUID-vkCmdPipelineBarrier-
+    // oldLayout-01153 and -newLayout-01152). The contents of a presented
+    // image may be discarded, so the move out of it is expressed as
+    // UNDEFINED -> new, which is the legal way to say "the old contents do
+    // not matter". Nothing can be transitioned INTO present_src with a
+    // barrier at all — the presentation engine owns that move.
+    if (old_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+        old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    if (new_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+        NF_LOG_WARN(LogCategory::RHI,
+            "Cannot transition into PRESENT_SRC with a barrier — the presentation engine owns it");
+        return;
+    }
+
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = old_layout;
@@ -610,7 +818,10 @@ void VulkanCommandBuffer::transition_image_layout(VkImage image, VkImageLayout o
     barrier.image = image;
     barrier.subresourceRange.aspectMask = aspect;
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
+    // The whole range of levels the transition applies to. A view of a
+    // mipped texture spans every level, so a transition that only covered
+    // level 0 left the rest of the view on an image in the old layout.
+    barrier.subresourceRange.levelCount = (level_count == 0) ? 1 : level_count;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
@@ -674,6 +885,12 @@ void VulkanCommandBuffer::transition_image_layout(VkImage image, VkImageLayout o
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         source_stage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        // Readback of a depth target that is written again afterwards.
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destination_stage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
         barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
         barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -707,6 +924,14 @@ void VulkanCommandBuffer::transition_image_layout(VkImage image, VkImageLayout o
         barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         source_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         destination_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    }
+
+    // The caller may know better than the layout pair does which write the
+    // transition has to be ordered against (the render graph declares the
+    // previous usage of a resource). Its answer wins.
+    if (src_access_override != 0) {
+        barrier.srcAccessMask = src_access_override;
+        source_stage = src_stage_override;
     }
 
     vkCmdPipelineBarrier(m_cmd, source_stage, destination_stage, 0,

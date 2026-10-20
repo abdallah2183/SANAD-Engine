@@ -108,7 +108,17 @@ VulkanSwapchain::VulkanSwapchain(VulkanDevice* device, const SwapchainDesc& desc
     create_info.imageColorSpace = surface_format.colorSpace;
     create_info.imageExtent = extent;
     create_info.imageArrayLayers = 1;
+    // The swapchain images are also used as copy destinations (the editor
+    // blits an offscreen target into the window image), so TRANSFER_DST is
+    // requested — but only when the surface supports it: asking for an
+    // unsupported usage flag makes the swapchain creation fail outright.
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
+        create_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    } else {
+        NF_LOG_DEBUG(LogCategory::RHI,
+            "Surface does not support transfer-destination swapchain images");
+    }
 
     const u32 queue_families[2] = { ctx.graphics_family, ctx.present_family };
     if (ctx.graphics_family != ctx.present_family) {
@@ -188,12 +198,25 @@ u32 VulkanSwapchain::acquire_next_image(const Semaphore& signal_semaphore) {
     }
 
     u32 image_index = 0;
+    // A bounded timeout, never an infinite one: a window that is
+    // minimised, or a compositor that stops presenting, must not block the
+    // frame loop forever. VK_TIMEOUT is reported like "out of date" so the
+    // caller rebuilds the swapchain instead of spinning on the acquire.
+    constexpr u64 kAcquireTimeoutNs = 1'000'000'000ull;
     const VkResult result = vkAcquireNextImageKHR(
-        m_device->context().device, m_swapchain, u64_max,
+        m_device->context().device, m_swapchain, kAcquireTimeoutNs,
         semaphore->handle(), VK_NULL_HANDLE, &image_index);
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        // Window resized or surface lost — caller must recreate the swapchain.
+    if (result == VK_ERROR_DEVICE_LOST) {
+        // A lost device is terminal: latch it so the render loop stops
+        // instead of trying to recreate the swapchain on a dead device.
+        nf::rhi::record_device_lost();
+        return u32_max;
+    }
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_TIMEOUT) {
+        // Window resized, surface lost, or no image became available in
+        // time — the caller must recreate the swapchain.
         return u32_max;
     }
 
@@ -234,6 +257,13 @@ void VulkanSwapchain::present(u32 image_index,
     present_info.pImageIndices = &image_index;
 
     const VkResult result = vkQueuePresentKHR(m_device->present_queue(), &present_info);
+
+    if (result == VK_ERROR_DEVICE_LOST) {
+        // A lost device is terminal: latch it so the render loop stops
+        // instead of submitting into a dead device.
+        nf::rhi::record_device_lost();
+        return;
+    }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         // Not fatal: the next acquire will report it and the caller rebuilds.

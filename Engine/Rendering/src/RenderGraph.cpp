@@ -23,6 +23,29 @@ RGTextureHandle RenderGraph::create_texture(const std::string& name, const rhi::
 
 RGTextureHandle RenderGraph::import_texture(const std::string& name, rhi::Texture* external) {
     NF_ASSERT(external, "import_texture requires a valid external texture");
+    // An import is a REFERENCE to a texture somebody else owns, and the
+    // graph is rebuilt every frame: the same three or four targets are
+    // imported again on every frame. Appending a new entry each time grew
+    // m_resources without bound (and compile() re-scanned all of it), so an
+    // import with a name that is already imported REUSES that entry: the
+    // handle stays stable across frames and the resource list stays as
+    // long as the set of distinct names.
+    for (size_t i = 0; i < m_resources.size(); ++i) {
+        Resource& res = m_resources[i];
+        if (!res.imported || res.name != name) continue;
+        res.external = external;
+        res.desc.width = external->width();
+        res.desc.height = external->height();
+        res.desc.format = external->format();
+        // The state tracker starts over: the texture this handle points at
+        // may be a different image than last frame's (the swapchain image
+        // rotates), so the graph must not assume it is still in the layout
+        // the previous frame left it in.
+        res.current_state = RGResourceState::Undefined;
+        m_compiled = false;
+        return static_cast<RGTextureHandle>(i);
+    }
+
     Resource res;
     res.name = name;
     res.desc = {};
@@ -298,6 +321,9 @@ void RenderGraph::reset(bool keep_resources) {
         m_resources.clear();
     }
     // If keep_resources, we keep owned textures alive for reuse; passes are cleared.
+    // Imported resources survive too: import_texture() reuses the entry with
+    // the same name, so the handles the caller holds stay valid and the
+    // resource list does not grow per frame.
 }
 
 } // namespace nf::rendering

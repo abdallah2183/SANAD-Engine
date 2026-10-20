@@ -80,6 +80,12 @@ public:
     VkImageView view() const { return m_view; }
     VkFormat vk_format() const { return m_vk_format; }
     u32 mip_levels() const { return m_mip_levels; }
+
+    /// Depth of a 3D image (1 for a 2D image). TextureDesc::depth is honoured:
+    /// a depth above one makes the backend create a VK_IMAGE_TYPE_3D image.
+    u32 depth() const { return m_depth; }
+    bool is_3d() const { return m_depth > 1; }
+
     u64 creation_serial() const override { return m_serial; }
 
     /// Current layout — required to emit correct image memory barriers.
@@ -104,6 +110,7 @@ private:
     Format m_format = Format::Unknown;
     u32 m_width = 0;
     u32 m_height = 0;
+    u32 m_depth = 1;
     u32 m_mip_levels = 1;
     mutable VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     bool m_owned = true;
@@ -194,11 +201,26 @@ public:
     VkPipelineLayout layout() const { return m_layout; }
     VkPipelineBindPoint bind_point() const { return VK_PIPELINE_BIND_POINT_GRAPHICS; }
 
+    /// The descriptor set layout the pipeline was built against (null when
+    /// the pipeline has no descriptor sets). The command buffer compares
+    /// the layout it is asked to bind against this one: binding a set whose
+    /// layout differs from the pipeline's is undefined behaviour, and the
+    /// mismatch is invisible until a shader reads the wrong binding.
+    VkDescriptorSetLayout set_layout() const { return m_set_layout; }
+
+    /// The push constant range the pipeline layout declares. A pipeline
+    /// without push constants has a size of zero and no stages.
+    u32 push_constant_offset() const { return m_push_range.offset; }
+    u32 push_constant_size() const { return m_push_range.size; }
+    VkShaderStageFlags push_constant_stages() const { return m_push_range.stageFlags; }
+
 private:
     VulkanDevice* m_device = nullptr;
     VkAliveGuard m_alive;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange m_push_range{};
 };
 
 // ---------------------------------------------------------------------------
@@ -224,6 +246,7 @@ public:
         d.has_depth = m_has_depth;
         d.present_source = m_present_source;
         d.color_load = m_color_load;
+        d.depth_load = m_depth_load;
         return d;
     }
     u32 color_attachment_count() const override {
@@ -233,10 +256,21 @@ public:
 
     /// Layout the color attachments are left in when the pass ends. Command
     /// recording needs it to keep the images' tracked layouts honest.
-    VkImageLayout final_color_layout() const {
-        return m_present_source ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-                                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
+    ///
+    /// It is the layout the pass was actually built with, not a guess from
+    /// `present_source`: a headless device has no surface, so the pass ends
+    /// in COLOR_ATTACHMENT_OPTIMAL even though it was asked to present.
+    VkImageLayout final_color_layout() const { return m_final_color_layout; }
+
+    /// Layout the attachments are expected to be in when the pass BEGINS.
+    ///
+    /// The render graph transitions a colour attachment to
+    /// COLOR_ATTACHMENT_OPTIMAL before the pass that draws into it, so the
+    /// pass has to declare exactly that: an initialLayout of UNDEFINED
+    /// contradicts the barrier the graph emits and leaves the two telling
+    /// the driver different stories about where the image is.
+    VkImageLayout initial_color_layout() const { return m_initial_color_layout; }
+    VkImageLayout initial_depth_layout() const { return m_initial_depth_layout; }
 
 private:
     VulkanDevice* m_device = nullptr;
@@ -246,6 +280,13 @@ private:
     bool m_has_depth = false;
     bool m_present_source = true;
     RenderPassDesc::ColorLoad m_color_load = RenderPassDesc::ColorLoad::Clear;
+    RenderPassDesc::DepthLoad m_depth_load = RenderPassDesc::DepthLoad::Clear;
+    /// The layout the color attachments actually end in (PRESENT_SRC only
+    /// when there is a surface to present to).
+    VkImageLayout m_final_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    /// The layout the attachments are expected to be in when the pass starts.
+    VkImageLayout m_initial_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkImageLayout m_initial_depth_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     std::vector<ColorAttachment> m_color_attachments; // owning copy
 };
 
@@ -354,9 +395,20 @@ public:
     VkCommandBuffer raw() const { return m_cmd; }
 
 private:
+    /// Records one image layout transition.
+    ///
+    /// `level_count` covers every mip level the transition applies to — a
+    /// view of a mipped texture spans all of them, so a transition that only
+    /// touched level 0 left the rest of the view reading an image that is
+    /// still in its old layout. `src_access` / `src_stage` override the
+    /// access mask and stage the transition is ordered against; zero means
+    /// "derive them from the layout pair".
     void transition_image_layout(VkImage image, VkImageLayout old_layout,
                                  VkImageLayout new_layout,
-                                 VkImageAspectFlags aspect);
+                                 VkImageAspectFlags aspect,
+                                 u32 level_count = 1,
+                                 VkAccessFlags src_access = 0,
+                                 VkPipelineStageFlags src_stage = 0);
 
     VulkanDevice* m_device = nullptr;
     VkAliveGuard m_alive;
@@ -369,6 +421,14 @@ private:
     /// does not take one — callers push to "whatever pipeline is bound", which
     /// is how every backend that is not Vulkan models it too.
     VkPipelineLayout m_current_layout = VK_NULL_HANDLE;
+
+    /// The descriptor set layout of the most recently bound pipeline, and the
+    /// push constant range its pipeline layout declares. Both are needed to
+    /// check what the caller asks for against what the pipeline actually
+    /// allows.
+    VkDescriptorSetLayout m_current_set_layout = VK_NULL_HANDLE;
+    u32 m_current_push_offset = 0;
+    u32 m_current_push_size = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -543,7 +603,11 @@ public:
     bool valid() const { return m_cmd != VK_NULL_HANDLE; }
 
 private:
-    void ensure_began();
+    /// Begins recording if the context is not recording yet. Returns false
+    /// when the context cannot record any more (it has already been
+    /// submitted) — the caller must then do nothing rather than record into
+    /// a command buffer the GPU may still be reading.
+    bool ensure_began();
     void transition_for_copy(VulkanTexture& tex, VkImageLayout target);
 
     VulkanDevice* m_device = nullptr;

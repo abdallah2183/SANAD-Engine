@@ -6,6 +6,7 @@
 #include <NF/Core/Assert.hpp>
 #include <NF/Core/Logger.hpp>
 
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -30,22 +31,46 @@ bool VulkanTextureView::create_from_desc(const TextureViewDesc& desc) {
     // Resolve format: explicit view format overrides texture format
     m_vk_format = (desc.format != Format::Unknown) ? to_vk_format(desc.format) : vk_tex.vk_format();
     m_format = (desc.format != Format::Unknown) ? desc.format : vk_tex.format();
-    m_width = vk_tex.width();
-    m_height = vk_tex.height();
-    m_dimension = desc.dimension;
     m_aspect = desc.aspect;
 
-    // Validate mip/layer ranges against texture description
-    // For now texture is always 2D with mip_levels=1, array_layers=1, so clamp
+    // Validate mip/layer ranges against the texture they describe: a view
+    // that reaches past the image's last mip is an invalid view, and the
+    // driver rejects it instead of quietly clamping.
     u32 mip_count = desc.mip_count;
     u32 layer_count = desc.layer_count;
     if (mip_count == 0) mip_count = 1;
     if (layer_count == 0) layer_count = 1;
+    const u32 base_mip = std::min<u32>(desc.base_mip, vk_tex.mip_levels() - 1);
+    mip_count = std::min<u32>(mip_count, vk_tex.mip_levels() - base_mip);
+    if (mip_count == 0) mip_count = 1;
+
+    // A view that starts at a higher mip covers a smaller image, and the
+    // size the caller reads back has to match what the view actually spans:
+    // a sampler derives its LOD range from it. A base of one texel at mip 4
+    // is still one texel wide, hence the max.
+    m_width = std::max<u32>(1u, vk_tex.width() >> base_mip);
+    m_height = std::max<u32>(1u, vk_tex.height() >> base_mip);
+
+    // A 3D image can only be viewed as 3D — a 2D view of it is rejected by
+    // the driver, so the dimension is corrected rather than failing.
+    ViewDimension dimension = desc.dimension;
+    u32 base_layer = desc.base_layer;
+    if (vk_tex.is_3d() && dimension != ViewDimension::View3D) {
+        dimension = ViewDimension::View3D;
+        layer_count = 1;
+    }
+    if (dimension == ViewDimension::View3D) {
+        // A 3D view has no array layers: the depth of the image is the
+        // third dimension, so the layer range has to be empty.
+        layer_count = 1;
+        base_layer = 0;
+    }
+    m_dimension = dimension;
 
     VkImageViewCreateInfo view_info{};
     view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view_info.image = vk_tex.image();
-    view_info.viewType = to_vk_view_type(desc.dimension);
+    view_info.viewType = to_vk_view_type(dimension);
     view_info.format = m_vk_format;
     view_info.components = {
         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -68,16 +93,16 @@ bool VulkanTextureView::create_from_desc(const TextureViewDesc& desc) {
     }
 
     view_info.subresourceRange.aspectMask = aspect;
-    view_info.subresourceRange.baseMipLevel = desc.base_mip;
+    view_info.subresourceRange.baseMipLevel = base_mip;
     view_info.subresourceRange.levelCount = mip_count;
-    view_info.subresourceRange.baseArrayLayer = desc.base_layer;
+    view_info.subresourceRange.baseArrayLayer = base_layer;
     view_info.subresourceRange.layerCount = layer_count;
 
     if (!NF_VK_CHECK(vkCreateImageView(m_device->context().device, &view_info,
                                        nullptr, &m_view))) {
         NF_LOG_ERROR(LogCategory::RHI, "Failed to create texture view (dim={}, aspect={}, mips {}:{}, layers {}:{})",
-                     static_cast<int>(desc.dimension), static_cast<int>(desc.aspect),
-                     desc.base_mip, mip_count, desc.base_layer, layer_count);
+                     static_cast<int>(dimension), static_cast<int>(desc.aspect),
+                     base_mip, mip_count, desc.base_layer, layer_count);
         return false;
     }
 
@@ -244,7 +269,10 @@ VulkanDescriptorSet::VulkanDescriptorSet(VulkanDevice* device,
         return;
     }
 
-    std::array<VkDescriptorPoolSize, 4> pool_sizes{};
+    // One pool-size entry per distinct descriptor type. The array has room
+    // for more types than the RHI currently defines, and the count is
+    // bounded: writing past the end of the array would corrupt the stack.
+    std::array<VkDescriptorPoolSize, 8> pool_sizes{};
     u32 pool_size_count = 0;
 
     for (const DescriptorBinding& b : layout.bindings()) {
@@ -258,6 +286,12 @@ VulkanDescriptorSet::VulkanDescriptorSet(VulkanDevice* device,
             }
         }
         if (!found) {
+            if (pool_size_count >= static_cast<u32>(pool_sizes.size())) {
+                NF_LOG_ERROR(LogCategory::RHI,
+                    "Descriptor layout declares more than {} distinct descriptor types",
+                    pool_sizes.size());
+                return;
+            }
             pool_sizes[pool_size_count].type = type;
             pool_sizes[pool_size_count].descriptorCount = b.count;
             ++pool_size_count;
@@ -340,7 +374,10 @@ VulkanDescriptorAllocator::~VulkanDescriptorAllocator() {
 }
 
 bool VulkanDescriptorAllocator::create_pool_for_layout(const VulkanDescriptorSetLayout& layout, Pool& out) {
-    std::array<VkDescriptorPoolSize, 4> pool_sizes{};
+    // Same bound as the 1:1 descriptor set: one entry per distinct
+    // descriptor type, with room to spare and a hard limit so a layout
+    // with more types than the array holds cannot write past its end.
+    std::array<VkDescriptorPoolSize, 8> pool_sizes{};
     u32 pool_size_count = 0;
     for (const DescriptorBinding& b : layout.bindings()) {
         const VkDescriptorType type = to_vk_descriptor_type(b.type);
@@ -353,6 +390,12 @@ bool VulkanDescriptorAllocator::create_pool_for_layout(const VulkanDescriptorSet
             }
         }
         if (!found) {
+            if (pool_size_count >= static_cast<u32>(pool_sizes.size())) {
+                NF_LOG_ERROR(LogCategory::RHI,
+                    "Descriptor layout declares more than {} distinct descriptor types",
+                    pool_sizes.size());
+                return false;
+            }
             pool_sizes[pool_size_count].type = type;
             pool_sizes[pool_size_count].descriptorCount = b.count * m_sets_per_pool;
             ++pool_size_count;
@@ -510,18 +553,28 @@ VulkanUploadContext::~VulkanUploadContext() {
     }
 }
 
-void VulkanUploadContext::ensure_began() {
-    if (m_began) return;
+bool VulkanUploadContext::ensure_began() {
+    if (m_began) return true;
+    if (m_submitted) {
+        // The command buffer was already submitted and the GPU may still be
+        // reading it: recording into it again is undefined behaviour, and
+        // vkBeginCommandBuffer on a buffer in the executable state fails.
+        // The context is single-use — create a new one for the next batch.
+        NF_LOG_ERROR(LogCategory::RHI,
+            "UploadContext cannot record after submit() — use a fresh context");
+        return false;
+    }
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     NF_VK_CHECK(vkBeginCommandBuffer(m_cmd, &begin_info));
     m_began = true;
+    return true;
 }
 
 void VulkanUploadContext::copy_buffer(const Buffer& src, Buffer& dst,
                                       usize src_offset, usize dst_offset, usize size) {
-    ensure_began();
+    if (!ensure_began()) return;
     const auto& vk_src = static_cast<const VulkanBuffer&>(src);
     const auto& vk_dst = static_cast<const VulkanBuffer&>(dst);
     VkBufferCopy region{};
@@ -534,10 +587,17 @@ void VulkanUploadContext::copy_buffer(const Buffer& src, Buffer& dst,
 void VulkanUploadContext::copy_buffer_to_texture(const Buffer& src, Texture& dst,
                                                  usize buffer_offset,
                                                  u32 tex_x, u32 tex_y, u32 tex_w, u32 tex_h) {
-    ensure_began();
+    if (!ensure_began()) return;
     const auto& vk_src = static_cast<const VulkanBuffer&>(src);
     auto& vk_dst = static_cast<VulkanTexture&>(dst);
-    const VkImageAspectFlags aspect = aspect_for_format(vk_dst.format());
+    // A VkBufferImageCopy's aspectMask must name exactly ONE aspect
+    // (VUID-VkBufferImageCopy-aspectMask-00212). A combined depth/stencil
+    // format therefore copies the DEPTH aspect only — the same narrowing
+    // the command-buffer path does.
+    VkImageAspectFlags aspect = aspect_for_format(vk_dst.format());
+    if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
+        aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
     const VkImageLayout old_layout = vk_dst.layout();
     if (old_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
         // Transition UNDEFINED / SHADER_READ etc -> TRANSFER_DST
@@ -588,18 +648,23 @@ void VulkanUploadContext::copy_buffer_to_texture(const Buffer& src, Texture& dst
 }
 
 std::unique_ptr<Fence> VulkanUploadContext::submit() {
-    if (!m_began) {
-        NF_LOG_WARN(LogCategory::RHI, "UploadContext::submit with no work recorded");
-        auto fence = m_device->create_fence(false);
-        // Signal immediately so caller waiting doesn't hang
-        return fence;
-    }
     if (m_submitted) {
         NF_LOG_ERROR(LogCategory::RHI, "UploadContext::submit called twice");
         return nullptr;
     }
+    if (!m_began) {
+        NF_LOG_WARN(LogCategory::RHI, "UploadContext::submit with no work recorded");
+        // Signal immediately so caller waiting doesn't hang: the fence is
+        // created already signalled, because Vulkan has no way to signal a
+        // fence that no submission will ever signal. An unsignalled fence
+        // would make `fence->wait()` block forever.
+        return m_device->create_fence(true);
+    }
     NF_VK_CHECK(vkEndCommandBuffer(m_cmd));
     m_began = false;
+    // The context is consumed by this submit: the command buffer is now in
+    // the executable state and the GPU may still be reading it, so it must
+    // not be reset or re-recorded. ensure_began() refuses further work.
     m_submitted = true;
 
     auto fence = m_device->create_fence(false);

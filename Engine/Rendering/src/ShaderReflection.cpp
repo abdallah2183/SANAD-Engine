@@ -1,6 +1,7 @@
 #include <NF/Rendering/ShaderReflection.hpp>
 #include <NF/Core/Logger.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <unordered_map>
 
@@ -38,6 +39,16 @@ struct TypeInfo {
     // For Array: element type, length (0 if runtime)
     u32 element_type = 0;
     u32 length = 0;
+    // For Array: the id of the constant that gives the element count. The
+    // count is NOT a literal in the instruction — it is the id of an
+    // OpConstant — so it is resolved after the whole module is parsed.
+    u32 length_const_id = 0;
+    // For Matrix: the column type and the column count. The count is the
+    // id of a constant as well (a mat4 is four columns, and that "four" is
+    // declared as a constant), so it is resolved after parsing.
+    u32 column_type = 0;
+    u32 column_count = 0;
+    u32 column_count_const_id = 0;
     // For Struct: member types
     std::vector<u32> member_types;
     // For Image: sampled type etc. (not needed for simple case)
@@ -86,6 +97,15 @@ static u32 type_size_bytes(u32 type_id, const std::unordered_map<u32, TypeInfo>&
             // For now, assume element size already accounts for alignment
             return elem_size * ti.length;
         }
+        case TypeKind::Matrix: {
+            // A matN is N columns of the column type. A mat4 of floats is
+            // four columns of four floats = 64 bytes. The column type is a
+            // vector, whose size already accounts for the std140/std430
+            // padding rules, so the matrix size is just the column size
+            // times the column count.
+            const u32 column_size = type_size_bytes(ti.column_type, types);
+            return column_size * ti.column_count;
+        }
         case TypeKind::Struct: {
             u32 size = 0;
             for (u32 mid : ti.member_types) {
@@ -133,6 +153,10 @@ ReflectionData reflect_spirv(std::span<const u8> spirv, rhi::ShaderStage stage) 
     std::unordered_map<u32, Decoration> decorations;
     std::unordered_map<u32, TypeInfo> types;
     std::unordered_map<u32, std::string> names;
+    // Constant values, keyed by their result id. Array lengths and matrix
+    // column counts are the id of a constant, not a literal, so the
+    // constant has to be looked up to learn how many elements there are.
+    std::unordered_map<u32, u32> constants;
     struct VariableInfo { u32 id; u32 type_id; u32 storage_class; };
     std::unordered_map<u32, VariableInfo> variables;
     // For OpMemberDecorate offset tracking (for push constant size via offsets)
@@ -230,8 +254,10 @@ ReflectionData reflect_spirv(std::span<const u8> spirv, rhi::ShaderStage stage) 
                 if (wc >= 4) { TypeInfo ti; ti.kind = TypeKind::Vector; ti.id = ops[0]; ti.component_type = ops[1]; ti.component_count = ops[2]; types[ti.id] = ti; }
                 break;
             }
-            case 24: { // OpTypeMatrix - treat as vector for size
-                if (wc >= 4) { TypeInfo ti; ti.kind = TypeKind::Matrix; ti.id = ops[0]; types[ti.id] = ti; }
+            case 24: { // OpTypeMatrix
+                // Result <id>, column type <id>, column count <id>. The
+                // column count is the id of a constant, not a literal.
+                if (wc >= 4) { TypeInfo ti; ti.kind = TypeKind::Matrix; ti.id = ops[0]; ti.column_type = ops[1]; ti.column_count_const_id = ops[2]; types[ti.id] = ti; }
                 break;
             }
             case 25: { // OpTypeImage
@@ -247,15 +273,12 @@ ReflectionData reflect_spirv(std::span<const u8> spirv, rhi::ShaderStage stage) 
                 break;
             }
             case 28: { // OpTypeArray
-                if (wc >= 4) { TypeInfo ti; ti.kind = TypeKind::Array; ti.id = ops[0]; ti.element_type = ops[1]; ti.length = ops[2]; // ops[2] is id of constant, not literal
-                    // Need to resolve constant value - for now, try to find it as literal? In SPIR-V, length is an ID, not literal.
-                    // For our shaders, array length is 1, and the constant is defined earlier. We need to look up constant value.
-                    // Simplify: if the length id is a constant, we need to find its value. For now, assume count 1 if we can't resolve.
-                    // We'll try to find the constant's value in a separate map, but we haven't tracked constants.
-                    // For now, set length to 1 as default for descriptor arrays (most are 1).
-                    // A more accurate approach would be to track OpConstant values.
-                    ti.length = 1; // default
-                    // Try to see if ops[2] is a known constant id with value 1 - we could look up if we tracked constants
+                // Result <id>, element type <id>, length <id>. The length is
+                // the id of a constant, not a literal: the constant is
+                // resolved after the whole module has been parsed (it may
+                // be declared after the type that uses it).
+                if (wc >= 4) { TypeInfo ti; ti.kind = TypeKind::Array; ti.id = ops[0]; ti.element_type = ops[1]; ti.length_const_id = ops[2];
+                    ti.length = 1; // fallback until the constant is resolved
                     types[ti.id] = ti;
                 }
                 break;
@@ -271,8 +294,13 @@ ReflectionData reflect_spirv(std::span<const u8> spirv, rhi::ShaderStage stage) 
                 if (wc >= 4) { TypeInfo ti; ti.kind = TypeKind::Pointer; ti.id = ops[0]; ti.storage_class = ops[1]; ti.pointee_type = ops[2]; types[ti.id] = ti; }
                 break;
             }
-            case 43: { // OpConstant - track for array lengths
-                // We could store constant values, but for now ignore
+            case 43: { // OpConstant - track for array lengths and matrix columns
+                // Result type <id>, result <id>, value <literal>. Only the
+                // single-word integer form is tracked — that is what array
+                // lengths and matrix column counts are.
+                if (wc >= 4) {
+                    constants[ops[1]] = ops[2];
+                }
                 break;
             }
             case 59: { // OpVariable
@@ -290,6 +318,25 @@ ReflectionData reflect_spirv(std::span<const u8> spirv, rhi::ShaderStage stage) 
         }
 
         idx += wc;
+    }
+
+    // Resolve the counts that are given as constant ids. This has to happen
+    // after the whole module is parsed: a constant may be declared after
+    // the type that uses it, and the types section of a SPIR-V module puts
+    // the constants after the types.
+    for (auto& [type_id, ti] : types) {
+        (void)type_id;
+        if (ti.kind == TypeKind::Array) {
+            auto it = constants.find(ti.length_const_id);
+            if (it != constants.end() && it->second > 0) {
+                ti.length = it->second;
+            }
+        } else if (ti.kind == TypeKind::Matrix) {
+            auto it = constants.find(ti.column_count_const_id);
+            if (it != constants.end() && it->second > 0) {
+                ti.column_count = it->second;
+            }
+        }
     }
 
     // Second pass: for each variable, determine if it's a descriptor or push constant or vertex input
@@ -410,6 +457,20 @@ ReflectionData reflect_spirv(std::span<const u8> spirv, rhi::ShaderStage stage) 
     }
 
     result.valid = true;
+    // The variables live in an unordered_map, so the reflected bindings came
+    // out in hash order. The descriptor set layout is built from that list,
+    // and a layout whose binding order changes from run to run makes every
+    // pipeline cache miss for no reason — so the bindings are sorted by
+    // (set, binding), which is the order the shader declares them in.
+    std::sort(result.bindings.begin(), result.bindings.end(),
+              [](const ReflectedBinding& a, const ReflectedBinding& b) {
+                  if (a.set != b.set) return a.set < b.set;
+                  return a.binding < b.binding;
+              });
+    std::sort(result.vertex_inputs.begin(), result.vertex_inputs.end(),
+              [](const ReflectedVertexInput& a, const ReflectedVertexInput& b) {
+                  return a.location < b.location;
+              });
     return result;
 }
 

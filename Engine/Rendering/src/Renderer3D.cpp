@@ -2444,8 +2444,12 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             0.0f,
         };
         gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(tonemap_push), &tonemap_push);
-        gcmd.set_viewport(0, 0, m_width, m_height);
-        gcmd.set_scissor(0, 0, m_width, m_height);
+        // The OUTPUT's size, not the renderer's: this pass fills the target
+        // it was given, which is not necessarily the size the renderer
+        // itself runs at (the editor renders the viewport panel at its own
+        // resolution into a target of another one).
+        gcmd.set_viewport(0, 0, out_target.width(), out_target.height());
+        gcmd.set_scissor(0, 0, out_target.width(), out_target.height());
         gcmd.draw(3);
         gcmd.end_render_pass();
     };

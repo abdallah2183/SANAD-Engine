@@ -32,6 +32,12 @@ void reset_device_lost() { g_device_lost.store(false, std::memory_order_relaxed)
 std::unique_ptr<IGraphicsDevice> create_device() {
 #if defined(NF_VULKAN_ENABLED)
     NF_LOG_INFO(LogCategory::RHI, "Creating Vulkan graphics device");
+    // A new device is a new chance: the previous one's loss says nothing
+    // about this one. The latch is process-global, so without this reset one
+    // device loss (in one test, in one editor session) would poison every
+    // later device in the same process — the RHI suite creates many devices
+    // in one binary, and every one of them would report "lost".
+    reset_device_lost();
     auto device = std::make_unique<VulkanDevice>();
     return device;
 #else

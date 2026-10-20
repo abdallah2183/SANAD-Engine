@@ -19,7 +19,8 @@ VulkanRenderPass::VulkanRenderPass(VulkanDevice* device, const RenderPassDesc& d
       m_depth_format(desc.depth_format),
       m_has_depth(desc.has_depth),
       m_present_source(desc.present_source),
-      m_color_load(desc.color_load) {
+      m_color_load(desc.color_load),
+      m_depth_load(desc.depth_load) {
     m_alive.attach(m_device);
 
     NF_ASSERT(m_device, "VulkanRenderPass requires a device");
@@ -47,6 +48,20 @@ VulkanRenderPass::VulkanRenderPass(VulkanDevice* device, const RenderPassDesc& d
     const bool can_present = m_present_source && (m_device->context().surface != VK_NULL_HANDLE);
     const VkImageLayout present_or_attachment = can_present ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
                                                             : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // The layout the attachments really end in. It is stored because
+    // final_color_layout() has to report what the pass was built with — a
+    // headless device has no surface, so a present_source pass still ends
+    // in COLOR_ATTACHMENT_OPTIMAL, not PRESENT_SRC.
+    m_final_color_layout = present_or_attachment;
+    // ...and the layout they are expected to be in when the pass starts.
+    // The render graph transitions a colour attachment to
+    // COLOR_ATTACHMENT_OPTIMAL before the pass that draws into it, so that
+    // is what the pass has to declare: an initialLayout of UNDEFINED
+    // contradicts the barrier the graph emits, and the two then tell the
+    // driver different stories about where the image is.
+    m_initial_color_layout = (m_color_load == RenderPassDesc::ColorLoad::Load)
+                                 ? present_or_attachment
+                                 : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     for (u32 i = 0; i < m_color_attachments.size(); ++i) {
         VkAttachmentDescription attachment{};
@@ -58,13 +73,15 @@ VulkanRenderPass::VulkanRenderPass(VulkanDevice* device, const RenderPassDesc& d
         attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        // The graph transitions the attachment to COLOR_ATTACHMENT_OPTIMAL
+        // before the pass begins (RenderGraph::execute), so that is the
+        // layout the image is in when the pass starts. Declaring UNDEFINED
+        // here would tell the driver the contents are garbage — and with
+        // loadOp=LOAD it would silently load garbage.
         // With Load, the pass promises to read the attachment's previous
         // contents — initialLayout must therefore declare the layout those
         // contents live in (mirroring finalLayout), exactly like DepthLoad.
-        // UNDEFINED+LOAD is legal Vulkan but reads garbage.
-        attachment.initialLayout = (m_color_load == RenderPassDesc::ColorLoad::Load)
-                                       ? present_or_attachment
-                                       : VK_IMAGE_LAYOUT_UNDEFINED;
+        attachment.initialLayout = m_initial_color_layout;
         attachment.finalLayout = present_or_attachment;
 
         VkAttachmentReference ref{};
@@ -86,13 +103,11 @@ VulkanRenderPass::VulkanRenderPass(VulkanDevice* device, const RenderPassDesc& d
         depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-        // With Load, the pass promises to read the attachment's previous
-        // contents — initialLayout must therefore declare the layout those
-        // contents live in. UNDEFINED+LOAD is legal Vulkan but reads garbage.
-        depth_attachment.initialLayout =
-            desc.depth_load == RenderPassDesc::DepthLoad::Load
-                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED;
+        // The depth attachment is in DEPTH_STENCIL_ATTACHMENT_OPTIMAL when
+        // the pass starts, in both load modes: the graph transitions the
+        // depth target to that layout before the pass, and UNDEFINED here
+        // would contradict it (and throw the prepass' depth away).
+        depth_attachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
         depth_ref.attachment = static_cast<u32>(attachments.size());
@@ -212,6 +227,30 @@ VulkanFramebuffer::VulkanFramebuffer(VulkanDevice* device, const VulkanRenderPas
     m_width = first->width();
     m_height = first->height();
 
+    // Every attachment of a framebuffer has to have the same dimensions:
+    // the framebuffer has ONE size, and an attachment of a different size
+    // is out of range for it. The driver rejects the framebuffer, but the
+    // error it reports does not say WHICH attachment was wrong, so the
+    // check is made here where the culprit can be named.
+    for (Texture* tex : color_attachments) {
+        const auto* vk_tex = static_cast<const VulkanTexture*>(tex);
+        if (vk_tex->width() != m_width || vk_tex->height() != m_height) {
+            NF_LOG_ERROR(LogCategory::RHI,
+                "Framebuffer attachment is {}x{} but the framebuffer is {}x{}",
+                vk_tex->width(), vk_tex->height(), m_width, m_height);
+            return;
+        }
+    }
+    if (depth_attachment) {
+        const auto* vk_tex = static_cast<const VulkanTexture*>(depth_attachment);
+        if (vk_tex->width() != m_width || vk_tex->height() != m_height) {
+            NF_LOG_ERROR(LogCategory::RHI,
+                "Framebuffer depth attachment is {}x{} but the framebuffer is {}x{}",
+                vk_tex->width(), vk_tex->height(), m_width, m_height);
+            return;
+        }
+    }
+
     VkFramebufferCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     create_info.renderPass = pass.handle();
@@ -324,8 +363,10 @@ VulkanPipeline::VulkanPipeline(VulkanDevice* device, const PipelineDesc& desc)
     input_assembly.primitiveRestartEnable = VK_FALSE;
 
     // --- Tessellation (unused) --------------------------------------------
-    VkPipelineTessellationStateCreateInfo tessellation{};
-    tessellation.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+    // There is no tessellation stage, so the pipeline must NOT declare a
+    // tessellation state: a pipeline without a tessellation shader may not
+    // have pTessellationState set (the state is only meaningful together
+    // with the stage, and a patch count of zero is not a valid state).
 
     // --- Viewport / scissor ------------------------------------------------
     // Dynamic state is used so a single pipeline can target any swapchain size
@@ -425,6 +466,9 @@ VulkanPipeline::VulkanPipeline(VulkanDevice* device, const PipelineDesc& desc)
         layout_info.setLayoutCount = 0;
         layout_info.pSetLayouts = nullptr;
     }
+    // Remembered so the command buffer can check that the sets it binds
+    // were allocated from the layout this pipeline was built against.
+    m_set_layout = set_layout;
 
     if (desc.push_constant_size > 0) {
         // Clamp to the guaranteed minimum; larger blocks are not portable.
@@ -449,6 +493,9 @@ VulkanPipeline::VulkanPipeline(VulkanDevice* device, const PipelineDesc& desc)
         layout_info.pushConstantRangeCount = 1;
         layout_info.pPushConstantRanges = &push_range;
     }
+    // Remembered so push_constants() can be checked against the range the
+    // pipeline layout actually declares.
+    m_push_range = push_range;
 
     if (!NF_VK_CHECK(vkCreatePipelineLayout(vk_device, &layout_info, nullptr, &m_layout))) {
         NF_LOG_ERROR(LogCategory::RHI, "Failed to create pipeline layout");
@@ -465,7 +512,8 @@ VulkanPipeline::VulkanPipeline(VulkanDevice* device, const PipelineDesc& desc)
     pipeline_info.pStages = stages.data();
     pipeline_info.pVertexInputState = &vertex_input;
     pipeline_info.pInputAssemblyState = &input_assembly;
-    pipeline_info.pTessellationState = &tessellation;
+    // Null: this pipeline has no tessellation stage (see above).
+    pipeline_info.pTessellationState = nullptr;
     pipeline_info.pViewportState = &viewport_state;
     pipeline_info.pRasterizationState = &rasterizer;
     pipeline_info.pMultisampleState = &multisampling;

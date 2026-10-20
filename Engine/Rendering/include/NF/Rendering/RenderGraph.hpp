@@ -71,6 +71,14 @@ public:
 
     // Imports an externally owned texture (e.g. swapchain image, offscreen target
     // created outside the graph). The graph never destroys it.
+    //
+    // An import is keyed by NAME: importing a name that is already imported
+    // reuses that resource (the handle stays the same, the texture it points
+    // at is updated) instead of appending a new one. The graph is rebuilt
+    // every frame, and the same targets are imported on every frame — the
+    // append version grew the resource list without bound and made
+    // compile() re-scan it every frame. Two different textures must
+    // therefore be imported under different names.
     RGTextureHandle import_texture(const std::string& name, rhi::Texture* external);
 
     // Adds a pass. Returns handle for dependency queries.

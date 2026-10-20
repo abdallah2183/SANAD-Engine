@@ -1,5 +1,6 @@
 #include <NF/Rendering/ShaderManager.hpp>
 #include <NF/Rendering/ShaderReflection.hpp>
+#include <NF/Core/FileSystem.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 
@@ -61,8 +62,23 @@ bool ShaderManager::compile_glsl_to_spirv(const std::string& glsl_path, rhi::Sha
         default: stage_flag = "frag"; break;
     }
 
-    // Output to temp file
-    std::filesystem::path tmp = std::filesystem::temp_directory_path() / "nf_shader_compile.spv";
+    // Output to a scratch file.
+    //
+    // The scratch directory is the one the process may actually write to: the
+    // system temp directory is denied to a process under an application-control
+    // policy or in a sandbox, and glslc then fails to write its output and the
+    // compile is reported as a shader error that has nothing to do with the
+    // shader. The name carries the process id, because two processes (or two
+    // threads) compiling at the same time wrote the same file.
+    const auto pid = static_cast<unsigned long>(
+#ifdef _WIN32
+        _getpid()
+#else
+        getpid()
+#endif
+    );
+    std::filesystem::path tmp = std::filesystem::path(nf::FileSystem::scratch_directory()) /
+                                ("nf_shader_compile_" + std::to_string(pid) + ".spv");
     std::string inner = "\"" + glslc + "\" -fshader-stage=" + stage_flag + " \"" + glsl_path + "\" -o \"" + tmp.string() + "\" 2>&1";
 #ifdef _WIN32
     // _popen runs the string via `cmd /c`, which strips the FIRST and LAST

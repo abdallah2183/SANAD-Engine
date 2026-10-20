@@ -162,7 +162,18 @@ void VulkanBuffer::update(const void* data, usize offset, usize size) {
     NF_ASSERT(data, "update() called with null data");
     NF_ASSERT(offset + size <= m_size, "update() range exceeds buffer size");
 
+    // The range check has to survive Release: NF_ASSERT compiles out under
+    // NDEBUG, so in a shipping build an out-of-range upload silently
+    // scribbles past the end of the buffer (or past the end of the mapped
+    // memory). The check below is the always-on one — it logs and refuses
+    // the upload rather than aborting the process.
     if (!data || size == 0) return;
+    if (offset > m_size || size > m_size - offset) {
+        NF_LOG_ERROR(LogCategory::RHI,
+            "Buffer::update range {}..{} exceeds the buffer size {}",
+            offset, offset + size, m_size);
+        return;
+    }
 
     // Fast path: host-visible memory, write straight into it.
     if (m_memory_usage != MemoryUsage::GPUOnly) {

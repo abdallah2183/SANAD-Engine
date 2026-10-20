@@ -55,6 +55,7 @@ VulkanTexture::VulkanTexture(VulkanDevice* device, const TextureDesc& desc)
       m_format(desc.format),
       m_width(desc.width),
       m_height(desc.height),
+      m_depth(desc.depth > 0 ? desc.depth : 1),
       m_mip_levels(desc.mip_levels > 0 ? desc.mip_levels : 1),
       m_owned(true) {
     m_alive.attach(m_device);
@@ -67,10 +68,15 @@ VulkanTexture::VulkanTexture(VulkanDevice* device, const TextureDesc& desc)
 
     VkImageCreateInfo image_info{};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.extent = { desc.width, desc.height, 1 };
+    // A depth above one means a 3D image: the texture description's depth
+    // is honoured instead of being silently dropped, so a 3D texture is
+    // created as one (and viewed as one).
+    const bool is_3d = m_depth > 1;
+    image_info.imageType = is_3d ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+    image_info.extent = { desc.width, desc.height, m_depth };
     image_info.mipLevels = m_mip_levels;
-    image_info.arrayLayers = desc.array_layers > 0 ? desc.array_layers : 1;
+    // A 3D image has no array layers: the depth IS the third dimension.
+    image_info.arrayLayers = (is_3d || desc.array_layers == 0) ? 1 : desc.array_layers;
     image_info.format = m_vk_format;
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -147,12 +153,16 @@ VulkanTexture::~VulkanTexture() {
 }
 
 bool VulkanTexture::create_view(bool is_depth) {
-    const VkImageAspectFlags aspect = is_depth ? (VK_IMAGE_ASPECT_DEPTH_BIT) : VK_IMAGE_ASPECT_COLOR_BIT;
+    // A combined depth/stencil format needs BOTH aspects: the render pass
+    // uses stencil load/store ops, and a view that exposes the depth aspect
+    // only makes the stencil attachment of that framebuffer incomplete.
+    const VkImageAspectFlags aspect = is_depth ? aspect_for(m_vk_format)
+                                                : VK_IMAGE_ASPECT_COLOR_BIT;
 
     VkImageViewCreateInfo view_info{};
     view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view_info.image = m_image;
-    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.viewType = is_3d() ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D;
     view_info.format = m_vk_format;
     view_info.components = {
         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,

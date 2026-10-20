@@ -340,6 +340,19 @@ void VulkanDevice::shutdown() {
         vkDeviceWaitIdle(m_ctx.device);
     }
 
+    // Device-level objects (buffers, textures, pipelines, framebuffers) must
+    // be destroyed before the device is: destroying a device with live
+    // children is undefined behaviour, and the driver only finds out when
+    // it is too late to say which object was the problem. The counter is
+    // the engine's own record of what is still alive, so the warning can
+    // name how many objects leaked.
+    const u32 alive = m_alive_objects.load(std::memory_order_relaxed);
+    if (alive != 0) {
+        NF_LOG_WARN(LogCategory::RHI,
+            "VulkanDevice::shutdown with {} RHI object(s) still alive — they were not "
+            "destroyed before the device", alive);
+    }
+
     if (m_ctx.command_pool && device_usable && vkDestroyCommandPool) {
         vkDestroyCommandPool(m_ctx.device, m_ctx.command_pool, nullptr);
         m_ctx.command_pool = VK_NULL_HANDLE;
@@ -598,8 +611,14 @@ bool VulkanDevice::create_logical_device() {
                                                   &present_support);
         }
 
-        if (supports_graphics) graphics_family = i;
-        if (present_support)   present_family = i;
+        // The FIRST capable family wins, not the last one: a discrete GPU
+        // often exposes several graphics-capable families (a "graphics"
+        // family plus a "compute" family that also supports graphics), and
+        // taking the last one silently picks a queue the driver treats as a
+        // secondary one — slower transfers, and on some drivers a different
+        // present path.
+        if (supports_graphics && graphics_family == u32_max) graphics_family = i;
+        if (present_support && present_family == u32_max)   present_family = i;
 
         // Prefer a single family that does both — cheaper cross-queue sync.
         if (supports_graphics && present_support) {
@@ -645,6 +664,31 @@ bool VulkanDevice::create_logical_device() {
     // extension is unavailable.
     std::vector<const char*> extensions;
     if (m_ctx.surface != VK_NULL_HANDLE) {
+        // The swapchain extension is not guaranteed to exist. Requesting a
+        // missing extension makes vkCreateDevice fail with a message that
+        // names nothing, so the availability is checked here and the error
+        // says exactly which extension is missing.
+        u32 device_ext_count = 0;
+        vkEnumerateDeviceExtensionProperties(m_ctx.physical_device, nullptr,
+                                             &device_ext_count, nullptr);
+        std::vector<VkExtensionProperties> device_exts(device_ext_count);
+        if (device_ext_count > 0) {
+            vkEnumerateDeviceExtensionProperties(m_ctx.physical_device, nullptr,
+                                                 &device_ext_count, device_exts.data());
+        }
+        bool has_swapchain = false;
+        for (const auto& ext : device_exts) {
+            if (std::strcmp(ext.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) {
+                has_swapchain = true;
+                break;
+            }
+        }
+        if (!has_swapchain) {
+            NF_LOG_ERROR(LogCategory::RHI,
+                "Device extension {} is not available — a windowed device cannot be created",
+                VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            return false;
+        }
         extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
 
@@ -996,36 +1040,90 @@ void VulkanDevice::update_descriptor_set(const DescriptorSet& set,
         vw.descriptorCount = 1;
         vw.descriptorType = to_vk_descriptor_type(w.type);
 
-        if (w.type == DescriptorType::UniformBuffer && w.buffer) {
-            const auto* vk_buf = static_cast<const VulkanBuffer*>(w.buffer);
-            VkDescriptorBufferInfo info{};
-            info.buffer = vk_buf->handle();
-            info.offset = static_cast<VkDeviceSize>(w.buffer_offset);
-            info.range = w.buffer_range == 0
-                ? VK_WHOLE_SIZE
-                : static_cast<VkDeviceSize>(w.buffer_range);
-            buffer_infos.push_back(info);
-            vw.pBufferInfo = &buffer_infos.back();
-        }
-
-        if ((w.type == DescriptorType::SampledImage ||
-             w.type == DescriptorType::SampledImageSeparate) && w.texture_view) {
-            const auto* vk_tv = static_cast<const VulkanTextureView*>(w.texture_view);
-            VkDescriptorImageInfo info{};
-            info.imageView = vk_tv->view();
-            info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            info.sampler = w.sampler
-                ? static_cast<const VulkanSampler*>(w.sampler)->handle()
-                : VK_NULL_HANDLE;
-            image_infos.push_back(info);
-            vw.pImageInfo = &image_infos.back();
-        }
-
-        if (w.type == DescriptorType::Sampler && w.sampler) {
-            VkDescriptorImageInfo info{};
-            info.sampler = static_cast<const VulkanSampler*>(w.sampler)->handle();
-            image_infos.push_back(info);
-            vw.pImageInfo = &image_infos.back();
+        // Each descriptor type has its own rules about which of the three
+        // resources it needs. Writing an incomplete or contradictory
+        // combination is a validation error, and on some drivers it leaves
+        // the descriptor in an undefined state that the shader then reads.
+        // The write is refused (and reported) instead of being forwarded.
+        switch (w.type) {
+            case DescriptorType::UniformBuffer: {
+                if (!w.buffer) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                        "Descriptor write for binding {} is a uniform buffer without a buffer",
+                        w.binding);
+                    continue;
+                }
+                const auto* vk_buf = static_cast<const VulkanBuffer*>(w.buffer);
+                VkDescriptorBufferInfo info{};
+                info.buffer = vk_buf->handle();
+                info.offset = static_cast<VkDeviceSize>(w.buffer_offset);
+                info.range = w.buffer_range == 0
+                    ? VK_WHOLE_SIZE
+                    : static_cast<VkDeviceSize>(w.buffer_range);
+                buffer_infos.push_back(info);
+                vw.pBufferInfo = &buffer_infos.back();
+                break;
+            }
+            case DescriptorType::SampledImage: {
+                // A combined image sampler needs BOTH: the sampler of a
+                // COMBINED_IMAGE_SAMPLER must not be null.
+                if (!w.texture_view || !w.sampler) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                        "Descriptor write for binding {} is a combined image sampler "
+                        "without a view or without a sampler", w.binding);
+                    continue;
+                }
+                const auto* vk_tv = static_cast<const VulkanTextureView*>(w.texture_view);
+                VkDescriptorImageInfo info{};
+                info.imageView = vk_tv->view();
+                info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                info.sampler = static_cast<const VulkanSampler*>(w.sampler)->handle();
+                image_infos.push_back(info);
+                vw.pImageInfo = &image_infos.back();
+                break;
+            }
+            case DescriptorType::SampledImageSeparate: {
+                // A sampled image without a sampler must NOT carry one: the
+                // sampler of a SAMPLED_IMAGE descriptor has to be null.
+                if (!w.texture_view) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                        "Descriptor write for binding {} is a sampled image without a view",
+                        w.binding);
+                    continue;
+                }
+                if (w.sampler) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                        "Descriptor write for binding {} is a sampled image WITH a sampler — "
+                        "a separate sampled image must not have one", w.binding);
+                    continue;
+                }
+                const auto* vk_tv = static_cast<const VulkanTextureView*>(w.texture_view);
+                VkDescriptorImageInfo info{};
+                info.imageView = vk_tv->view();
+                info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                info.sampler = VK_NULL_HANDLE;
+                image_infos.push_back(info);
+                vw.pImageInfo = &image_infos.back();
+                break;
+            }
+            case DescriptorType::Sampler: {
+                if (!w.sampler) {
+                    NF_LOG_ERROR(LogCategory::RHI,
+                        "Descriptor write for binding {} is a sampler without a sampler",
+                        w.binding);
+                    continue;
+                }
+                VkDescriptorImageInfo info{};
+                info.sampler = static_cast<const VulkanSampler*>(w.sampler)->handle();
+                image_infos.push_back(info);
+                vw.pImageInfo = &image_infos.back();
+                break;
+            }
+            default:
+                NF_LOG_ERROR(LogCategory::RHI,
+                    "Descriptor write for binding {} has an unknown descriptor type",
+                    w.binding);
+                continue;
         }
 
         vk_writes.push_back(vw);

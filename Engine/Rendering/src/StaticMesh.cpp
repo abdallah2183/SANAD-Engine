@@ -17,6 +17,11 @@ MeshLOD& StaticMesh::lod(u32 idx) {
 }
 
 const MeshLOD& StaticMesh::lod(u32 idx) const {
+    // The const overload cannot grow the LOD list (the non-const one does),
+    // so an out-of-range index returns a shared empty LOD instead of
+    // reading past the end of the vector.
+    static const MeshLOD empty{};
+    if (idx >= m_lods.size()) return empty;
     return m_lods[idx];
 }
 
@@ -102,6 +107,22 @@ bool StaticMesh::upload(rhi::IGraphicsDevice& device) {
     m_vertex_buffers.reserve(m_lods.size());
     m_index_buffers.reserve(m_lods.size());
 
+    // One upload context for the whole mesh, ONE submit at the end.
+    // Buffer::update() on a GPU-only buffer stages the copy and ends in
+    // vkQueueWaitIdle (Device_Vk.cpp), so uploading the vertex and the
+    // index buffer of every LOD that way stalls the GPU twice per LOD. The
+    // upload context copies on the GPU and returns a fence instead, which
+    // is what the header promises ("no vkQueueWaitIdle in hot path").
+    auto upload = device.create_upload_context();
+    if (!upload) {
+        NF_LOG_ERROR(LogCategory::Core, "StaticMesh '{}': no upload context available", m_name);
+        return false;
+    }
+    // The staging buffers have to outlive the copy: the GPU reads them
+    // asynchronously, so they are kept alive until the fence has signalled.
+    std::vector<std::unique_ptr<rhi::Buffer>> staging_buffers;
+    staging_buffers.reserve(m_lods.size() * 2);
+
     for (size_t i = 0; i < m_lods.size(); ++i) {
         auto& lod = m_lods[i];
         if (lod.vertices.empty() || lod.indices.empty()) {
@@ -137,7 +158,6 @@ bool StaticMesh::upload(rhi::IGraphicsDevice& device) {
         vb_desc.memory = rhi::MemoryUsage::GPUOnly;
         auto vb = device.create_buffer(vb_desc);
         if (!vb) return false;
-        vb->update(lod.vertices.data(), 0, vb_size);
 
         rhi::BufferDesc ib_desc{};
         ib_desc.size = ib_size;
@@ -145,11 +165,46 @@ bool StaticMesh::upload(rhi::IGraphicsDevice& device) {
         ib_desc.memory = rhi::MemoryUsage::GPUOnly;
         auto ib = device.create_buffer(ib_desc);
         if (!ib) return false;
-        ib->update(lod.indices.data(), 0, ib_size);
+
+        // Stage the vertices and the indices, then hand both copies to the
+        // upload context. The staging buffers are host-visible, so writing
+        // into them is a plain memcpy — no GPU stall.
+        rhi::BufferDesc staging_desc{};
+        staging_desc.usage = rhi::BufferUsage::TransferSrc;
+        staging_desc.memory = rhi::MemoryUsage::CPUToGPU;
+
+        staging_desc.size = vb_size;
+        auto vb_staging = device.create_buffer(staging_desc);
+        if (!vb_staging) return false;
+        vb_staging->update(lod.vertices.data(), 0, vb_size);
+
+        staging_desc.size = ib_size;
+        auto ib_staging = device.create_buffer(staging_desc);
+        if (!ib_staging) return false;
+        ib_staging->update(lod.indices.data(), 0, ib_size);
+
+        upload->copy_buffer(*vb_staging, *vb, 0, 0, vb_size);
+        upload->copy_buffer(*ib_staging, *ib, 0, 0, ib_size);
+
+        staging_buffers.push_back(std::move(vb_staging));
+        staging_buffers.push_back(std::move(ib_staging));
 
         m_vertex_buffers.push_back(std::move(vb));
         m_index_buffers.push_back(std::move(ib));
     }
+
+    // One submit for the whole mesh: the GPU copies every buffer in one go,
+    // and the fence tells us when the staging buffers may be released.
+    auto fence = upload->submit();
+    if (!fence) {
+        NF_LOG_ERROR(LogCategory::Core, "StaticMesh '{}': upload submit failed", m_name);
+        return false;
+    }
+    if (!fence->wait()) {
+        NF_LOG_ERROR(LogCategory::Core, "StaticMesh '{}': upload did not complete", m_name);
+        return false;
+    }
+
     m_uploaded = true;
     NF_LOG_INFO(LogCategory::Core, "StaticMesh '{}' uploaded ({} LODs, {} verts, {} indices)", m_name, m_lods.size(), m_lods[0].vertices.size(), m_lods[0].indices.size());
     return true;
