@@ -50,7 +50,14 @@ std::string format_timestamp(std::chrono::system_clock::time_point tp) {
         tp.time_since_epoch()) % 1000;
 
     std::tm tm{};
+    // MSVC and POSIX disagree on the argument order, and glibc only grew
+    // localtime_s in 2.39 — so the POSIX path uses localtime_r, which every
+    // Unix has had forever.
+#if defined(_WIN32)
     localtime_s(&tm, &time);
+#else
+    localtime_r(&time, &tm);
+#endif
 
     std::ostringstream ss;
     ss << std::put_time(&tm, "%H:%M:%S") << '.'
@@ -98,8 +105,17 @@ void Logger::log(LogLevel level, LogCategory cat, std::string_view msg,
     lm.file = std::string(file);
     lm.line = line;
 
-    std::lock_guard lock(m_mutex);
-    for (auto& sink : m_sinks) {
+    // The sinks run OUTSIDE the lock. std::mutex is not recursive, so a sink
+    // that logs re-enters log() and deadlocks on itself — and that path
+    // exists: assert_failed -> default_assert_handler -> Logger::error().
+    // Copy the sink list under the lock, release it, then invoke the sinks in
+    // their registration order.
+    std::vector<LogSink> sinks;
+    {
+        std::lock_guard lock(m_mutex);
+        sinks = m_sinks;
+    }
+    for (auto& sink : sinks) {
         sink(lm);
     }
 }

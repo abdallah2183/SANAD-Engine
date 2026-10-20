@@ -156,8 +156,11 @@ bool InputRecorder::load(const u8* data, usize size, std::string& out_error) {
             m_events.clear();
             return false;
         }
-        m_tick = ticks;
     }
+    // The tick span is restored unconditionally, not only when the recording
+    // has events: a recording of N silent ticks is a real recording, and
+    // dropping its span made it load back as a zero-length one.
+    m_tick = ticks;
     return true;
 }
 

@@ -11,12 +11,18 @@
 namespace nf::ecs {
 
 // ComponentRegistry
+//
+// The registry is a process-wide singleton that can be written from any
+// thread (the first mention of a component type registers it), so every
+// accessor takes the registry lock. The map is node-based, so a pointer
+// handed out by get_info() stays valid across an insertion elsewhere.
 ComponentRegistry& ComponentRegistry::instance() {
     static ComponentRegistry reg;
     return reg;
 }
 
 ComponentTypeId ComponentRegistry::get_id_by_name(const std::string& name) const {
+    std::lock_guard lock(m_mutex);
     for (auto& [id, info] : m_id_to_info) {
         if (info.name == name) return id;
     }
@@ -24,11 +30,13 @@ ComponentTypeId ComponentRegistry::get_id_by_name(const std::string& name) const
 }
 
 const ComponentInfo* ComponentRegistry::get_info(ComponentTypeId id) const {
+    std::lock_guard lock(m_mutex);
     auto it = m_id_to_info.find(id);
     return it != m_id_to_info.end() ? &it->second : nullptr;
 }
 
 std::string ComponentRegistry::get_name(ComponentTypeId id) const {
+    std::lock_guard lock(m_mutex);
     auto it = m_id_to_info.find(id);
     return it != m_id_to_info.end() ? it->second.name : "";
 }

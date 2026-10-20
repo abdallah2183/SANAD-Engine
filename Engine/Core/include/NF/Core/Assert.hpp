@@ -41,6 +41,16 @@ void set_assert_handler(AssertHandler handler);
     } while (0)
 
 // Unreachable
+//
+// The trailing "unreachable" hint is compiler-specific: __assume is an MSVC
+// intrinsic, and __builtin_unreachable is the GCC/Clang equivalent. Without
+// the guard the header only compiles on MSVC.
+#if defined(_MSC_VER)
+    #define NF_UNREACHABLE_HINT() __assume(0)
+#else
+    #define NF_UNREACHABLE_HINT() __builtin_unreachable()
+#endif
+
 #define NF_UNREACHABLE() \
     ::nf::assert_failed("Unreachable code reached", __FILE__, __LINE__); \
-    __assume(0)
+    NF_UNREACHABLE_HINT()

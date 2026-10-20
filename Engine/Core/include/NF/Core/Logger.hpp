@@ -69,6 +69,16 @@ public:
     void set_min_level(LogLevel level);
     void set_category_filter(LogCategory cats);
 
+    /// True when a message at `level` passes the level filter. This is the
+    /// cheap gate the log macros use so a filtered-out call costs an atomic
+    /// load instead of a std::format plus a heap allocation. The category
+    /// filter is still applied inside log().
+    bool enabled(LogLevel level) const {
+        return static_cast<u8>(level) >= static_cast<u8>(m_min_level.load(std::memory_order_relaxed));
+    }
+    /// The current minimum level (messages below it are dropped).
+    LogLevel min_level() const { return m_min_level.load(std::memory_order_relaxed); }
+
     void log(LogLevel level, LogCategory cat, std::string_view msg,
              std::string_view file = "", u32 line = 0);
 
@@ -97,14 +107,28 @@ private:
 // --- Macros for file/line capture with std::format support ---
 
 // Helper: format message (if format args present, use std::format; else pass through)
-#define NF_LOG_FMT(cat_level, cat, ...) \
-    ::nf::Logger::instance().cat_level(cat, std::format(__VA_ARGS__), __FILE__, __LINE__)
+//
+// The level gate comes FIRST on purpose. The filter lives inside log(), which
+// runs AFTER the message has been formatted — so a filtered-out NF_LOG_TRACE
+// (there are several in hot loops) used to pay for a std::format and the heap
+// allocation its result needs, only to be thrown away. enabled() is an atomic
+// load, so a dropped call now costs a load and a compare.
+//
+// The form stays an EXPRESSION (not a do/while): the macros are used as
+// statements everywhere, and keeping them expressions means no existing call
+// site can change meaning. `level` is the LogLevel value, `method` the
+// Logger member that logs at it — the two cannot be derived from each other
+// (the enum is Trace/Debug/..., the methods are trace/debug/...).
+#define NF_LOG_FMT(level, method, cat, ...) \
+    (::nf::Logger::instance().enabled(level) \
+         ? ::nf::Logger::instance().method(cat, std::format(__VA_ARGS__), __FILE__, __LINE__) \
+         : (void)0)
 
-#define NF_LOG_TRACE(cat, ...) NF_LOG_FMT(trace, cat, __VA_ARGS__)
-#define NF_LOG_DEBUG(cat, ...) NF_LOG_FMT(debug, cat, __VA_ARGS__)
-#define NF_LOG_INFO(cat, ...)  NF_LOG_FMT(info,  cat, __VA_ARGS__)
-#define NF_LOG_WARN(cat, ...)  NF_LOG_FMT(warn,  cat, __VA_ARGS__)
-#define NF_LOG_ERROR(cat, ...) NF_LOG_FMT(error, cat, __VA_ARGS__)
-#define NF_LOG_FATAL(cat, ...) NF_LOG_FMT(fatal, cat, __VA_ARGS__)
+#define NF_LOG_TRACE(cat, ...) NF_LOG_FMT(::nf::LogLevel::Trace, trace, cat, __VA_ARGS__)
+#define NF_LOG_DEBUG(cat, ...) NF_LOG_FMT(::nf::LogLevel::Debug, debug, cat, __VA_ARGS__)
+#define NF_LOG_INFO(cat, ...)  NF_LOG_FMT(::nf::LogLevel::Info,  info,  cat, __VA_ARGS__)
+#define NF_LOG_WARN(cat, ...)  NF_LOG_FMT(::nf::LogLevel::Warn,  warn,  cat, __VA_ARGS__)
+#define NF_LOG_ERROR(cat, ...) NF_LOG_FMT(::nf::LogLevel::Error, error, cat, __VA_ARGS__)
+#define NF_LOG_FATAL(cat, ...) NF_LOG_FMT(::nf::LogLevel::Fatal, fatal, cat, __VA_ARGS__)
 
 } // namespace nf

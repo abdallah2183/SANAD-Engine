@@ -32,6 +32,10 @@ void WorkerThread::stop() {
 void WorkerThread::push_job(Job job) {
     {
         std::lock_guard lock(m_queue_mutex);
+        // The counter is bumped while the queue lock is held, so it is never
+        // lower than the number of queued jobs. The wait predicate can then
+        // read it without the lock and never miss a wakeup.
+        m_pending_jobs.fetch_add(1, std::memory_order_release);
         m_queue.push_back(std::move(job));
     }
     {
@@ -45,6 +49,7 @@ bool WorkerThread::pop_job(Job& out) {
     if (m_queue.empty()) return false;
     out = std::move(m_queue.back());
     m_queue.pop_back();
+    m_pending_jobs.fetch_sub(1, std::memory_order_acq_rel);
     return true;
 }
 
@@ -53,6 +58,7 @@ bool WorkerThread::steal_job(Job& out) {
     if (m_queue.empty()) return false;
     out = std::move(m_queue.front());
     m_queue.pop_front();
+    m_pending_jobs.fetch_sub(1, std::memory_order_acq_rel);
     return true;
 }
 
@@ -60,10 +66,14 @@ void WorkerThread::run() {
     NF_LOG_DEBUG(LogCategory::Jobs, "Worker thread {} started", m_id);
 
     while (m_running.load(std::memory_order_acquire)) {
-        // Wait for work or stop signal
+        // Wait for work or stop signal. The predicate reads the atomic
+        // pending count, not the deque: the deque is only safe to touch under
+        // m_queue_mutex, and this predicate runs while the *condition
+        // variable's* mutex is held.
         std::unique_lock cv_lock(m_cv_mutex);
         m_cv.wait_for(cv_lock, std::chrono::milliseconds(1), [this] {
-            return !m_queue.empty() || !m_running.load(std::memory_order_acquire);
+            return m_pending_jobs.load(std::memory_order_acquire) > 0 ||
+                   !m_running.load(std::memory_order_acquire);
         });
         cv_lock.unlock();
 
@@ -94,7 +104,12 @@ void JobGroup::add(std::function<void()> task, JobPriority priority) {
     // bare task left m_pending incremented forever, so wait() never returned and
     // the group was unusable by any caller that actually waited on it.
     m_pending.fetch_add(1, std::memory_order_relaxed);
-    JobSystem::instance().enqueue(Job(std::move(task), priority, &m_pending));
+    Job job(std::move(task), priority, &m_pending);
+    if (!JobSystem::instance().enqueue(job)) {
+        // The job was dropped, so no worker will decrement the counter. Give
+        // it back here or wait() never returns.
+        m_pending.fetch_sub(1, std::memory_order_acq_rel);
+    }
 }
 
 void JobGroup::wait() {
@@ -112,7 +127,10 @@ JobSystem& JobSystem::instance() {
 }
 
 void JobSystem::init(u32 thread_count) {
-    NF_ASSERT(!m_initialized.load(), "JobSystem already initialized");
+    // NF_VERIFY, not NF_ASSERT: the release build has no assert, so a double
+    // init() silently started a second set of workers on top of the first.
+    NF_VERIFY(!m_initialized.load(std::memory_order_acquire), "JobSystem already initialized");
+    if (m_initialized.load(std::memory_order_acquire)) return;
 
     if (thread_count == 0) {
         thread_count = std::thread::hardware_concurrency();
@@ -150,22 +168,37 @@ void JobSystem::shutdown() {
     NF_LOG_INFO(LogCategory::Jobs, "JobSystem shut down");
 }
 
-void JobSystem::enqueue(Job job) {
-    NF_ASSERT(m_initialized.load(), "JobSystem not initialized");
+bool JobSystem::enqueue(Job job) {
+    // NF_ASSERT is compiled out in release builds, and m_workers is empty
+    // before init() and after shutdown(). The old code went straight to
+    // "(m_next_worker + 1) % m_workers.size()" — a modulo by zero, which is
+    // a hardware divide-by-zero trap on x64, not a benign result.
+    // NF_VERIFY is always on, and the early return keeps the trap out of
+    // reach.
+    NF_VERIFY(m_initialized.load(std::memory_order_acquire), "JobSystem not initialized");
+    if (!m_initialized.load(std::memory_order_acquire)) {
+        NF_LOG_ERROR(LogCategory::Jobs, "JobSystem::enqueue: job system is not initialised; job dropped");
+        return false;
+    }
 
     // Round-robin initial assignment, then work stealing handles the rest
     u32 target;
     {
         std::lock_guard lock(m_enqueue_mutex);
+        if (m_workers.empty()) {
+            NF_LOG_ERROR(LogCategory::Jobs, "JobSystem::enqueue: no workers available; job dropped");
+            return false;
+        }
         target = m_next_worker;
         m_next_worker = (m_next_worker + 1) % m_workers.size();
     }
 
     m_workers[target]->push_job(std::move(job));
+    return true;
 }
 
-void JobSystem::enqueue(std::function<void()> task, JobPriority priority) {
-    enqueue(Job(std::move(task), priority));
+bool JobSystem::enqueue(std::function<void()> task, JobPriority priority) {
+    return enqueue(Job(std::move(task), priority));
 }
 
 void JobSystem::dispatch(DynamicArray<std::function<void()>> tasks) {
@@ -182,7 +215,11 @@ void JobSystem::dispatch_and_wait(DynamicArray<std::function<void()>> tasks) {
         job.task = std::move(t);
         job.priority = JobPriority::Normal;
         job.pending_counter = &pending;
-        enqueue(std::move(job));
+        if (!enqueue(std::move(job))) {
+            // The job was dropped, so no worker will ever decrement the
+            // counter for it. Decrement it here, or wait() spins forever.
+            pending.fetch_sub(1, std::memory_order_acq_rel);
+        }
     }
 
     while (pending.load(std::memory_order_acquire) > 0) {
@@ -207,7 +244,11 @@ void JobSystem::parallel_for(usize count, usize batch_size,
             fn(start, end);
             pending.fetch_sub(1, std::memory_order_acq_rel);
         };
-        enqueue(std::move(job));
+        if (!enqueue(std::move(job))) {
+            // Dropped: nothing will run the task and nothing will decrement
+            // the counter. Account for it here so the wait below terminates.
+            pending.fetch_sub(1, std::memory_order_acq_rel);
+        }
     }
 
     while (pending.load(std::memory_order_acquire) > 0) {

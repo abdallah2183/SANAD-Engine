@@ -49,6 +49,14 @@ public:
         if (this != &other) {
             destroy_elements();
             free_storage();
+            // free_storage() releases the buffer but deliberately leaves m_size
+            // alone, because grow() needs the OLD size to move the elements
+            // out. Here there is nothing left to move: the old elements are
+            // already destroyed, so the size must be cleared before reserve()
+            // runs. Without this, reserve() -> grow() walked i < m_size over a
+            // null m_data and dereferenced it — a null-pointer read on every
+            // copy-assignment of a non-empty array.
+            m_size = 0;
             reserve(other.m_size);
             for (usize i = 0; i < other.m_size; ++i) {
                 new (m_data + i) T(other.m_data[i]);
@@ -93,7 +101,11 @@ public:
     }
 
     void pop_back() {
-        NF_ASSERT(m_size > 0, "pop_back on empty array");
+        // NF_ASSERT is compiled out in release builds, so an empty pop used to
+        // decrement m_size to SIZE_MAX and call a destructor on m_data[-1].
+        // NF_VERIFY is always on.
+        NF_VERIFY(m_size > 0, "pop_back on empty array");
+        if (m_size == 0) return;
         --m_size;
         m_data[m_size].~T();
     }
@@ -156,7 +168,12 @@ private:
         T* new_data = reinterpret_cast<T*>(aligned_alloc(sizeof(T) * new_capacity, alignof(T)));
         NF_VERIFY(new_data != nullptr, "DynamicArray: allocation failed");
 
-        for (usize i = 0; i < m_size; ++i) {
+        // Only the elements that actually exist are moved, and never out of a
+        // null buffer. The second condition matters on the copy-assignment
+        // path, where m_size used to survive free_storage() while m_data did
+        // not — the loop then walked a stale count over a null pointer.
+        const usize to_move = (m_data != nullptr) ? m_size : 0;
+        for (usize i = 0; i < to_move; ++i) {
             new (new_data + i) T(std::move(m_data[i]));
             m_data[i].~T();
         }
@@ -264,6 +281,10 @@ public:
 
 private:
     usize hash_index(const K& key) const {
+        // m_capacity is 0 on a default-constructed map. Every caller that can
+        // reach an empty map checks for it first, but a modulo by zero is a
+        // hardware trap, not a benign result, so the guard is here too.
+        if (m_capacity == 0) return 0;
         return std::hash<K>{}(key) % m_capacity;
     }
 
@@ -286,6 +307,15 @@ private:
     }
 
     void rehash(usize new_capacity) {
+        // reserve(0) used to set m_capacity to 0 and then re-insert the old
+        // entries through put_internal -> hash_index -> "% 0", which is an
+        // integer division by zero (a hardware trap on x64). A zero-capacity
+        // map is simply an empty map.
+        if (new_capacity == 0) {
+            clear();
+            return;
+        }
+
         auto old_keys = std::move(m_keys);
         auto old_values = std::move(m_values);
         auto old_occupied = std::move(m_occupied);

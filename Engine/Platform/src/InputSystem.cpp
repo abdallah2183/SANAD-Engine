@@ -16,39 +16,61 @@
 namespace nf {
 
 // --- InputAction ---
+//
+// The state bitsets are sized by the enums' Count values, and the enums are
+// narrow (KeyCode is a u16), so a binding that names a code past Count would
+// index the bitset out of bounds — std::bitset::operator[] does not bounds
+// check, so that is undefined behaviour, not a benign read. The setters
+// already validate; the getters have to as well. InputState::axis() uses the
+// same shape (check the index, then read).
 
 bool InputAction::is_pressed(const InputState& state) const {
     for (KeyCode k : keys) {
-        if (state.keys[static_cast<usize>(k)]) return true;
+        const auto idx = static_cast<usize>(k);
+        if (idx < static_cast<usize>(KeyCode::Count) && state.keys[idx]) return true;
     }
     for (MouseButton m : mouse_buttons) {
-        if (state.mouse_buttons[static_cast<usize>(m)]) return true;
+        const auto idx = static_cast<usize>(m);
+        if (idx < static_cast<usize>(MouseButton::Count) && state.mouse_buttons[idx]) return true;
     }
     for (GamepadButton g : gamepad_buttons) {
-        if (state.gamepad_buttons[static_cast<usize>(g)]) return true;
+        const auto idx = static_cast<usize>(g);
+        if (idx < static_cast<usize>(GamepadButton::Count) && state.gamepad_buttons[idx]) return true;
     }
     return false;
 }
 
 bool InputAction::is_just_pressed(const InputState& state) const {
     for (KeyCode k : keys) {
-        if (state.keys_pressed_this_frame[static_cast<usize>(k)]) return true;
+        const auto idx = static_cast<usize>(k);
+        if (idx < static_cast<usize>(KeyCode::Count) && state.keys_pressed_this_frame[idx]) return true;
     }
     for (MouseButton m : mouse_buttons) {
-        if (state.mouse_pressed_this_frame[static_cast<usize>(m)]) return true;
+        const auto idx = static_cast<usize>(m);
+        if (idx < static_cast<usize>(MouseButton::Count) && state.mouse_pressed_this_frame[idx]) return true;
     }
     for (GamepadButton g : gamepad_buttons) {
-        if (state.gamepad_pressed_this_frame[static_cast<usize>(g)]) return true;
+        const auto idx = static_cast<usize>(g);
+        if (idx < static_cast<usize>(GamepadButton::Count) && state.gamepad_pressed_this_frame[idx]) return true;
     }
     return false;
 }
 
 bool InputAction::is_just_released(const InputState& state) const {
     for (KeyCode k : keys) {
-        if (state.keys_released_this_frame[static_cast<usize>(k)]) return true;
+        const auto idx = static_cast<usize>(k);
+        if (idx < static_cast<usize>(KeyCode::Count) && state.keys_released_this_frame[idx]) return true;
+    }
+    // The mouse belongs here too: an action bound only to MouseButton::Left
+    // never reported a release while its two siblings both looked at the
+    // mouse, so a "just released" edge could never fire for it.
+    for (MouseButton m : mouse_buttons) {
+        const auto idx = static_cast<usize>(m);
+        if (idx < static_cast<usize>(MouseButton::Count) && state.mouse_released_this_frame[idx]) return true;
     }
     for (GamepadButton g : gamepad_buttons) {
-        if (state.gamepad_released_this_frame[static_cast<usize>(g)]) return true;
+        const auto idx = static_cast<usize>(g);
+        if (idx < static_cast<usize>(GamepadButton::Count) && state.gamepad_released_this_frame[idx]) return true;
     }
     return false;
 }
@@ -86,27 +108,33 @@ void InputSystem::end_frame() {
 }
 
 bool InputSystem::is_key_down(KeyCode key) const {
-    return m_state.keys[static_cast<usize>(key)];
+    const auto idx = static_cast<usize>(key);
+    return idx < static_cast<usize>(KeyCode::Count) && m_state.keys[idx];
 }
 
 bool InputSystem::is_key_pressed(KeyCode key) const {
-    return m_state.keys_pressed_this_frame[static_cast<usize>(key)];
+    const auto idx = static_cast<usize>(key);
+    return idx < static_cast<usize>(KeyCode::Count) && m_state.keys_pressed_this_frame[idx];
 }
 
 bool InputSystem::is_key_released(KeyCode key) const {
-    return m_state.keys_released_this_frame[static_cast<usize>(key)];
+    const auto idx = static_cast<usize>(key);
+    return idx < static_cast<usize>(KeyCode::Count) && m_state.keys_released_this_frame[idx];
 }
 
 bool InputSystem::is_mouse_down(MouseButton btn) const {
-    return m_state.mouse_buttons[static_cast<usize>(btn)];
+    const auto idx = static_cast<usize>(btn);
+    return idx < static_cast<usize>(MouseButton::Count) && m_state.mouse_buttons[idx];
 }
 
 bool InputSystem::is_mouse_pressed(MouseButton btn) const {
-    return m_state.mouse_pressed_this_frame[static_cast<usize>(btn)];
+    const auto idx = static_cast<usize>(btn);
+    return idx < static_cast<usize>(MouseButton::Count) && m_state.mouse_pressed_this_frame[idx];
 }
 
 bool InputSystem::is_mouse_released(MouseButton btn) const {
-    return m_state.mouse_released_this_frame[static_cast<usize>(btn)];
+    const auto idx = static_cast<usize>(btn);
+    return idx < static_cast<usize>(MouseButton::Count) && m_state.mouse_released_this_frame[idx];
 }
 
 void InputSystem::register_action(const InputAction& action) {
@@ -136,8 +164,14 @@ void InputSystem::on_key_down(KeyCode key) {
 void InputSystem::on_key_up(KeyCode key) {
     auto idx = static_cast<usize>(key);
     if (idx < static_cast<usize>(KeyCode::Count)) {
+        // Only a key that was actually held produces a release edge. A
+        // duplicated WM_KEYUP would otherwise report a "just released" for a
+        // key that was never down — the same rule on_gamepad_button already
+        // follows, and on_key_down mirrors it for the press edge.
+        if (m_state.keys[idx]) {
+            m_state.keys_released_this_frame[idx] = true;
+        }
         m_state.keys[idx] = false;
-        m_state.keys_released_this_frame[idx] = true;
     }
 }
 
@@ -150,8 +184,12 @@ void InputSystem::on_mouse_button(MouseButton btn, bool pressed) {
             }
             m_state.mouse_buttons[idx] = true;
         } else {
+            // Same rule as on_key_up: no release edge for a button that was
+            // not held.
+            if (m_state.mouse_buttons[idx]) {
+                m_state.mouse_released_this_frame[idx] = true;
+            }
             m_state.mouse_buttons[idx] = false;
-            m_state.mouse_released_this_frame[idx] = true;
         }
     }
 }
@@ -175,15 +213,18 @@ void InputSystem::on_gamepad_axis(GamepadAxis axis, f32 value) {
 }
 
 bool InputSystem::is_gamepad_down(GamepadButton btn) const {
-    return m_state.gamepad_buttons[static_cast<usize>(btn)];
+    const auto idx = static_cast<usize>(btn);
+    return idx < static_cast<usize>(GamepadButton::Count) && m_state.gamepad_buttons[idx];
 }
 
 bool InputSystem::is_gamepad_pressed(GamepadButton btn) const {
-    return m_state.gamepad_pressed_this_frame[static_cast<usize>(btn)];
+    const auto idx = static_cast<usize>(btn);
+    return idx < static_cast<usize>(GamepadButton::Count) && m_state.gamepad_pressed_this_frame[idx];
 }
 
 bool InputSystem::is_gamepad_released(GamepadButton btn) const {
-    return m_state.gamepad_released_this_frame[static_cast<usize>(btn)];
+    const auto idx = static_cast<usize>(btn);
+    return idx < static_cast<usize>(GamepadButton::Count) && m_state.gamepad_released_this_frame[idx];
 }
 
 void InputSystem::on_gamepad_button(GamepadButton btn, bool pressed) {

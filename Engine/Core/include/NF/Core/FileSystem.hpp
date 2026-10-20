@@ -48,6 +48,20 @@ public:
     static std::string engine_content();
     static std::string project_root();
 
+    /// A directory this process may actually write scratch files into.
+    ///
+    /// The system temp directory is the obvious place for a scratch file, and
+    /// it is denied to a process running under an application-control policy, a
+    /// sandboxed CI, or a locked-down workstation. The failure then reads as
+    /// "Access is denied" for a file the user never touched, and it looks like
+    /// a broken feature rather than a denied directory.
+    ///
+    /// The answer is decided once, the first time it is asked for: the system
+    /// temp directory when the process may write there, and a directory beside
+    /// the running executable when it may not. The directory always exists
+    /// when this returns.
+    static std::filesystem::path scratch_directory();
+
     // Working directory
     static bool set_working_directory(std::string_view path);
     static std::string get_working_directory();

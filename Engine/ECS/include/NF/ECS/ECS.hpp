@@ -33,14 +33,24 @@ class ComponentRegistry {
 public:
     static ComponentRegistry& instance();
 
+    // The registry is a process-wide singleton written from any thread that
+    // first mentions a component type (component_type_id<T>() runs its
+    // registration through a function-local static, so two threads can
+    // register different types concurrently). Every access is therefore
+    // guarded: an unguarded map read racing a map write is a data race, not
+    // a benign one.
     template<typename T>
     ComponentTypeId register_component(const std::string& name) {
-        std::string key = name.empty() ? typeid(T).name() : name;
+        const std::string key = name.empty() ? typeid(T).name() : name;
+        std::lock_guard lock(m_mutex);
         auto it = m_name_to_id.find(key);
         if (it != m_name_to_id.end()) return it->second;
         ComponentTypeId id = m_next_id++;
         m_name_to_id[key] = id;
-        m_id_to_info[id] = {name, sizeof(T), alignof(T)};
+        // Store the RESOLVED key: the caller may have passed an empty name,
+        // and an empty ComponentInfo::name would make the type unnameable in
+        // every diagnostic that goes through get_name()/get_id_by_name().
+        m_id_to_info[id] = {key, sizeof(T), alignof(T)};
         // Also map type_index for get_id<T> without name
         m_type_to_id[std::type_index(typeid(T))] = id;
         return id;
@@ -48,6 +58,7 @@ public:
 
     template<typename T>
     ComponentTypeId get_id() const {
+        std::lock_guard lock(m_mutex);
         auto it = m_type_to_id.find(std::type_index(typeid(T)));
         return it != m_type_to_id.end() ? it->second : kInvalidComponentId;
     }
@@ -58,6 +69,7 @@ public:
 
 private:
     ComponentRegistry() = default;
+    mutable std::mutex m_mutex;
     std::map<std::string, ComponentTypeId> m_name_to_id;
     std::map<std::type_index, ComponentTypeId> m_type_to_id;
     std::map<ComponentTypeId, ComponentInfo> m_id_to_info;

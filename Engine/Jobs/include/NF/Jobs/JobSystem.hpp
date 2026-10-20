@@ -78,6 +78,12 @@ private:
     u32 m_id;
     std::deque<Job> m_queue;
     mutable std::mutex m_queue_mutex;
+    // The number of jobs sitting in m_queue. The wait predicate reads THIS,
+    // not m_queue: m_queue is only safe to touch under m_queue_mutex, and the
+    // predicate is evaluated by the waiting thread while it holds the
+    // condition variable's mutex — a different lock. Reading the deque from
+    // there was a data race on the deque's own storage.
+    std::atomic<u32> m_pending_jobs{0};
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     std::condition_variable m_cv;
@@ -92,8 +98,12 @@ public:
     void init(u32 thread_count = 0);
     void shutdown();
 
-    void enqueue(Job job);
-    void enqueue(std::function<void()> task, JobPriority priority = JobPriority::Normal);
+    // Enqueue returns false when the job was DROPPED — the job system is not
+    // initialised, or it has no workers. Callers that wait on a completion
+    // counter have to know, otherwise they wait for a counter that nothing
+    // will ever decrement.
+    bool enqueue(Job job);
+    bool enqueue(std::function<void()> task, JobPriority priority = JobPriority::Normal);
 
     // Convenience: dispatch a batch and wait
     void dispatch(DynamicArray<std::function<void()>> tasks);

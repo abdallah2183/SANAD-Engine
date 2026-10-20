@@ -87,6 +87,7 @@ private:
     byte* m_base = nullptr;
     usize m_block_size = 0;
     usize m_block_count = 0;
+    usize m_alignment = 16;
     FreeNode* m_free_list = nullptr;
     std::atomic<usize> m_free_count{0};
     std::mutex m_mutex;
@@ -133,10 +134,15 @@ struct MemoryScope {
 // Engine code should use allocators explicitly.
 
 // --- NF_NEW / NF_DELETE macros for allocator-aware allocation ---
+//
+// NF_DELETE takes the type explicitly: the destructor call needs to know the
+// static type, and a macro cannot infer it. The old two-argument form
+// referenced a type literally named `T`, which only compiled if such a type
+// happened to be visible at the call site — so it could not be used at all.
 #define NF_NEW(allocator, T) \
     new ((allocator).allocate(sizeof(T), alignof(T))) T
 
-#define NF_DELETE(allocator, ptr) \
+#define NF_DELETE(allocator, ptr, T) \
     do { \
         if (ptr) { \
             (ptr)->~T(); \
@@ -147,9 +153,15 @@ struct MemoryScope {
 #define NF_NEW_ARRAY(allocator, T, count) \
     new ((allocator).allocate(sizeof(T) * (count), alignof(T))) T[(count)]
 
-#define NF_DELETE_ARRAY(allocator, ptr) \
+// The element destructors have to run: the old version freed the block
+// without destroying the elements, which leaked every non-trivially-
+// destructible element (std::string, std::vector, ...) the array held.
+#define NF_DELETE_ARRAY(allocator, ptr, T, count) \
     do { \
         if (ptr) { \
+            for (usize _nf_i = 0; _nf_i < (count); ++_nf_i) { \
+                (ptr)[_nf_i].~T(); \
+            } \
             (allocator).deallocate(ptr); \
         } \
     } while (0)

@@ -13,6 +13,13 @@ struct Entity {
     bool valid() const { return id != u32_max; }
     bool operator==(const Entity& other) const { return id == other.id && generation == other.generation; }
     bool operator!=(const Entity& other) const { return !(*this == other); }
+    // Total order over (id, generation) so an Entity can key a std::set /
+    // std::map. Keying a set on the id alone is a trap: two entities can
+    // share an id with different generations, and the stale one must not be
+    // mistaken for the live one.
+    bool operator<(const Entity& other) const {
+        return id != other.id ? id < other.id : generation < other.generation;
+    }
 };
 
 static constexpr Entity kInvalidEntity{};
