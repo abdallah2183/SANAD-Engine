@@ -189,14 +189,13 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 <summary><b>Quality gates</b></summary>
 
 - Clean MSVC `/W4 /WX` build.
-- **26 test suites** on Windows x64 (Release). The release machine ran 18 of
-  them: **1,208 passed / 0 failed / 3 skipped**. The other 8 could not be
-  started there — Windows Smart App Control refuses to launch freshly built,
-  unsigned binaries on that machine — so the full 26-suite run is CI's job,
-  and CI is where they are green on every push.
+- **26 test suites: 1,906 passed / 0 failed / 3 skipped** on Windows x64
+  (Release) — `Scripts\verify_release.ps1` runs them all and prints the
+  verdict.
 - 0 Vulkan validation errors and 0 leaked RHI objects in the editor acceptance run.
 - End-to-end check: create a project with `nf`, build it, package it, and run the
-  shipped player without the dev-tree shaders.
+  shipped player without the dev-tree shaders. The portable zip is extracted
+  into a clean folder and used to build and play a game.
 
 </details>
 
