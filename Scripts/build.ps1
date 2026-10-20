@@ -40,14 +40,20 @@ $vsInstall = $vsInstall.Trim()
 Write-NF "Visual Studio: $vsInstall"
 
 # --- Choose the newest MSVC toolset ----------------------------------------
+# Sorted as VERSIONS, not as text. "Sort-Object Name -Descending" is a
+# lexicographic comparison, and "14.9.x" sorts ABOVE "14.44.x" as a string
+# (9 > 4), so that comparison could pick a 2022-era toolset over a 14.44 one.
+# The rule here is the one CMake/Toolchain-MSVC.cmake applies: compare the
+# numeric parts.
 $msvcParent = Join-Path $vsInstall "VC\Tools\MSVC"
 if (-not (Test-Path $msvcParent)) {
     throw "MSVC toolsets not found at $msvcParent"
 }
 
 $msvcRoot = Get-ChildItem -Path $msvcParent -Directory |
+    Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
     Where-Object { Test-Path (Join-Path $_.FullName "bin\Hostx64\x64\cl.exe") } |
-    Sort-Object Name -Descending |
+    Sort-Object { [version]$_.Name } -Descending |
     Select-Object -First 1
 
 if (-not $msvcRoot) {
@@ -62,8 +68,9 @@ if (-not (Test-Path $sdkRoot)) {
 }
 
 $sdkVersion = Get-ChildItem -Path (Join-Path $sdkRoot "Include") -Directory |
+    Where-Object { $_.Name -match '^10\.\d+\.\d+\.\d+$' } |
     Where-Object { Test-Path (Join-Path $_.FullName "um\windows.h") } |
-    Sort-Object Name -Descending |
+    Sort-Object { [version]$_.Name } -Descending |
     Select-Object -First 1
 
 if (-not $sdkVersion) {

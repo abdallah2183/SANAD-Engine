@@ -11,7 +11,15 @@ cd /d "%~dp0"
 set "SANAD_EDITOR="
 if exist "build\release\bin\SANADEditor.exe" set "SANAD_EDITOR=build\release\bin\SANADEditor.exe"
 if not defined SANAD_EDITOR if exist "build\video\bin\SANADEditor.exe" set "SANAD_EDITOR=build\video\bin\SANADEditor.exe"
-if not defined SANAD_EDITOR if exist "dist\stage\SANAD-0.2.0\SANADEditor.exe" set "SANAD_EDITOR=dist\stage\SANAD-0.2.0\SANADEditor.exe"
+rem The staged package directory is named after the version it was built from
+rem (dist\stage\SANAD-<version>), so a path with the version written into it
+rem breaks the moment the version is bumped. Glob the stage directory and take
+rem the newest one that actually holds the editor.
+if not defined SANAD_EDITOR (
+    for /f "usebackq delims=" %%d in (`dir /b /ad /o-d "dist\stage" 2^>nul`) do (
+        if not defined SANAD_EDITOR if exist "dist\stage\%%d\SANADEditor.exe" set "SANAD_EDITOR=dist\stage\%%d\SANADEditor.exe"
+    )
+)
 if not defined SANAD_EDITOR (
     echo SANADEditor.exe was not found.
     echo Build it first:  build_release.bat   or   cmake --build build\release

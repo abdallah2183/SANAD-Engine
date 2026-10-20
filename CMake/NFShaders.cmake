@@ -2,12 +2,22 @@
 # GLSL → SPIR-V compilation, shared by samples and tests.
 #
 # Shaders are compiled at build time so nothing needs a shader compiler at
-# runtime. When glslc is unavailable the prebuilt .spv files checked into the
-# repository are used instead, which keeps the tree buildable on a machine with
-# only the Vulkan runtime installed.
+# runtime. glslc ships with the Vulkan SDK, so the only real requirement is
+# that the SDK is installed.
+#
+# THE COMPILER IS MANDATORY. An earlier version of this file fell back to
+# "prebuilt SPIR-V checked into the repository" when glslc could not be found.
+# That fallback was a lie: `*.spv` is in .gitignore, so no .spv file has ever
+# been committed, and the fallback pointed the shader directories at the GLSL
+# *sources*. A build on a machine where the SDK lived at the default
+# C:\VulkanSDK location without VULKAN_SDK set and without glslc on PATH
+# therefore configured successfully, compiled, linked, and produced an engine
+# that loaded no shaders at all — a silent black screen with no error anywhere.
+# A missing compiler is now a hard configure error: failing loudly at
+# configure time is the only outcome that tells the user what is wrong.
 #
 # Defines, in the calling scope:
-#   NF_GLSLC_EXECUTABLE        — path to glslc, or empty
+#   NF_GLSLC_EXECUTABLE        — path to glslc
 #   NF_TRIANGLE_SHADER_DIR     — directory the Triangle sample reads SPIR-V from
 #   NF_QUAD_SHADER_DIR         — directory the TexturedQuad sample + tests read
 
@@ -16,6 +26,28 @@ find_program(NF_GLSLC_EXECUTABLE
     HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin"
     DOC "glslc SPIR-V compiler"
 )
+
+# The Vulkan SDK's default install root is C:\VulkanSDK\<version>. Engine/RHI
+# finds the SDK headers there when VULKAN_SDK is not set, so glslc has to be
+# found there too — otherwise the headers and the compiler come from different
+# places and only one of them works. The newest version wins, matching the
+# header lookup in Engine/RHI/CMakeLists.txt.
+if(NOT NF_GLSLC_EXECUTABLE AND WIN32 AND IS_DIRECTORY "C:/VulkanSDK")
+    file(GLOB _nf_vulkan_versions RELATIVE "C:/VulkanSDK" "C:/VulkanSDK/*")
+    set(_nf_best_sdk_version "")
+    foreach(_v IN LISTS _nf_vulkan_versions)
+        if(IS_DIRECTORY "C:/VulkanSDK/${_v}" AND "${_v}" STRGREATER "${_nf_best_sdk_version}")
+            set(_nf_best_sdk_version "${_v}")
+        endif()
+    endforeach()
+    if(NOT _nf_best_sdk_version STREQUAL "")
+        find_program(NF_GLSLC_EXECUTABLE
+            NAMES glslc glslc.exe
+            HINTS "C:/VulkanSDK/${_nf_best_sdk_version}/Bin"
+            DOC "glslc SPIR-V compiler"
+        )
+    endif()
+endif()
 
 # nf_compile_shaders(<target-name> <source-dir> <output-dir> <base-name>)
 #
@@ -146,11 +178,17 @@ if(NF_GLSLC_EXECUTABLE)
         "${NF_CLIFF_SHADER_SRC_DIR}" "${NF_CLIFF_SHADER_OUT_DIR}" "sprite2d")
     set(NF_CLIFF_SHADER_DIR "${NF_CLIFF_SHADER_OUT_DIR}")
 else()
-    message(STATUS "[NF] glslc not found — using prebuilt SPIR-V from the source tree")
-    set(NF_TRIANGLE_SHADER_DIR "${NF_TRIANGLE_SHADER_SRC_DIR}")
-    set(NF_QUAD_SHADER_DIR     "${NF_QUAD_SHADER_SRC_DIR}")
-    set(NF_RHI_PUSH_SHADER_DIR "${NF_RHI_PUSH_SHADER_SRC_DIR}")
-    set(NF_BASIC3D_SHADER_DIR  "${NF_BASIC3D_SHADER_SRC_DIR}")
-    set(NF_EDITOR_IMGUI_SHADER_DIR "${NF_EDITOR_IMGUI_SHADER_SRC_DIR}")
-    set(NF_CLIFF_SHADER_DIR        "${NF_CLIFF_SHADER_SRC_DIR}")
+    # No glslc, so no SPIR-V, so no engine. Failing here is the whole point:
+    # the previous fallback produced a binary that started, drew nothing and
+    # said nothing. See the note at the top of this file.
+    message(FATAL_ERROR
+        "[NF] glslc (the Vulkan SDK shader compiler) was not found.\n"
+        "     The engine's shaders are compiled at build time; there are no "
+        "prebuilt .spv files in the repository to fall back on.\n"
+        "     Install the LunarG Vulkan SDK (1.1+) and either:\n"
+        "       * set the VULKAN_SDK environment variable, or\n"
+        "       * install to the default C:\\VulkanSDK location, or\n"
+        "       * put glslc on PATH.\n"
+        "     (Searched: $ENV{VULKAN_SDK}/Bin, C:/VulkanSDK/<version>/Bin, PATH)")
 endif()
+

@@ -30,19 +30,36 @@ if "%VS_INSTALL%"=="" (
 )
 
 REM --- Pick the newest MSVC toolset available -------------------------------
+REM Compared as VERSIONS, not as text and not by date. "dir /o-n" orders by
+REM modified date, and a lexicographic sort ranks "14.9.35207" above
+REM "14.44.35207" (true as a string, false as a version) — so both of those
+REM could hand the build an old toolset. CMake/Toolchain-MSVC.cmake applies
+REM the same numeric rule; this is that rule, in batch.
 set MSVC_ROOT=
-for /f "delims=" %%d in ('dir /b /o-n "%VS_INSTALL%\VC\Tools\MSVC" 2^>nul') do (
-    if "!MSVC_ROOT!"=="" (
-        if exist "%VS_INSTALL%\VC\Tools\MSVC\%%d\bin\Hostx64\x64\cl.exe" set "MSVC_ROOT=%VS_INSTALL%\VC\Tools\MSVC\%%d"
+set MSVC_VER=
+for /f "delims=" %%d in ('dir /b "%VS_INSTALL%\VC\Tools\MSVC" 2^>nul') do (
+    echo %%d| findstr /r /c:"^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
+    if not errorlevel 1 (
+        if exist "%VS_INSTALL%\VC\Tools\MSVC\%%d\bin\Hostx64\x64\cl.exe" (
+            call :version_newer "%%d" "!MSVC_VER!"
+            if "!VERSION_NEWER!"=="1" (
+                set "MSVC_VER=%%d"
+                set "MSVC_ROOT=%VS_INSTALL%\VC\Tools\MSVC\%%d"
+            )
+        )
     )
 )
 
 REM --- Pick the newest Windows SDK -----------------------------------------
 set "SDK_ROOT=C:\Program Files (x86)\Windows Kits\10"
 set SDK_VERSION=
-for /f "delims=" %%d in ('dir /b /o-n "%SDK_ROOT%\Include" 2^>nul') do (
-    if "!SDK_VERSION!"=="" (
-        if exist "%SDK_ROOT%\Include\%%d\um\windows.h" set "SDK_VERSION=%%d"
+for /f "delims=" %%d in ('dir /b "%SDK_ROOT%\Include" 2^>nul') do (
+    echo %%d| findstr /r /c:"^10\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
+    if not errorlevel 1 (
+        if exist "%SDK_ROOT%\Include\%%d\um\windows.h" (
+            call :version_newer "%%d" "!SDK_VERSION!"
+            if "!VERSION_NEWER!"=="1" set "SDK_VERSION=%%d"
+        )
     )
 )
 
@@ -90,3 +107,50 @@ if errorlevel 1 (
 
 echo [NF] BUILD_SUCCEEDED: %BUILD_DIR%
 endlocal
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM :version_newer <candidate> <current>
+REM   Sets VERSION_NEWER to 1 when <candidate> is numerically newer than
+REM   <current> (or <current> is empty), 0 otherwise. Dotted numeric parts are
+REM   compared one at a time, so 14.44.35207 beats 14.9.35207.
+REM ---------------------------------------------------------------------------
+:version_newer
+set "VERSION_NEWER=0"
+if "%~2"=="" (
+    set "VERSION_NEWER=1"
+) else (
+    call :version_split "%~1"
+    set "VN_A=!VS_A!" & set "VN_B=!VS_B!" & set "VN_C=!VS_C!" & set "VN_D=!VS_D!"
+    call :version_split "%~2"
+    set "NEWER=0"
+    if !VN_A! GTR !VS_A! set "NEWER=1"
+    if !VN_A! EQU !VS_A! (
+        if !VN_B! GTR !VS_B! set "NEWER=1"
+        if !VN_B! EQU !VS_B! (
+            if !VN_C! GTR !VS_C! set "NEWER=1"
+            if !VN_C! EQU !VS_C! (
+                if !VN_D! GTR !VS_D! set "NEWER=1"
+            )
+        )
+    )
+    set "VERSION_NEWER=!NEWER!"
+)
+goto :eof
+
+REM ---------------------------------------------------------------------------
+REM :version_split <version>
+REM   Splits <version> on "." into VS_A..VS_D, defaulting missing parts to 0.
+REM ---------------------------------------------------------------------------
+:version_split
+set "VS_A=0" & set "VS_B=0" & set "VS_C=0" & set "VS_D=0"
+for /f "tokens=1-4 delims=." %%a in ("%~1") do (
+    set "VS_A=%%a"
+    set "VS_B=%%b"
+    if not defined VS_B set "VS_B=0"
+    set "VS_C=%%c"
+    if not defined VS_C set "VS_C=0"
+    set "VS_D=%%d"
+    if not defined VS_D set "VS_D=0"
+)
+goto :eof

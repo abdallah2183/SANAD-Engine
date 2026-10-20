@@ -17,7 +17,6 @@ set(NF_WARNING_FLAGS_MSVC
     /w14311    # Pointer truncation
     /w14545    # Function call before evaluation
     /w14619    # constexpr not generated
-    /w14263    # Override
     /w14189    # Local variable uninitialized
 )
 
@@ -42,6 +41,10 @@ set(NF_WARNING_FLAGS_GCC ${NF_WARNING_FLAGS_CLANG})
 function(nf_target_set_warnings target_name)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE ${NF_WARNING_FLAGS_MSVC})
+        # NOMINMAX: prevent Windows.h from defining min/max macros that clash
+        # with std::min/std::max. Required project-wide, so it is set here —
+        # for EVERY target that opts into the project's warning set, engine
+        # libraries and test/suite binaries alike.
         target_compile_definitions(${target_name} PUBLIC NOMINMAX)
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(${target_name} PRIVATE ${NF_WARNING_FLAGS_CLANG})
@@ -108,8 +111,8 @@ function(nf_engine_library name)
     # MSVC: static runtime
     if(MSVC)
         set_property(TARGET ${name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        # NOMINMAX: prevent Windows.h from defining min/max macros that clash
-        # with std::min/std::max. Required project-wide.
-        target_compile_definitions(${name} PUBLIC NOMINMAX)
+        # NOMINMAX comes from nf_target_set_warnings() above, which every
+        # engine library goes through — it used to be added a second time
+        # here, so the definition was emitted twice on every command line.
     endif()
 endfunction()
