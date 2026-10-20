@@ -14,7 +14,12 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstaller,
     [switch]$SkipPortable,
-    [switch]$StageOnly
+    [switch]$StageOnly,
+    # The build directory the binaries come from, relative to the repository
+    # root. CI builds into build/ci (a Debug tree) while a release build lives
+    # in build/release, and hard-coding one of them made the other impossible
+    # to package.
+    [string]$BuildDir = 'build\release'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,7 +41,7 @@ $version = if ($suffix -eq '') { $verNum } else { "$verNum-$suffix" }
 $versionInfo = "$($m.Groups[1].Value).$($m.Groups[2].Value).$($m.Groups[3].Value).0"
 Write-Host "version: $version (VersionInfo $versionInfo)"
 
-$build = Join-Path $repo 'build\release'
+$build = Join-Path $repo $BuildDir
 $dist = Join-Path $repo 'dist'
 $stage = Join-Path $dist "stage\SANAD-$version"
 $setupName = "SANAD-$version-Windows-x64-Setup.exe"
@@ -118,10 +123,28 @@ $n = (Get-ChildItem (Join-Path $stage 'Templates') -Recurse -File).Count
 $tplNames = (Get-ChildItem (Join-Path $stage 'Templates') -Directory | Select-Object -ExpandProperty Name) -join ', '
 Write-Host ("  Templates/              {0,8} files  ({1})" -f $n, $tplNames)
 
+# --- Sample games (source projects; Cache/ and dist/ are never shipped) -------
+$gamesSrc = Join-Path $repo 'Games'
+if (Test-Path $gamesSrc) {
+    Copy-Item $gamesSrc (Join-Path $stage 'Games') -Recurse -Force
+    Get-ChildItem (Join-Path $stage 'Games') -Recurse -Directory |
+        Where-Object { $_.Name -in @('Cache', 'dist') } |
+        Remove-Item -Recurse -Force
+    $g = (Get-ChildItem (Join-Path $stage 'Games') -Recurse -File).Count
+    Write-Host ("  Games/                  {0,8} files  (TreeWorld source)" -f $g)
+}
+
+# --- Agent entry points (a folder opened by an AI must explain the engine) ----
+foreach ($src in @('AGENTS.md', 'CLAUDE.md', 'llms.txt')) {
+    $p = Join-Path $repo $src
+    if (Test-Path $p) { Copy-Item $p $stage -Force }
+}
+
 # --- Docs: the .md the launcher OPENS + the images it LOADS as card thumbnails
 $docsDst = Join-Path $stage 'Docs'
 foreach ($src in @('Docs\Demo_Release.md', 'Docs\Getting_Started_Ar.md', 'Docs\Tutorial_Ar.md',
-                   'Docs\Lua_Scripting_Ar.md', 'Docs\Asset_Import.md', 'Docs\Blender_Pipeline.md')) {
+                   'Docs\Lua_Scripting_Ar.md', 'Docs\Asset_Import.md', 'Docs\Blender_Pipeline.md',
+                   'Docs\AI_Game_Guide.md')) {
     $p = Join-Path $repo $src
     if (Test-Path $p) { Copy-Item $p $docsDst -Force }
 }

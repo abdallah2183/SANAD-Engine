@@ -8,13 +8,18 @@ cmake_minimum_required(VERSION 3.24)
 # A hand-maintained literal in a .cpp is what made the launcher keep advertising
 # 0.1.0 after every build; the fix is that there is nowhere left to put one.
 #
-# 0.2.0: the transform-hierarchy upgrade (world rotation and scale now
-# propagate and reach the renderer), asset delete/rename, view framing, and
-# the Godot-style FileSystem dock.
+# 0.3.0: the AI-ready workflow (AGENTS.md, nf guide, per-project guides, Lua
+# input/entity lookup), the TreeWorld sample game, editor duplicate/recovery,
+# authored distance fog, and the playable Crate Hunter starter.
+# The description says what the engine IS, not what it aspires to be: the
+# runtime, the editor and the packaging scripts are Windows-only (Win32 +
+# Vulkan + WASAPI), there is no Linux or macOS player yet, and
+# Docs/Demo_Release.md says exactly that. Advertising "cross-platform" for a
+# Windows-only product is a claim the repository cannot back.
 project(SANAD
-    VERSION 0.2.0
+    VERSION 0.3.0
     LANGUAGES C CXX
-    DESCRIPTION "SANAD Engine - High-performance cross-platform game engine"
+    DESCRIPTION "SANAD Engine - High-performance Windows x64 game engine"
 )
 
 # project(VERSION) accepts NUMBERS only, so a pre-release tag cannot live there.

@@ -61,6 +61,18 @@ jobs:
         shell: bash
         run: bash Scripts/check_layering.sh
 
+      # The editor's UI literals are a localisation contract: an ImGui widget
+      # call that carries a raw Latin string bypasses the Arabic shell and
+      # ships English wording into the Arabic UI. The gate existed only as a
+      # local script nobody ran, and it covered 2 of the 7 editor UI files.
+      # It is a static check, so it costs seconds and catches the class of
+      # defect a screenshot review misses.
+      - name: Check UI literals
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File Tests/check_ui_literals.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # Point the Vulkan loader at Lavapipe so a device is available headlessly.
       # Non-fatal: without it the GPU suites degrade to SKIPPED, which the test
       # runner reports honestly rather than as a pass.
@@ -103,6 +115,32 @@ jobs:
             fi
           }
 
+          # Why a suite matters, where there is a reason worth stating. The
+          # list of suites itself is NOT written here: it comes from the
+          # runner's own output below, so a suite added later cannot be
+          # forgotten. A hand-maintained list of suites is the exact thing
+          # that drifted before — 14 of 26 were asserted while the comment
+          # above claimed all of them.
+          suite_why() {
+            case "$1" in
+              CoreTests)      echo "the core suite (math, memory, containers, IO) is missing or broken." ;;
+              JobTests)       echo "the job-system suite is missing or broken." ;;
+              ECSTests)       echo "the ECS suite — which carries the Phase 11 W4 benchmark ceilings — is missing or broken." ;;
+              AssetTests)     echo "the asset suite — Phase 11 W1 made Assets CPU-pure and unified the mesh format — is missing or broken." ;;
+              RHITests)       echo "Lavapipe is probably missing — GPU coverage was not verified." ;;
+              PhysicsTests)   echo "the physics suite is missing or broken." ;;
+              AnimationTests) echo "the animation suite is missing or broken." ;;
+              AudioTests)     echo "the audio suite is missing or broken." ;;
+              GameplayTests)  echo "the gameplay suite is missing or broken." ;;
+              SaveTests)      echo "the save suite is missing or broken." ;;
+              StreamingTests) echo "the streaming suite — Phase 11 W5, and the only thing asserting a boundary does not thrash — is missing or broken." ;;
+              RuntimeTests)   echo "the runtime suite — the only one that catches Runtime::update() no longer stepping a subsystem — is missing or broken." ;;
+              EditorTests)    echo "the editor suite is missing or broken." ;;
+              ToolTests)      echo "the tool suite is missing or broken." ;;
+              *)              echo "it reported PASS but ran zero tests — registered but not driven." ;;
+            esac
+          }
+
           # A suite that failed to build never reaches the count above: run_tests.sh
           # reports it as SKIP and leaves it out of the totals entirely, so the
           # per-suite assertion below cannot see it.
@@ -112,20 +150,19 @@ jobs:
             exit 1
           fi
 
-          require_suite CoreTests      "the core suite (math, memory, containers, IO) is missing or broken."
-          require_suite JobTests       "the job-system suite is missing or broken."
-          require_suite ECSTests       "the ECS suite — which carries the Phase 11 W4 benchmark ceilings — is missing or broken."
-          require_suite AssetTests     "the asset suite — Phase 11 W1 made Assets CPU-pure and unified the mesh format — is missing or broken."
-          require_suite RHITests       "Lavapipe is probably missing — GPU coverage was not verified."
-          require_suite PhysicsTests   "the physics suite is missing or broken."
-          require_suite AnimationTests "the animation suite is missing or broken."
-          require_suite AudioTests     "the audio suite is missing or broken."
-          require_suite GameplayTests  "the gameplay suite is missing or broken."
-          require_suite SaveTests      "the save suite is missing or broken."
-          require_suite StreamingTests "the streaming suite — Phase 11 W5, and the only thing asserting a boundary does not thrash — is missing or broken."
-          require_suite RuntimeTests   "the runtime suite — the only one that catches Runtime::update() no longer stepping a subsystem — is missing or broken."
-          require_suite EditorTests    "the editor suite is missing or broken."
-          require_suite ToolTests      "the tool suite is missing or broken."
+          # Every suite the runner reported PASS must have actually executed a
+          # test. The list comes from the runner's output, so it covers all 26
+          # suites — including the ones nobody remembered to assert — and a
+          # suite that builds but registers zero tests (Passed: 0) fails here
+          # instead of passing quietly.
+          suites=$(grep -E '^PASS  ' test_suites.log | awk '{print $2}' | sort -u)
+          if [ -z "${suites}" ]; then
+            echo "No suite reported PASS — the runner produced no results at all."
+            exit 1
+          fi
+          for suite in ${suites}; do
+            require_suite "${suite}" "$(suite_why "${suite}")"
+          done
 
           # The reflection tests are the only guard against a property table that
           # points at the wrong offset — a defect that compiles, links and
@@ -289,3 +326,96 @@ jobs:
             echo "audio mixed to silence — audio is not being stepped"; exit 1
           fi
           echo "End-to-end OK: project created, built, packaged and run standalone with physics, animation and audio."
+
+      # The TreeWorld sample: the one project in the repository that is a real
+      # game rather than a template. It is packaged by the shipped player and
+      # played by it, and the acceptance is the PLAYER'S OWN log line —
+      # "Validation errors: 0" — not "the folder looks right" and not "the
+      # process started".
+      #
+      # The player is the shipped one, from inside the package, with no
+      # --project pointing at the build tree: what a user downloads has to
+      # render on its own.
+      - name: TreeWorld acceptance (headless)
+        shell: bash
+        run: |
+          set -o pipefail
+          BUILD_ABS="$(cd "$BUILD_DIR" && pwd)"
+          NF="$BUILD_ABS/bin/nf.exe"; [ -f "$NF" ] || NF="$BUILD_ABS/bin/nf"
+          if [ ! -f "$NF" ]; then echo "nf not built (needs -DNF_BUILD_TOOLS=ON)"; exit 1; fi
+
+          "$NF" build --project Games/TreeWorld/TreeWorld.nfproj
+          if [ ! -f "Games/TreeWorld/dist/NFPlayer.exe" ]; then
+            echo "TreeWorld was not packaged"; exit 1
+          fi
+
+          cd Games/TreeWorld/dist
+          "./NFPlayer.exe" --project TreeWorld.nfproj --frames 120 --headless --validation \
+            > treeworld.log 2>&1
+          code=$?
+          tail -25 treeworld.log
+
+          if [ "$code" -ne 0 ]; then echo "TreeWorld player exited $code"; exit 1; fi
+          if ! grep -q 'Rendered 120 frames' treeworld.log; then
+            echo "TreeWorld did not render 120 frames"; exit 1
+          fi
+          if grep -q 'meshes=0' treeworld.log; then
+            echo "TreeWorld rendered no geometry"; exit 1
+          fi
+          if ! grep -q 'Validation errors: 0' treeworld.log; then
+            echo "TreeWorld validation is not clean"; exit 1
+          fi
+          if ! grep -q 'Alive RHI objects before shutdown: 0' treeworld.log; then
+            echo "TreeWorld leaked RHI objects"; exit 1
+          fi
+          echo "TreeWorld OK: packaged, played 120 frames, validation clean, no leaked RHI objects."
+
+      # The portable zip is what a user downloads, so the acceptance is the
+      # zip: it is staged, zipped, extracted into a folder that has never
+      # seen the engine, and the SHIPPED CLI and player are asked to create,
+      # build and run a game from inside it. The engine's own build tree is
+      # not on the path, so nothing here can be satisfied by a file that
+      # happens to sit next to the build.
+      - name: Portable zip runs from a clean folder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -ExecutionPolicy Bypass -File packaging/windows/build_installer.ps1 `
+            -SkipBuild -SkipInstaller -BuildDir build/ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $zip = Get-ChildItem dist -Filter 'SANAD-*-Windows-x64-Portable.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'the portable zip was not produced' }
+
+          # The checksum the release notes publish.
+          $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($zip.Name)" | Out-File -Append -Encoding utf8 dist/SHA256SUMS.txt
+          Write-Host "SHA-256 $($hash)  $($zip.Name)"
+
+          $clean = Join-Path $env:RUNNER_TEMP 'nf_portable'
+          Remove-Item $clean -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $zip.FullName -DestinationPath $clean
+          $nf = Get-ChildItem $clean -Recurse -Filter 'nf.exe' | Select-Object -First 1
+          if (-not $nf) { throw 'the extracted package has no nf.exe' }
+
+          $game = Join-Path $clean 'ZipGame'
+          & $nf.FullName new $game --name ZipGame --template ThirdPerson
+          if ($LASTEXITCODE -ne 0) { throw 'nf new failed from the extracted package' }
+          & $nf.FullName build --project (Join-Path $game 'ZipGame.nfproj')
+          if ($LASTEXITCODE -ne 0) { throw 'nf build failed from the extracted package' }
+
+          $player = Get-ChildItem (Join-Path $game 'dist') -Filter 'NFPlayer.exe' | Select-Object -First 1
+          if (-not $player) { throw 'the package has no player' }
+          Push-Location (Join-Path $game 'dist')
+          & $player.FullName --frames 60 --validation > player.log 2>&1
+          $code = $LASTEXITCODE
+          Pop-Location
+          Get-Content (Join-Path $game 'dist\player.log') -Tail 20
+          if ($code -ne 0) { throw "the packaged player exited $code" }
+          if (-not (Select-String -Path (Join-Path $game 'dist\player.log') -Pattern 'Validation errors: 0' -Quiet)) {
+            throw 'the packaged player from the zip is not validation clean'
+          }
+          if (-not (Select-String -Path (Join-Path $game 'dist\player.log') -Pattern 'Alive RHI objects before shutdown: 0' -Quiet)) {
+            throw 'the packaged player from the zip leaked RHI objects'
+          }
+          Write-Host 'Portable zip OK: extracted to a clean folder, created, built and played a game.'
