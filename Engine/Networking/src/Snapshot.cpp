@@ -3,6 +3,7 @@
 #include <NF/Networking/Snapshot.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace nf::net {
@@ -104,6 +105,15 @@ bool decode_snapshot(const u8* data, usize size, Snapshot& out, std::string& out
         e.x = read_f32(p + 8);
         e.y = read_f32(p + 12);
         e.z = read_f32(p + 16);
+        // A NaN position is STICKY: it survives every integration step, so a
+        // single malformed datagram would poison the predicted world and
+        // every snapshot derived from it. The vehicle and body codecs reject
+        // non-finite values for the same reason, so the snapshot does too.
+        if (!std::isfinite(e.x) || !std::isfinite(e.y) || !std::isfinite(e.z)) {
+            out_error = "snapshot entity position not finite";
+            out = Snapshot{};
+            return false;
+        }
         out.entities.push_back(e);
     }
     return true;

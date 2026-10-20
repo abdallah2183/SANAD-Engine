@@ -39,7 +39,13 @@ bool ConstraintApplier::endpoints_live(const ConstraintEvent& e) const {
     // resolve, and a two-body constraint needs two DIFFERENT bodies.
     const u32 a = m_bodies.body_of(e.body_a);
     const u32 b = m_bodies.body_of(e.body_b);
-    return a != 0 && b != 0 && a != b;
+    if (a == 0 || b == 0 || a == b) return false;
+    // A Clone needs its TEMPLATE joint as well: cloning a joint that has
+    // not been applied yet is impossible. Failing the clone permanently
+    // (instead of deferring it) loses the joint for good, so the template
+    // is part of the liveness check and the event waits for it.
+    if (e.op == ConstraintOp::Clone && m_constraints.handle_of(e.source) == 0) return false;
+    return true;
 }
 
 void ConstraintApplier::apply_constraint_event(const ConstraintEvent& e,
@@ -76,8 +82,17 @@ void ConstraintApplier::apply_constraint_event(const ConstraintEvent& e,
 
     // ORDER: bodies before their joints. A joint whose endpoints have not
     // arrived yet is queued — the reliable channel delivers in send order,
-    // so the body event is always moments behind.
+    // so the body event is always moments behind. A Clone whose TEMPLATE
+    // joint has not been applied yet waits the same way.
     if (!endpoints_live(e)) {
+        // The waiting room is bounded: a peer naming body ids that never
+        // arrive would grow this vector forever, and flush_pending() scans
+        // it on every packet (a quadratic cost). 1024 deferred joints is
+        // far more than any real rig needs.
+        if (m_pending.size() >= kMaxPendingConstraints) {
+            m_pending.erase(m_pending.begin()); // the oldest wait is dropped
+            ++result.failed_events;
+        }
         m_pending.push_back(e);
         result.deferred_events++;
         return;
@@ -92,6 +107,9 @@ void ConstraintApplier::apply_constraint_event(const ConstraintEvent& e,
         // assigned — this is "clone_constraint over the wire" (§371/§349).
         const u32 source = m_constraints.handle_of(e.source);
         if (source == 0) {
+            // Unreachable: endpoints_live() already deferred a Clone whose
+            // template was missing. Kept as a hard guard — cloning handle 0
+            // would be nonsense.
             result.failed_events++;
             return;
         }

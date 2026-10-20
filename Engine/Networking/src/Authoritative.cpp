@@ -2,6 +2,7 @@
 
 #include <NF/Networking/Authoritative.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -66,6 +67,22 @@ bool decode_input(const u8* data, usize size, NetInput& out, std::string& out_er
         return false;
     }
     out.jump = data[12] == 1;
+    // A NaN in a movement axis is STICKY: it survives every integration step,
+    // so one hostile packet would put NaN into the authoritative position,
+    // into every snapshot the server publishes from then on, and into every
+    // client that applies one. Every other codec in this module rejects
+    // non-finite values for exactly this reason.
+    if (!std::isfinite(out.move_x) || !std::isfinite(out.move_z)) {
+        out_error = "net input movement not finite";
+        out = NetInput{};
+        return false;
+    }
+    // Gameplay only ever writes the axes in [-1, 1] (they are scaled by the
+    // movement speed), so anything else is corruption rather than a value to
+    // honour: clamp it back into the gameplay range instead of letting a
+    // bogus axis drive the player.
+    out.move_x = std::clamp(out.move_x, -1.0f, 1.0f);
+    out.move_z = std::clamp(out.move_z, -1.0f, 1.0f);
     return true;
 }
 
@@ -75,11 +92,17 @@ NetWorld::NetWorld(float fixed_dt, float speed)
     : m_dt(fixed_dt > 0.0f ? fixed_dt : 1.0f / 60.0f), m_speed(speed) {}
 
 void NetWorld::add_entity(u32 id, float x, float y, float z) {
-    m_bodies[id] = Body{x, y, z, 0.0f, 0.0f};
+    // The generation counter lives OUTSIDE the body: a removed id that is
+    // handed out again is a NEW entity, and the stale snapshot of the old
+    // one must still be recognisable as stale.
+    const u32 generation = ++m_generations[id];
+    m_bodies[id] = Body{x, y, z, 0.0f, 0.0f, generation};
 }
 
 void NetWorld::remove_entity(u32 id) {
     m_bodies.erase(id);
+    // The generation is NOT forgotten: the id may be handed out again, and
+    // the new entity must not be confused with the old one.
 }
 
 bool NetWorld::has_entity(u32 id) const {
@@ -107,7 +130,7 @@ Snapshot NetWorld::to_snapshot(u32 tick) const {
     for (const auto& [id, b] : m_bodies) {
         SnapshotEntity e;
         e.id = id;
-        e.generation = 0;
+        e.generation = b.generation;
         e.x = b.x;
         e.y = b.y;
         e.z = b.z;
@@ -118,13 +141,24 @@ Snapshot NetWorld::to_snapshot(u32 tick) const {
 
 void NetWorld::apply_snapshot(const Snapshot& snapshot) {
     for (const auto& e : snapshot.entities) {
+        // The generation this side has ISSUED for the id (0 = never seen).
+        u32& issued = m_generations[e.id];
+        if (e.generation < issued) {
+            // STALE record: the local id was recycled after this snapshot
+            // was taken, so the record describes an entity that no longer
+            // exists. Applying it would resurrect the old one.
+            continue;
+        }
+        issued = e.generation;
         auto it = m_bodies.find(e.id);
         if (it == m_bodies.end()) {
-            m_bodies[e.id] = Body{e.x, e.y, e.z, 0.0f, 0.0f};
+            // Unknown here: adopt the record as-is, generation included.
+            m_bodies[e.id] = Body{e.x, e.y, e.z, 0.0f, 0.0f, e.generation};
         } else {
             it->second.x = e.x;
             it->second.y = e.y;
             it->second.z = e.z;
+            it->second.generation = e.generation;
         }
     }
 }
@@ -146,8 +180,36 @@ void AuthoritativeServer::add_player(u32 entity_id, float x, float y, float z) {
     m_world.add_entity(entity_id, x, y, z);
 }
 
-void AuthoritativeServer::submit_input(u32 entity_id, const NetInput& input) {
-    m_inputs[entity_id][input.tick] = input;
+bool AuthoritativeServer::submit_input(u32 entity_id, const NetInput& input) {
+    // Only a REGISTERED entity may submit. An unknown id would create a
+    // permanent entry in the outer map, and a client inventing ids would
+    // grow the server's memory one entry at a time.
+    if (!m_world.has_entity(entity_id)) return false;
+    // Ticks are u32 and wrap, so the window is compared wrap-aware.
+    if (tick_less(m_tick, input.tick)) {
+        // Too far in the future: refused, never stored. A client that
+        // submits tick 10'000'000 must not make the server hold it.
+        if (static_cast<u32>(input.tick - m_tick) > kNetInputLeadTicks) return false;
+    } else if (tick_less(input.tick, m_tick)) {
+        // Too far in the past: late input never rewinds, so it is dropped.
+        if (static_cast<u32>(m_tick - input.tick) > kNetInputWindowTicks) return false;
+    }
+    auto& per_tick = m_inputs[entity_id];
+    per_tick[input.tick] = input;
+    // Trim the tail: an entry that has fallen out of the window is dead
+    // weight, and without this the map would only shrink when the current
+    // tick happens to arrive.
+    if (per_tick.size() > kNetInputWindowTicks + kNetInputLeadTicks + 1) {
+        const u32 oldest_kept = m_tick - kNetInputWindowTicks;
+        for (auto it = per_tick.begin(); it != per_tick.end();) {
+            if (tick_less(it->first, oldest_kept)) {
+                it = per_tick.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    return true;
 }
 
 void AuthoritativeServer::tick() {

@@ -309,7 +309,14 @@ std::vector<u8> encode_constraint_event(const ConstraintEvent& event) {
     out.push_back('E');
     push_u16(out, 1); // version
     push_u8(out, static_cast<u8>(event.op));
-    push_u8(out, static_cast<u8>(event.kind));
+    // Remove and Clone carry no kind on the wire, and the kind byte is part
+    // of the header: it must be Fixed for both, or the decoder's exact-size
+    // check refuses a packet this encoder just produced (the joint is then
+    // never torn down, silently). The header documents the rule: the kind
+    // of a Remove is ignored, so it is normalised instead of honoured.
+    const bool kindless = (event.op == ConstraintOp::Remove ||
+                           event.op == ConstraintOp::Clone);
+    push_u8(out, static_cast<u8>(kindless ? ConstraintKind::Fixed : event.kind));
     if (event.op == ConstraintOp::Remove) {
         push_u32(out, event.net_id);
         return out;
@@ -517,14 +524,59 @@ bool decode_constraint_event(const u8* data, usize size, ConstraintEvent& out,
 
 // --- Server-side drive-input queue ------------------------------------------
 
-void VehicleInputQueue::submit_drive_input(u32 entity, const VehicleDriveInput& input) {
-    m_inputs[entity][input.tick] = input;
+bool VehicleInputQueue::submit_drive_input(u32 entity, const VehicleDriveInput& input) {
+    // A peer names BOTH the vehicle and the tick, so neither may be trusted
+    // to stay small: the queue is bounded in both directions.
+    // Ticks are u32 and wrap, so the window is compared wrap-aware against
+    // the clock the server itself runs on (m_now, advanced by consume()).
+    if (tick_less(m_now, input.tick)) {
+        // Too far in the future: refused, never stored.
+        if (static_cast<u32>(input.tick - m_now) > kPendingInputLeadTicks) {
+            ++m_dropped;
+            return false;
+        }
+    } else if (tick_less(input.tick, m_now)) {
+        // Too far in the past: late input never rewinds, so it is dropped.
+        if (static_cast<u32>(m_now - input.tick) > kPendingInputWindowTicks) {
+            ++m_dropped;
+            return false;
+        }
+    }
+    auto it = m_inputs.find(entity);
+    if (it == m_inputs.end()) {
+        if (m_inputs.size() >= kMaxQueuedVehicles) {
+            // The table is full: an unknown vehicle is refused rather than
+            // allowed to grow the map one entry at a time.
+            ++m_dropped;
+            return false;
+        }
+        it = m_inputs.emplace(entity, std::map<u32, VehicleDriveInput>{}).first;
+    }
+    auto& per_tick = it->second;
+    per_tick[input.tick] = input;
+    // Trim the tail: an entry that has fallen out of the window is dead
+    // weight, and without this the map would only shrink when the wanted
+    // tick happens to arrive.
+    if (per_tick.size() > kPendingInputWindowTicks + kPendingInputLeadTicks + 1) {
+        const u32 oldest_kept = m_now - kPendingInputWindowTicks;
+        for (auto pit = per_tick.begin(); pit != per_tick.end();) {
+            if (tick_less(pit->first, oldest_kept)) {
+                pit = per_tick.erase(pit);
+            } else {
+                ++pit;
+            }
+        }
+    }
+    return true;
 }
 
 bool VehicleInputQueue::consume(u32 entity, u32 tick, VehicleDriveInput& out) {
     out = VehicleDriveInput{};
     out.tick = tick;
     out.entity = entity;
+    // The requested tick IS the server's clock: it is what the input window
+    // is measured against, even when the vehicle has nothing queued.
+    if (tick_less(m_now, tick)) m_now = tick;
     auto it = m_inputs.find(entity);
     if (it == m_inputs.end()) return false;
     auto& per_tick = it->second;
@@ -563,9 +615,15 @@ void VehicleGhostClient::apply_vehicle_snapshot(const VehicleSnapshot& snapshot)
         pqw = prev->second.qw;
         had_focus = true;
     }
+    // The ghost table IS the last snapshot: a vehicle the server stopped
+    // replicating must not linger here forever, or a server that names ten
+    // thousand entities per snapshot would grow this map without bound.
+    std::unordered_map<u32, VehicleNetState> fresh;
+    fresh.reserve(snapshot.vehicles.size());
     for (const auto& v : snapshot.vehicles) {
-        m_ghosts[v.entity] = v;
+        fresh[v.entity] = v;
     }
+    m_ghosts = std::move(fresh);
     m_acked = snapshot.tick;
     m_has_acked = true;
     const auto cur = m_ghosts.find(m_focus);

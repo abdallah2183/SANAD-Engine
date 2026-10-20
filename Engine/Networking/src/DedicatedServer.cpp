@@ -41,6 +41,12 @@ bool DedicatedServer::provision(u32 ip, u16 port) {
         ++m_refused;
         return false;
     }
+    const Endpoint endpoint{ip, port};
+    // Already connected: this is the same peer coming back, not a new one.
+    if (m_player_by_endpoint.find(endpoint) != m_player_by_endpoint.end()) {
+        ++m_refused;
+        return false;
+    }
     const u32 id = m_next_player++;
     Client c;
     c.player_id = id;
@@ -52,15 +58,40 @@ bool DedicatedServer::provision(u32 ip, u16 port) {
     m_world.add_player(id, m_config.spawn_x + static_cast<float>(id - 1),
                        m_config.spawn_y, m_config.spawn_z);
     m_players.emplace(id, std::move(c));
-    m_player_by_port.emplace(port, id);
+    m_player_by_endpoint.emplace(endpoint, id);
     return true;
 }
 
-DedicatedServer::Client* DedicatedServer::client_by_port(u16 port) {
-    auto it = m_player_by_port.find(port);
-    if (it == m_player_by_port.end()) return nullptr;
+DedicatedServer::Client* DedicatedServer::client_by_endpoint(u32 ip, u16 port) {
+    const auto it = m_player_by_endpoint.find(Endpoint{ip, port});
+    if (it == m_player_by_endpoint.end()) return nullptr;
     auto pit = m_players.find(it->second);
     return pit == m_players.end() ? nullptr : &pit->second;
+}
+
+bool DedicatedServer::first_message_is_complete(const NetPacket& pkt) const {
+    // The first message must CARRY a payload that decodes: a bare channel
+    // header proves nothing about the client's intent, and a bare header is
+    // the only thing a scanner needs to spray at the port.
+    if (pkt.payload.empty()) return false;
+    NetInput in;
+    std::string err;
+    return decode_input(pkt.payload.data(), pkt.payload.size(), in, err);
+}
+
+bool DedicatedServer::provision_rate_limited(u32 ip, u64 now_ms) {
+    // Provisioning is rate limited per source ADDRESS: a scanner spraying
+    // well-formed first messages must not be able to burn the player table
+    // faster than real clients can connect. 0 disables the limit.
+    if (m_config.max_provisions_per_ip == 0) return false;
+    auto& window = m_provision_windows[ip];
+    if (now_ms - window.start_ms >= kProvisionWindowMs) {
+        window.start_ms = now_ms;
+        window.attempts = 0;
+    }
+    if (window.attempts >= m_config.max_provisions_per_ip) return true;
+    ++window.attempts;
+    return false;
 }
 
 void DedicatedServer::pump(u64 now_ms) {
@@ -80,14 +111,27 @@ void DedicatedServer::pump(u64 now_ms) {
             continue;
         }
 
-        Client* client = client_by_port(d.from_port);
+        Client* client = client_by_endpoint(d.from_ip, d.from_port);
         if (client == nullptr) {
-            // First contact: this datagram IS a client connecting. Provision
-            // the next player id and bind the connection to this source port.
-            // A full server drops the stranger (counted as a refusal) rather
-            // than evicting a player already in the game.
+            // First contact: this datagram IS a client connecting — but only
+            // a COMPLETE, well-formed first message earns a player slot. A
+            // bare header (or a payload that is not a valid input) is junk:
+            // it earns a malformed count, not a reservation. Otherwise a
+            // scanner spraying 13-byte datagrams at the port exhausts
+            // max_players one byte at a time.
+            if (!first_message_is_complete(pkt)) {
+                ++m_malformed;
+                continue;
+            }
+            if (provision_rate_limited(d.from_ip, now_ms)) {
+                ++m_refused;
+                continue;
+            }
+            // Provision the next player id and bind the connection to this
+            // source endpoint. A full server drops the stranger (counted as a
+            // refusal) rather than evicting a player already in the game.
             if (!provision(d.from_ip, d.from_port)) continue;
-            client = client_by_port(d.from_port);
+            client = client_by_endpoint(d.from_ip, d.from_port);
             if (client == nullptr) continue;
         }
 

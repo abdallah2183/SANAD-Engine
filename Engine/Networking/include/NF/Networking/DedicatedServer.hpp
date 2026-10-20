@@ -8,8 +8,9 @@
 // pieces the simulation deliberately knows nothing about:
 //   - one UdpSocket bound to a port (loopback-only by default, exactly like
 //     the tests; a production host passes a real address),
-//   - one ReliableChannel per connected client, demultiplexed by source port
-//     because every connection shares the server's single socket,
+//   - one ReliableChannel per connected client, demultiplexed by source
+//     endpoint (address AND port) because every connection shares the
+//     server's single socket,
 //   - player provisioning: a client's first datagram claims the next free
 //     player slot (a net entity id), so "connecting" is implicit in UDP,
 //     which is the honest model for a connectionless transport.
@@ -48,6 +49,10 @@ struct DedicatedServerConfig {
     float spawn_x = 0.0f;           // where a newly provisioned player appears
     float spawn_y = 0.0f;           // (player n is offset to x + (n-1), so two
     float spawn_z = 0.0f;           // connecting clients never stack)
+    /// How many players one source ADDRESS may claim per second. 0 disables
+    /// the limit. The default is generous enough for a whole NAT while still
+    /// stopping a scanner from burning the player table in a burst.
+    u32 max_provisions_per_ip = 32;
 };
 
 class DedicatedServer {
@@ -65,9 +70,10 @@ public:
     u16 local_port() const { return m_socket.local_port(); }
 
     /// Pumps the socket without stepping the simulation: drains incoming
-    /// datagrams into the per-client channels (provisioning a player on first
-    /// contact), submits decoded inputs, and flushes acks back to each client.
-    /// Idempotent and safe to call in a tight poll loop.
+    /// datagrams into the per-client channels (provisioning a player on the
+    /// first COMPLETE, well-formed message), submits decoded inputs, and
+    /// flushes acks back to each client. Idempotent and safe to call in a
+    /// tight poll loop.
     void pump(u64 now_ms);
 
     /// One authoritative tick: pump, step the shared world, broadcast the
@@ -94,6 +100,30 @@ public:
     u32 malformed_packets() const { return m_malformed; }
 
 private:
+    /// How long a provisioning rate-limit window lasts (per source address).
+    static constexpr u64 kProvisionWindowMs = 1000;
+
+    /// A UDP peer is the (ADDRESS, PORT) pair, never the port alone: two
+    /// clients on the same host, or behind two different NATs, can pick the
+    /// same source port, and keying by port alone would hand the second
+    /// client's datagrams to the first client's channel.
+    struct Endpoint {
+        u32 ip = 0;
+        u16 port = 0;
+
+        bool operator==(const Endpoint& o) const { return ip == o.ip && port == o.port; }
+    };
+
+    struct EndpointHash {
+        usize operator()(const Endpoint& e) const noexcept {
+            // Mix the address and the port into one word: the port alone
+            // would collide for every client behind the same NAT.
+            u64 h = static_cast<u64>(e.ip) * 0x9E3779B97F4A7C15ull;
+            h ^= static_cast<u64>(e.port) + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+            return static_cast<usize>(h);
+        }
+    };
+
     struct Client {
         u32 player_id = 0;
         u32 ip = 0;
@@ -103,14 +133,28 @@ private:
         bool has_submitted = false;
     };
 
-    Client* client_by_port(u16 port);
+    /// Provisioning attempts per source address, inside the current window.
+    struct ProvisionWindow {
+        u64 start_ms = 0;
+        u32 attempts = 0;
+    };
+
+    Client* client_by_endpoint(u32 ip, u16 port);
     bool provision(u32 ip, u16 port);
+    /// True when the address has already used up its provisioning budget.
+    bool provision_rate_limited(u32 ip, u64 now_ms);
+    /// A player slot is only earned by a COMPLETE, well-formed first
+    /// message — a bare channel header is junk.
+    bool first_message_is_complete(const NetPacket& pkt) const;
 
     DedicatedServerConfig m_config;
     UdpSocket m_socket;
     AuthoritativeServer m_world;
     std::unordered_map<u32, Client> m_players;   // player id -> connection
-    std::unordered_map<u16, u32> m_player_by_port; // source port -> player id
+    // A UDP peer is the (address, port) pair: two clients can share a source
+    // port, and keying by port alone would cross their datagrams.
+    std::unordered_map<Endpoint, u32, EndpointHash> m_player_by_endpoint;
+    std::unordered_map<u32, ProvisionWindow> m_provision_windows; // ip -> window
     u32 m_next_player = 1;
     u32 m_refused = 0;
     u32 m_malformed = 0;

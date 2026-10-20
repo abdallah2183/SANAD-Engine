@@ -29,6 +29,15 @@
 
 namespace nf::net {
 
+/// Input window of the server-side queues (see AuthoritativeServer::
+/// submit_input): a client may run at most this many ticks AHEAD of the
+/// server's current tick, and the server keeps at most this many ticks of
+/// input behind it. At 60Hz, 120 ticks is two seconds: long enough for a
+/// client that is a round trip plus a frame behind, short enough that a
+/// client cannot make the server hold an unbounded number of ticks.
+inline constexpr u32 kNetInputLeadTicks = 120;
+inline constexpr u32 kNetInputWindowTicks = 120;
+
 /// Player intent for one tick. Fixed 12-byte encoding (little-endian).
 struct NetInput {
     u32 tick = 0;
@@ -66,10 +75,15 @@ private:
     struct Body {
         float x = 0, y = 0, z = 0;
         float vx = 0, vz = 0;
+        u32 generation = 0; // bumped every time the id is (re)issued
     };
     float m_dt = 1.0f / 60.0f;
     float m_speed = 6.0f;
     std::unordered_map<u32, Body> m_bodies;
+    // The generation counter of every id ever issued. It outlives the body
+    // on purpose: a recycled id must be distinguishable from the entity it
+    // replaced, and the snapshot carries the counter for exactly that.
+    std::unordered_map<u32, u32> m_generations;
 };
 
 /// Authoritative game server: owns the world, consumes inputs, emits snapshots.
@@ -80,7 +94,11 @@ public:
     void add_player(u32 entity_id, float x, float y, float z);
     /// Queues an input for its tick (re-submission replaces: the latest
     /// intent for a tick wins). Ticks are consumed in order by tick().
-    void submit_input(u32 entity_id, const NetInput& input);
+    /// Returns false when the input was REFUSED: the entity is not
+    /// registered, or the tick falls outside the input window (too far in
+    /// the future, or too far in the past to ever be applied). A refused
+    /// input is never stored.
+    bool submit_input(u32 entity_id, const NetInput& input);
     /// Steps exactly one fixed tick, consuming tick-matched inputs
     /// (missing input = neutral), and publishes its snapshot.
     void tick();

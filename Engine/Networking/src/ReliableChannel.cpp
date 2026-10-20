@@ -41,21 +41,31 @@ bool ReliableChannel::seq_less(u16 a, u16 b) {
 
 bool ReliableChannel::send_reliable(std::vector<u8> payload) {
     if (payload.empty()) return false;
-    const u16 seq = m_next_seq++;
-    m_unacked.emplace(seq, Unacked{std::move(payload), 0, false});
+    // The queue is bounded: a peer that never acks must not be able to grow
+    // the sender's memory without limit.
+    if (m_unacked.size() >= kMaxUnacked) return false;
+    const u32 seq = m_next_seq;
+    const auto inserted = m_unacked.emplace(seq, Unacked{std::move(payload), 0, false});
+    // The sequence is already in flight: refuse the payload instead of
+    // dropping it silently. With a 32-bit counter this cannot happen, but
+    // the check is the difference between "lost" and "reported".
+    if (!inserted.second) return false;
+    ++m_next_seq;
     return true;
 }
 
 std::vector<NetPacket> ReliableChannel::poll_outgoing(u64 now_ms) {
-    // Current ack state: cumulative ack is the last delivered sequence, and
-    // bit n covers (ack - 1 - n).
-    u16 ack = static_cast<u16>(m_expected - 1);
+    // Current ack state: the cumulative ack is the last delivered sequence,
+    // and the bitfield names the sequences already received OUT OF ORDER
+    // (bit n ⟺ ack + 1 + n). Those are exactly the packets sitting in the
+    // receive buffer: the sender can free them now instead of resending
+    // them until the gap in front of them fills.
+    const u16 ack = static_cast<u16>(m_expected - 1);
     u32 bits = 0;
-    for (u16 seq : m_recent) {
-        // Only sequences strictly below the cumulative ack belong in bits.
-        if (!seq_less(seq, m_expected) || seq == static_cast<u16>(m_expected - 1)) continue;
-        const u16 distance = static_cast<u16>(static_cast<u16>(m_expected - 1) - seq - 1);
-        if (distance < 32) bits |= (1u << distance);
+    for (const auto& [seq, payload] : m_receive_buffer) {
+        (void)payload;
+        const u16 distance = static_cast<u16>(seq - ack);
+        if (distance >= 1 && distance <= 32) bits |= (1u << (distance - 1));
     }
 
     std::vector<NetPacket> out;
@@ -66,7 +76,7 @@ std::vector<NetPacket> ReliableChannel::poll_outgoing(u64 now_ms) {
         entry.sent_once = true;
         entry.last_sent_ms = now_ms;
         NetPacket pkt;
-        pkt.seq = seq;
+        pkt.seq = static_cast<u16>(seq & 0xFFFFu);
         pkt.ack = ack;
         pkt.ack_bits = bits;
         pkt.payload = entry.payload;
@@ -75,22 +85,14 @@ std::vector<NetPacket> ReliableChannel::poll_outgoing(u64 now_ms) {
     // Pure ack (no payload) when there is nothing else to say: ack state
     // still needs to travel, or the peer resends forever. Emitted only when
     // the queue is silent to avoid doubling every packet.
-    if (out.empty() && (!m_recent.empty() || m_expected != 0)) {
+    if (out.empty() && (m_received_any || m_expected != 0 || !m_receive_buffer.empty())) {
         NetPacket pkt;
-        pkt.seq = m_next_seq; // NOT consumed: pure acks carry no sequence
+        pkt.seq = next_seq(); // NOT consumed: pure acks carry no sequence
         pkt.ack = ack;
         pkt.ack_bits = bits;
         out.push_back(std::move(pkt));
     }
     return out;
-}
-
-void ReliableChannel::note_received(u16 seq) {
-    for (u16 s : m_recent) {
-        if (s == seq) return;
-    }
-    m_recent.push_back(seq);
-    while (m_recent.size() > 33) m_recent.erase(m_recent.begin());
 }
 
 std::vector<std::vector<u8>> ReliableChannel::receive(const NetPacket& packet) {
@@ -103,12 +105,14 @@ std::vector<std::vector<u8>> ReliableChannel::receive(const NetPacket& packet) {
         // Since our unacked seqs are all ahead of (or at) the peer's view,
         // free when NOT seq_less(ack, seq).
         for (auto it = m_unacked.begin(); it != m_unacked.end();) {
-            const u16 seq = it->first;
+            const u16 seq = static_cast<u16>(it->first & 0xFFFFu);
             bool acked = !seq_less(packet.ack, seq);
             if (!acked) {
-                // Bitfield: bit n ⟺ (ack - 1 - n) received, i.e. n = ack - seq - 1.
-                const u16 distance = static_cast<u16>(packet.ack - seq);
-                if (distance >= 1 && distance - 1 < 32) {
+                // Bitfield: bit n ⟺ (ack + 1 + n) was received out of order.
+                // The distance is measured FORWARD from the cumulative ack,
+                // and only the 32 sequences right above it can be named.
+                const u16 distance = static_cast<u16>(seq - packet.ack);
+                if (distance >= 1 && distance <= 32) {
                     acked = (packet.ack_bits & (1u << (distance - 1))) != 0;
                 }
             }
@@ -122,7 +126,7 @@ std::vector<std::vector<u8>> ReliableChannel::receive(const NetPacket& packet) {
     // Pure acks carry no payload and no sequence.
     if (packet.payload.empty()) return ready;
 
-    note_received(packet.seq);
+    m_received_any = true;
     if (seq_less(packet.seq, m_expected)) {
         return ready; // duplicate or ancient: acked above, never delivered
     }

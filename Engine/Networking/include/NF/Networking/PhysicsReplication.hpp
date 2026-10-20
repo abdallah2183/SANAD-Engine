@@ -60,6 +60,16 @@
 
 namespace nf::net {
 
+// Bounds of the server-side drive-input queue (see VehicleInputQueue): a
+// peer names both the vehicle and the tick, so the queue is capped in both
+// directions. kPendingInputLeadTicks is how far AHEAD of the server's clock
+// an input may be, kPendingInputWindowTicks how far behind it may be, and
+// kMaxQueuedVehicles how many distinct vehicles are tracked at once. At
+// 60Hz, 120 ticks is two seconds.
+inline constexpr u32 kPendingInputLeadTicks = 120;
+inline constexpr u32 kPendingInputWindowTicks = 120;
+inline constexpr usize kMaxQueuedVehicles = 1024;
+
 // --- Vehicle drive input (client → server, reliable channel payload) ------
 
 /// Arcade intent for one vehicle on one tick. Ranges mirror VehicleComponent:
@@ -183,22 +193,37 @@ bool decode_constraint_event(const u8* data, usize size, ConstraintEvent& out,
 /// one tick's input per vehicle (missing = neutral zeros); resubmission
 /// replaces (latest intent for a tick wins); ticks at or below the consumed
 /// one are dropped so late input never rewinds the simulation.
+///
+/// The store is BOUNDED, because a peer names both the vehicle and the tick:
+/// an input outside the tick window (too far ahead of the server's clock, or
+/// too far behind it to ever be applied) is refused, and the table holds at
+/// most kMaxQueuedVehicles vehicles. A refused input is never stored, and
+/// dropped_inputs() counts the refusals.
 class VehicleInputQueue {
 public:
-    void submit_drive_input(u32 entity, const VehicleDriveInput& input);
+    /// Queues an input for its tick. Returns false when it was refused (the
+    /// tick is outside the window, or the vehicle table is full).
+    bool submit_drive_input(u32 entity, const VehicleDriveInput& input);
     /// Returns true when a real input matched (entity, tick); false leaves
     /// `out` neutral (zeros, tick/entity filled in for bookkeeping).
     bool consume(u32 entity, u32 tick, VehicleDriveInput& out);
     usize pending(u32 entity) const;
+    /// Telemetry: how many inputs were refused (window or table overflow).
+    usize dropped_inputs() const { return m_dropped; }
 
 private:
     std::unordered_map<u32, std::map<u32, VehicleDriveInput>> m_inputs;
+    u32 m_now = 0; // the server's clock, advanced by consume()
+    usize m_dropped = 0;
 };
 
 // --- Client-side authoritative ghosts ----------------------------------------
 
 /// Server truth as the client sees it: one entry per replicated vehicle,
 /// overwritten whole on every snapshot (no prediction — see header note).
+/// The table is REBUILT from every snapshot: a vehicle the server stops
+/// replicating is dropped, so the map cannot grow with every entity id the
+/// server happens to name.
 class VehicleGhostClient {
 public:
     explicit VehicleGhostClient(u32 focus_entity);

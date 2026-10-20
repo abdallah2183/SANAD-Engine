@@ -27,7 +27,9 @@
 //      delivery in send order, so a pending body event is always moments
 //      behind, and the joint lands the instant its endpoints bind. A joint
 //      whose body NEVER arrives fails loudly via pending() telemetry instead
-//      of silently vanishing.
+//      of silently vanishing. A Clone waits for its TEMPLATE joint too:
+//      cloning a joint that does not exist yet is impossible, and failing
+//      the clone instead of deferring it would lose the joint for good.
 //   2. AUTHORITY: the server assigns every net constraint id, and the client
 //      trusts that id. A Spawn/Clone whose net_id is already applied is a
 //      duplicate (a resent reliable packet) and is ignored — the same
@@ -167,6 +169,11 @@ public:
     const BodyRegistry& bodies() const { return m_bodies; }
 
 private:
+    /// How many joints may wait for their endpoints at once. A peer naming
+    /// body ids that never arrive would otherwise fill the waiting room
+    /// forever, and flush_pending() scans it on every packet.
+    static constexpr usize kMaxPendingConstraints = 1024;
+
     bool endpoints_live(const ConstraintEvent& e) const;
     void apply_constraint_event(const ConstraintEvent& e, ApplyResult& result);
     /// Tears down every applied joint touching `net_body` (joints first, then
