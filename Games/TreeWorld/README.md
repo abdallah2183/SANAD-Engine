@@ -30,13 +30,38 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj --frames
 
 ## What is in the scene
 
-- 63 entities, authored as plain text in `Content/Scenes/Main.nfscene`.
-- 8 trees (trunk + three canopy layers), 3 rocks, bushes, a stone path, five
-  emissive fireflies, and a six-part primitive character.
+- 40 entities, authored as plain text in `Content/Scenes/Main.nfscene`.
+- 8 trees (a leaning tapered trunk + a canopy of four crowns), 3 rocks,
+  bushes, a stone path and five emissive fireflies.
+- **One rigged character.** The explorer is a single entity with a rig: a
+  glTF that carries a skin, 19 bones and three clips (idle, walk, run). The
+  engine skins it and plays the clip that matches how fast it is moving.
+- **A camera that follows.** `Camera: ... follow=Player pivot=0,1.45,0
+  distance=5.2 yaw=180 pitch=-13 smoothing=9 radius=0.35` — the camera
+  orbits the character, eases after it, and pulls in front of a tree
+  instead of ending up inside one.
 - Daylight sky, cascaded sun shadows, distance fog, ACES tonemap, bloom,
   colour grading, vignette.
 - Procedural bark and leaf textures under `Content/Textures`; all materials are
   text `.nfmat` files.
+
+## Where the assets come from
+
+The character and the props are **authored as code**, not modelled in a DCC
+tool, so they are reproducible, reviewable as code, and carry no
+third-party licence:
+
+- `Tools/Character/make_character.py` writes
+  `Content/Characters/Explorer.gltf` (and its `.bin`).
+- `Tools/Props/make_props.py` writes `Content/Meshes/TreeTrunk.gltf`,
+  `TreeCanopy.gltf` and `Rock.gltf`.
+
+Re-run them after changing the shape of a bone, a tree or a rock:
+
+```bat
+python Tools\Character\make_character.py
+python Tools\Props\make_props.py
+```
 
 ## Gameplay script
 

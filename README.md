@@ -117,11 +117,12 @@ Claude Code, Codex, Cursor, or another coding agent at this repository:
 
 ## 🎮 Sample game: TreeWorld
 
-A complete playable game built entirely from SANAD data — a low-poly explorer
+A complete playable game built entirely from SANAD data — a rigged explorer
 walking a misty forest, collecting five fireflies. Source, scene, Lua, materials,
 and procedural textures live in [`Games/TreeWorld`](Games/TreeWorld); the style
-is deliberately low-poly because the engine ships primitive meshes, not a scanned
-forest pack.
+is deliberately low-poly because the assets are authored as code (a rig with 19
+bones and three clips, tapered trunks, jittered rocks) rather than bought from a
+scanned forest pack.
 
 <img src="Games/TreeWorld/Screenshot.png" alt="TreeWorld — misty forest with a third-person explorer" width="860">
 
@@ -140,6 +141,18 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 - **A real game, not a tech demo** — TreeWorld is packaged and played by the
   shipped player, and CI accepts it by the player's own log line
   (`Validation errors: 0`), not by "the folder looks right".
+- **A third-person camera.** The camera follows a player: a pivot on the
+  character, an orbit (distance, yaw, pitch), frame-rate-independent
+  smoothing, and a collision sphere that pulls it in front of a tree
+  instead of leaving it inside one.
+- **A character with a skeleton and a walk cycle.** The explorer is ONE
+  entity with a rig — a glTF with a skin, 19 bones and three clips (idle,
+  walk, run). The engine skins it and plays the clip that matches how fast
+  it is moving. It used to be seven ordinary entities and a Lua script
+  that moved them by hand.
+- **A forest that is not a cube and three spheres.** Tapered trunks that
+  lean, canopies of overlapping crowns, jittered rocks — all authored as
+  code, so they are reproducible and carry no third-party licence.
 - **Agent-ready from the first command.** `AGENTS.md`, `CLAUDE.md`, Cursor rules,
   `llms.txt`, a per-project `AGENTS.md`, and `nf guide` all teach an AI the same
   native scene/Lua workflow — no HTML fallback.
