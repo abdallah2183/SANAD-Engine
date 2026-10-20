@@ -737,8 +737,9 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     // The name runs to the next space, so a name with no
                     // spaces is the whole value.
                     const std::string follow_value = line.substr(follow_pos + 7);
-                    const size_t end = rest.find(' ');
-                    cam.follow_target = (end == std::string::npos) ? follow_value : follow_value.substr(0, end);
+                    const size_t end = follow_value.find(' ');
+                    cam.follow_target = (end == std::string::npos) ? follow_value
+                                                                  : follow_value.substr(0, end);
                 }
                 auto scan_vec3 = [&](const char* prefix, float& x, float& y, float& z) {
                     const size_t pos = line.find(prefix);

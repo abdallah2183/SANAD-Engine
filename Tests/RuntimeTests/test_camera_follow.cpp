@@ -153,14 +153,16 @@ NF_TEST(follow_camera_orbits_the_pivot_with_its_yaw) {
 
 NF_TEST(follow_camera_pitch_raises_and_lowers_the_camera) {
     const Vec3 pivot{0.0f, 0.0f, 0.0f};
-    // A negative pitch looks DOWN, so the camera sits BELOW the pivot.
-    const Vec3 below = follow_camera_position(pivot, 0.0f, -30.0f, 5.0f);
-    NF_CHECK(below.y < -1.0f);
-    // The distance is the distance, whatever the pitch.
-    NF_CHECK_NEAR((below - pivot).length(), 5.0f, kEps);
-    // A positive pitch puts it above.
-    const Vec3 above = follow_camera_position(pivot, 0.0f, 30.0f, 5.0f);
+    // A negative pitch looks DOWN, so the camera sits ABOVE the pivot. This is
+    // the convention every engine uses, and the opposite one puts a
+    // third-person camera under the character's chin.
+    const Vec3 above = follow_camera_position(pivot, 0.0f, -30.0f, 5.0f);
     NF_CHECK(above.y > 1.0f);
+    // The distance is the distance, whatever the pitch.
+    NF_CHECK_NEAR((above - pivot).length(), 5.0f, kEps);
+    // A positive pitch puts it below.
+    const Vec3 below = follow_camera_position(pivot, 0.0f, 30.0f, 5.0f);
+    NF_CHECK(below.y < -1.0f);
 }
 
 NF_TEST(follow_camera_smoothing_covers_the_same_ground_per_second_at_any_frame_rate) {

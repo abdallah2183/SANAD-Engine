@@ -18,8 +18,13 @@ Vec3 follow_camera_direction(float yaw_deg, float pitch_deg) {
     const f32 pitch = pitch_deg * kDegToRad;
     // The camera sits BEHIND the pivot and looks at it, so the direction from
     // the pivot to the camera is the negation of the view direction.
+    //
+    // The pitch follows the convention every engine uses: NEGATIVE looks
+    // DOWN, so the camera is above the target and tilts towards it. A camera
+    // below the pivot, staring up at the character's chin, is the wrong way
+    // round for a third-person game.
     const f32 cp = std::cos(pitch);
-    return Vec3{std::sin(yaw) * cp, std::sin(pitch), std::cos(yaw) * cp}.normalized();
+    return Vec3{std::sin(yaw) * cp, -std::sin(pitch), std::cos(yaw) * cp}.normalized();
 }
 
 Vec3 follow_camera_position(const Vec3& pivot, float yaw_deg, float pitch_deg, float distance) {

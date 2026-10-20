@@ -783,14 +783,6 @@ std::vector<Runtime::AnimatedTransformSample> Runtime::animated_transform_sample
         }
         AnimatedTransformSample s;
         s.entity_id = e.id;
-        {
-            // TEMPORARY DIAGNOSTIC
-            std::string nm = "?";
-            if (const auto* nc = world.get<scene::NameComponent>(e)) {
-                nm = nc->name;
-            }
-            NF_LOG_WARN(LogCategory::Core, "DIAG animated entity id={} name={}", e.id, nm);
-        }
         s.translation = Vec3(t->local_x, t->local_y, t->local_z);
         s.rotation_euler_degrees = Vec3(t->rot_x, t->rot_y, t->rot_z);
         s.scale = Vec3(t->scale_x, t->scale_y, t->scale_z);
@@ -3409,7 +3401,10 @@ void Runtime::update_follow_camera(float dt) {
         cam = c;
         break;
     }
+
     if (cam == nullptr || cam->follow_target.empty()) {
+        // No camera, or a camera that follows nothing: the scene's own
+        // camera (its Transform, looking at the origin) stays in charge.
         return;
     }
 
@@ -3762,15 +3757,30 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
     for (auto e : world.query<scene::Transform, MeshComponent>()) {
         const auto* tr = world.get<scene::Transform>(e);
         const auto* mc = world.get<MeshComponent>(e);
-        if (tr == nullptr || mc == nullptr || !mc->mesh_id.valid()) {
+        if (tr == nullptr || mc == nullptr) {
             continue;
         }
-        auto it = m_mesh_handles.find(mc->mesh_id);
-        if (it == m_mesh_handles.end()) {
-            // Asset still loading or failed: skip safely (no crash).
-            continue;
+        rendering::StaticMeshHandle mesh_handle;
+        if (mc->mesh_id.valid()) {
+            auto it = m_mesh_handles.find(mc->mesh_id);
+            if (it == m_mesh_handles.end()) {
+                // Asset still loading or failed: skip safely (no crash).
+                continue;
+            }
+            mesh_handle = it->second;
+        } else {
+            // A RIGGED CHARACTER: its geometry comes from the rig, not from an
+            // asset id, and its mesh is its OWN (a skinned mesh deforms
+            // differently every frame, so it cannot share the library's copy
+            // of the same file). Without this the character is loaded,
+            // animated and never drawn.
+            const auto* ch = world.get<CharacterComponent>(e);
+            if (ch == nullptr || !ch->loaded || !ch->mesh.valid()) {
+                continue;
+            }
+            mesh_handle = ch->mesh;
         }
-        const rendering::StaticMesh* mesh = m_mesh_library->get(it->second);
+        const rendering::StaticMesh* mesh = m_mesh_library->get(mesh_handle);
         if (mesh == nullptr || !mesh->is_uploaded()) {
             continue;
         }
@@ -3789,7 +3799,7 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
         // Transform becomes a matrix, so this path, extract_render_objects, the
         // editor's bounds and the gizmo all agree.
         ro.world = scene::world_matrix(*tr);
-        ro.mesh_handle = it->second;
+        ro.mesh_handle = mesh_handle;
         // Shared material assignment: same path shares one renderer instance.
         ro.material_handle = material_for_path(mc->material);
         if (!ro.material_handle.valid()) {

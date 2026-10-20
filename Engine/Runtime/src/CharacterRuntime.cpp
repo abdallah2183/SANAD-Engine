@@ -276,6 +276,15 @@ void Runtime::load_characters() {
             mc = &world.add<rendering::MeshComponent>(e, rendering::MeshComponent{});
         }
         mc->mesh = handle;
+        // The MATERIAL comes from the scene, not from the file: the file's
+        // material is not an asset the engine can load on its own, and a
+        // render object with no material is not drawn at all -- the character
+        // would be loaded, animated and invisible.
+        if (const auto* scene_mesh = world.get<MeshComponent>(e)) {
+            if (!scene_mesh->material.empty()) {
+                mc->material = material_for_path(scene_mesh->material);
+            }
+        }
         ch->loaded = true;
         ++m_character_count;
         NF_LOG_INFO(LogCategory::Core,
