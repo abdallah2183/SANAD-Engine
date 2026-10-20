@@ -39,6 +39,36 @@ public:
     [[nodiscard]] virtual bool action_pressed(std::string_view action) const = 0;
     /// Signed magnitude in [-1, 1] for an analogue action; 0 when absent.
     [[nodiscard]] virtual f32 action_axis(std::string_view action) const = 0;
+
+    // --- Pointing ---------------------------------------------------------
+    //
+    // A keyboard source can answer "is W held" forever. A pointer cannot: it
+    // reports how far it MOVED since the last frame, and that number is only
+    // meaningful once per frame. So a source that owns a pointer refreshes it
+    // in begin_frame() and every reader in that frame sees the same value —
+    // a camera that consumed the delta would leave the next reader with zero.
+    //
+    // All three default to "no pointer", which is the truth for a replay log,
+    // a headless run, and every source written before aiming existed.
+
+    /// Called once per frame before anything reads input. Default: nothing.
+    virtual void begin_frame() {}
+
+    /// The pointer's movement since the previous frame, in pixels. Returns
+    /// false when this source has no pointer, so the caller can tell "the
+    /// mouse did not move" from "there is no mouse".
+    [[nodiscard]] virtual bool look_delta(f32& dx, f32& dy) const {
+        (void)dx;
+        (void)dy;
+        return false;
+    }
+
+    /// Wheel notches since the previous frame, positive = forward.
+    [[nodiscard]] virtual f32 wheel_delta() const { return 0.0f; }
+
+    /// Hide and clip the pointer (or give it back) while the game is played.
+    /// Default: nothing — a source with no window has nothing to capture.
+    virtual void set_pointer_capture(bool captured) { (void)captured; }
 };
 
 /// Everything a module may touch, refreshed by the Runtime before each callback.

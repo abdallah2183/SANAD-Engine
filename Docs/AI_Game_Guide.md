@@ -89,7 +89,7 @@ entity_count: 3
 entity: 1:0
   Name: MainCamera
   Transform: local(0,4,8) world(0,4,8) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true follow=Player pivot=0,0,0 distance=7 yaw=0 pitch=-20 align=60
 ---
 entity: 2:0
   Name: Player
@@ -131,12 +131,38 @@ Every script must define `update(dt)`. `dt` is seconds since the previous frame.
 | `nf.entity_name(id, gen)` | name string, or `nil` |
 | `nf.entity_count()` | live entity count |
 | `nf.action("move_forward")` | held? `move_forward`, `move_back`, `move_left`, `move_right`, `jump`, `sprint`, `interact` |
-| `nf.axis("move_x")` | -1..1; `move_x`, `move_z` |
+| `nf.axis("move_x")` | -1..1; `move_x`, `move_z`, `look_x`, `look_y` |
+| `nf.camera_move()` | `x, z` — the move axes rotated by the camera; move with this |
+| `nf.camera_yaw()` | the active camera's yaw in degrees; `0` when the scene has none |
 | `nf.clamp(v, lo, hi)` / `nf.lerp(a,b,t)` | math helpers |
 | `print(...)` | write to the engine log |
 
 Sandbox: no `io`, `os`, `require`, `dofile`, `loadfile`; standard `math`,
 `string`, `table`, `utf8`, `coroutine` are available.
+
+### Rebinding (optional)
+
+`Content/Input/bindings.nfinput` changes which control means which action. It
+overlays the engine defaults, so a file that rebinds one action leaves the rest
+alone — you cannot break a game by writing a short file.
+
+```
+# Content/Input/bindings.nfinput
+jump   = key:Space, pad:A
+sprint = key:Shift, axis:LT
+move_x = -key:A, +key:D, axis:LeftX
+```
+
+- Tokens are `key:NAME`, `pad:NAME`, `axis:NAME`, each optionally prefixed with
+  `+` or `-`. The sign is what the control contributes to an axis.
+- Key names: `A`–`Z`, `0`–`9`, `Space`, `Esc`, `Enter`, `Tab`, `Shift`, `Ctrl`,
+  `Alt`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`,
+  `Insert`, `Delete`, `F1`–`F9`.
+- Pad buttons: `A B X Y LB RB Back Start Guide LS RS DPadUp DPadDown DPadLeft
+  DPadRight`. Pad axes: `LeftX LeftY RightX RightY LT RT`.
+- A line that does not parse is reported with its line number and the whole
+  file is ignored, keeping the defaults. Half a control scheme is worse than
+  the one that worked.
 
 ---
 
@@ -156,8 +182,9 @@ function update(dt)
     local x, y, z = nf.entity_pos(self_id, self_gen)
     if not x then return end
 
-    local mx = nf.axis("move_x")
-    local mz = nf.axis("move_z")
+    -- Camera-relative: the mouse turns the camera, so W walks away from it.
+    -- With no camera in the scene this returns the raw axes.
+    local mx, mz = nf.camera_move()
     nf.set_entity_pos(self_id, self_gen,
         x + mx * speed * dt,
         y,

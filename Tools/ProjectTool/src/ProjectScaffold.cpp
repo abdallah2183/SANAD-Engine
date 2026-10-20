@@ -78,7 +78,9 @@ nf.find_entity("CrateA")          -- id, gen, or nil
 nf.entity_name(id, gen)
 nf.entity_count()
 nf.action("move_forward")         -- W / Up, also move_back/left/right/jump/interact
-nf.axis("move_x")                 -- -1..1, also move_z
+nf.axis("move_x")                 -- -1..1, also move_z, look_x, look_y
+nf.camera_move()                  -- x, z: move_x/move_z rotated by the camera
+nf.camera_yaw()                   -- the active camera's yaw in degrees (0 = none)
 nf.clamp(v, lo, hi)
 nf.lerp(a, b, t)
 print(...)                        -- goes to the engine log
@@ -87,6 +89,10 @@ print(...)                        -- goes to the engine log
 `nf.action` and `nf.axis` use the engine's named actions:
 `move_forward`, `move_back`, `move_left`, `move_right`, `move_x`, `move_z`,
 `jump`, `sprint`, `interact`.
+
+Move with `nf.camera_move()`, not `nf.axis("move_x")`: the player can turn the
+camera, so "forward" is wherever they are looking. In a scene with no camera it
+returns the raw axes, so it is always safe to call.
 
 ## 60-second playable example
 
@@ -102,8 +108,7 @@ function update(dt)
     local x, y, z = nf.entity_pos(self_id, self_gen)
     if not x then return end
 
-    local mx = nf.axis("move_x")
-    local mz = nf.axis("move_z")
+    local mx, mz = nf.camera_move()
     nf.set_entity_pos(self_id, self_gen, x + mx * speed * dt, y, z + mz * speed * dt)
 
     for _, name in ipairs(targets) do

@@ -147,7 +147,9 @@ print(string.format("النقاط: %d", score))
 | `nf.entity_name` | `id, gen` | نص أو `nil` | اسم الكائن |
 | `nf.entity_count` | — | رقم | عدد الكائنات الحيّة |
 | `nf.action` | `action` | `bool` | هل الفعل مضغوط؟ (`move_forward`، `jump`…) |
-| `nf.axis` | `action` | رقم `-1..1` | محور حركة (`move_x`، `move_z`) |
+| `nf.axis` | `action` | رقم `-1..1` | محور حركة (`move_x`، `move_z`، `look_x`، `look_y`) |
+| `nf.camera_move` | — | `x, z` | محورا الحركة مُدوَّران بـ yaw الكاميرا — حرّك بهما |
+| `nf.camera_yaw` | — | رقم | دوران الكاميرا الفعّالة بالدرجات (`0` إن لا كاميرا) |
 | `nf.clamp` | `v, lo, hi` | رقم | حصر قيمة |
 | `nf.lerp` | `a, b, t` | رقم | تنقّل ناعم |
 | `nf.log_info/warn/error` | رسالة | — | اكتب للسجل بمستوى |
@@ -179,8 +181,9 @@ function update(dt)
     local x, y, z = nf.entity_pos(self_id, self_gen)
     if not x then return end
 
-    local mx = nf.axis("move_x")
-    local mz = nf.axis("move_z")
+    -- منسوبة للكاميرا: الفأرة تدوّر الكاميرا، فـ W يمشي بعيداً عنها.
+    -- ومشهد بلا كاميرا يعيد المحورين الخامّين كما كانا.
+    local mx, mz = nf.camera_move()
     nf.set_entity_pos(self_id, self_gen,
         x + mx * speed * dt, y, z + mz * speed * dt)
 

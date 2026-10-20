@@ -50,6 +50,20 @@ struct CameraEdit {
     float smoothing = 8.0f;
     float collision_radius = 0.35f;
     bool avoid_collision = true;
+    // Aiming the camera (0.4.0). The mouse and the right stick turn the
+    // orbit, the wheel changes the distance, and auto-align drifts the camera
+    // back behind the character while it runs. These are scene data, not
+    // preferences: a game that wants a fixed camera ships `mouse_look=false`.
+    bool mouse_look = true;
+    float look_sensitivity = 0.12f;
+    float stick_sensitivity = 180.0f;
+    float pitch_min = -80.0f;
+    float pitch_max = 60.0f;
+    bool invert_look_y = false;
+    float zoom_min = 1.5f;
+    float zoom_max = 12.0f;
+    float zoom_step = 0.6f;
+    float align_speed = 0.0f;
 };
 
 struct LightEdit {

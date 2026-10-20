@@ -8,6 +8,11 @@ cmake_minimum_required(VERSION 3.24)
 # A hand-maintained literal in a .cpp is what made the launcher keep advertising
 # 0.1.0 after every build; the fix is that there is nowhere left to put one.
 #
+# 0.4.0: the player can aim. Mouse look, gamepad look, camera-relative
+# movement, wheel zoom and auto-align — the one gap the 0.3.0 notes named —
+# plus the scene format, the editor panel, the Lua API and the templates that
+# make it usable from a game rather than only from the engine.
+#
 # 0.3.0: the AI-ready workflow (AGENTS.md, nf guide, per-project guides, Lua
 # input/entity lookup), the TreeWorld sample game, editor duplicate/recovery,
 # authored distance fog, and the playable Crate Hunter starter.
@@ -17,7 +22,7 @@ cmake_minimum_required(VERSION 3.24)
 # Docs/Demo_Release.md says exactly that. Advertising "cross-platform" for a
 # Windows-only product is a claim the repository cannot back.
 project(SANAD
-    VERSION 0.3.0
+    VERSION 0.4.0
     LANGUAGES C CXX
     DESCRIPTION "SANAD Engine - High-performance Windows x64 game engine"
 )

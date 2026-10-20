@@ -587,6 +587,41 @@ void camera_panel(EditorApp& app) {
         ImGui::Checkbox((AV("follow_avoid") + "##ca").c_str(), &c.edit.avoid_collision);
     }
 
+    // Aiming (0.4.0). The follow camera above decides where the camera is
+    // when nobody touches it; these decide how it answers a hand. They are
+    // the difference between a camera the player watches and a camera the
+    // player turns, and every one of them is a taste — which is why they are
+    // scene data and not constants in the runtime.
+    if (section(AV("aim").c_str())) {
+        ImGui::Checkbox((AV("aim_mouse") + "##cam_mouse").c_str(), &c.edit.mouse_look);
+        hint(AV("aim_hint"));
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_sensitivity") + "##cam_sens").c_str(), &c.edit.look_sensitivity,
+                         0.005f, 0.001f, 5.0f, "%.3f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_stick") + "##cam_stick").c_str(), &c.edit.stick_sensitivity, 1.0f,
+                         0.0f, 1080.0f, "%.0f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_pitch_min") + "##cam_pmin").c_str(), &c.edit.pitch_min, 0.5f,
+                         -89.9f, 89.9f, "%.1f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_pitch_max") + "##cam_pmax").c_str(), &c.edit.pitch_max, 0.5f,
+                         -89.9f, 89.9f, "%.1f");
+        ImGui::Checkbox((AV("aim_invert_y") + "##cam_inv").c_str(), &c.edit.invert_look_y);
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_zoom_min") + "##cam_zmin").c_str(), &c.edit.zoom_min, 0.05f, 0.1f,
+                         100.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_zoom_max") + "##cam_zmax").c_str(), &c.edit.zoom_max, 0.1f, 0.1f,
+                         100.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_zoom_step") + "##cam_zstep").c_str(), &c.edit.zoom_step, 0.02f,
+                         0.01f, 10.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_align") + "##cam_align").c_str(), &c.edit.align_speed, 0.5f, 0.0f,
+                         720.0f, "%.0f");
+    }
+
     if (section(AV("transform").c_str())) {
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::DragFloat3((AV("position") + "##cp").c_str(), &c.xf.px, 0.05f);

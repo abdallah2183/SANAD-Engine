@@ -1,5 +1,6 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/BuiltinModules.hpp>
+#include <NF/Runtime/PlayerLook.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/SceneExtraction.hpp>
 #include <NF/Jobs/JobSystem.hpp>
@@ -566,6 +567,13 @@ void Runtime::mark_scene_edited() {
 }
 
 void Runtime::update(float dt) {
+    // The input source refreshes once, here, before anything reads it: a
+    // pointer reports a DELTA, and a delta that two readers each consumed
+    // would make the camera and the script disagree about how far the mouse
+    // moved. Sources with no pointer do nothing.
+    if (m_input_source != nullptr) {
+        m_input_source->begin_frame();
+    }
     // Streaming first: it moves world membership (merge/unload chunks), and
     // everything below — asset sync, physics, animation — must see the
     // post-stream world. No-op unless enable_streaming ran.
@@ -1190,11 +1198,21 @@ u32 Runtime::step_script(float dt) {
     scripting::ScriptInput input;
     if (m_input_source != nullptr) {
         gameplay::IInputSource* source = m_input_source;
+        Runtime* self = this;
         input.pressed = [source](std::string_view action) {
             return source->action_pressed(action);
         };
         input.axis = [source](std::string_view action) {
             return source->action_axis(action);
+        };
+        // The camera is aimed before the scripts run (update() places it last
+        // in the frame, but the aim is written to the component at the top of
+        // that call), so a script asking "which way is the camera looking"
+        // gets this frame's answer, not the previous frame's.
+        input.camera_yaw = [self]() { return self->camera_yaw(); };
+        input.camera_move = [self, source](f32& out_x, f32& out_z) {
+            move_relative(source->action_axis("move_x"), source->action_axis("move_z"),
+                          self->camera_yaw(), out_x, out_z);
         };
     }
     m_scripts->set_input_source(input);
@@ -3385,16 +3403,33 @@ float Runtime::camera_obstacle_hit(const std::vector<CameraObstacle>& obstacles,
     return hit ? closest : -1.0f;
 }
 
+f32 Runtime::camera_yaw() const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0.0f;
+    }
+    const ecs::World& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<CameraComponent>()) {
+        const auto* c = world.get<CameraComponent>(e);
+        if (c != nullptr && c->is_active) {
+            return c->yaw;
+        }
+    }
+    return 0.0f;
+}
+
 void Runtime::update_follow_camera(float dt) {
     m_follow_active = false;
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        if (m_input_source != nullptr) {
+            m_input_source->set_pointer_capture(false);
+        }
         return;
     }
     ecs::World& world = m_scene_data_ptr->scene->world();
 
-    const CameraComponent* cam = nullptr;
+    CameraComponent* cam = nullptr;
     for (auto e : world.query<CameraComponent>()) {
-        const auto* c = world.get<CameraComponent>(e);
+        auto* c = world.get<CameraComponent>(e);
         if (c == nullptr || !c->is_active) {
             continue;
         }
@@ -3402,10 +3437,77 @@ void Runtime::update_follow_camera(float dt) {
         break;
     }
 
+    // Whether the pointer belongs to the game this frame. Decided ONCE and
+    // applied ONCE: asking for capture and then giving it back every frame
+    // would clip and unclip the cursor sixty times a second, which is both
+    // pointless and visible.
+    const bool aiming = cam != nullptr && !cam->follow_target.empty() && m_playing &&
+                        cam->mouse_look && m_input_source != nullptr;
+    if (m_input_source != nullptr) {
+        m_input_source->set_pointer_capture(aiming);
+    }
+
     if (cam == nullptr || cam->follow_target.empty()) {
         // No camera, or a camera that follows nothing: the scene's own
         // camera (its Transform, looking at the origin) stays in charge.
         return;
+    }
+
+    // --- Aiming ---------------------------------------------------------
+    //
+    // The orbit used to be whatever the scene authored. Now the player
+    // turns it, and the component is where the turn lives: play mode clones
+    // the scene, so a camera aimed during play is thrown away when play
+    // stops, and an authored angle is never overwritten by a mouse that
+    // happened to be moving in the editor.
+    if (aiming) {
+        LookSettings look;
+        look.mouse_sensitivity = cam->look_sensitivity;
+        look.stick_sensitivity = cam->stick_sensitivity;
+        look.pitch_min = cam->pitch_min;
+        look.pitch_max = cam->pitch_max;
+        look.invert_y = cam->invert_look_y;
+
+        LookState state{cam->yaw, cam->pitch};
+        bool aimed = false;
+
+        f32 dx = 0.0f;
+        f32 dy = 0.0f;
+        if (m_input_source->look_delta(dx, dy) && (dx != 0.0f || dy != 0.0f)) {
+            state = look_apply_mouse(state, dx, dy, look);
+            aimed = true;
+        }
+        const f32 stick_x = m_input_source->action_axis("look_x");
+        const f32 stick_y = m_input_source->action_axis("look_y");
+        if (stick_x != 0.0f || stick_y != 0.0f) {
+            state = look_apply_stick(state, stick_x, stick_y, dt, look);
+            aimed = true;
+        }
+
+        const f32 wheel = m_input_source->wheel_delta();
+        if (wheel != 0.0f) {
+            cam->distance = follow_zoom(cam->distance, wheel, cam->zoom_step, cam->zoom_min,
+                                        cam->zoom_max);
+        }
+
+        // Auto-align: the camera drifts back behind the character while it
+        // runs and the player is not aiming. Only when the player IS moving:
+        // a camera that recentres while standing still fights the player's
+        // last deliberate look.
+        if (cam->align_speed > 0.0f && !aimed) {
+            const f32 mx = m_input_source->action_axis("move_x");
+            const f32 mz = m_input_source->action_axis("move_z");
+            if (mx * mx + mz * mz > 0.04f) {
+                f32 world_x = 0.0f;
+                f32 world_z = 0.0f;
+                move_relative(mx, mz, state.yaw, world_x, world_z);
+                const f32 wanted = look_yaw_for_direction(world_x, world_z, state.yaw);
+                state.yaw = look_align(state.yaw, wanted, cam->align_speed, dt);
+            }
+        }
+
+        cam->yaw = state.yaw;
+        cam->pitch = state.pitch;
     }
 
     const ecs::Entity target = find_entity_by_name(world, cam->follow_target);

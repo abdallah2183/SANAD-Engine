@@ -418,6 +418,31 @@ public:
 #endif
         return 0.0f;
     }
+
+    // --- aiming, in the editor -------------------------------------------
+    //
+    // The player captures the pointer and hides it; the editor must not,
+    // because the pointer is also how the user reaches every panel. So play
+    // mode uses the gesture the viewport already teaches — hold the RIGHT
+    // button and drag to look — and reads ImGui's own delta, which is exactly
+    // the movement the user made over the editor.
+    //
+    // Editor navigation is disabled while playing (see the !playing guard
+    // around apply_viewport_navigation), so the same drag cannot orbit the
+    // authoring camera at the same time.
+    [[nodiscard]] bool look_delta(float& dx, float& dy) const override {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (!io.MouseDown[1]) {
+            dx = 0.0f;
+            dy = 0.0f;
+            return false;
+        }
+        dx = io.MouseDelta.x;
+        dy = io.MouseDelta.y;
+        return true;
+    }
+
+    [[nodiscard]] float wheel_delta() const override { return ImGui::GetIO().MouseWheel; }
 };
 
 // --- Editor viewport navigation (orbit around the scene origin) --------------

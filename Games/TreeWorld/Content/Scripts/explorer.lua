@@ -34,8 +34,10 @@ function update(dt)
     local x, y, z = nf.entity_pos(self_id, self_gen)
     if not x then return end
 
-    local mx = nf.axis("move_x")
-    local mz = nf.axis("move_z")
+    -- The movement axes, rotated by the camera's yaw: W walks away from the
+    -- camera wherever the player has turned it. Before 0.4.0 these were world
+    -- axes, which was correct only while the camera could not turn.
+    local mx, mz = nf.camera_move()
     local len = math.sqrt(mx * mx + mz * mz)
     if len > 1.0 then
         mx, mz = mx / len, mz / len

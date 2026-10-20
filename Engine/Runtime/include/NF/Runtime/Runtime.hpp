@@ -537,7 +537,15 @@ public:
 
     /// The input source handed to modules. Non-owning; null means no input, and
     /// modules are expected to check.
-    void set_input_source(gameplay::IInputSource* source) { m_input_source = source; }
+    void set_input_source(gameplay::IInputSource* source) {
+        // Hand the pointer back before letting go of the source that owns it:
+        // a captured cursor whose owner is gone is a hidden, clipped cursor
+        // with nobody left to release it.
+        if (m_input_source != nullptr && m_input_source != source) {
+            m_input_source->set_pointer_capture(false);
+        }
+        m_input_source = source;
+    }
     [[nodiscard]] gameplay::IInputSource* input_source() const { return m_input_source; }
 
     /// Whether the game is currently playing (vs. editing). Mirrored into
@@ -548,6 +556,14 @@ public:
     /// before each update; harness/tests default to editing (false).
     void set_playing(bool playing) { m_playing = playing; }
     [[nodiscard]] bool playing() const { return m_playing; }
+
+    /// The yaw of the scene's active camera, in degrees; 0 when the scene has
+    /// no active camera.
+    ///
+    /// Read from the component every call rather than cached: the camera is
+    /// aimed once per frame and a script runs after it, so the number a
+    /// script sees has to be the one the player just produced.
+    [[nodiscard]] f32 camera_yaw() const;
 
     // --- Deterministic input record + replay --------------------------------
     //

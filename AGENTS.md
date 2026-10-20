@@ -85,16 +85,27 @@ Games/MyGame/
     Scenes/Main.nfscene      entities + components (plain text)
     Scripts/player.lua       update(dt) gameplay
     Materials/*.nfmat        base_color, metallic, roughness
+    Input/bindings.nfinput   optional: which key/pad means which action
   Cache/                     cooked output (git-ignored)
   dist/                      packaged player (git-ignored)
 ```
 
 - Attach a script to an entity with:
   `Script: lang=lua path=content://Scripts/player.lua`
+- A third-person camera is one line, and the player can aim it:
+  `Camera: … follow=Player pivot=0,1.45,0 distance=5.2 yaw=180 pitch=-13 align=90`.
+  Aiming is scene data — `mouse`, `looksens`, `sticksens`, `pitchmin`,
+  `pitchmax`, `invert_y`, `zoommin`, `zoommax`, `zoomstep`, `align`. Every key
+  is optional; `mouse=0` restores the old fixed orbit.
 - Keep `entity_count` in the scene header equal to the number of `entity:`
   blocks.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
+- Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
+  overlays the engine defaults — a file that rebinds one action leaves the rest
+  alone. Format: `action = key:W, pad:A, axis:LeftX`, with `+`/`-` signs and
+  `#` comments. A line that does not parse is reported and the whole file is
+  ignored rather than half-applied.
 
 ## Lua API (what a game can actually do)
 
@@ -110,11 +121,18 @@ nf.find_entity("CrateA")          -- id, gen, or nil
 nf.entity_name(id, gen)
 nf.entity_count()
 nf.action("move_forward")         -- W/Up; also move_back/left/right/jump/interact
-nf.axis("move_x")                 -- -1..1; also move_z
+nf.axis("move_x")                 -- -1..1; also move_z, look_x, look_y
+nf.camera_move()                  -- x, z: move_x/move_z ROTATED BY THE CAMERA
+nf.camera_yaw()                   -- the active camera's yaw in degrees (0 = none)
 nf.clamp(v, lo, hi)
 nf.lerp(a, b, t)
 print(...)                        -- engine log
 ```
+
+`nf.camera_move()` is what a player script should move with: the mouse turns the
+camera, so `W` means "away from the camera", not "-Z". In a scene with no
+camera it returns the raw axes, so it is safe to call unconditionally. Use
+`nf.axis("move_x")` only when you deliberately want screen-independent axes.
 
 A complete collect-the-crates example is in
 [`Docs/AI_Game_Guide.md`](Docs/AI_Game_Guide.md). Prefer editing the template's

@@ -355,6 +355,48 @@ struct CameraComponent {
 
     /// Whether the camera pulls in when something is in the way.
     bool avoid_collision = true;
+
+    // --- Aiming the camera ------------------------------------------------
+    //
+    // A follow camera that only obeys the yaw in this file is a camera the
+    // player watches. These fields let the player turn it: how far one pixel
+    // of mouse travel turns it, how fast a held stick turns it, how far up
+    // and down it may look, and whether the wheel changes the distance.
+    //
+    // The maths is in NF/Runtime/PlayerLook.hpp; this is the scene data for
+    // it, and every field is optional in the file — a scene written before
+    // aiming existed loads with the defaults below, which are the aiming
+    // every third-person game has.
+
+    /// Whether the mouse aims this camera while the game is playing.
+    ///
+    /// On by default, because a third-person camera the player cannot turn
+    /// is the one thing the 0.3.0 notes listed as missing. A scene that
+    /// wants the old fixed orbit sets `mouse=0`.
+    bool mouse_look = true;
+
+    /// Degrees of yaw per pixel of mouse travel.
+    float look_sensitivity = 0.12f;
+
+    /// Degrees per second at full stick deflection.
+    float stick_sensitivity = 180.0f;
+
+    /// The vertical clamp, in degrees. Negative looks down.
+    float pitch_min = -80.0f;
+    float pitch_max = 60.0f;
+
+    /// Flip the vertical axis for players who grew up with it.
+    bool invert_look_y = false;
+
+    /// The wheel's distance range, in metres, and how far one notch moves.
+    float zoom_min = 1.5f;
+    float zoom_max = 12.0f;
+    float zoom_step = 0.6f;
+
+    /// Degrees per second the camera drifts back behind the character while
+    /// it runs without the mouse. 0 disables it, which is what every scene
+    /// authored before this existed gets.
+    float align_speed = 0.0f;
 };
 
 /// The navigation volume: where the walkable mesh is baked, and how (design doc

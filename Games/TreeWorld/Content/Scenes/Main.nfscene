@@ -3,207 +3,208 @@ version: 1
 name: TreeWorld
 entity_count: 40
 ---
-entity: 1:0
+entity: 0:0
   Name: MainCamera
-  Transform: local(0,8.5,19.0) world(0,8.5,19.0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Camera: fov=60 aspect=1.7777778 near=0.1 far=220 active=true follow=Player pivot=0,1.45,0 distance=5.2 yaw=180 pitch=-13 smoothing=9 radius=0.35 avoid=1
+  Transform: local(-3.95182633,5.30283976,7.75486708) world(-3.95182633,5.30283976,7.75486708) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=60 aspect=1.77777779 near=0.100000001 far=220 active=true pivot=0,1.45000005,0 distance=5.19999981 yaw=180 pitch=-13 smoothing=9 radius=0.349999994 avoid=1 align=90 follow=Player
 ---
-entity: 2:0
+entity: 1:0
   Name: Sun
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Light: type=Directional dir(-0.45,-1,-0.25) color(1,0.94,0.84) intensity=1.15 shadows=true shadow_strength=0.55
+  Light: type=Directional dir(-0.449999988,-1,-0.25) color(1,0.939999998,0.839999974) intensity=1.14999998 shadow_strength=0.550000012
 ---
-entity: 3:0
+entity: 2:0
   Name: Sky
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Sky: zenith(0.30,0.46,0.64) horizon(0.72,0.78,0.80) ground(0.08,0.09,0.08) clear(0.04,0.05,0.07) sun_disk=1 sun_glow=1 enabled=true
-  PostProcess: bloom=true bloom_threshold=2.6 bloom_knee=0.5 bloom_intensity=0.40 bloom_radius=1.3 grade=true grade_contrast=1.05 grade_pivot=1.0 grade_temperature=0.02 grade_tint=0.0 grade_gamma=1.0 exposure=1.0 tonemap=aces saturation=1.02 vignette=0.12 fog=true fog_color(0.72,0.78,0.80) fog_start=10 fog_end=45
+  Sky: zenith(0.300000012,0.460000008,0.639999986) horizon(0.720000029,0.779999971,0.800000012) ground(0.0799999982,0.0900000036,0.0799999982) clear(0.0399999991,0.0500000007,0.0700000003) sun_disk=1 sun_glow=1 enabled=true
+  PostProcess: bloom=true bloom_threshold=2.5999999 bloom_knee=0.5 bloom_intensity=0.400000006 bloom_radius=1.29999995 grade=true grade_contrast=1.04999995 grade_pivot=1 grade_temperature=0.0199999996 grade_tint=0 grade_gamma=1 sharpen=false sharpen_amount=0 sharpen_radius=1 saturation=1.01999998 vignette=0.119999997 lens=false lens_distortion=0 lens_chroma=0 dof=false dof_focus=10 dof_range=2 dof_radius=6 motion=false motion_intensity=1 motion_length=0.0500000007 exposure=1 tonemap=aces fog=true fog_color(0.720000029,0.779999971,0.800000012) fog_start=10 fog_end=45
 ---
-entity: 4:0
+entity: 3:0
   Name: Ground
   Transform: local(0,-0.5,0) world(0,-0.5,0) rot(0,0,0) scale(30,1,30) parent(4294967295:0)
   Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Grass
-  RigidBody: type=Static mass=0 friction=0.900000 restitution=0.050000 linear_damping=0.050000 angular_damping=0.050000 allow_sleep=true
+  RigidBody: type=Static mass=0 friction=0.899999976 restitution=0.0500000007 linear_damping=0.0500000007 angular_damping=0.0500000007 allow_sleep=true
   Collider: shape=Box half(15,0.5,15)
 ---
-entity: 5:0
+entity: 4:0
   Name: Player
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: material=content://Materials/Character
+  Mesh: asset_id=00000000-0000-0000-0000-000000000000 material=content://Materials/Character
   CharacterRig: file=content://Characters/Explorer.gltf
-  Script: lang=lua path=content://Scripts/explorer.lua
+  Animation: clip= speed=1 loop=loop paused=false state_machine=true
+  Script: lang=lua path=content://Scripts/explorer.lua enabled=true
+---
+entity: 5:0
+  Name: Tree1Trunk
+  Transform: local(8.1301403,0,3.36760998) world(8.1301403,0,3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+---
+entity: 6:0
+  Name: Tree1CanopyLow
+  Transform: local(8.1301403,0,3.36760998) world(8.1301403,0,3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+---
+entity: 7:0
+  Name: Tree2Trunk
+  Transform: local(3.36760998,0,8.1301403) world(3.36760998,0,8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+---
+entity: 8:0
+  Name: Tree2CanopyLow
+  Transform: local(3.36760998,0,8.1301403) world(3.36760998,0,8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+---
+entity: 9:0
+  Name: Tree3Trunk
+  Transform: local(-3.36760998,0,8.1301403) world(-3.36760998,0,8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+---
+entity: 10:0
+  Name: Tree3CanopyLow
+  Transform: local(-3.36760998,0,8.1301403) world(-3.36760998,0,8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+---
+entity: 11:0
+  Name: Tree4Trunk
+  Transform: local(-8.1301403,0,3.36760998) world(-8.1301403,0,3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
 ---
 entity: 12:0
-  Name: Tree1Trunk
-  Transform: local(8.13014,0,3.36761) world(8.13014,0,3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Tree4CanopyLow
+  Transform: local(-8.1301403,0,3.36760998) world(-8.1301403,0,3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
 ---
 entity: 13:0
-  Name: Tree1CanopyLow
-  Transform: local(8.13014,0,3.36761) world(8.13014,0,3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Name: Tree5Trunk
+  Transform: local(-8.1301403,0,-3.36760998) world(-8.1301403,0,-3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+---
+entity: 14:0
+  Name: Tree5CanopyLow
+  Transform: local(-8.1301403,0,-3.36760998) world(-8.1301403,0,-3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+---
+entity: 15:0
+  Name: Tree6Trunk
+  Transform: local(-3.36760998,0,-8.1301403) world(-3.36760998,0,-8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
 ---
 entity: 16:0
-  Name: Tree2Trunk
-  Transform: local(3.36761,0,8.13014) world(3.36761,0,8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Tree6CanopyLow
+  Transform: local(-3.36760998,0,-8.1301403) world(-3.36760998,0,-8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
 ---
 entity: 17:0
-  Name: Tree2CanopyLow
-  Transform: local(3.36761,0,8.13014) world(3.36761,0,8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Name: Tree7Trunk
+  Transform: local(3.36760998,0,-8.1301403) world(3.36760998,0,-8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+---
+entity: 18:0
+  Name: Tree7CanopyLow
+  Transform: local(3.36760998,0,-8.1301403) world(3.36760998,0,-8.1301403) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+---
+entity: 19:0
+  Name: Tree8Trunk
+  Transform: local(8.1301403,0,-3.36760998) world(8.1301403,0,-3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
 ---
 entity: 20:0
-  Name: Tree3Trunk
-  Transform: local(-3.36761,0,8.13014) world(-3.36761,0,8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Tree8CanopyLow
+  Transform: local(8.1301403,0,-3.36760998) world(8.1301403,0,-3.36760998) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
 ---
 entity: 21:0
-  Name: Tree3CanopyLow
-  Transform: local(-3.36761,0,8.13014) world(-3.36761,0,8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+  Name: RockA
+  Transform: local(4.19999981,0,4.30000019) world(4.19999981,0,4.30000019) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f302f0ea-1db5-4f02-bef4-e6520435b493 material=content://Materials/Stone
+---
+entity: 22:0
+  Name: RockB
+  Transform: local(-4.5,0,3.5999999) world(-4.5,0,3.5999999) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f302f0ea-1db5-4f02-bef4-e6520435b493 material=content://Materials/Stone
+---
+entity: 23:0
+  Name: RockC
+  Transform: local(3.5999999,0,-4.4000001) world(3.5999999,0,-4.4000001) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: asset_id=f302f0ea-1db5-4f02-bef4-e6520435b493 material=content://Materials/Stone
 ---
 entity: 24:0
-  Name: Tree4Trunk
-  Transform: local(-8.13014,0,3.36761) world(-8.13014,0,3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Path1
+  Transform: local(0,0.0149999997,-4) world(0,0.0149999997,-4) rot(0,0,0) scale(0.800000012,0.0299999993,0.949999988) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
 ---
 entity: 25:0
-  Name: Tree4CanopyLow
-  Transform: local(-8.13014,0,3.36761) world(-8.13014,0,3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+  Name: Path2
+  Transform: local(0,0.0149999997,-2) world(0,0.0149999997,-2) rot(0,0,0) scale(0.800000012,0.0299999993,0.949999988) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
+---
+entity: 26:0
+  Name: Path3
+  Transform: local(0,0.0149999997,0) world(0,0.0149999997,0) rot(0,0,0) scale(0.800000012,0.0299999993,0.949999988) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
+---
+entity: 27:0
+  Name: Path4
+  Transform: local(0,0.0149999997,2) world(0,0.0149999997,2) rot(0,0,0) scale(0.800000012,0.0299999993,0.949999988) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
 ---
 entity: 28:0
-  Name: Tree5Trunk
-  Transform: local(-8.13014,0,-3.36761) world(-8.13014,0,-3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Path5
+  Transform: local(0,0.0149999997,4) world(0,0.0149999997,4) rot(0,0,0) scale(0.800000012,0.0299999993,0.949999988) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
 ---
 entity: 29:0
-  Name: Tree5CanopyLow
-  Transform: local(-8.13014,0,-3.36761) world(-8.13014,0,-3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+  Name: Bush1
+  Transform: local(-6.4000001,0.379999995,4.19999981) world(-6.4000001,0.379999995,4.19999981) rot(0,0,0) scale(0.899999976,0.550000012,0.899999976) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
+---
+entity: 30:0
+  Name: Bush2
+  Transform: local(6.5,0.379999995,4.5999999) world(6.5,0.379999995,4.5999999) rot(0,0,0) scale(0.800000012,0.550000012,0.800000012) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
+---
+entity: 31:0
+  Name: Bush3
+  Transform: local(-6.80000019,0.379999995,-3.5999999) world(-6.80000019,0.379999995,-3.5999999) rot(0,0,0) scale(0.75,0.550000012,0.75) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
 ---
 entity: 32:0
-  Name: Tree6Trunk
-  Transform: local(-3.36761,0,-8.13014) world(-3.36761,0,-8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Bush4
+  Transform: local(6.80000019,0.379999995,-4.19999981) world(6.80000019,0.379999995,-4.19999981) rot(0,0,0) scale(0.850000024,0.550000012,0.850000024) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
 ---
 entity: 33:0
-  Name: Tree6CanopyLow
-  Transform: local(-3.36761,0,-8.13014) world(-3.36761,0,-8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
+  Name: Bush5
+  Transform: local(-5.19999981,0.379999995,-6.5) world(-5.19999981,0.379999995,-6.5) rot(0,0,0) scale(0.699999988,0.550000012,0.699999988) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
+---
+entity: 34:0
+  Name: Bush6
+  Transform: local(5.4000001,0.379999995,-6.5999999) world(5.4000001,0.379999995,-6.5999999) rot(0,0,0) scale(0.75,0.550000012,0.75) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
+---
+entity: 35:0
+  Name: Firefly1
+  Transform: local(-3,1.25,2) world(-3,1.25,2) rot(0,0,0) scale(0.129999995,0.129999995,0.129999995) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
 ---
 entity: 36:0
-  Name: Tree7Trunk
-  Transform: local(3.36761,0,-8.13014) world(3.36761,0,-8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
+  Name: Firefly2
+  Transform: local(3,1.25,1.5) world(3,1.25,1.5) rot(0,0,0) scale(0.129999995,0.129999995,0.129999995) parent(4294967295:0)
+  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
 ---
 entity: 37:0
-  Name: Tree7CanopyLow
-  Transform: local(3.36761,0,-8.13014) world(3.36761,0,-8.13014) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
----
-entity: 40:0
-  Name: Tree8Trunk
-  Transform: local(8.13014,0,-3.36761) world(8.13014,0,-3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=2c4567c4-ac01-4c33-b2ef-5adbfbfc4a2a material=content://Materials/Bark
----
-entity: 41:0
-  Name: Tree8CanopyLow
-  Transform: local(8.13014,0,-3.36761) world(8.13014,0,-3.36761) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=4f831df7-18ea-48e3-a5ff-f149d7efc4e9 material=content://Materials/Leaves
----
-entity: 44:0
-  Name: RockA
-  Transform: local(4.2,0,4.3) world(4.2,0,4.3) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=f302f0ea-1db5-4f02-bef4-e6520435b493 material=content://Materials/Stone
----
-entity: 45:0
-  Name: RockB
-  Transform: local(-4.5,0,3.6) world(-4.5,0,3.6) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=f302f0ea-1db5-4f02-bef4-e6520435b493 material=content://Materials/Stone
----
-entity: 46:0
-  Name: RockC
-  Transform: local(3.6,0,-4.4) world(3.6,0,-4.4) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Mesh: asset_id=f302f0ea-1db5-4f02-bef4-e6520435b493 material=content://Materials/Stone
----
-entity: 47:0
-  Name: Path1
-  Transform: local(0,0.015,-4.0) world(0,0.015,-4.0) rot(0,0,0) scale(0.80,0.03,0.95) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
----
-entity: 48:0
-  Name: Path2
-  Transform: local(0,0.015,-2.0) world(0,0.015,-2.0) rot(0,0,0) scale(0.80,0.03,0.95) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
----
-entity: 49:0
-  Name: Path3
-  Transform: local(0,0.015,0.0) world(0,0.015,0.0) rot(0,0,0) scale(0.80,0.03,0.95) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
----
-entity: 50:0
-  Name: Path4
-  Transform: local(0,0.015,2.0) world(0,0.015,2.0) rot(0,0,0) scale(0.80,0.03,0.95) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
----
-entity: 51:0
-  Name: Path5
-  Transform: local(0,0.015,4.0) world(0,0.015,4.0) rot(0,0,0) scale(0.80,0.03,0.95) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Path
----
-entity: 52:0
-  Name: Bush1
-  Transform: local(-6.4,0.38,4.2) world(-6.4,0.38,4.2) rot(0,0,0) scale(0.9,0.55,0.9) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
----
-entity: 53:0
-  Name: Bush2
-  Transform: local(6.5,0.38,4.6) world(6.5,0.38,4.6) rot(0,0,0) scale(0.8,0.55,0.8) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
----
-entity: 54:0
-  Name: Bush3
-  Transform: local(-6.8,0.38,-3.6) world(-6.8,0.38,-3.6) rot(0,0,0) scale(0.75,0.55,0.75) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
----
-entity: 55:0
-  Name: Bush4
-  Transform: local(6.8,0.38,-4.2) world(6.8,0.38,-4.2) rot(0,0,0) scale(0.85,0.55,0.85) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
----
-entity: 56:0
-  Name: Bush5
-  Transform: local(-5.2,0.38,-6.5) world(-5.2,0.38,-6.5) rot(0,0,0) scale(0.7,0.55,0.7) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
----
-entity: 57:0
-  Name: Bush6
-  Transform: local(5.4,0.38,-6.6) world(5.4,0.38,-6.6) rot(0,0,0) scale(0.75,0.55,0.75) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Leaves
----
-entity: 58:0
-  Name: Firefly1
-  Transform: local(-3.0,1.25,2.0) world(-3.0,1.25,2.0) rot(0,0,0) scale(0.13,0.13,0.13) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
----
-entity: 59:0
-  Name: Firefly2
-  Transform: local(3.0,1.25,1.5) world(3.0,1.25,1.5) rot(0,0,0) scale(0.13,0.13,0.13) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
----
-entity: 60:0
   Name: Firefly3
-  Transform: local(0.0,1.35,-3.0) world(0.0,1.35,-3.0) rot(0,0,0) scale(0.13,0.13,0.13) parent(4294967295:0)
+  Transform: local(0,1.35000002,-3) world(0,1.35000002,-3) rot(0,0,0) scale(0.129999995,0.129999995,0.129999995) parent(4294967295:0)
   Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
 ---
-entity: 61:0
+entity: 38:0
   Name: Firefly4
-  Transform: local(-2.5,1.25,-2.0) world(-2.5,1.25,-2.0) rot(0,0,0) scale(0.13,0.13,0.13) parent(4294967295:0)
+  Transform: local(-2.5,1.25,-2) world(-2.5,1.25,-2) rot(0,0,0) scale(0.129999995,0.129999995,0.129999995) parent(4294967295:0)
   Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
 ---
-entity: 62:0
+entity: 39:0
   Name: Firefly5
-  Transform: local(2.8,1.25,-2.5) world(2.8,1.25,-2.5) rot(0,0,0) scale(0.13,0.13,0.13) parent(4294967295:0)
+  Transform: local(2.79999995,1.25,-2.5) world(2.79999995,1.25,-2.5) rot(0,0,0) scale(0.129999995,0.129999995,0.129999995) parent(4294967295:0)
   Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow

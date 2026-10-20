@@ -172,8 +172,40 @@ int l_axis(lua_State* L) {
     return 1;
 }
 
-int l_set_entity_scale(lua_State* L) {
-    ecs::World* w = bound_world(L);
+// nf.camera_yaw() -> degrees, or 0 when the scene has no camera.
+//
+// A script that turns the character to face where it walks needs the same
+// yaw the camera is using, or the character walks backwards into the camera
+// while the player looks the other way.
+int l_camera_yaw(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const f32 yaw = (input != nullptr && input->camera_yaw) ? input->camera_yaw() : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(yaw));
+    return 1;
+}
+
+// nf.camera_move() -> x, z in world space.
+//
+// The two axes the player pressed, rotated by the camera's yaw: pressing W
+// moves away from the camera wherever the camera is pointing. Without a
+// camera the raw axes ARE the world axes, which is what every script did
+// before this existed — so a script can call this unconditionally.
+int l_camera_move(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    f32 x = 0.0f;
+    f32 z = 0.0f;
+    if (input != nullptr && input->camera_move) {
+        input->camera_move(x, z);
+    } else if (input != nullptr && input->axis) {
+        x = input->axis("move_x");
+        z = input->axis("move_z");
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(x));
+    lua_pushnumber(L, static_cast<lua_Number>(z));
+    return 2;
+}
+
+int l_set_entity_scale(lua_State* L) {    ecs::World* w = bound_world(L);
     ecs::Entity e;
     if (!check_entity(L, 1, e) || !w) {
         lua_pushboolean(L, 0);
@@ -251,6 +283,10 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "action");
     lua_pushcfunction(L, l_axis);
     lua_setfield(L, -2, "axis");
+    lua_pushcfunction(L, l_camera_yaw);
+    lua_setfield(L, -2, "camera_yaw");
+    lua_pushcfunction(L, l_camera_move);
+    lua_setfield(L, -2, "camera_move");
     lua_pop(L, 1);
 }
 

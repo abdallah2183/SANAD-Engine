@@ -47,6 +47,20 @@ using LogCallback = std::function<void(const std::string& level, const std::stri
 struct ScriptInput {
     std::function<bool(std::string_view action)> pressed;
     std::function<f32(std::string_view action)> axis;
+
+    /// Where the camera is looking, in degrees. Empty (headless, or a scene
+    /// with no camera) reports 0, which is the direction a script that never
+    /// asked about the camera already assumed.
+    std::function<f32()> camera_yaw;
+
+    /// The movement axes rotated by the camera's yaw: (x, z) in world space.
+    ///
+    /// Before the camera could be turned, "forward" was a world axis and a
+    /// script could add `move_z * speed * dt` to z. Once the player turns the
+    /// camera, forward is wherever they are looking — so the rotation has to
+    /// happen somewhere, and it happens here, once, instead of in every
+    /// script's trigonometry.
+    std::function<void(f32&, f32&)> camera_move;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

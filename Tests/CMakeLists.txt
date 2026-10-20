@@ -140,6 +140,8 @@ add_executable(RuntimeTests
     TestFramework.cpp
     RuntimeTests/test_runtime_scene.cpp
     RuntimeTests/test_camera_follow.cpp
+    RuntimeTests/test_player_look.cpp
+    RuntimeTests/test_input_bindings.cpp
     RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp
     RuntimeTests/test_runtime.cpp

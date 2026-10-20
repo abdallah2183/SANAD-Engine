@@ -7,7 +7,8 @@
 --  which is the honest HUD this demo ships with.
 --
 --  The four engine calls this game is built from:
---    nf.axis("move_x"/"move_z")  -> -1..1 held input
+--    nf.camera_move()            -> x, z of the held input, rotated by the
+--                                   camera so W always walks away from it
 --    nf.entity_pos(id, gen)      -> x, y, z (nil when no Transform)
 --    nf.find_entity("CrateA")    -> id, gen (nil when absent)
 --    nf.set_entity_pos(...)      -> move the player / hide a collected crate
@@ -23,8 +24,10 @@ function update(dt)
     local x, y, z = nf.entity_pos(self_id, self_gen)
     if not x then return end
 
-    local mx = nf.axis("move_x")
-    local mz = nf.axis("move_z")
+    -- Camera-relative: the mouse turns the camera, so "forward" is wherever
+    -- the player is looking. In a scene with no camera this returns the raw
+    -- axes, which is what the starter did before 0.4.0.
+    local mx, mz = nf.camera_move()
     nf.set_entity_pos(self_id, self_gen,
         x + mx * speed * dt,
         y,

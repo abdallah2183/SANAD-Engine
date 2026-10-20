@@ -13,7 +13,9 @@ set(NFRUNTIME_SOURCES
     src/PlayerControllerModule.cpp
     src/OrbitCameraModule.cpp
     src/KeyboardInput.cpp
+    src/InputBindings.cpp
     src/CameraFollow.cpp
+    src/PlayerLook.cpp
     src/CharacterRuntime.cpp
 )
 

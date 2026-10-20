@@ -6,7 +6,7 @@ entity_count: 12
 entity: 1:0
   Name: MainCamera
   Transform: local(0,4,8) world(0,4,8) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true follow=Player pivot=0,0,0 distance=7 yaw=0 pitch=-20 smoothing=8 radius=0.35 avoid=1 align=60
 ---
 entity: 2:0
   Name: Sun

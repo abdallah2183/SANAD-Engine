@@ -758,6 +758,27 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 size_t radius_pos = line.find("radius=");
                 if (radius_pos != std::string::npos) sscanf(line.c_str()+radius_pos, "radius=%f", &cam.collision_radius);
                 cam.avoid_collision = line.find("avoid=0") == std::string::npos;
+                // Aiming the camera. Every key is optional and a missing one
+                // keeps the default, so a scene written before the camera
+                // could be turned loads exactly as it did.
+                if (line.find("mouse=0") != std::string::npos) cam.mouse_look = false;
+                size_t look_sens_pos = line.find("looksens=");
+                if (look_sens_pos != std::string::npos) sscanf(line.c_str()+look_sens_pos, "looksens=%f", &cam.look_sensitivity);
+                size_t stick_sens_pos = line.find("sticksens=");
+                if (stick_sens_pos != std::string::npos) sscanf(line.c_str()+stick_sens_pos, "sticksens=%f", &cam.stick_sensitivity);
+                size_t pitch_min_pos = line.find("pitchmin=");
+                if (pitch_min_pos != std::string::npos) sscanf(line.c_str()+pitch_min_pos, "pitchmin=%f", &cam.pitch_min);
+                size_t pitch_max_pos = line.find("pitchmax=");
+                if (pitch_max_pos != std::string::npos) sscanf(line.c_str()+pitch_max_pos, "pitchmax=%f", &cam.pitch_max);
+                if (line.find("invert_y=1") != std::string::npos) cam.invert_look_y = true;
+                size_t zoom_min_pos = line.find("zoommin=");
+                if (zoom_min_pos != std::string::npos) sscanf(line.c_str()+zoom_min_pos, "zoommin=%f", &cam.zoom_min);
+                size_t zoom_max_pos = line.find("zoommax=");
+                if (zoom_max_pos != std::string::npos) sscanf(line.c_str()+zoom_max_pos, "zoommax=%f", &cam.zoom_max);
+                size_t zoom_step_pos = line.find("zoomstep=");
+                if (zoom_step_pos != std::string::npos) sscanf(line.c_str()+zoom_step_pos, "zoomstep=%f", &cam.zoom_step);
+                size_t align_pos = line.find("align=");
+                if (align_pos != std::string::npos) sscanf(line.c_str()+align_pos, "align=%f", &cam.align_speed);
                 scene->world().add<CameraComponent>(e, cam);
             } else if (line.rfind("  RigidBody:",0)==0) {
                 physics::RigidBodyComponent rb;
@@ -1560,6 +1581,39 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " distance=" << c->distance << " yaw=" << c->yaw << " pitch=" << c->pitch
                 << " smoothing=" << c->smoothing << " radius=" << c->collision_radius
                 << " avoid=" << (c->avoid_collision ? "1" : "0");
+            // Aiming. Only what differs from the default is written, so a
+            // scene that never touched these keys round-trips unchanged —
+            // the same rule the shadow tuning follows.
+            if (!c->mouse_look) {
+                out << " mouse=0";
+            }
+            if (c->look_sensitivity != 0.12f) {
+                out << " looksens=" << c->look_sensitivity;
+            }
+            if (c->stick_sensitivity != 180.0f) {
+                out << " sticksens=" << c->stick_sensitivity;
+            }
+            if (c->pitch_min != -80.0f) {
+                out << " pitchmin=" << c->pitch_min;
+            }
+            if (c->pitch_max != 60.0f) {
+                out << " pitchmax=" << c->pitch_max;
+            }
+            if (c->invert_look_y) {
+                out << " invert_y=1";
+            }
+            if (c->zoom_min != 1.5f) {
+                out << " zoommin=" << c->zoom_min;
+            }
+            if (c->zoom_max != 12.0f) {
+                out << " zoommax=" << c->zoom_max;
+            }
+            if (c->zoom_step != 0.6f) {
+                out << " zoomstep=" << c->zoom_step;
+            }
+            if (c->align_speed != 0.0f) {
+                out << " align=" << c->align_speed;
+            }
             if (!c->follow_target.empty()) {
                 out << " follow=" << c->follow_target;
             }

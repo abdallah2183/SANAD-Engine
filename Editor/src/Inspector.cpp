@@ -85,6 +85,16 @@ CameraEdit read_camera(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.smoothing = c->smoothing;
     out.collision_radius = c->collision_radius;
     out.avoid_collision = c->avoid_collision;
+    out.mouse_look = c->mouse_look;
+    out.look_sensitivity = c->look_sensitivity;
+    out.stick_sensitivity = c->stick_sensitivity;
+    out.pitch_min = c->pitch_min;
+    out.pitch_max = c->pitch_max;
+    out.invert_look_y = c->invert_look_y;
+    out.zoom_min = c->zoom_min;
+    out.zoom_max = c->zoom_max;
+    out.zoom_step = c->zoom_step;
+    out.align_speed = c->align_speed;
     return out;
 }
 
@@ -184,6 +194,37 @@ std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
         out_err = "Camera collision radius must not be negative";
         return nullptr;
     }
+    // Aiming. Every limit here is one the runtime would otherwise have to
+    // re-clamp silently, and a value that is silently different from what the
+    // panel shows is worse than a rejected edit.
+    if (edit.look_sensitivity < 0.001f || edit.look_sensitivity > 5.0f) {
+        out_err = "Look sensitivity must be within [0.001, 5] degrees per pixel";
+        return nullptr;
+    }
+    if (edit.stick_sensitivity < 0.0f || edit.stick_sensitivity > 1080.0f) {
+        out_err = "Stick sensitivity must be within [0, 1080] degrees per second";
+        return nullptr;
+    }
+    if (edit.pitch_min < -89.9f || edit.pitch_max > 89.9f || edit.pitch_min >= edit.pitch_max) {
+        out_err = "Pitch range must be ordered and within [-89.9, 89.9]";
+        return nullptr;
+    }
+    if (edit.zoom_min < 0.1f) {
+        out_err = "Minimum zoom distance must be at least 0.1";
+        return nullptr;
+    }
+    if (edit.zoom_max <= edit.zoom_min) {
+        out_err = "Maximum zoom distance must be greater than the minimum";
+        return nullptr;
+    }
+    if (edit.zoom_step <= 0.0f || edit.zoom_step > 10.0f) {
+        out_err = "Zoom step must be within (0, 10]";
+        return nullptr;
+    }
+    if (edit.align_speed < 0.0f) {
+        out_err = "Align speed must not be negative";
+        return nullptr;
+    }
     runtime::CameraComponent after = before;
     after.is_active = edit.active;
     after.fov_y = edit.fov_y;
@@ -199,6 +240,16 @@ std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
     after.smoothing = edit.smoothing;
     after.collision_radius = edit.collision_radius;
     after.avoid_collision = edit.avoid_collision;
+    after.mouse_look = edit.mouse_look;
+    after.look_sensitivity = edit.look_sensitivity;
+    after.stick_sensitivity = edit.stick_sensitivity;
+    after.pitch_min = edit.pitch_min;
+    after.pitch_max = edit.pitch_max;
+    after.invert_look_y = edit.invert_look_y;
+    after.zoom_min = edit.zoom_min;
+    after.zoom_max = edit.zoom_max;
+    after.zoom_step = edit.zoom_step;
+    after.align_speed = edit.align_speed;
     return std::make_unique<SetCameraCommand>(e, had, before, after);
 }
 

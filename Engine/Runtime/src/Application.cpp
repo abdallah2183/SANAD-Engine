@@ -273,6 +273,35 @@ int Application::run() {
         // is what every headless harness asserts on.
         KeyboardInputSource keyboard_input;
         if (!m_config.headless) {
+            // The source needs the window to clip and centre the pointer; a
+            // source without one still reads keys and sticks, which is what a
+            // headless run and the editor's play mode want.
+            keyboard_input.set_window(window.native_handle());
+
+            // Rebinding is optional. A project that ships
+            // `Content/Input/bindings.nfinput` gets its own vocabulary; a
+            // project that does not gets the engine's, which is exactly what
+            // the source used before the table existed. A file that does not
+            // parse is reported and ignored rather than half-applied: half a
+            // control scheme is worse than the one that worked.
+            if (const auto text = vfs.read_text("content://Input/bindings.nfinput"); text.ok) {
+                std::string parse_error;
+                runtime::InputBindings parsed =
+                    runtime::InputBindings::parse(text.value, &parse_error);
+                if (parse_error.empty()) {
+                    // Overlay, not replace: a file that rebinds jump and
+                    // nothing else must not delete `interact`.
+                    InputBindings bindings = InputBindings::defaults();
+                    bindings.merge(parsed);
+                    keyboard_input.set_bindings(std::move(bindings));
+                    NF_LOG_INFO(LogCategory::Core, "Input bindings loaded: {} actions overridden",
+                                parsed.action_count());
+                } else {
+                    NF_LOG_WARN(LogCategory::Core,
+                                "Input bindings ignored ({}), keeping the defaults", parse_error);
+                }
+            }
+
             runtime.set_playing(true);
             if (m_config.enable_input) {
                 runtime.set_input_source(&keyboard_input);
