@@ -196,6 +196,60 @@ def quat_norm(q):
 # --- the geometry ------------------------------------------------------------
 
 
+def add_ball(positions, normals, uvs, joints, weights, indices, centre, radius, bone):
+    """A faceted ball: an icosahedron, subdivided once.
+
+    The character is seen from 5 m away, most of the time from behind, and a
+    sphere with 12 vertices reads as a blob from that distance. One
+    subdivision gives 42 vertices and 80 triangles -- enough for a head that
+    has a shape instead of a point.
+    """
+    t = (1.0 + 5.0 ** 0.5) / 2.0
+    verts = [
+        (-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0),
+        (0, -1, t), (0, 1, t), (0, -1, -t), (0, 1, -t),
+        (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1),
+    ]
+    faces = [
+        (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+        (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+        (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+        (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1),
+    ]
+    new_faces = []
+    cache = {}
+
+    def midpoint(a, b):
+        key = (min(a, b), max(a, b))
+        if key in cache:
+            return cache[key]
+        pa, pb = verts[a], verts[b]
+        verts.append([(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5, (pa[2] + pb[2]) * 0.5])
+        cache[key] = len(verts) - 1
+        return cache[key]
+
+    for a, b, c in faces:
+        ab = midpoint(a, b)
+        bc = midpoint(b, c)
+        ca = midpoint(c, a)
+        new_faces.extend([(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)])
+
+    base = len(positions)
+    for v in verts:
+        n = math.sqrt(sum(c * c for c in v))
+        unit = (v[0] / n, v[1] / n, v[2] / n)
+        p = (centre[0] + unit[0] * radius,
+             centre[1] + unit[1] * radius * 1.12,
+             centre[2] + unit[2] * radius)
+        positions.append(p)
+        normals.append(unit)
+        uvs.append((0.5 + 0.5 * unit[0], 0.5 + 0.5 * unit[2]))
+        joints.append([bone, 0, 0, 0])
+        weights.append([1.0, 0.0, 0.0, 0.0])
+    for a, b, c in new_faces:
+        indices.extend([base + a, base + b, base + c])
+
+
 def build_mesh():
     """The skinned mesh: one tapered tube per bone, plus the head cap.
 
@@ -284,22 +338,14 @@ def build_mesh():
                     d = ring_base[r + 1][s]
                     indices.extend([a, b, c, a, c, d])
 
-    # The head: an octahedron-ish cap, so the character has a head and not
-    # a stick.
+    # The head: a small faceted ball, so the character has a HEAD and not a
+    # stick. A cone reads as a witch's hat from the game's own camera, and the
+    # camera is 5 m behind the character -- the head is what the player looks
+    # at all the time.
     head_pos = BONES[bone_index("Head")][2]
     head_bone = bone_index("Head")
-    head_r = 0.115
-    for s in range(SIDES):
-        a = 2.0 * math.pi * s / SIDES
-        ca, sa = math.cos(a), math.sin(a)
-        p = (head_pos[0] + ca * head_r, head_pos[1], head_pos[2] + sa * head_r)
-        add_vertex(p, (ca * 0.4, 0.9, sa * 0.4), (s / SIDES, 1.0), [head_bone], [1.0])
-    top = len(positions)
-    add_vertex((head_pos[0], head_pos[1] + 0.13, head_pos[2]), (0, 1, 0), (0.5, 1.0),
-               [head_bone], [1.0])
-    for s in range(SIDES):
-        s2 = (s + 1) % SIDES
-        indices.extend([s, s2, top])
+    add_ball(positions, normals, uvs, joints, weights, indices,
+             (head_pos[0], head_pos[1] + 0.055, head_pos[2]), 0.125, head_bone)
 
     return positions, normals, uvs, joints, weights, indices
 
