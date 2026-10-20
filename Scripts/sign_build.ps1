@@ -1,4 +1,8 @@
 param(
+    # The folder holding the executables to sign. Defaults to the bin folder
+    # of the build tree.
+    [string]$BinDir = '',
+    # The build tree whose bin folder is used when BinDir is empty.
     [string]$BuildDir = 'build\Release',
     [string]$CertThumbprint = ''
 )
@@ -9,32 +13,57 @@ param(
 # launch an unsigned binary that has no reputation. A freshly built
 # executable is exactly that, so on a locked-down machine the test suites
 # cannot even START -- the failure reads as "blocked by your organization's
-# Device Guard policy", not as a test result. Signing the build is the
-# standard answer, and it is what a public release needs.
+# Device Guard policy", not as a test result.
 #
-# A certificate in the machine's Trusted Publishers + Trusted Root stores
-# satisfies the policy. A self-signed one is enough for LOCAL verification;
-# a public code-signing certificate is what the release itself needs.
+# A certificate the machine trusts satisfies the policy. A certificate in the
+# Trusted Publishers + Trusted Root stores of the user is enough for LOCAL
+# verification; a public code-signing certificate is what a public release
+# needs.
 #
 # The certificate is used, never created: signing with a throwaway key that
 # nobody trusts changes nothing, and generating one silently would hide the
 # fact that the build is not actually trusted anywhere.
 #
-# Set-AuthenticodeSignature embeds the signature and THEN reports whether
-# the chain validates. A self-signed development certificate chains to a
-# root that only this user trusts, so the chain status is a warning here --
-# the signature itself is what the policy looks at.
+# The result is VERIFIED, because a certificate can be in the right stores
+# and still not satisfy the policy: the script launches what it signed and
+# says so plainly when the machine refuses it. A signed binary that does not
+# start is worse than an unsigned one, because it looks deliberate.
 
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$bin = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repo $BuildDir }
-$bin = Join-Path $bin 'bin'
-if (-not (Test-Path $bin)) { throw "No bin directory at $bin" }
+if (-not $BinDir) {
+    $BinDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repo $BuildDir }
+    $BinDir = Join-Path $BinDir 'bin'
+}
+if (-not (Test-Path $BinDir)) { throw "No bin directory at $BinDir" }
 
-if (-not $CertThumbprint) {
-    $certs = @(Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
-               Where-Object { $_.NotAfter -gt (Get-Date) })
-    if ($certs.Count -eq 0) {
+function Get-CodeSigningCertificates {
+    @(Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
+       Where-Object { $_.NotAfter -gt (Get-Date) -and $_.HasPrivateKey } |
+       Sort-Object NotBefore -Descending)
+}
+
+# True when the machine lets the executable start. A blocked launch exits
+# with 4551 (STATUS_DEVICE_GUARD_BLOCKED... the code the shell reports).
+function Test-ExecutableStarts {
+    param([string]$Path)
+    $probe = Join-Path $env:TEMP 'nf_sign_probe.exe'
+    Copy-Item $Path $probe -Force
+    $out = Join-Path $env:TEMP 'nf_sign_probe.log'
+    cmd /c "`"$probe`" --help" > $out 2>&1
+    $code = $LASTEXITCODE
+    Remove-Item $probe -Force -ErrorAction SilentlyContinue
+    if ($code -eq 4551) { return $false }
+    return $true
+}
+
+$candidates = @()
+if ($CertThumbprint) {
+    $candidates = @(Get-Item "Cert:\CurrentUser\My\$CertThumbprint" -ErrorAction SilentlyContinue)
+    if ($candidates.Count -eq 0) { throw "No certificate $CertThumbprint in Cert:\CurrentUser\My" }
+} else {
+    $candidates = Get-CodeSigningCertificates
+    if ($candidates.Count -eq 0) {
         Write-Error 'No code-signing certificate in Cert:\CurrentUser\My.'
         Write-Error 'Create one with:'
         Write-Error '  New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Your Name" -CertStoreLocation Cert:\CurrentUser\My'
@@ -42,28 +71,46 @@ if (-not $CertThumbprint) {
         Write-Error '  foreach ($s in "TrustedPublisher","Root") { $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($s,"CurrentUser"); $store.Open("ReadWrite"); $store.Add($cert); $store.Close() }'
         exit 1
     }
-    $CertThumbprint = $certs[0].Thumbprint
 }
-$cert = Get-Item "Cert:\CurrentUser\My\$CertThumbprint"
-Write-Host "signing with: $($cert.Subject) ($($cert.Thumbprint))"
+
+$exes = @(Get-ChildItem $BinDir -Filter *.exe -File)
+if ($exes.Count -eq 0) { throw "No executables in $BinDir" }
+
+$chosen = $null
+foreach ($cert in $candidates) {
+    Write-Host "trying: $($cert.Subject) ($($cert.Thumbprint))"
+    foreach ($exe in $exes) {
+        $sig = Set-AuthenticodeSignature -FilePath $exe.FullName -Certificate $cert -HashAlgorithm SHA256
+        if (-not $sig.SignerCertificate) {
+            Write-Warning ("  {0,-32} NOT SIGNED" -f $exe.Name)
+        }
+    }
+    # The verdict of the machine, not of Windows' certificate store: sign one
+    # of them and ask the machine to start it.
+    $probe = $exes | Sort-Object Length | Select-Object -First 1
+    if (Test-ExecutableStarts $probe.FullName) {
+        $chosen = $cert
+        break
+    }
+    Write-Host '  the machine still refuses the signed binary - trying the next certificate'
+}
+if (-not $chosen) {
+    Write-Error 'The machine refused every certificate tried.'
+    Write-Error 'Signing is not enough here: the policy also wants the signer trusted at the'
+    Write-Error 'MACHINE level. Add the certificate to LocalMachine\TrustedPublisher and'
+    Write-Error 'LocalMachine\Root (needs administrator), or use a public code-signing certificate.'
+    exit 1
+}
 
 $count = 0
 $unsigned = 0
-$untrusted = 0
-foreach ($exe in Get-ChildItem $bin -Filter *.exe -File) {
-    $sig = Set-AuthenticodeSignature -FilePath $exe.FullName -Certificate $cert -HashAlgorithm SHA256
-    if (-not $sig.SignerCertificate) {
-        Write-Warning ("  {0,-32} NOT SIGNED" -f $exe.Name)
+foreach ($exe in $exes) {
+    $sig = Get-AuthenticodeSignature $exe.FullName
+    if ($sig.SignerCertificate -and $sig.SignerCertificate.Thumbprint -eq $chosen.Thumbprint) {
+        $count++
+    } else {
         $unsigned++
-        continue
-    }
-    $count++
-    if ($sig.Status -ne 'Valid') {
-        # The signature is embedded; the chain does not validate because the
-        # root is trusted only for this user. Say so once, not per file.
-        $untrusted++
     }
 }
-Write-Host "signed $count executables ($unsigned failed, $untrusted with an untrusted chain)"
-if ($unsigned -gt 0) { exit 1 }
-exit 0
+Write-Host "signed $count executables with $($chosen.Subject) ($unsigned failed)"
+exit ($(if ($unsigned -gt 0) { 1 } else { 0 }))

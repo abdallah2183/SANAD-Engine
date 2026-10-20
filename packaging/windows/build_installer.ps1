@@ -233,6 +233,23 @@ REPORTING A PROBLEM
 $readme | Set-Content -Path (Join-Path $stage 'README.txt') -Encoding UTF8
 Write-Host '  README.txt + SANAD.png'
 
+# --- Sign the staged binaries ------------------------------------------------
+# A portable package that Windows refuses to launch is a package nobody can
+# use: Smart App Control (and an enterprise WDAC policy) refuse an unsigned
+# executable it has no reputation for, and a freshly built one never has.
+# Signing the STAGED copies -- not the build tree -- is what makes the zip
+# work on a locked-down machine.
+#
+# Best effort: a machine with no code-signing certificate still gets a
+# package, unsigned, exactly as before. The warning says which.
+$signScript = Join-Path $repo 'Scripts\sign_build.ps1'
+if (Test-Path $signScript) {
+    & powershell -ExecutionPolicy Bypass -File $signScript -BinDir $stage
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning 'The package is UNSIGNED: Windows Smart App Control or a WDAC policy may refuse to launch it.'
+    }
+}
+
 $total = (Get-ChildItem $stage -Recurse -File | Measure-Object -Property Length -Sum)
 Write-Host ("staged {0} files, {1:N1} MB -> {2}" -f $total.Count, ($total.Sum / 1MB), $stage)
 

@@ -6,8 +6,8 @@
 
 **SHA-256:**
 ```
-549d4ddf57a1d44f5fd605b2eca4fd89571ce8ceb9c59b9f42f81f8a2c436a3e  SANAD-0.3.0-Windows-x64-Portable.zip
-fce03163a6f56c99041f3493a94b40d23bd7fc3bfa4044fe6a7ad6cd8142971e  SANAD-0.3.0-TreeWorld.zip
+69e411e15cde9410c4964c82174eea3743fa4a7a726333313af1822fed853fa8  SANAD-0.3.0-Windows-x64-Portable.zip
+a5cc34dfa2165dc677670d8d9d4e2c8da1294baa3c7dedd12906c10f0446557e  SANAD-0.3.0-TreeWorld.zip
 ```
 
 Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (English available)
@@ -103,40 +103,38 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 
 ## Verification | التحقق
 
+Everything below was run on the release machine, Release, Windows x64, and
+every number is what the binaries actually printed.
+
 - **Clean build from scratch:** `rmdir /s /q build` then
   `build_nf.bat Release` → **0 errors**, 700 build steps, 41 executables.
-- **Test suites: 1,476 passed / 0 failed / 3 skipped** across the 21 suites
-  that ran on the release machine (Release, Windows x64).
-- **The machine refuses to launch some freshly built binaries.** Windows
-  **Smart App Control** blocks an unsigned executable the machine's cloud
-  reputation service has not seen yet, and the failure reads as *"blocked by
-  your organization's Device Guard policy"* — not as a test result. Two
-  things make it go away, and both are legitimate:
-  - **Submit the build tree to the reputation service**
-    (`MpCmdRun -Scan -ScanType 3 -File build\Release\bin`) and run the suite
-    again a few minutes later. The verdict arrives on its own.
-  - **Sign the build** (`Scripts\sign_build.ps1`) with a certificate the
-    machine trusts.
-  `Scripts\verify_release.ps1` does both and then runs everything.
-- **TreeWorld, played by the shipped player:**
+- **All 26 test suites: 1,906 passed / 0 failed / 3 skipped.**
+- **TreeWorld, played by the shipped player** (the packaged one, from inside
+  the package):
   - headless — 120 frames, **Validation errors: 0**, **Alive RHI objects
-    before shutdown: 0**;
+    before shutdown: 0**, `SANAD Runtime exited cleanly`;
   - windowed — the same 120 frames with **`extracted=60 visible=40
-    draws=80`**, i.e. the scene really is drawn. A headless run has no
-    swapchain to present to, so it reports zero draws whatever the scene
-    contains; the windowed run is the one that proves the rendering.
+    draws=80`**: the scene really is drawn. A headless run has no swapchain
+    to present to, so it reports zero draws whatever the scene contains —
+    the windowed run is the one that proves the rendering.
+- **The portable zip**, extracted into a folder that has never seen the
+  engine: the shipped CLI creates a Third-Person project, builds and
+  packages it, and the shipped player plays it — **Validation errors: 0**,
+  **0 leaked RHI objects**.
 - **Editor acceptance, headless:** every automation step OK, 0 Vulkan
   validation errors, 0 leaked RHI objects, `draws=120 visible=60`.
-- **End-to-end:** `nf new` → `nf build` → the packaged player renders frames
-  with physics, animation and audio running.
-- **The portable zip** contains the editor, the CLI, the player, the cooker,
-  the importer, the templates, the shaders, the Arabic font and the
-  TreeWorld source (127 files).
+- **The portable zip ships signed binaries.** A portable package that
+  Windows refuses to launch is a package nobody can use, and Smart App
+  Control refuses an unsigned executable it has no reputation for. The
+  packaging script signs the staged copies when a code-signing certificate
+  is available.
+
+`Scripts\verify_release.ps1` runs all of the above and prints the verdict.
 
 > **CI could not run for this release.** GitHub reported: *"The job was not
 > started because your account is locked due to a billing issue."* Every
 > workflow on the repository — including the one that was green before —
-> stopped the same way. Fixing the account's billing restores the full
-> 26-suite run on a machine without a code-integrity policy, plus the
-> TreeWorld and portable-zip acceptance, all of which are wired into the CI
-> workflow and run on the next push.
+> stopped the same way. Fixing the account's billing restores the CI gates
+> that are already wired up: the full 26-suite run on a machine without a
+> code-integrity policy, the TreeWorld acceptance in both its headless and
+> its rendering form, and the portable-zip acceptance.

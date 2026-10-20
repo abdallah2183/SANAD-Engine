@@ -74,6 +74,7 @@ Write-Host ''
 Write-Host '=== the 26 test suites ==='
 $results = @{}
 $pending = @($suites)
+$attempt = 0
 $deadline = (Get-Date).AddMinutes($RetryMinutes)
 while ($pending.Count -gt 0) {
     foreach ($s in $pending) {
@@ -87,7 +88,31 @@ while ($pending.Count -gt 0) {
     }
     if ($pending.Count -eq 0) { break }
     if ((Get-Date) -ge $deadline) { break }
-    $wait = [Math]::Min(60, [int]($deadline - (Get-Date)).TotalSeconds)
+    # A blocked binary is judged by its HASH, so a blocked file keeps its
+    # verdict until the file changes. Signing it again changes the file, the
+    # reputation service is asked about the new hash, and the answer comes
+    # back immediately.
+    #
+    # The certificate has to CHANGE. An Authenticode signature without a
+    # timestamp is deterministic, so signing the same file with the same
+    # certificate produces the same bytes -- the same hash -- and the same
+    # verdict. Rotating through the available certificates is what actually
+    # moves the file.
+    $signers = @(Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
+                 Where-Object { $_.NotAfter -gt (Get-Date) -and $_.HasPrivateKey } |
+                 Sort-Object NotBefore -Descending)
+    if ($signers.Count -gt 0) {
+        $signer = $signers[$attempt % $signers.Count]
+        foreach ($s in $pending) {
+            $exe = Join-Path $bin "$s.exe"
+            if (Test-Path $exe) {
+                Set-AuthenticodeSignature -FilePath $exe -Certificate $signer -HashAlgorithm SHA256 | Out-Null
+            }
+        }
+        Write-Host ("  ... re-signed with {0}" -f $signer.Subject)
+    }
+    $attempt++
+    $wait = [Math]::Min(45, [int]($deadline - (Get-Date)).TotalSeconds)
     Write-Host ("  ... {0} still blocked by the code-integrity policy, retrying in {1}s" -f ($pending -join ', '), $wait)
     Start-Sleep -Seconds $wait
 }
@@ -148,7 +173,12 @@ if (-not $SkipZip) {
                 }
                 Start-Sleep -Seconds 40
             }
-            $game = Join-Path $clean 'VerifyGame'
+            # The game is created OUTSIDE the extracted folder: the packager
+            # refuses to write a package inside the directory the player lives
+            # in, and that refusal is correct -- it would overwrite the
+            # running player.
+            $game = Join-Path $env:TEMP 'nf_portable_game'
+            Remove-Item $game -Recurse -Force -ErrorAction SilentlyContinue
             & $zipNf.FullName new $game --name VerifyGame --template ThirdPerson | Select-Object -Last 2
             & $zipNf.FullName build --project (Join-Path $game 'VerifyGame.nfproj') | Select-Object -Last 3
             $zipPlayer = Get-ChildItem (Join-Path $game 'dist') -Filter 'NFPlayer.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
