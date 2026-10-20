@@ -1,13 +1,13 @@
 # SANAD Engine 0.3.0 — AI-ready release
 
 **Download:**
-- `SANAD-0.3.0-Windows-x64-Portable.zip` — the engine, the editor, the CLI, the tools
+- `SANAD-0.3.0-Windows-x64-Portable.zip` — the engine: editor, CLI, player, cooker, importer, templates, shaders, Arabic font, docs
 - `SANAD-0.3.0-TreeWorld.zip` — the sample game, packaged and ready to play
 
 **SHA-256:**
 ```
-69e411e15cde9410c4964c82174eea3743fa4a7a726333313af1822fed853fa8  SANAD-0.3.0-Windows-x64-Portable.zip
-a5cc34dfa2165dc677670d8d9d4e2c8da1294baa3c7dedd12906c10f0446557e  SANAD-0.3.0-TreeWorld.zip
+81231b9d3e098aa0de557014c9192ed48978339ac912f51423281d46024b76d4  SANAD-0.3.0-Windows-x64-Portable.zip
+5cd49a16b523d9739fa7370b280fa2b4017653d336505a0af8c03d33f2547db1  SANAD-0.3.0-TreeWorld.zip
 ```
 
 Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (English available)
@@ -16,15 +16,33 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 
 ## Highlights | أبرز ما في النسخة
 
-### TreeWorld: a real game, not a tech demo | لعبة حقيقية، مو ديمو تقني
-- `Games/TreeWorld` is a complete misty-forest scene: 66 entities, a
-  character, trees, rocks, crates, textures, a Lua gameplay script and a
-  fog-lit atmosphere.
-- It is packaged and played by the **shipped player**, not by the editor:
-  `nf build --project Games/TreeWorld/TreeWorld.nfproj`, then the packaged
-  `NFPlayer.exe` runs it standalone.
-- CI accepts it by the player's own log line — `Validation errors: 0` and
-  no leaked RHI objects — not by "the folder looks right".
+### A third-person game, not a fixed camera | لعبة شخص ثالث، مش كاميرا ثابتة
+- The camera **follows a player**: a pivot on the character, an orbit
+  (distance, yaw, pitch), smoothing that is frame-rate independent, and a
+  collision sphere that pulls the camera in front of a tree instead of
+  leaving it inside one.
+- The camera is set in the scene — `Camera: … follow=Player pivot=0,1.45,0
+  distance=5.2 yaw=180 pitch=-13 smoothing=9 radius=0.35` — and in the
+  editor's Camera panel.
+- A headless run has no swapchain to present to, so it reports **zero
+  draws** whatever the scene contains. The windowed run is what proves the
+  rendering: `extracted=60 visible=40 draws=80`.
+
+### A character with a skeleton and a walk cycle | شخصية بهيكل عظمي ومشي
+- The explorer is **one entity with a rig**: a glTF that carries a skin, 19
+  bones and three clips (idle, walk, run). The engine skins it on the CPU
+  and plays the clip that matches how fast it is moving.
+- The character was seven ordinary entities (a body, a head, hair, two arms,
+  two legs) and a Lua script that moved them by hand every frame.
+- The rig and the props are **authored as code** (`Tools/Character`,
+  `Tools/Props`), so the assets are reproducible, reviewable as code, and
+  carry no third-party licence: they are ours, and they are CC0 like the
+  rest of the repository.
+
+### A forest that is not a cube and three spheres | غابة مش مكعبات وكرات
+- The trees are a tapered eight-sided trunk that leans, with three
+  branches, and a canopy of four overlapping crowns. The rocks are two
+  jittered, flat-shaded blobs.
 
 ### An agent can build a playable game | الوكيل يقدر يبني لعبة قابلة للعب
 - `AGENTS.md` at the repository root and in every project `nf new` creates:
@@ -34,8 +52,8 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 - The CLI grew `nf new --template`, `nf build`, `nf run`, `nf verify`, and
   the templates really scaffold — Default, ThirdPerson, FPSStarter,
   Platformer2D.
-- The Third-Person starter is a **playable Crate Hunter**: WASD to move,
-  crates to collect, a score.
+- The Third-Person starter is a **playable Crate Hunter** game: WASD to
+  move, crates to collect, a score.
 
 ### The editor does not lose your work | المحرر ما يضيع شغلك
 - `Ctrl+D` duplicates an entity **and its whole subtree**.
@@ -44,7 +62,7 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 - A rename now moves the registry entry and the cooked copy with the file;
   a delete purges them too. The browser shows the file's own name.
 
-### The engine got its foundations right | الأساسات اتظبطت
+### The foundations, fixed | الأساسات اتظبطت
 - The Vulkan backend now tracks the image layout the GPU is **actually**
   in. The old code derived a barrier's old layout from the caller's usage
   hint, which produced transitions the driver never saw.
@@ -72,15 +90,17 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
    Games\TreeWorld\dist\NFPlayer.exe --project Games\TreeWorld\dist\TreeWorld.nfproj
    ```
 5. **File → Open Project** on `Games/TreeWorld/TreeWorld.nfproj` to open the
-   scene in the editor.
+   forest in the editor and watch the camera follow.
 
 ## What's inside
 
 - `SANADEditor.exe`, `NFPlayer.exe`, `NFGamePlayer.exe`, `nf.exe`,
-  `NFAssetCooker.exe`, `NFModelImporter.exe`- `Templates/` — Default, ThirdPerson, FPSStarter, Platformer2D, Blender
-- `Games/TreeWorld/` — the sample game (source; its `Cache/` and `dist/`
-  are not shipped)
-- `Shaders/` — the compiled SPIR-V programs, `Resources/fonts/Amiri-Regular.ttf`
+  `NFAssetCooker.exe`, `NFModelImporter.exe`
+- `Templates/` — Default, ThirdPerson, FPSStarter, Platformer2D, Blender
+- `Games/TreeWorld/` — the sample game (source; its `Cache/` and `dist/` are
+  not shipped)
+- `Shaders/` — the compiled SPIR-V programs,
+  `Resources/fonts/Amiri-Regular.ttf`
 - `Docs/` — release notes, Arabic getting-started, tutorial, Lua scripting,
   asset import, the AI game guide, Blender pipeline
 - `AGENTS.md`, `CLAUDE.md`, `llms.txt` — the agent entry points
@@ -89,16 +109,16 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 ## Known issues | قيود معروفة
 
 - **Windows x64 only.** There is no Linux or macOS player.
-- **Unsigned binaries:** with **Smart App Control** or an enterprise **WDAC**
-  policy enabled, Windows may refuse to launch the executables — including
-  the ones a build just produced. Either allow the folder, or sign the
-  build. This is a machine policy, not a defect: do not disable your
-  security policy to run a demo.
-- **The camera is still fixed.** It looks at the origin, so a real
-  third-person game is not possible yet. A follow camera and a glTF
-  character with idle/walk/run animation are the next release.
-- The tree, the rocks and the character are built from primitives. Real
-  CC0 assets are on the way.
+- **The binaries are unsigned.** Windows **Smart App Control** or an
+  enterprise **WDAC** policy may refuse to launch them — including the
+  ones a build just produced. Sign the build (`Scripts\sign_build.ps1`,
+  or `build_installer.ps1 -Sign`) with a certificate the machine trusts,
+  or allow the folder. This is a machine policy, not a defect: do not
+  disable your security to run a demo.
+- **The camera cannot be aimed yet.** It follows a fixed orbit; a mouse
+  look and a player-driven yaw come next.
+- The tree, the rocks and the character are stylised; real scanned assets
+  are not in.
 - Autosave is a recovery file, not a versioned backup system.
 
 ## Verification | التحقق
@@ -108,33 +128,24 @@ every number is what the binaries actually printed.
 
 - **Clean build from scratch:** `rmdir /s /q build` then
   `build_nf.bat Release` → **0 errors**, 700 build steps, 41 executables.
-- **All 26 test suites: 1,906 passed / 0 failed / 3 skipped.**
-- **TreeWorld, played by the shipped player** (the packaged one, from inside
-  the package):
+- **All 26 test suites: 1,923 passed / 0 failed / 3 skipped.**
+- **TreeWorld, played by the shipped player:**
   - headless — 120 frames, **Validation errors: 0**, **Alive RHI objects
     before shutdown: 0**, `SANAD Runtime exited cleanly`;
-  - windowed — the same 120 frames with **`extracted=60 visible=40
-    draws=80`**: the scene really is drawn. A headless run has no swapchain
-    to present to, so it reports zero draws whatever the scene contains —
-    the windowed run is the one that proves the rendering.
+  - windowed — 120 frames with **`extracted=60 visible=40 draws=80`**: the
+    scene really is drawn, and the character is skinned and animated
+    (`Animated characters: 1 (max mesh deviation 0.0018)`).
 - **The portable zip**, extracted into a folder that has never seen the
-  engine: the shipped CLI creates a Third-Person project, builds and
-  packages it, and the shipped player plays it — **Validation errors: 0**,
-  **0 leaked RHI objects**.
+  engine: the shipped CLI creates a Third-Person project, builds it, and
+  the shipped player plays it — **Validation errors: 0**, **0 leaked RHI
+  objects**.
 - **Editor acceptance, headless:** every automation step OK, 0 Vulkan
-  validation errors, 0 leaked RHI objects, `draws=120 visible=60`.
-- **The portable zip ships signed binaries.** A portable package that
-  Windows refuses to launch is a package nobody can use, and Smart App
-  Control refuses an unsigned executable it has no reputation for. The
-  packaging script signs the staged copies when a code-signing certificate
-  is available.
-
-`Scripts\verify_release.ps1` runs all of the above and prints the verdict.
+  validation errors, 0 leaked RHI objects.
 
 > **CI could not run for this release.** GitHub reported: *"The job was not
 > started because your account is locked due to a billing issue."* Every
 > workflow on the repository — including the one that was green before —
-> stopped the same way. Fixing the account's billing restores the CI gates
-> that are already wired up: the full 26-suite run on a machine without a
+> stopped the same way. Fixing the account's billing restores the CI gates,
+> which are already wired up: the full 26-suite run on a machine without a
 > code-integrity policy, the TreeWorld acceptance in both its headless and
 > its rendering form, and the portable-zip acceptance.

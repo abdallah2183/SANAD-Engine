@@ -15,6 +15,17 @@ param(
     [switch]$SkipInstaller,
     [switch]$SkipPortable,
     [switch]$StageOnly,
+    # Sign the staged binaries with a code-signing certificate.
+    #
+    # Off by default: a release signed with a SELF-SIGNED certificate is
+    # still "unknown publisher" to every machine that does not trust it, so
+    # the signature buys nothing for a public download -- and a release that
+    # claims to be signed when it is not really signed is worse than one that
+    # says plainly that it is unsigned. Turn it on for a build you are going
+    # to run on your own machine: Smart App Control refuses an unsigned
+    # executable it has no reputation for, and a certificate the machine
+    # trusts satisfies the policy.
+    [switch]$Sign,
     # The build directory the binaries come from, relative to the repository
     # root. CI builds into build/ci (a Debug tree) while a release build lives
     # in build/release, and hard-coding one of them made the other impossible
@@ -242,12 +253,16 @@ Write-Host '  README.txt + SANAD.png'
 #
 # Best effort: a machine with no code-signing certificate still gets a
 # package, unsigned, exactly as before. The warning says which.
-$signScript = Join-Path $repo 'Scripts\sign_build.ps1'
-if (Test-Path $signScript) {
-    & powershell -ExecutionPolicy Bypass -File $signScript -BinDir $stage
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning 'The package is UNSIGNED: Windows Smart App Control or a WDAC policy may refuse to launch it.'
+if ($Sign) {
+    $signScript = Join-Path $repo 'Scripts\sign_build.ps1'
+    if (Test-Path $signScript) {
+        & powershell -ExecutionPolicy Bypass -File $signScript -BinDir $stage
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'The package is UNSIGNED: Windows Smart App Control or a WDAC policy may refuse to launch it.'
+        }
     }
+} else {
+    Write-Host '  (not signed - pass -Sign to sign the staged binaries)'
 }
 
 $total = (Get-ChildItem $stage -Recurse -File | Measure-Object -Property Length -Sum)
