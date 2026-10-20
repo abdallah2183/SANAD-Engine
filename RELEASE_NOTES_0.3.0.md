@@ -6,7 +6,7 @@
 
 **SHA-256:**
 ```
-bd3432cbbb4adfa5431bb9bd1f6de804a9babed9315a98d9aea0bfdd7c01784a  SANAD-0.3.0-Windows-x64-Portable.zip
+549d4ddf57a1d44f5fd605b2eca4fd89571ce8ceb9c59b9f42f81f8a2c436a3e  SANAD-0.3.0-Windows-x64-Portable.zip
 fce03163a6f56c99041f3493a94b40d23bd7fc3bfa4044fe6a7ad6cd8142971e  SANAD-0.3.0-TreeWorld.zip
 ```
 
