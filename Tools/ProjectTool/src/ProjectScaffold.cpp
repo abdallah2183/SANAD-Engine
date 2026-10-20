@@ -4,6 +4,7 @@
 
 #include "PathUtils.hpp"
 
+#include <cctype>
 #include <filesystem>
 #include <string>
 
@@ -164,11 +165,43 @@ inside the camera's view unless you also author a camera.
 6. Windows x64 + Vulkan is the target. There is no browser build.
 )GUIDE";
 
+// A project name becomes a .nfproj file name, so the rules are the ones
+// Windows enforces on a file name — not just "no path separator".
 bool is_valid_name(const std::string& name) {
     if (name.empty()) return false;
     // A name containing a separator would put the .nfproj somewhere other than
     // the project root, which the mount defaults would then disagree with.
-    return name.find_first_of("/\\:") == std::string::npos && name != "." && name != "..";
+    if (name.find_first_of("/\\:") != std::string::npos) return false;
+    // The rest of the Windows-invalid set. Explorer cannot create a file
+    // with these, so `nf new "My|Game"` used to produce a .nfproj the user
+    // could never open.
+    if (name.find_first_of("<>|\"?*") != std::string::npos) return false;
+    // Control characters are illegal in a Windows file name too.
+    for (const char ch : name) {
+        if (static_cast<unsigned char>(ch) < 0x20) return false;
+    }
+    // A trailing dot or space is silently dropped by Windows, so the file
+    // would be created under a different name than the one that was asked
+    // for — and "My Game." would collide with "My Game".
+    if (name.back() == '.' || name.back() == ' ') return false;
+    // The reserved device names. "CON" is the console device whatever
+    // extension follows it, so "CON.nfproj" is a file Windows refuses.
+    std::string upper;
+    upper.reserve(name.size());
+    for (const char ch : name) {
+        upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+    }
+    const auto dot = upper.find('.');
+    const std::string stem = dot == std::string::npos ? upper : upper.substr(0, dot);
+    static const char* kReservedDevices[] = {"CON",  "PRN",  "AUX",  "NUL",  "COM1",
+                                              "COM2", "COM3", "COM4", "COM5", "COM6",
+                                              "COM7", "COM8", "COM9", "LPT1", "LPT2",
+                                              "LPT3", "LPT4", "LPT5", "LPT6", "LPT7",
+                                              "LPT8", "LPT9"};
+    for (const char* device : kReservedDevices) {
+        if (stem == device) return false;
+    }
+    return name != "." && name != "..";
 }
 
 } // namespace
@@ -217,7 +250,9 @@ std::filesystem::path resolve_project_template(std::string_view name,
 bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
     if (!is_valid_name(opts.name)) {
         out_error = "invalid project name '" + opts.name +
-                    "' (no path separators, no leading dot)";
+                    "' (letters, digits, spaces, '-', '_' and '.' only: no path separators, no "
+                    "Windows-reserved characters, no trailing dot or space, and not a reserved "
+                    "device name such as CON)";
         return false;
     }
     if (opts.root.empty()) {
@@ -266,8 +301,9 @@ bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
     }
 
     // Generated output must not be committed. Without this the first `nf build`
-    // drops a Cache/ and a dist/ into the user's repository.
-    if (!detail::write_text(root / ".gitignore", "Cache/\ndist/\n*.nfproj.tmp\n", out_error)) {
+    // drops a Cache/, a dist/ and a Shaders/ into the user's repository.
+    if (!detail::write_text(root / ".gitignore", "Cache/\ndist/\nShaders/\n*.nfproj.tmp\n",
+                            out_error)) {
         return false;
     }
 

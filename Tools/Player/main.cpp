@@ -10,10 +10,13 @@
 #include <NF/Assets/ProjectDescriptor.hpp>
 #include <NF/Core/CrashHandler.hpp>
 
+#include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #if defined(_WIN32)
@@ -57,14 +60,36 @@ void print_help() {
               << "no dir, it writes to Crashes/ beside the executable.\n";
 }
 
+// The directory the running executable lives in.
+//
+// argv[0] is whatever the caller typed: launched from PATH it is just
+// "NFPlayer.exe", and std::filesystem::absolute resolves that against the
+// CURRENT WORKING DIRECTORY, not against the executable. Two things then go
+// wrong for a shipped package: the "single .nfproj beside the executable"
+// search scans the folder the user happened to be in, and the crash dump
+// directory points outside the package, contradicting the shipped
+// README.txt. The Windows module path is the only thing that names the real
+// file, so it wins; argv[0] stays as a portable last-resort fallback.
+std::filesystem::path executable_directory(const char* argv0) {
+#if defined(_WIN32)
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(),
+                                             static_cast<DWORD>(buffer.size()));
+    if (length != 0 && length < buffer.size()) {
+        return std::filesystem::path(buffer.data()).parent_path();
+    }
+#endif
+    std::error_code ec;
+    const auto path = std::filesystem::absolute(argv0, ec);
+    if (ec || path.empty()) return std::filesystem::current_path();
+    return path.parent_path();
+}
+
 // Look for exactly one .nfproj next to the executable. A package contains one,
 // so a shipped game can be launched with no arguments at all.
-std::string find_project_beside(const char* argv0) {
+std::string find_project_beside(const std::filesystem::path& dir) {
+    if (dir.empty()) return {};
     std::error_code ec;
-    auto exe = std::filesystem::absolute(argv0, ec);
-    if (ec || exe.empty()) return {};
-    const auto dir = exe.parent_path();
-
     std::vector<std::filesystem::path> found;
     for (auto it = std::filesystem::directory_iterator(dir, ec);
          !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
@@ -74,6 +99,27 @@ std::string find_project_beside(const char* argv0) {
         }
     }
     return found.size() == 1 ? found.front().string() : std::string{};
+}
+
+// A frame count, or nothing.
+//
+// `--frames` decides whether the run is bounded at all: 0 means "until the
+// window closes". Parsed with atoi, a missing value became 0, so a CI run
+// that meant to be bounded hung forever; a malformed value became 0 too; and
+// a negative value became a count near 2^32 through the unsigned cast. Parse
+// it properly and refuse anything that is not a plain count.
+bool parse_frame_count(const std::string& text, uint32_t& out_frames) {
+    if (text.empty()) return false;
+    uint64_t value = 0;
+    const char* const begin = text.data();
+    const char* const end = begin + text.size();
+    const auto result = std::from_chars(begin, end, value);
+    // from_chars on an unsigned type rejects a leading '-' outright, so a
+    // negative count cannot slip through as a huge positive one.
+    if (result.ec != std::errc{} || result.ptr != end) return false;
+    if (value > 0xFFFFFFFFull) return false;
+    out_frames = static_cast<uint32_t>(value);
+    return true;
 }
 
 } // namespace
@@ -99,9 +145,24 @@ int main(int argc, char** argv) {
         else if (arg.rfind("--project=", 0) == 0) project_path = arg.substr(10);
         else if (arg == "--scene") config.scene_path = next();
         else if (arg.rfind("--scene=", 0) == 0) config.scene_path = arg.substr(8);
-        else if (arg == "--frames") config.max_frames = static_cast<uint32_t>(std::atoi(next().c_str()));
-        else if (arg.rfind("--frames=", 0) == 0) config.max_frames = static_cast<uint32_t>(std::atoi(arg.substr(9).c_str()));
-        else if (arg == "--validation") config.validation = true;
+        else if (arg == "--frames") {
+            const std::string value = next();
+            uint32_t frames = 0;
+            if (!parse_frame_count(value, frames)) {
+                std::cerr << "NFPlayer: --frames requires a frame count "
+                             "(0 = until the window closes)\n";
+                return 1;
+            }
+            config.max_frames = frames;
+        } else if (arg.rfind("--frames=", 0) == 0) {
+            uint32_t frames = 0;
+            if (!parse_frame_count(arg.substr(9), frames)) {
+                std::cerr << "NFPlayer: --frames requires a frame count "
+                             "(0 = until the window closes)\n";
+                return 1;
+            }
+            config.max_frames = frames;
+        } else if (arg == "--validation") config.validation = true;
         else if (arg == "--headless") config.headless = true;
         else if (arg == "--input-log") config.input_log_path = next();
         else if (arg.rfind("--input-log=", 0) == 0) config.input_log_path = arg.substr(12);
@@ -125,8 +186,11 @@ int main(int argc, char** argv) {
     // startup leaves a readable artifact behind. Dumps land beside the
     // executable (never %APPDATA%, never the registry): the package folder is
     // the whole install, and deleting it is the whole uninstall.
-    std::error_code exe_ec;
-    const auto exe_dir = std::filesystem::absolute(argv[0], exe_ec).parent_path();
+    //
+    // The directory comes from the module path, not argv[0]: a package
+    // launched from anywhere else would otherwise write its dumps into the
+    // user's current directory, outside the folder that is the whole install.
+    const auto exe_dir = executable_directory(argv[0]);
     {
         nf::CrashHandlerConfig crash_cfg;
         crash_cfg.dump_directory = (exe_dir / "Crashes").string();
@@ -157,7 +221,9 @@ int main(int argc, char** argv) {
     }
 
     // Environment overrides, so CI can drive the player the same way it drives
-    // the samples.
+    // the samples. NF_PLAYER_FRAMES is validated exactly like the option: a
+    // typo there used to become 0 through atoi, which silently turned a
+    // bounded run into an unbounded one.
 #ifdef _MSC_VER
     char* buf = nullptr; size_t sz = 0;
     if (_dupenv_s(&buf, &sz, "NF_PLAYER_PROJECT") == 0 && buf) {
@@ -166,7 +232,14 @@ int main(int argc, char** argv) {
     }
     char* b2 = nullptr; size_t s2 = 0;
     if (_dupenv_s(&b2, &s2, "NF_PLAYER_FRAMES") == 0 && b2) {
-        config.max_frames = static_cast<uint32_t>(std::atoi(b2));
+        uint32_t frames = 0;
+        if (!parse_frame_count(b2, frames)) {
+            std::cerr << "NFPlayer: NF_PLAYER_FRAMES must be a frame count, got '"
+                      << b2 << "'\n";
+            std::free(b2);
+            return 1;
+        }
+        config.max_frames = frames;
         std::free(b2);
     }
     char* b3 = nullptr; size_t s3 = 0;
@@ -181,13 +254,21 @@ int main(int argc, char** argv) {
     }
 #else
     if (auto e = std::getenv("NF_PLAYER_PROJECT"); e && project_path.empty()) project_path = e;
-    if (auto e = std::getenv("NF_PLAYER_FRAMES")) config.max_frames = static_cast<uint32_t>(std::atoi(e));
+    if (auto e = std::getenv("NF_PLAYER_FRAMES")) {
+        uint32_t frames = 0;
+        if (!parse_frame_count(e, frames)) {
+            std::cerr << "NFPlayer: NF_PLAYER_FRAMES must be a frame count, got '"
+                      << e << "'\n";
+            return 1;
+        }
+        config.max_frames = frames;
+    }
     if (std::getenv("NF_PLAYER_VALIDATION")) config.validation = true;
     if (std::getenv("NF_PLAYER_HEADLESS")) config.headless = true;
 #endif
 
     if (project_path.empty()) {
-        project_path = find_project_beside(argv[0]);
+        project_path = find_project_beside(exe_dir);
         if (project_path.empty()) {
             std::cerr << "NFPlayer: no --project given and no single .nfproj beside the executable\n";
             print_help();

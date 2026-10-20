@@ -138,23 +138,66 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        auto next = [&](std::string& dst) {
-            if (i + 1 < argc) dst = argv[++i];
+        // A missing option value is a mistake, not a default. `next` used to
+        // leave the destination untouched when there was nothing to consume,
+        // so `NFAssetCooker --registry --all` took "--all" as the registry
+        // path and reported the confusing "Failed to load registry '--all'".
+        // The value must exist, must not be empty, and must not look like
+        // another option.
+        auto next = [&](std::string& dst) -> bool {
+            if (i + 1 >= argc) return false;
+            const char* value = argv[i + 1];
+            if (value[0] == '\0' || value[0] == '-') return false;
+            dst = value;
+            ++i;
+            return true;
         };
         auto value_of = [&](std::string_view prefix) {
             return std::string(arg.substr(prefix.size()));
         };
 
-        if (arg == "--input") next(input);
-        else if (arg.rfind("--input=", 0) == 0) input = value_of("--input=");
-        else if (arg == "--output") next(output);
-        else if (arg.rfind("--output=", 0) == 0) output = value_of("--output=");
-        else if (arg == "--registry") next(registry);
-        else if (arg.rfind("--registry=", 0) == 0) registry = value_of("--registry=");
-        else if (arg == "--project") next(project_path);
-        else if (arg.rfind("--project=", 0) == 0) project_path = value_of("--project=");
-        else if (arg == "--content") next(content_mount);
-        else if (arg == "--cache") next(cache_mount);
+        // Every option below takes exactly one value; name the offending one
+        // so the user knows which argument is wrong.
+        auto require_value = [&](const char* option, bool ok) -> bool {
+            if (ok) return true;
+            std::cerr << "NFAssetCooker: " << option << " requires a value\n";
+            return false;
+        };
+
+        if (arg == "--input") {
+            if (!require_value("--input", next(input))) return 1;
+        }
+        else if (arg.rfind("--input=", 0) == 0) {
+            input = value_of("--input=");
+            if (!require_value("--input", !input.empty())) return 1;
+        }
+        else if (arg == "--output") {
+            if (!require_value("--output", next(output))) return 1;
+        }
+        else if (arg.rfind("--output=", 0) == 0) {
+            output = value_of("--output=");
+            if (!require_value("--output", !output.empty())) return 1;
+        }
+        else if (arg == "--registry") {
+            if (!require_value("--registry", next(registry))) return 1;
+        }
+        else if (arg.rfind("--registry=", 0) == 0) {
+            registry = value_of("--registry=");
+            if (!require_value("--registry", !registry.empty())) return 1;
+        }
+        else if (arg == "--project") {
+            if (!require_value("--project", next(project_path))) return 1;
+        }
+        else if (arg.rfind("--project=", 0) == 0) {
+            project_path = value_of("--project=");
+            if (!require_value("--project", !project_path.empty())) return 1;
+        }
+        else if (arg == "--content") {
+            if (!require_value("--content", next(content_mount))) return 1;
+        }
+        else if (arg == "--cache") {
+            if (!require_value("--cache", next(cache_mount))) return 1;
+        }
         else if (arg == "--verify") verify = true;
         else if (arg == "--all") all = true;
         else if (arg == "--help" || arg == "-h") { print_help(); return 0; }

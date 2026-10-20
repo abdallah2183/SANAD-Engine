@@ -253,9 +253,9 @@ void dos_datetime(uint16_t& out_time, uint16_t& out_date) {
                                      ((tm_value.tm_mon + 1) << 5) | tm_value.tm_mday);
 }
 
-} // namespace
-
-uint32_t crc32_of(const uint8_t* data, size_t size) {
+// CRC-32 (IEEE 0xEDB88320) table, shared by the one-shot and the streaming
+// form below.
+const std::array<uint32_t, 256>& crc32_table() {
     static const std::array<uint32_t, 256> table = [] {
         std::array<uint32_t, 256> t{};
         for (uint32_t i = 0; i < 256; ++i) {
@@ -267,11 +267,82 @@ uint32_t crc32_of(const uint8_t* data, size_t size) {
         }
         return t;
     }();
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < size; ++i) {
-        crc = table[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+    return table;
+}
+
+// The incremental CRC update. The archive needs this form: a file is
+// checksummed while it streams, so its bytes are never all in memory at once.
+uint32_t crc32_update(uint32_t crc, const void* data, std::size_t size) {
+    const auto& table = crc32_table();
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for (std::size_t i = 0; i < size; ++i) {
+        crc = table[(crc ^ bytes[i]) & 0xFFu] ^ (crc >> 8);
     }
-    return crc ^ 0xFFFFFFFFu;
+    return crc;
+}
+
+// The zip payload is copied in fixed-size chunks. A package can carry a
+// multi-megabyte mesh or the player itself, and holding one of those whole in
+// memory just to write it out is how a packager runs a machine out of RAM.
+constexpr std::size_t kZipChunkSize = 64 * 1024;
+
+// The size and the CRC of a file, read in chunks. The zip header carries
+// both before the payload, so this is a separate pass from the copy.
+bool measure_file(const std::filesystem::path& path, uint32_t& out_crc,
+                  uint32_t& out_size, std::string& out_error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        out_error = "zip: failed to read '" + path.string() + "'";
+        return false;
+    }
+    uint32_t crc = 0xFFFFFFFFu;
+    uint64_t total = 0;
+    std::vector<char> buffer(kZipChunkSize);
+    while (in) {
+        in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto got = in.gcount();
+        if (got <= 0) break;
+        total += static_cast<uint64_t>(got);
+        if (total > 0xFFFFFFFFull) {
+            // The stored size field is 32 bits wide, so a bigger file cannot
+            // be described by this archive format at all.
+            out_error = "zip: file too large for a store-only archive: '" + path.string() + "'";
+            return false;
+        }
+        crc = crc32_update(crc, buffer.data(), static_cast<std::size_t>(got));
+    }
+    out_crc = crc ^ 0xFFFFFFFFu;
+    out_size = static_cast<uint32_t>(total);
+    return true;
+}
+
+// Copy a file into the archive in chunks. Store-only means the bytes go out
+// verbatim, so this is the only pass that writes the payload.
+bool copy_file_into(std::ofstream& out, const std::filesystem::path& path,
+                    std::string& out_error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        out_error = "zip: failed to read '" + path.string() + "'";
+        return false;
+    }
+    std::vector<char> buffer(kZipChunkSize);
+    while (in) {
+        in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto got = in.gcount();
+        if (got <= 0) break;
+        out.write(buffer.data(), got);
+        if (!out) {
+            out_error = "zip: write failed for '" + path.string() + "'";
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+uint32_t crc32_of(const uint8_t* data, size_t size) {
+    return crc32_update(0xFFFFFFFFu, data, size) ^ 0xFFFFFFFFu;
 }
 
 bool zip_directory(const std::filesystem::path& dir,
@@ -314,22 +385,23 @@ bool zip_directory(const std::filesystem::path& dir,
             out_error = "zip: failed to relativize '" + f.string() + "'";
             return false;
         }
-        std::ifstream in(f, std::ios::binary);
-        if (!in) {
-            out_error = "zip: failed to read '" + f.string() + "'";
-            return false;
-        }
-        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),
-                                   std::istreambuf_iterator<char>());
-        if (bytes.size() > 0xFFFFFFFFull) {
-            out_error = "zip: file too large for a store-only archive: '" + f.string() + "'";
-            return false;
-        }
 
         ZipEntry e;
         e.name = rel.generic_string();
-        e.size = static_cast<uint32_t>(bytes.size());
-        e.crc = crc32_of(bytes.data(), bytes.size());
+        // The zip name field is 16 bits wide. A longer name used to be
+        // truncated silently, so the archive's entry names no longer matched
+        // the files on disk: a corrupt archive rather than a failed build.
+        if (e.name.size() > 0xFFFFu) {
+            out_error = "zip: entry name is longer than the 65535 bytes the zip format "
+                        "allows: '" + e.name + "'";
+            return false;
+        }
+        // The header carries the CRC and the size before the payload, so the
+        // file is measured first and copied second. Both passes stream in
+        // fixed-size chunks: an asset is never held in memory in its entirety.
+        if (!measure_file(f, e.crc, e.size, out_error)) {
+            return false;
+        }
         e.offset = static_cast<uint32_t>(out.tellp());
 
         put_u32(out, 0x04034b50); // local file header
@@ -344,10 +416,11 @@ bool zip_directory(const std::filesystem::path& dir,
         put_u16(out, static_cast<uint16_t>(e.name.size()));
         put_u16(out, 0); // extra length
         out.write(e.name.data(), static_cast<std::streamsize>(e.name.size()));
-        out.write(reinterpret_cast<const char*>(bytes.data()),
-                  static_cast<std::streamsize>(bytes.size()));
         if (!out) {
             out_error = "zip: write failed for '" + e.name + "'";
+            return false;
+        }
+        if (!copy_file_into(out, f, out_error)) {
             return false;
         }
         entries.push_back(std::move(e));
@@ -517,6 +590,7 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
     // runtime falls back to searching build/DebugNinja/..., which does not exist
     // outside the engine tree.
     const auto project_shaders = root / "Shaders" / "Basic3D";
+    size_t spv_staged = 0;
     if (!opts.shader_dir.empty()) {
         if (std::filesystem::exists(opts.shader_dir, ec)) {
             if (!detail::copy_tree(opts.shader_dir, project_shaders, out_error)) {
@@ -531,6 +605,32 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
                         "' (build the engine first)";
             return false;
         }
+        // Count the compiled SPIR-V in the SOURCE, not in the copy: a previous
+        // build may have left .spv files in the project, and those must not
+        // make a build that staged nothing look complete.
+        ec.clear();
+        for (auto it = std::filesystem::recursive_directory_iterator(opts.shader_dir, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            if (!it->is_regular_file(ec) || ec) continue;
+            if (it->path().extension() == ".spv") ++spv_staged;
+        }
+    }
+
+    // A package without SPIR-V is a game that opens a black window and never
+    // says why. The two ways to get here are an engine built without a shader
+    // compiler (the configured directory then holds the .glsl sources, not
+    // SPIR-V) and a tool that never compiled the shaders at all. Both must
+    // fail the build, loudly, instead of shipping a game that cannot draw.
+    if (spv_staged == 0) {
+        if (opts.shader_dir.empty()) {
+            out_error = "no shader directory was configured: the engine was not built with "
+                        "shaders, so the package would have none";
+        } else {
+            out_error = "the engine was not built with shaders: no compiled SPIR-V (.spv) in '" +
+                        opts.shader_dir.string() + "' (build the shader targets, or point the "
+                        "shader directory at one that holds compiled SPIR-V)";
+        }
+        return false;
     }
 
     // --- assemble the package ----------------------------------------------

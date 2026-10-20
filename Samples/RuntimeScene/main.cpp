@@ -2,8 +2,10 @@
 
 #include <NF/Runtime/Application.hpp>
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 int main(int argc, char** argv) {
     nf::runtime::ApplicationConfig config;

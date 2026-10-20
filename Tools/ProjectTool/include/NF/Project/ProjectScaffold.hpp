@@ -70,7 +70,7 @@ struct ScaffoldOptions {
 //   <root>/Cache/             cooked output lands here
 //   <root>/Shaders/           shipped SPIR-V lands here (shaders://)
 //   <root>/dist/              packaging output
-//   <root>/.gitignore         ignores Cache/ and dist/
+//   <root>/.gitignore         ignores Cache/, dist/ and Shaders/
 //
 // Refuses to overwrite an existing project file: silently replacing someone's
 // project is not a recoverable mistake.

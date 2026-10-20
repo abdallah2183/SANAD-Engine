@@ -217,11 +217,28 @@ int main(int argc, char** argv) {
     bool strict_character = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
-        if ((arg == "--input") && i + 1 < argc) {
+        // A known option whose VALUE is missing is not an unknown argument:
+        // "NFModelImporter --input" told the user "unknown argument: --input",
+        // which is both wrong and unhelpful. The option check and the value
+        // check are separate, and a missing value names the option that wants
+        // it.
+        if (arg == "--input") {
+            if (i + 1 >= argc) {
+                std::cerr << "--input requires a path\n";
+                return 2;
+            }
             input = argv[++i];
-        } else if ((arg == "--output") && i + 1 < argc) {
+        } else if (arg == "--output") {
+            if (i + 1 >= argc) {
+                std::cerr << "--output requires a path\n";
+                return 2;
+            }
             output = argv[++i];
-        } else if ((arg == "--mesh") && i + 1 < argc) {
+        } else if (arg == "--mesh") {
+            if (i + 1 >= argc) {
+                std::cerr << "--mesh requires a mesh index (N) or 'all'\n";
+                return 2;
+            }
             mesh_sel = argv[++i];
         } else if (arg == "--info") {
             info_only = true;
