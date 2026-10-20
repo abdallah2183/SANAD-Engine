@@ -36,6 +36,16 @@
 
 namespace nf::runtime {
 
+namespace {
+
+// The largest frame delta the simulation is allowed to see. A hitch (a scene
+// load, a shader compile, a debugger break) produces a multi-second delta;
+// feeding that to the audio mixer or the particle sim either stalls the
+// frame or leaves a backlog the mixer can never drain.
+constexpr float kMaxFrameDelta = 0.25f;
+
+} // namespace
+
 Application::Application(const ApplicationConfig& config) : m_config(config) {}
 
 Application::~Application() = default;
@@ -401,8 +411,15 @@ int Application::run() {
                 }
             }
 
-            const float dt = static_cast<float>(clock.elapsed_seconds());
+            // The frame delta is clamped before it reaches the simulation. A
+            // scene load, a shader compile or a debugger break produces a
+            // multi-second delta, and the audio mixer drains at most four
+            // blocks per frame — so an unclamped hitch left a permanent
+            // backlog that could never be caught up, and the audio stayed
+            // seconds behind the video for the rest of the session.
+            const float raw_dt = static_cast<float>(clock.elapsed_seconds());
             clock.reset();
+            const float dt = std::min(raw_dt, kMaxFrameDelta);
 
             runtime.update(dt);
 
@@ -481,9 +498,12 @@ int Application::run() {
             if (m_config.max_frames > 0 && frame_count >= m_config.max_frames) {
                 break;
             }
-            if (m_config.headless && frame_count >= (m_config.max_frames != 0 ? m_config.max_frames : 10)) {
-                break;
-            }
+            // No second limit here. max_frames == 0 means "no limit"
+            // everywhere else in the engine (see the check above), and the
+            // old headless-only branch silently stopped a headless run after
+            // ten frames when --frames was omitted — a hard-to-diagnose
+            // truncation of a validation run, and a disagreement with the
+            // windowed path, which kept running.
         }
 
         NF_LOG_INFO(LogCategory::Core, "Rendered {} frames (meshes={})", frame_count, runtime.mesh_count());

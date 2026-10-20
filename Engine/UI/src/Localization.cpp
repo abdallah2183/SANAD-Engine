@@ -15,6 +15,7 @@
 
 #include <NF/Core/Logger.hpp>
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -31,7 +32,14 @@ struct Entry {
     const char* ar;
 };
 
-// Keep sorted by key within each block (deterministic, greppable).
+// The table is ONE flat array, not sorted: the keys are grouped by the panel
+// or feature that introduced them (and later blocks are appended, not
+// merged), so "keep sorted" is not the contract this file follows. The rows
+// are also not free of dead weight — a number of keys are not referenced by
+// the engine or the editor yet, and are kept on purpose so a half-built
+// panel keeps its strings. Lookup is first-match-wins over a hash map built
+// once, so the order of the rows does not change what a key means; only a
+// DUPLICATE key would, and the table carries none.
 constexpr Entry kEntries[] = {
     {"add_day_night", "Add Day/Night Cycle", "إضافة دورة ليل ونهار"},
     {"add_sky_settings", "Add Sky Settings", "إضافة إعدادات السماء"},
@@ -729,6 +737,10 @@ constexpr Entry kEntries[] = {
      "Delete the folder '%s' and everything inside it? This cannot be undone.",
      "حذف المجلد «%s» وكل ما بداخله؟ لا يمكن التراجع۔"},
     {"rename_prompt", "New name", "الاسم الجديد"},
+    // A failed rename used to fall through tr()'s unknown-key path, which
+    // returns the KEY ITSELF — the user saw the literal text "rename_failed"
+    // in the console, in both languages.
+    {"rename_failed", "Rename failed", "فشل إعادة التسمية"},
     {"name_no_spaces", "Name cannot contain spaces.", "الاسم لا يمكن أن يحتوي مسافات۔"},
     {"deleted_fmt", "Deleted: %s", "تم الحذف: %s"},
     {"renamed_fmt", "Renamed: %s", "تمت إعادة التسمية: %s"},
@@ -885,7 +897,10 @@ constexpr Entry kEntries[] = {
     {"vignette", "Vignette", "التظليل الجانبي"},
 };
 
-Language g_language = Language::English;
+// The active language. Atomic: set_language() runs on the UI/main thread
+// while tr() runs on the render thread (tr() is called per widget per
+// frame), so a plain global here is a data race.
+std::atomic<Language> g_language{Language::English};
 
 // tr() runs per widget per frame, so lookup is a hash map built once — NOT a
 // linear scan. First row wins on duplicates (same rule the old scan had), so a
@@ -918,11 +933,11 @@ void log_missing_once(const std::string& key) {
 } // namespace
 
 void set_language(Language lang) {
-    g_language = lang;
+    g_language.store(lang, std::memory_order_relaxed);
 }
 
 Language current_language() {
-    return g_language;
+    return g_language.load(std::memory_order_relaxed);
 }
 
 std::string tr(const char* key) {
@@ -936,7 +951,8 @@ std::string tr(const char* key) {
         return key;
     }
     const Entry* e = it->second;
-    if (g_language == Language::Arabic && e->ar != nullptr && e->ar[0] != '\0') {
+    if (g_language.load(std::memory_order_relaxed) == Language::Arabic &&
+        e->ar != nullptr && e->ar[0] != '\0') {
         return e->ar;
     }
     if (e->en != nullptr && e->en[0] != '\0') {

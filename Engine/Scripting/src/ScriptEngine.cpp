@@ -211,7 +211,7 @@ bool LuaVM::run_string(const std::string& code, const std::string& chunk_name,
     if (luaL_loadbufferx(m_state, code.data(), code.size(), chunk_name.c_str(), "t") != LUA_OK) {
         size_t len = 0;
         const char* msg = lua_tolstring(m_state, -1, &len);
-        m_last_error.assign(msg ? msg : "syntax error", msg ? len : 12);
+        m_last_error.assign(msg ? msg : "syntax error", msg ? len : 13);
         lua_pop(m_state, 1);
         if (out_error) *out_error = m_last_error;
         return false;

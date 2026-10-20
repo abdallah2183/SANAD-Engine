@@ -101,6 +101,11 @@ Runtime::~Runtime() {
     // Best effort: free GPU resources while the device is still alive.
     // If the device was already shut down this is a no-op (guards inside).
     // The explicit shutdown() path is preferred (called before device shutdown).
+    // The gameplay modules go first: a module's shutdown hook may flush state
+    // or release a device resource, and a Runtime destroyed without an
+    // explicit shutdown() (an exception path, a tool, a test) would otherwise
+    // drop them without their hook ever running.
+    shutdown_gameplay();
     disable_destruction();
     if (m_renderer_initialized && m_renderer) {
         // Do not call device.wait_idle() here: the device may already be gone.
@@ -951,6 +956,16 @@ void Runtime::init_gameplay() {
 
     auto& registry = gameplay::GameplayModuleRegistry::instance();
     for (const std::string& name : registry.names()) {
+        // Do NOT create a second instance of a module that is already loaded.
+        // init_gameplay() runs on every scene load (adopt_scene), and the
+        // modules are meant to SURVIVE a reload (they get on_scene_unload and
+        // then on_scene_load). Appending unconditionally left N copies of
+        // every module after N scene loads: they were stepped N times per
+        // frame, and find_gameplay_module() resolves a name to the FIRST
+        // match — so the scene's gameplay state was written into the
+        // instance belonging to the FIRST scene while the live instance kept
+        // its defaults.
+        if (find_gameplay_module(name) != nullptr) continue;
         if (auto module = registry.create(name)) {
             m_gameplay_modules.push_back(GameplaySlot{std::move(module), false});
         }

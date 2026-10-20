@@ -1,4 +1,4 @@
-// NF/Scripting/ScriptSystem.cpp — per-entity sandboxed script ticking.
+// NF/Scripting/ScriptSystem.cpp â€” per-entity sandboxed script ticking.
 
 #include <NF/Scripting/ScriptEngine.hpp>
 #include <NF/Core/Logger.hpp>
@@ -23,10 +23,6 @@ constexpr int kMaxConsecutiveErrors = 5;
 // recompile lazily (keeps a pathological scene from pinning memory).
 constexpr usize kMaxCachedEnvs = 64;
 
-usize hash_source(const std::string& s) {
-    return std::hash<std::string>{}(s);
-}
-
 } // namespace
 
 struct ScriptSystem::Impl {
@@ -34,9 +30,11 @@ struct ScriptSystem::Impl {
     u64 instruction_limit = 0;
     ScriptInput input;
     bool has_input = false;
-    // source hash -> registry ref of the _ENV table (LUA_NOREF = broken).
-    std::unordered_map<usize, int> envs;
-    std::unordered_map<usize, int> consecutive_errors;
+    // The cache is keyed by the SOURCE TEXT, not by a hash of it. A 64-bit
+    // hash collision would hand one script's _ENV to another script, so
+    // one script's update() would run in another's environment.
+    std::unordered_map<std::string, int> envs;
+    std::unordered_map<std::string, int> consecutive_errors;
 
     ~Impl() {
         for (const auto& [key, ref] : envs) {
@@ -55,7 +53,7 @@ struct ScriptSystem::Impl {
     // Compiles source into a fresh _ENV; returns the env registry ref, or
     // LUA_NOREF on error (already logged). Stack discipline: every path
     // below leaves the stack exactly as it found it.
-    int compile(const std::string& source, usize key) {
+    int compile(const std::string& source) {
         lua_State* L = vm.state();
         if (luaL_loadbufferx(L, source.data(), source.size(), "script", "t") != LUA_OK) {
             size_t len = 0;
@@ -63,11 +61,11 @@ struct ScriptSystem::Impl {
             NF_LOG_ERROR(LogCategory::Script, "script compile failed: {}",
                          msg ? std::string(msg, len) : "?");
             lua_pop(L, 1);
-            envs[key] = LUA_NOREF;
+            envs[source] = LUA_NOREF;
             return LUA_NOREF;
         }
         // Stack: [chunk]. Build the sandbox env, stash it in the registry,
-        // and point the chunk's _ENV at it — before running anything.
+        // and point the chunk's _ENV at it â€” before running anything.
         lua_newtable(L); // [chunk, env]
         lua_pushvalue(L, -1); // [chunk, env, env] (one copy is stashed)
         lua_newtable(L); // [chunk, env, env, mt]
@@ -94,7 +92,7 @@ struct ScriptSystem::Impl {
                          msg ? std::string(msg, len) : "?");
             lua_pop(L, 2); // errmsg + handler
             luaL_unref(L, LUA_REGISTRYINDEX, ref);
-            envs[key] = LUA_NOREF;
+            envs[source] = LUA_NOREF;
             return LUA_NOREF;
         }
         lua_remove(L, base); // drop handler; stack is balanced again
@@ -106,11 +104,11 @@ struct ScriptSystem::Impl {
         if (!has_update) {
             NF_LOG_ERROR(LogCategory::Script, "script must define update(dt)");
             luaL_unref(L, LUA_REGISTRYINDEX, ref);
-            envs[key] = LUA_NOREF;
+            envs[source] = LUA_NOREF;
             return LUA_NOREF;
         }
-        envs[key] = ref;
-        consecutive_errors[key] = 0;
+        envs[source] = ref;
+        consecutive_errors[source] = 0;
         return ref;
     }
 };
@@ -149,11 +147,14 @@ void ScriptSystem::update(ecs::World& world, float dt) {
         if (!comp || !comp->enabled || comp->source.empty()) continue;
         if (impl.envs.size() > kMaxCachedEnvs) impl.clear();
 
-        const usize key = hash_source(comp->source);
+        // The cache is keyed by the source text itself, so two different
+        // scripts can never share an _ENV (a hash collision would have let
+        // one script's update() run in another's environment).
+        const std::string& key = comp->source;
         auto eit = impl.envs.find(key);
         int env_ref = (eit != impl.envs.end()) ? eit->second : LUA_NOREF;
         if (eit == impl.envs.end()) {
-            env_ref = impl.compile(comp->source, key);
+            env_ref = impl.compile(key);
             if (env_ref == LUA_NOREF) continue; // logged at compile time
         } else if (env_ref == LUA_NOREF) {
             continue; // broken source: stays silent until the source changes

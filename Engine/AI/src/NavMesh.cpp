@@ -950,9 +950,23 @@ bool NavMesh::find_path(Vec3 start, Vec3 goal, std::vector<Vec3>& out_waypoints)
         if (li >= 0 && static_cast<usize>(li) < m_links.size()) {
             // Across a jump: the only two points the walkable surface offers
             // are the link's own endpoints.
+            //
+            // The ORDER follows the direction of travel. A* may enter a link
+            // from either end (a bidirectional link can be walked backwards),
+            // and the polygon chain knows which end we came from: `from` is
+            // the polygon the link was entered from. Emitting start-then-end
+            // unconditionally routed a backward traversal through the link's
+            // endpoints in reverse — the follower walked to the far end
+            // first and then back across the gap.
             const LinkRecord& rec = m_links[static_cast<usize>(li)];
-            pts.push_back(rec.spec.start);
-            pts.push_back(rec.spec.end);
+            const bool forward = (rec.start_poly == from);
+            if (forward) {
+                pts.push_back(rec.spec.start);
+                pts.push_back(rec.spec.end);
+            } else {
+                pts.push_back(rec.spec.end);
+                pts.push_back(rec.spec.start);
+            }
             continue;
         }
         const NavPoly& a = m_polys[from];

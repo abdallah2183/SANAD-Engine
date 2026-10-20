@@ -2,9 +2,34 @@
 #include <NF/Scene/Transform.hpp>
 #include <NF/Core/Logger.hpp>
 
+#include <cmath>
+#include <string>
 #include <unordered_map>
 
 namespace nf::scene {
+
+namespace {
+
+// Non-throwing float parse. std::stof throws std::invalid_argument on a
+// non-numeric string and std::out_of_range on a huge one, and an override
+// value is untrusted input (it comes from a file or a script) — a malformed
+// value must make the override fail, not take the process down. The whole
+// string has to be consumed, so "1.5x" is rejected rather than read as 1.5.
+bool parse_float(const std::string& text, float& out) {
+    if (text.empty()) return false;
+    try {
+        size_t used = 0;
+        const float value = std::stof(text, &used);
+        if (used != text.size()) return false;
+        if (!std::isfinite(value)) return false;
+        out = value;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
 
 Prefab::Prefab(std::string name) : m_name(std::move(name)) {}
 
@@ -48,11 +73,18 @@ ecs::Entity PrefabSystem::instantiate(const Prefab& prefab, ecs::World& target_w
     if (entities.empty()) return ecs::kInvalidEntity;
 
     std::unordered_map<u32, ecs::Entity> id_map;
+    // The prefab's OWN entities, keyed by id. Looking one up by id alone is
+    // not enough: ComponentStorage::has() compares the FULL entity (id AND
+    // generation), so an entity whose generation is not 0 resolves to
+    // nullptr — and the root test then wrongly reports "was root", which
+    // re-parents the entity and destroys the prefab's internal hierarchy.
+    std::unordered_map<u32, ecs::Entity> old_entities;
     ecs::Entity first_new = ecs::kInvalidEntity;
     for (ecs::Entity e : entities) {
         ecs::Entity new_e = target_world.create_entity();
         if (!first_new.valid()) first_new = new_e;
         id_map[e.id] = new_e;
+        old_entities[e.id] = e;
         if (auto* t = prefab.world().get<Transform>(e)) {
             Transform copy = *t;
             // Parent will be remapped later
@@ -79,7 +111,11 @@ ecs::Entity PrefabSystem::instantiate(const Prefab& prefab, ecs::World& target_w
             // Root entities of the prefab instance are parented to the requested parent
             // Only the first root should be parented? For simplicity, parent all roots.
             // Check if this entity was a root in the prefab (no parent or parent not in prefab)
-            auto* old_t = prefab.world().get<Transform>(ecs::Entity{old_id, 0});
+            const auto oit = old_entities.find(old_id);
+            const ecs::Entity old_entity =
+                (oit != old_entities.end()) ? oit->second : ecs::kInvalidEntity;
+            auto* old_t = old_entity.valid() ? prefab.world().get<Transform>(old_entity)
+                                              : nullptr;
             bool was_root = !old_t || !old_t->parent.valid() || id_map.find(old_t->parent.id) == id_map.end();
             if (was_root) {
                 t->parent = parent;
@@ -125,8 +161,15 @@ void PrefabSystem::set_override(ecs::World& world, ecs::Entity instance_entity, 
                 if (auto* t = world.get<Transform>(instance_entity)) {
                     // Save base if not already saved
                     if (existing.base_value.empty()) existing.base_value = std::to_string(t->local_x);
-                    t->local_x = std::stof(ov.override_value);
-                    t->dirty = true;
+                    float parsed = 0.0f;
+                    if (parse_float(ov.override_value, parsed)) {
+                        t->local_x = parsed;
+                        t->dirty = true;
+                    } else {
+                        NF_LOG_WARN(LogCategory::Scene,
+                                    "Prefab override '{}' has a non-numeric value '{}'",
+                                    ov.field_name, ov.override_value);
+                    }
                 }
             }
             // Add more fields as needed for tests
@@ -138,8 +181,15 @@ void PrefabSystem::set_override(ecs::World& world, ecs::Entity instance_entity, 
     if (copy.component_name == "Transform" && copy.field_name == "local_x") {
         if (auto* t = world.get<Transform>(instance_entity)) {
             if (copy.base_value.empty()) copy.base_value = std::to_string(t->local_x);
-            t->local_x = std::stof(copy.override_value);
-            t->dirty = true;
+            float parsed = 0.0f;
+            if (parse_float(copy.override_value, parsed)) {
+                t->local_x = parsed;
+                t->dirty = true;
+            } else {
+                NF_LOG_WARN(LogCategory::Scene,
+                            "Prefab override '{}' has a non-numeric value '{}'",
+                            copy.field_name, copy.override_value);
+            }
         }
     }
     inst->overrides.push_back(std::move(copy));
@@ -160,8 +210,11 @@ void PrefabSystem::reset_override(ecs::World& world, ecs::Entity e, const std::s
             // Restore base value
             if (ov.component_name == "Transform" && ov.field_name == "local_x") {
                 if (auto* t = world.get<Transform>(e)) {
-                    if (!ov.base_value.empty()) t->local_x = std::stof(ov.base_value);
-                    t->dirty = true;
+                    float parsed = 0.0f;
+                    if (!ov.base_value.empty() && parse_float(ov.base_value, parsed)) {
+                        t->local_x = parsed;
+                        t->dirty = true;
+                    }
                 }
             }
             ov.overridden = false;
@@ -178,8 +231,11 @@ void PrefabSystem::reset_all_overrides(ecs::World& world, ecs::Entity e) {
         if (ov.overridden) {
             if (ov.component_name == "Transform" && ov.field_name == "local_x") {
                 if (auto* t = world.get<Transform>(e)) {
-                    if (!ov.base_value.empty()) t->local_x = std::stof(ov.base_value);
-                    t->dirty = true;
+                    float parsed = 0.0f;
+                    if (!ov.base_value.empty() && parse_float(ov.base_value, parsed)) {
+                        t->local_x = parsed;
+                        t->dirty = true;
+                    }
                 }
             }
             ov.overridden = false;

@@ -27,22 +27,32 @@ void set_parent(ecs::World& world, ecs::Entity child, ecs::Entity parent) {
         }
     }
 
+    // Remember the previous state: a REJECTED re-parent must leave the
+    // hierarchy exactly as it was. Restoring "no parent" instead of the old
+    // parent silently turned a child of a live entity into a new root.
+    const ecs::Entity old_parent = child_t->parent;
+    const bool old_dirty = child_t->dirty;
+
     child_t->parent = parent;
     child_t->dirty = true;
 
     // Prevent cycles: if parent is descendant of child, reject
     if (parent.valid()) {
         ecs::Entity cur = parent;
-        std::set<u32> visited;
+        // Keyed on the WHOLE entity (id + generation): two entities can share
+        // an id, and the stale one must not be mistaken for the live one.
+        std::set<ecs::Entity> visited;
         while (cur.valid()) {
             if (cur == child) {
-                // Cycle detected, revert
-                child_t->parent = ecs::kInvalidEntity;
+                // Cycle detected — restore the PREVIOUS parent, not "no
+                // parent": a rejected operation must not change the world.
+                child_t->parent = old_parent;
+                child_t->dirty = old_dirty;
                 NF_LOG_WARN(LogCategory::Core, "set_parent: cycle detected, rejected");
                 return;
             }
-            if (visited.count(cur.id)) break;
-            visited.insert(cur.id);
+            if (visited.count(cur)) break;
+            visited.insert(cur);
             auto* cur_t = world.get<Transform>(cur);
             if (!cur_t) break;
             cur = cur_t->parent;
@@ -105,8 +115,11 @@ void propagate_transforms(ecs::World& world) {
     }
 
     // BFS
-    std::set<u32> visited;
-    for (auto r : roots) visited.insert(r.id);
+    // Keyed on the WHOLE entity (id + generation), not the id alone: an id
+    // can be reused with a new generation, and the stale entity must not
+    // shadow the live one.
+    std::set<ecs::Entity> visited;
+    for (auto r : roots) visited.insert(r);
 
     while (!q.empty()) {
         ecs::Entity cur = q.front(); q.pop();
@@ -115,8 +128,8 @@ void propagate_transforms(ecs::World& world) {
         auto it = children_map.find(cur.id);
         if (it == children_map.end()) continue;
         for (ecs::Entity child : it->second) {
-            if (visited.count(child.id)) continue;
-            visited.insert(child.id);
+            if (visited.count(child)) continue;
+            visited.insert(child);
             auto* child_t = world.get<Transform>(child);
             if (!child_t) continue;
             // world_rot = parent.world_rot * local_rot. The order matters and is
@@ -163,7 +176,13 @@ Quat quat_from_euler_xyz_degrees(float rx_deg, float ry_deg, float rz_deg) {
 }
 
 void euler_xyz_degrees_from_quat(const Quat& q, float& out_rx, float& out_ry, float& out_rz) {
-    // Mat4 is column-major, so m[col][row] is R[row][col].
+    // nf::Mat4 is ROW-major (m[row][col]) — see Math.hpp — and Quat::to_matrix
+    // stores the TRANSPOSE of the standard column-vector rotation matrix R
+    // (v' = R v): m[row][col] holds R[col][row]. So the R entries quoted
+    // below are read transposed — m.m[2][1] IS R[1][2]. Do NOT "simplify" the
+    // index arithmetic to read m straight: that feeds the transpose into the
+    // extraction and yields the INVERSE rotation, which looks almost right
+    // on any symmetric test case.
     const Mat4 m = q.to_matrix();
 
     // From R = Ry * Rx * Rz:

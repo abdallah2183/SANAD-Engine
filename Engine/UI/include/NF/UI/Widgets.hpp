@@ -20,6 +20,7 @@
 
 #include <NF/Core/Types.hpp>
 
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -151,13 +152,21 @@ struct Slider {
 
 /// A retained screen of widgets. Games own canvases (HUD canvas, menu
 /// canvas, ...) and snapshot the active one per frame.
+///
+/// The widget containers are deques, not vectors: add_label()/add_bar()/...
+/// hand out a reference to the widget they just stored, and find_label() and
+/// friends hand out a pointer to a stored widget. With a vector the next
+/// add_* reallocates and every one of those references/pointers dangles —
+/// the classic "HUD label updates the wrong object after the second label
+/// is added" bug. A deque never moves the elements it already holds, so the
+/// references stay valid for the lifetime of the canvas.
 class Canvas {
 public:
-    std::vector<Label> labels;
-    std::vector<ProgressBar> bars;
-    std::vector<Reticle> reticles;
-    std::vector<MenuList> menus;
-    std::vector<Slider> sliders;
+    std::deque<Label> labels;
+    std::deque<ProgressBar> bars;
+    std::deque<Reticle> reticles;
+    std::deque<MenuList> menus;
+    std::deque<Slider> sliders;
 
     Label& add_label(Label l);
     ProgressBar& add_bar(ProgressBar b);

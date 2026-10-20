@@ -9,6 +9,33 @@
 
 namespace nf::scene {
 
+namespace {
+
+// Non-throwing integer parse. std::stoi throws std::invalid_argument on a
+// non-numeric string and std::out_of_range on a huge one, and a scene file
+// is untrusted input — a malformed line must make the parse FAIL, not take
+// the process down. The whole trimmed string has to be consumed, so "12abc"
+// is rejected rather than silently read as 12.
+bool parse_int(const std::string& text, long& out) {
+    // A file written on Windows keeps the '\r' that std::getline leaves
+    // behind, so trim before the "everything was consumed" check.
+    const size_t b = text.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return false;
+    const size_t e = text.find_last_not_of(" \t\r\n");
+    const std::string trimmed = text.substr(b, e - b + 1);
+    try {
+        size_t used = 0;
+        const long value = std::stol(trimmed, &used);
+        if (used != trimmed.size()) return false;
+        out = value;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
+
 Scene::Scene(std::string name) {
     m_metadata.name = std::move(name);
 }
@@ -85,17 +112,25 @@ bool Scene::deserialize(const std::string& data) {
     if (!std::getline(iss, line)) return false;
     size_t count_pos = line.find(":");
     if (count_pos==std::string::npos) return false;
-    int entity_count = std::stoi(line.substr(count_pos+1));
+    long entity_count = 0;
+    if (!parse_int(line.substr(count_pos+1), entity_count)) return false;
+    if (entity_count < 0) return false;
     // For each entity, read Entity line and optional Transform line
-    for (int i=0;i<entity_count;++i){
+    for (long i=0;i<entity_count;++i){
         if (!std::getline(iss, line)) return false;
         if (line.rfind("Entity:",0)!=0) return false;
-        // Parse id:generation
-        size_t colon = line.find(":",6);
-        size_t colon2 = line.find(":", colon+1);
-        if (colon==std::string::npos || colon2==std::string::npos) return false;
-        u32 id = static_cast<u32>(std::stoi(line.substr(7, colon-7)));
-        u32 gen = static_cast<u32>(std::stoi(line.substr(colon+1)));
+        // Parse "Entity:<id>:<generation>". The id starts right after the
+        // "Entity:" prefix and ends at the NEXT colon — the old code took
+        // the colon at the end of the prefix, so it parsed "0:0" as the id
+        // and let std::stoi silently stop at the second colon.
+        size_t colon2 = line.find(":", 7);
+        if (colon2 == std::string::npos) return false;
+        long id_value = 0;
+        long gen_value = 0;
+        if (!parse_int(line.substr(7, colon2 - 7), id_value)) return false;
+        if (!parse_int(line.substr(colon2 + 1), gen_value)) return false;
+        u32 id = static_cast<u32>(id_value);
+        u32 gen = static_cast<u32>(gen_value);
         // Create entity with same id/generation — we need to ensure the World can create an entity with specific id
         // Our World::create_entity always generates a new id, so we need a way to import an entity with a given id.
         // For this minimal test, we just create a new entity and ignore the original id/generation, then
