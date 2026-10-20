@@ -92,7 +92,14 @@ echo [NF] ninja: & where ninja
 set "BUILD_DIR=%~dp0..\build\%BUILD_TYPE%"
 
 echo [NF] Configuring...
-cmake -S "%~dp0.." -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
+REM NF_BUILD_TOOLS is ON on purpose: this script is the documented build
+REM entry point, and it promises the CLI (nf), the standalone player, the
+REM asset cooker and the model importer. The CMake default is OFF -- a bare
+REM "cmake -S . -B build" is a library-only build -- so a clean tree built
+REM through this script produced an engine with NO CLI: the release package
+REM then shipped without the tool that creates a game, and the AGENTS.md
+REM instruction "build_nf.bat Release" did not build what it says it builds.
+cmake -S "%~dp0.." -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE% -DNF_BUILD_TOOLS=ON
 if errorlevel 1 (
     echo [NF] ERROR: CMake configure failed.
     exit /b 1
