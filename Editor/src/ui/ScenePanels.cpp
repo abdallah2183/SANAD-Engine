@@ -27,6 +27,7 @@
 #include <NF/Audio/Components.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Rendering/ShadowCascades.hpp>
+#include <NF/Core/FileSystem.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
@@ -647,7 +648,7 @@ void render_panel(EditorApp& app, const UiFrameStats& stats) {
     if (primary_button(AV("save_trace"))) {
         namespace fs = std::filesystem;
         std::error_code ec;
-        const fs::path path = fs::temp_directory_path(ec) / "nf_profile_trace.json";
+        const fs::path path = nf::FileSystem::scratch_directory() / "nf_profile_trace.json";
         std::string err;
         if (!ec && app.profiler_session().save_chrome_trace(path.string(), err)) {
             push_info(app.console(), std::string("Trace saved to ") + path.string() + " (" +

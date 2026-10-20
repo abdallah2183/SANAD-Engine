@@ -23,6 +23,7 @@
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Core/Logger.hpp>
+#include <NF/Core/FileSystem.hpp>
 #include <NF/Core/Math.hpp>
 #include <NF/Core/Profiler.hpp>
 #include <NF/Core/Time.hpp>
@@ -2322,7 +2323,7 @@ static nf::ecs::Entity automation_drag_entity{};
                     bool ok = false;
                     if (tr.ok) {
                         const std::string abs =
-                            (std::filesystem::temp_directory_path() / "nf_auto_tex.bmp").string();
+                            (nf::FileSystem::scratch_directory() / "nf_auto_tex.bmp").string();
                         {
                             std::ofstream o(abs, std::ios::binary | std::ios::trunc);
                             o.write(reinterpret_cast<const char*>(bmp.data()),
@@ -2431,7 +2432,7 @@ static nf::ecs::Entity automation_drag_entity{};
                     std::vector<uint8_t> bytes;
                     ma->save_to_bytes(bytes);
                     const std::string abs =
-                        (std::filesystem::temp_directory_path() / "nf_auto_cube.nfmesh").string();
+                        (nf::FileSystem::scratch_directory() / "nf_auto_cube.nfmesh").string();
                     bool ok = false;
                     std::string e;
                     {
@@ -2627,7 +2628,7 @@ static nf::ecs::Entity automation_drag_entity{};
                     // success while showing nothing.
                     std::string trace_err;
                     const auto trace_path =
-                        std::filesystem::temp_directory_path() / "nf_editor_auto_trace.json";
+                        nf::FileSystem::scratch_directory() / "nf_editor_auto_trace.json";
                     const bool saved = app.profiler_session().save_chrome_trace(trace_path.string(), trace_err);
                     bool trace_ok = saved;
                     std::string trace_detail;
@@ -2685,7 +2686,7 @@ static nf::ecs::Entity automation_drag_entity{};
                     // rather than only through the CLI, so a break in either path
                     // shows up here.
                     const auto proj_root =
-                        std::filesystem::temp_directory_path() / "nf_editor_auto_project";
+                        nf::FileSystem::scratch_directory() / "nf_editor_auto_project";
                     std::error_code pec;
                     std::filesystem::remove_all(proj_root, pec);
 
@@ -2704,7 +2705,7 @@ static nf::ecs::Entity automation_drag_entity{};
                 }
                 if (f == 114) {
                     const auto proj_root =
-                        std::filesystem::temp_directory_path() / "nf_editor_auto_project";
+                        nf::FileSystem::scratch_directory() / "nf_editor_auto_project";
                     nf::project::BuildOptions bo;
                     bo.project_file = proj_root / "AutoProject.nfproj";
                     bo.shader_dir = NF_BASIC3D_SHADER_DIR;

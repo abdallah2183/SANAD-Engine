@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <string>
+#include <unordered_map>
 
 namespace nf::editor {
 
@@ -21,27 +23,55 @@ bool ends_with(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+// True when `name` is one WHOLE component of the generic (forward-slash)
+// path `path`. A substring test cannot tell "dist" the directory from
+// "Distribution" the directory, and the difference is the difference between
+// "the generated output" and "the user's project".
+bool has_path_component(const std::string& path, const std::string& name) {
+    size_t pos = 0;
+    while (pos <= path.size()) {
+        const size_t next = path.find('/', pos);
+        const size_t len = (next == std::string::npos) ? std::string::npos : next - pos;
+        if (path.compare(pos, len, name) == 0) {
+            return true;
+        }
+        if (next == std::string::npos) {
+            break;
+        }
+        pos = next + 1;
+    }
+    return false;
+}
+
+// The on-disk spelling of a logical path, when the scan found the file.
+// The registry key is canonical (lowercased on Windows); the name the user
+// reads is the file's own.
+std::string display_path_of(const std::string& logical,
+                             const std::unordered_map<std::string, std::string>& spelling) {
+    const std::string prefix = "content://";
+    if (logical.rfind(prefix, 0) != 0) {
+        return logical;
+    }
+    const auto it = spelling.find(to_lower_str(logical.substr(prefix.size())));
+    if (it == spelling.end()) {
+        return logical;
+    }
+    return prefix + it->second;
+}
+
 } // namespace
 
 std::vector<AssetEntry> list_content_assets(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg) {
     std::vector<AssetEntry> out;
-    for (const auto& kv : reg.entries()) {
-        const assets::AssetMetadata& meta = kv.second;
-        if (meta.logical_path.rfind("content://", 0) != 0) {
-            continue;
-        }
-        AssetEntry e;
-        e.logical_path = meta.logical_path;
-        e.type = meta.type;
-        e.id = meta.id;
-        e.has_id = meta.id.valid();
-        e.cooked_path = meta.cooked_path;
-        if (!meta.cooked_path.empty()) {
-            auto ex = vfs.exists(meta.cooked_path);
-            e.has_cooked = ex.ok && ex.value;
-        }
-        out.push_back(e);
-    }
+    std::vector<AssetEntry> disk_entries;
+    // The registry stores the CANONICAL spelling of a logical path (lowercased
+    // on Windows, where the filesystem is case-insensitive), but the browser
+    // shows the file's own name: "Meshes/Cube.nfmesh", not
+    // "meshes/cube.nfmesh". The scan below records the real spelling of every
+    // file it walks, and a registry entry takes its DISPLAY path from there.
+    // The registry key stays canonical — that is what makes one file one
+    // asset — and only the name the user reads follows the disk.
+    std::unordered_map<std::string, std::string> spelling;
     // Scene files live on disk but are not registry assets: scan content://.
     // NOTE: the relative path is stripped lexically from the same base string
     // the iterator was seeded with (guaranteed prefix), never via
@@ -63,14 +93,6 @@ std::vector<AssetEntry> list_content_assets(assets::VirtualFileSystem& vfs, asse
             for (char& c : ext) {
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             }
-            const bool is_scene = (ext == ".nfscene");
-            const bool is_material = (ext == ".nfmat");
-            const bool is_script = (ext == ".lua");
-            const bool is_texture =
-                (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga");
-            if (!is_scene && !is_material && !is_texture && !is_script) {
-                continue;
-            }
             const std::string full = it->path().generic_string();
             if (full.size() <= base.size() || full.compare(0, base.size(), base) != 0) {
                 continue;
@@ -82,23 +104,54 @@ std::vector<AssetEntry> list_content_assets(assets::VirtualFileSystem& vfs, asse
             if (rel.empty()) {
                 continue;
             }
-            const std::string logical = "content://" + rel;
-            bool known = false;
-            for (const auto& e : out) {
-                if (e.logical_path == logical) {
-                    known = true;
-                    break;
-                }
-            }
-            if (known) {
+            // The spelling of EVERY file, not only the ones the browser
+            // lists: a mesh is a registry asset and never reaches the
+            // extension test below, and its spelling is what the browser
+            // shows for it.
+            spelling[to_lower_str(rel)] = rel;
+            const bool is_scene = (ext == ".nfscene");
+            const bool is_material = (ext == ".nfmat");
+            const bool is_script = (ext == ".lua");
+            const bool is_texture =
+                (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga");
+            if (!is_scene && !is_material && !is_texture && !is_script) {
                 continue;
             }
             AssetEntry e;
-            e.logical_path = logical;
+            e.logical_path = "content://" + rel;
             e.type = is_material  ? assets::AssetType::Material
                       : is_script ? assets::AssetType::Script
                       : (is_texture ? assets::AssetType::Texture : assets::AssetType::Scene);
             e.is_scene_file = !is_material && !is_texture && !is_script;
+            disk_entries.push_back(e);
+        }
+    }
+    // The registry entries come FIRST: they carry the AssetId and the cooked
+    // path, and a disk entry for the same file would arrive without them.
+    for (const auto& kv : reg.entries()) {
+        const assets::AssetMetadata& meta = kv.second;
+        if (meta.logical_path.rfind("content://", 0) != 0) {
+            continue;
+        }
+        AssetEntry e;
+        e.logical_path = display_path_of(meta.logical_path, spelling);
+        e.type = meta.type;
+        e.id = meta.id;
+        e.has_id = meta.id.valid();
+        e.cooked_path = meta.cooked_path;
+        if (!meta.cooked_path.empty()) {
+            auto ex = vfs.exists(meta.cooked_path);
+            e.has_cooked = ex.ok && ex.value;
+        }
+        out.push_back(e);
+    }
+    // Then the files the registry does not know: scenes, materials, scripts
+    // and the textures that were never imported.
+    for (const AssetEntry& e : disk_entries) {
+        const bool known = std::any_of(out.begin(), out.end(), [&e](const AssetEntry& existing) {
+            return existing.logical_path == e.logical_path;
+        });
+        if (!known) {
             out.push_back(e);
         }
     }
@@ -243,10 +296,17 @@ std::string parent_folder_of(const std::string& folder) {
     if (slash == std::string::npos || slash + 1 >= folder.size()) {
         return folder;
     }
-    // Both mounts are 10 chars ("content://" / "project://"); a slash at or
-    // before that is the root's own trailing slash.
-    if (slash <= 9) {
-        return folder.substr(0, 10);
+    // The root of a logical path is its SCHEME, and the scheme's length is
+    // not a constant: "content://" is 10 characters, "project://" is 10, and
+    // "cache://" is 8. The old code hard-coded 10 and called substr(0, 10)
+    // on a 9-character string, which THROWS std::out_of_range — the browser's
+    // Up button on a cache:// path took the editor down with it.
+    const size_t scheme = folder.find("://");
+    const size_t root_len = (scheme == std::string::npos) ? 0 : scheme + 3;
+    // A slash at or before the root's own trailing slash IS the root's
+    // trailing slash: the parent of a mount root is the mount root.
+    if (root_len != 0 && slash < root_len) {
+        return folder.substr(0, root_len);
     }
     return folder.substr(0, slash);
 }
@@ -561,9 +621,15 @@ std::vector<AssetEntry> list_project_assets(assets::VirtualFileSystem& vfs) {
         // Cache/ holds the cooked copies the registry already points at: listing
         // them would show every mesh twice, with the cooked copy sorting first
         // and carrying no AssetId, so a drag-and-drop would grab the wrong one.
+        //
+        // The test is by PATH COMPONENT, not by substring: "C:/Users/me/
+        // Distribution/MyGame" CONTAINS "/dist", so the substring test
+        // filtered out every asset of a project that happened to live under a
+        // directory whose name starts with "dist". Only a whole component
+        // named "dist" (or ".git", "build", "Cache") is the generated output.
         const std::string dir = it->path().parent_path().generic_string();
-        if (dir.find("/dist") != std::string::npos || dir.find("/.git") != std::string::npos ||
-            dir.find("/build") != std::string::npos || dir.find("/Cache") != std::string::npos) {
+        if (has_path_component(dir, "dist") || has_path_component(dir, ".git") ||
+            has_path_component(dir, "build") || has_path_component(dir, "Cache")) {
             continue;
         }
         const assets::AssetType type = project_asset_type_for(it->path().extension().string());

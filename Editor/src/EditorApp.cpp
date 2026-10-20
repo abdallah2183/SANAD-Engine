@@ -1,5 +1,6 @@
 #include <NF/Editor/EditorApp.hpp>
 #include <NF/Audio/AudioDecoder.hpp>
+#include <NF/Editor/AssetRegistryPaths.hpp>
 #include <NF/Editor/ExternalIde.hpp>
 #include <NF/Editor/Outliner.hpp>
 #include <NF/Editor/Prefabs.hpp>
@@ -27,8 +28,10 @@
 #include <windows.h>
 
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <vector>
 
 namespace nf::editor {
 
@@ -843,7 +846,7 @@ bool EditorApp::ensure_primitive_asset(PrimitiveKind kind, assets::AssetId& out_
     const std::string logical = primitive_asset_path(kind);
     // Reuse: a scene saved last session already points at this mesh, and a
     // second copy under a second id would fork the asset for no reason.
-    if (auto existing = m_registry.find_by_path(logical)) {
+    if (const assets::AssetMetadata* existing = find_asset(m_registry, logical)) {
         out_id = existing->id;
         m_manager.load_mesh(out_id);
         return true;
@@ -893,7 +896,12 @@ bool EditorApp::ensure_primitive_asset(PrimitiveKind kind, assets::AssetId& out_
     assets::AssetMetadata meta;
     meta.id = id;
     meta.type = assets::AssetType::Mesh;
-    meta.logical_path = logical;
+    // The registry keys paths by an exact string, but the filesystem behind
+    // it is case-insensitive on Windows: two spellings of one file would
+    // register as two assets with two ids, and the cooker's "unchanged, skip"
+    // check would never fire. The canonical spelling keeps the editor and
+    // every other writer of the registry on ONE name for a file.
+    meta.logical_path = canonical_registry_path(logical);
     meta.cooked_path = cooked;
     meta.format = "nfmesh-v1";
     meta.version = 1;
@@ -2544,6 +2552,99 @@ bool EditorApp::create_asset_folder(const std::string& logical_dir, std::string&
     return true;
 }
 
+namespace {
+
+// Drops every registry entry under `logical_path` — the path itself and
+// anything inside it — and the cooked copies they point at.
+//
+// The FileSystem dock is registry-driven, so an entry that outlives its file
+// is a DELETED asset that keeps showing up in the browser, cooked and
+// loadable. The cooked copy goes with it: it is derived from the source, and
+// nothing references it once the source is gone.
+size_t purge_registry_tree(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
+                           const std::string& logical_path) {
+    std::string prefix = logical_path;
+    while (prefix.size() > 1 && prefix.back() == '/') {
+        prefix.pop_back();
+    }
+    // Compared canonically: the registry is keyed by an exact string, but the
+    // file it names is the same file whichever way it is spelled.
+    const std::string canonical_prefix = canonical_registry_path(prefix);
+    std::vector<assets::AssetId> doomed;
+    for (const auto& entry : reg.entries()) {
+        const std::string stored = canonical_registry_path(entry.second.logical_path);
+        if (stored == canonical_prefix ||
+            (stored.size() > canonical_prefix.size() &&
+             stored.rfind(canonical_prefix + "/", 0) == 0)) {
+            doomed.push_back(entry.first);
+        }
+    }
+    size_t removed = 0;
+    for (const assets::AssetId& id : doomed) {
+        std::string cooked;
+        if (const assets::AssetMetadata* meta = reg.find(id)) {
+            cooked = meta->cooked_path;
+        }
+        if (!cooked.empty()) {
+            if (auto rc = vfs.resolve(cooked); rc.ok) {
+                std::error_code ec;
+                std::filesystem::remove(rc.value, ec);
+            }
+        }
+        if (reg.remove(id)) {
+            ++removed;
+        }
+    }
+    return removed;
+}
+
+// Moves a registry entry to a new logical path, cooked copy and all.
+//
+// The registry has no rename API and its path->id map is private, so the
+// only way to keep the map honest is to remove the entry and add it back
+// under the new path. The AssetId is kept: it is the same asset, and scenes
+// reference it by id.
+void retarget_registry_entry(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
+                              const assets::AssetMetadata& source, const std::string& to_logical) {
+    assets::AssetMetadata meta = source;
+    const std::string old_cooked = meta.cooked_path;
+    std::string new_cooked = old_cooked;
+    // The cooked copy mirrors the logical path under the cache mount, so the
+    // rename moves it: a cooked file left under the old name is a stale copy
+    // of a file that no longer exists.
+    constexpr const char* kContentMount = "content://";
+    constexpr const char* kCacheMount = "cache://";
+    if (to_logical.rfind(kContentMount, 0) == 0 && old_cooked.rfind(kCacheMount, 0) == 0) {
+        new_cooked = std::string(kCacheMount) + to_logical.substr(std::string(kContentMount).size());
+    }
+    reg.remove(meta.id);
+    meta.logical_path = canonical_registry_path(to_logical);
+    meta.cooked_path = new_cooked;
+    std::string add_err;
+    if (!reg.add(meta, add_err)) {
+        NF_LOG_ERROR(LogCategory::Editor, "Registry rejected the renamed asset '{}': {}",
+                     to_logical, add_err);
+        return;
+    }
+    if (!old_cooked.empty() && old_cooked != new_cooked) {
+        auto old_res = vfs.resolve(old_cooked);
+        auto new_res = vfs.resolve(new_cooked);
+        if (old_res.ok && new_res.ok) {
+            std::error_code ec;
+            std::filesystem::rename(old_res.value, new_res.value, ec);
+            if (ec) {
+                // The destination already holds a cooked copy, so the move was
+                // refused. The old copy is stale either way: it goes, and the
+                // next cook writes the new one.
+                std::error_code rm_ec;
+                std::filesystem::remove(old_res.value, rm_ec);
+            }
+        }
+    }
+}
+
+} // namespace
+
 bool EditorApp::delete_asset(const std::string& logical_path, bool recursive, std::string& out_err) {
     if (logical_path.empty()) {
         out_err = "Asset path is empty";
@@ -2577,6 +2678,11 @@ bool EditorApp::delete_asset(const std::string& logical_path, bool recursive, st
         out_err = "Delete failed: " + res.error;
         return false;
     }
+    // The registry has to go with the file. The FileSystem dock is
+    // registry-driven, so an entry that outlives its file is a deleted asset
+    // that REAPPEARS in the browser — with has_cooked == true, because the
+    // cooked copy was never reclaimed either.
+    purge_registry_tree(m_vfs, m_registry, logical_path);
     // Drop a selection that pointed at the deleted file, so the inspector does
     // not keep rendering fields for something that is gone.
     if (m_browser.selected_path == logical_path) {
@@ -2603,16 +2709,74 @@ bool EditorApp::rename_asset(const std::string& from_logical, const std::string&
         out_err = "Name must contain no spaces";
         return false;
     }
+    // The registry has to follow the file. The entry's logical_path is what
+    // the browser lists, what find_by_path() resolves and what the cooker
+    // compares against the file on disk, so a rename that left the registry
+    // alone left the asset registered under a name that no longer exists —
+    // and its cooked copy under the old name, never reclaimed.
+    //
+    // A FOLDER rename takes its contents with it, so the entries that move
+    // are the path itself and everything inside it.
+    struct RegistryMove {
+        assets::AssetMetadata meta;
+        std::string new_logical;
+    };
+    const std::string canonical_from = canonical_registry_path(from_logical);
+    std::vector<RegistryMove> moves;
+    for (const auto& entry : m_registry.entries()) {
+        const std::string& stored = entry.second.logical_path;
+        const std::string canonical_stored = canonical_registry_path(stored);
+        if (canonical_stored == canonical_from) {
+            moves.push_back(RegistryMove{entry.second, canonical_registry_path(to_logical)});
+        } else if (canonical_stored.size() > canonical_from.size() &&
+                   canonical_stored.rfind(canonical_from + "/", 0) == 0) {
+            // The tail after the renamed prefix is kept as it is: only the
+            // folder's own name changes.
+            const std::string tail = stored.substr(from_logical.size());
+            moves.push_back(RegistryMove{entry.second, canonical_registry_path(to_logical) + tail});
+        }
+    }
+    // The clash check comes BEFORE the file moves: an entry already
+    // registered under the destination would make the re-add a duplicate, and
+    // a duplicate add loses the asset. Such an entry is stale by definition —
+    // the VFS refuses to rename onto an existing file, so the file it names
+    // is not there.
+    const std::string canonical_to = canonical_registry_path(to_logical);
+    std::vector<assets::AssetId> stale;
+    for (const auto& entry : m_registry.entries()) {
+        const std::string canonical_stored = canonical_registry_path(entry.second.logical_path);
+        const bool clashes =
+            canonical_stored == canonical_to ||
+            (canonical_stored.size() > canonical_to.size() &&
+             canonical_stored.rfind(canonical_to + "/", 0) == 0);
+        if (!clashes) {
+            continue;
+        }
+        bool is_moving = false;
+        for (const RegistryMove& mv : moves) {
+            if (mv.meta.id == entry.first) {
+                is_moving = true;
+                break;
+            }
+        }
+        if (!is_moving) {
+            stale.push_back(entry.first);
+        }
+    }
+    for (const assets::AssetId& id : stale) {
+        m_registry.remove(id);
+    }
     const auto renamed = m_vfs.rename(from_logical, to_logical);
     if (!renamed.ok) {
         out_err = "Rename failed: " + renamed.error;
         return false;
     }
+    for (const RegistryMove& mv : moves) {
+        retarget_registry_entry(m_vfs, m_registry, mv.meta, mv.new_logical);
+    }
     // Keep the session's pointers at the asset's new name, so an open scene
     // that was renamed still saves and reloads.
-    if (m_scene_path == from_logical) {
-        m_scene_path = to_logical;
-    }
+    //
     // A folder rename moves everything under it, so any pointer that names a
     // path INSIDE the old tree has to follow it — not just one that names the
     // tree root. A dock selection of "content://Meshes/cube.nfmesh" while
@@ -2628,6 +2792,7 @@ bool EditorApp::rename_asset(const std::string& from_logical, const std::string&
             p = to_logical + p.substr(from_logical.size());
         }
     };
+    retarget(m_scene_path);
     retarget(m_browser.selected_path);
     for (std::string& f : m_browser.favorites) {
         retarget(f);
@@ -2962,7 +3127,7 @@ void EditorApp::watch_imported(const ImportJob& job) {
             switch (written.type) {
                 case assets::AssetType::Mesh:
                     if (const assets::AssetMetadata* meta =
-                            m_registry.find_by_path(written.logical_path)) {
+                            find_asset(m_registry, written.logical_path)) {
                         m_hot.watch_mesh(meta->id, meta->logical_path);
                     }
                     break;
@@ -2981,7 +3146,7 @@ void EditorApp::watch_imported(const ImportJob& job) {
     // No commit landed (a failed job): fall back to the primary destination,
     // which is still the right guess for the single-file types.
     if (job.type == assets::AssetType::Mesh) {
-        if (const assets::AssetMetadata* meta = m_registry.find_by_path(job.dst_logical)) {
+        if (const assets::AssetMetadata* meta = find_asset(m_registry, job.dst_logical)) {
             m_hot.watch_mesh(meta->id, meta->logical_path);
         }
     } else if (job.type == assets::AssetType::Texture) {
@@ -3116,6 +3281,44 @@ static bool valid_prefab_path(const std::string& path) {
            path.compare(path.size() - ext.size(), ext.size(), ext) == 0;
 }
 
+namespace {
+
+// A file-name-safe version of an entity's name.
+//
+// The engine's own asset rules apply: no spaces (a Lua host stops at the
+// first space) and no path separators. Everything outside [A-Za-z0-9_-]
+// becomes '_', and a name that is empty after that falls back to the
+// caller's default.
+std::string prefab_stem_from_name(const std::string& name, const std::string& fallback) {
+    std::string out;
+    out.reserve(name.size());
+    for (const char c : name) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (std::isalnum(u) != 0 || c == '_' || c == '-') {
+            out.push_back(c);
+        } else {
+            out.push_back('_');
+        }
+    }
+    while (!out.empty() && out.front() == '_') out.erase(out.begin());
+    while (!out.empty() && out.back() == '_') out.pop_back();
+    return out.empty() ? fallback : out;
+}
+
+} // namespace
+
+std::string EditorApp::prefab_path_for(ecs::Entity root) const {
+    const ecs::World* w = world();
+    const std::string fallback = "entity_" + std::to_string(root.id);
+    std::string stem = fallback;
+    if (w != nullptr && root.valid() && w->is_alive(root)) {
+        if (const auto* name = w->get<scene::NameComponent>(root)) {
+            stem = prefab_stem_from_name(name->name, fallback);
+        }
+    }
+    return "content://Prefabs/" + stem + ".nfscene";
+}
+
 bool EditorApp::create_prefab(ecs::Entity root, const std::string& prefab_path, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;
@@ -3132,6 +3335,22 @@ bool EditorApp::create_prefab(ecs::Entity root, const std::string& prefab_path, 
     if (!valid_prefab_path(prefab_path)) {
         out_err = "Prefab path must look like content://Prefabs/<name>.nfscene";
         return false;
+    }
+    // Refuse to overwrite a prefab that is not this entity's own. The path
+    // used to be derived from the entity id alone, and the ECS RECYCLES ids:
+    // saving a prefab from a new entity that reused a freed id overwrote a
+    // DIFFERENT prefab, with no undo entry and no warning. Re-saving the
+    // prefab this entity is already linked to is an update, not an overwrite,
+    // and stays allowed.
+    const auto* link = w->get<scene::PrefabLinkComponent>(root);
+    const bool updating_own = (link != nullptr && link->prefab_path == prefab_path);
+    if (!updating_own) {
+        auto existing = m_vfs.exists(prefab_path);
+        if (existing.ok && existing.value) {
+            out_err = "A prefab already exists at '" + prefab_path +
+                      "' — rename or delete it before saving another one here";
+            return false;
+        }
     }
     // Snapshot the subtree into a template scene (top link stripped: a
     // template root links nowhere; nested links are preserved verbatim).
@@ -4211,7 +4430,7 @@ std::vector<AssetEntry> EditorApp::browser_entries() {
                     continue;
                 }
                 const std::string content_path = "content://" + e.logical_path.substr(kPrefix.size());
-                if (const assets::AssetMetadata* meta = m_registry.find_by_path(content_path)) {
+                if (const assets::AssetMetadata* meta = find_asset(m_registry, content_path)) {
                     if (meta->id.valid()) {
                         e.id = meta->id;
                         e.has_id = true;

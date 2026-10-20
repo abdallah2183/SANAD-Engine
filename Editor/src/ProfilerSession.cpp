@@ -1,5 +1,6 @@
 #include <NF/Editor/ProfilerSession.hpp>
 
+#include <cstddef>
 #include <cstdio>
 
 namespace nf::editor {
@@ -33,6 +34,19 @@ void ProfilerSession::capture_frame() {
         m_events.reserve(frame.size() * 8);
     }
     m_events.insert(m_events.end(), frame.begin(), frame.end());
+    // Keep the window bounded (kMaxSessionEvents). The OLDEST events are the
+    // ones dropped: a trace is a picture of the recent past, and the export
+    // is far more useful over the last minutes than over the last hour of an
+    // idle editor.
+    //
+    // The trim happens in one go down to a low-water mark, not a few events
+    // per frame: erasing from the front of a vector moves everything behind
+    // it, so a per-frame trim would rewrite the whole buffer every frame.
+    if (m_events.size() > kMaxSessionEvents) {
+        const std::size_t keep = (kMaxSessionEvents * 3) / 4;
+        m_events.erase(m_events.begin(),
+                       m_events.begin() + static_cast<std::ptrdiff_t>(m_events.size() - keep));
+    }
 }
 
 void ProfilerSession::clear() {

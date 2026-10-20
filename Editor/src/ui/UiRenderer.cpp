@@ -333,9 +333,15 @@ bool UiRenderer::render(rhi::CommandBuffer& cmd, const rhi::RenderPass& pass,
             }
         }
     }
-    std::vector<std::unique_ptr<rhi::DescriptorSet>> id_sets;
-    id_sets.reserve(used_ids.size());
-    for (uintptr_t id : used_ids) {
+    // One slot per used id, ALWAYS. The draw loop looks a set up BY INDEX, so
+    // the slot of an id whose texture could not be resolved has to stay in
+    // place (null) instead of being skipped: a `continue` used to drop a slot
+    // and left every later id pointing one slot too far — at the end, past the
+    // end of the vector, into whatever the allocator's heap had there. The
+    // garbage pointer was then handed to bind_descriptor_sets().
+    std::vector<std::unique_ptr<rhi::DescriptorSet>> id_sets(used_ids.size());
+    for (size_t slot = 0; slot < used_ids.size(); ++slot) {
+        const uintptr_t id = used_ids[slot];
         const rhi::TextureView* view = nullptr;
         const rhi::Sampler* samp = nullptr;
         if (id == kFontTextureId) {
@@ -358,7 +364,7 @@ bool UiRenderer::render(rhi::CommandBuffer& cmd, const rhi::RenderPass& pass,
         if (view == nullptr) {
             NF_LOG_WARN(LogCategory::Editor, "UiRenderer: unresolvable texture id {}, skipping draw",
                         id);
-            continue;
+            continue; // the slot stays null -> set_for() returns null -> the draw is skipped
         }
         auto set = m_allocator->allocate(*m_layout);
         if (!set) {
@@ -369,11 +375,11 @@ bool UiRenderer::render(rhi::CommandBuffer& cmd, const rhi::RenderPass& pass,
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, view, samp},
         }};
         m_device->update_descriptor_set(*set, std::span<const rhi::DescriptorWrite>(w));
-        id_sets.push_back(std::move(set));
+        id_sets[slot] = std::move(set);
     }
     // id_sets[i] serves used_ids[i]; the draw loop looks up by id.
-    auto set_for = [used_ids, &id_sets](uintptr_t id) -> const rhi::DescriptorSet* {
-        for (size_t i = 0; i < used_ids.size(); ++i) {
+    auto set_for = [&used_ids, &id_sets](uintptr_t id) -> const rhi::DescriptorSet* {
+        for (size_t i = 0; i < used_ids.size() && i < id_sets.size(); ++i) {
             if (used_ids[i] == id) {
                 return id_sets[i].get();
             }

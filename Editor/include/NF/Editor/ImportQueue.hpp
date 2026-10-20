@@ -47,6 +47,7 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
 
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -124,7 +125,7 @@ struct ImportJob {
 
 class ImportQueue {
 public:
-    ImportQueue() = default;
+    ImportQueue();
 
     // Validates the request (source exists, supported extension, destination
     // free unless overwrite) and queues it. Returns the job id, or 0 + err
@@ -154,18 +155,34 @@ public:
     /// *.gltf/*.glb while submit() answered "Unsupported extension".
     static std::string accepted_extension_glob();
 
+    /// Where a worker may write the scratch file it validates a scene with.
+    ///
+    /// The scene validator reads a FILE, so it cannot use the VFS (the VFS is
+    /// shared and the validator runs on a worker thread); it writes a
+    /// temporary copy next to the project instead. The default is the system
+    /// temp directory, which is right for tools and tests. The editor points
+    /// it at the user's own project folder, because a sandboxed process is not
+    /// allowed to write outside its own tree and the validation then failed
+    /// with "Scratch write failed" for a file the user never touched.
+    void set_scratch_dir(std::filesystem::path dir);
+    const std::filesystem::path& scratch_dir() const { return m_scratch_dir; }
+
 private:
     static assets::AssetType type_for_extension(const std::string& ext_lower);
     // Pure-CPU stages (worker-safe): read + validate/cook + fingerprint.
+    // `scratch_dir` is where the worker may write a scratch file (the scene
+    // validation reads a FILE); it is a directory the process may write to.
     static void run_cpu_stages(const std::string& src_absolute, const std::string& dst_dir,
                                assets::AssetType type, assets::MeshImportFormat source_format,
-                               size_t job_id, const std::shared_ptr<ImportStaged>& staged);
+                               size_t job_id, const std::shared_ptr<ImportStaged>& staged,
+                               const std::filesystem::path& scratch_dir);
     // Main-thread commit: copy + register from a finished staged block.
     // Returns false only for an unfinished block (caller bug).
     static bool commit_staged(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
                               ImportJob& job);
     std::vector<ImportJob> m_jobs;
     size_t m_next_id = 1;
+    std::filesystem::path m_scratch_dir;
 };
 
 } // namespace nf::editor

@@ -20,6 +20,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <NF/Editor/FileSystemPanel.hpp>
 #include <NF/Editor/UiText.hpp>
+#include <NF/Editor/UiTextInput.hpp>
 #include <NF/Editor/UiTheme.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 
@@ -231,10 +232,18 @@ std::string ellipsize_to_width(const std::string& text, float max_w) {
 // One slot, not a map: a rename is a single blocking interaction (the dock is
 // the only thing that can start one), and a second rename while the first is
 // open would have to either queue or steal focus. `open` false means no modal.
+//
+// `requested` is the OTHER half of the modal's state. ImGui owns the popup's
+// lifetime (it closes on a click outside) and the editor owns the pending
+// rename, so the two have to be told apart: `requested` is the rising edge
+// that opens the popup exactly once, and `open` says a rename is pending.
+// Calling OpenPopup() every frame instead would fight ImGui's own close and
+// spring the modal back open the moment the user clicked away.
 struct RenameState {
     bool open = false;
+    bool requested = false;
     std::string from;
-    char name[128]{};
+    std::string name;
 };
 RenameState& rename_state() {
     static RenameState s;
@@ -249,6 +258,7 @@ RenameState& rename_state() {
 // contents with it, and the prompt says so.
 struct ConfirmState {
     bool open = false;
+    bool requested = false;
     std::string path;
     bool folder = false;
 };
@@ -259,12 +269,14 @@ ConfirmState& confirm_state() {
 
 void begin_rename(RenameState& s, const std::string& from) {
     s.open = true;
+    s.requested = true;
     s.from = from;
     // Prefill with the current file name (not the whole path): the user is
-    // renaming within the folder they are standing in.
-    const std::string nm = file_name_of(from);
-    std::strncpy(s.name, nm.c_str(), sizeof(s.name) - 1);
-    s.name[sizeof(s.name) - 1] = '\0';
+    // renaming within the folder they are standing in. The name is a
+    // std::string, not a fixed buffer: it becomes the destination FILE NAME,
+    // and a name cut at the buffer's end was a rename to a name the user
+    // never typed.
+    s.name = file_name_of(from);
 }
 
 // Builds the destination logical path: same folder, new file name.
@@ -280,21 +292,29 @@ std::string renamed_path(const std::string& from, const std::string& new_name) {
 // confirmation line). Any failure is reported to the console and the modal is
 // closed either way: keeping it open on an error with no message next to it is
 // worse than closing with the error in the console.
+//
+// The state is cleared FULLY — the name and the source path go with the flag.
+// A second commit in the same frame (the Enter key AND the button, or two
+// callers) would otherwise rename the file twice and push a spurious error.
 bool finish_rename(EditorApp& app, RenameState& s) {
     const std::string typed(s.name);
+    const std::string from(s.from);
     s.open = false;
+    s.requested = false;
+    s.name.clear();
+    s.from.clear();
     // An emptied box is a cancel, not a rename to "". Refusing here rather than
     // in EditorApp keeps the modal responsive: the user gets nothing at all,
     // which reads as "the field was empty, I did not mean that".
     if (typed.empty()) {
         return false;
     }
-    const std::string to = renamed_path(s.from, typed);
-    if (to == s.from) {
+    const std::string to = renamed_path(from, typed);
+    if (to == from) {
         return false; // retyped the same name: nothing to do, nothing to report
     }
     std::string err;
-    if (!app.rename_asset(s.from, to, err)) {
+    if (!app.rename_asset(from, to, err)) {
         push_error(app.console(), AV("rename_failed"), err);
         return false;
     }
@@ -306,12 +326,18 @@ bool finish_rename(EditorApp& app, RenameState& s) {
 // the wording of the confirm; both were captured when the confirm opened, so a
 // path that changed underneath cannot flip a file delete into a tree delete.
 bool finish_delete(EditorApp& app, ConfirmState& c) {
+    const std::string path(c.path);
+    const bool folder(c.folder);
+    c.open = false;
+    c.requested = false;
+    c.path.clear();
+    c.folder = false;
     std::string err;
-    if (!app.delete_asset(c.path, c.folder, err)) {
+    if (!app.delete_asset(path, folder, err)) {
         push_error(app.console(), AV("delete_asset"), err);
         return false;
     }
-    push_info(app.console(), AVF("deleted_fmt", c.path.c_str()));
+    push_info(app.console(), AVF("deleted_fmt", path.c_str()));
     return true;
 }
 
@@ -410,10 +436,14 @@ void draw_folder_tree(EditorApp& app, const std::vector<std::string>& all_folder
     for (const std::string& sub : subs) {
         ImGui::PushID(sub.c_str());
         const bool is_current = (app.browser().current_folder == sub);
+        // "content://Content" is NOT an ancestor of "content://Content2/Meshes":
+        // a raw string prefix says it is, and the tree then keeps the wrong
+        // folder expanded. The ancestor relation is a PATH COMPONENT relation,
+        // so the prefix has to end at a separator.
+        const std::string& current = app.browser().current_folder;
         const bool is_ancestor =
-            !app.browser().current_folder.empty() &&
-            app.browser().current_folder.rfind(sub, 0) == 0 &&
-            app.browser().current_folder.size() > sub.size();
+            !current.empty() && current.size() > sub.size() && current.rfind(sub, 0) == 0 &&
+            current[sub.size()] == '/';
         const bool has_kids = !subfolders_in_folder(all_folders, sub).empty();
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                    ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -758,8 +788,6 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
 
     // --- Filter row ---------------------------------------------------------
     {
-        char filter[128]{};
-        std::strncpy(filter, bs.filter_text.c_str(), sizeof(filter) - 1);
         const std::string hint = AV("filter_files");
         // A fixed -220 assumed a wide dock; on a narrow panel the negative width
         // collapses the field to nothing, which is exactly the "squashed" look.
@@ -767,9 +795,11 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
         // both stay on one row at any width.
         const float type_w = compact ? 104.0f : 190.0f;
         ImGui::PushItemWidth(-type_w - 10.0f);
-        if (ImGui::InputTextWithHint("##fsfilter", hint.c_str(), filter, sizeof(filter))) {
-            bs.filter_text = filter;
-        }
+        // The filter is a std::string, not a char[128]: ImGui writes into a
+        // fixed buffer and the old one silently cut a longer query at 127
+        // characters, so the list then filtered by a query the user never
+        // typed. The helper grows the string instead of cutting the text.
+        input_text_with_hint("##fsfilter", hint.c_str(), bs.filter_text);
         ImGui::PopItemWidth();
         ImGui::SameLine();
         const std::string type_items[7] = {AV("asset_type_all"), AV("asset_type_mesh"),
@@ -1003,7 +1033,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                         // CONFIRM that names what is inside it. A single click
                         // that empties a tree is the one thing a file browser
                         // must never do.
-                        confirm_state() = {true, folder, true};
+                        confirm_state() = {true, true, folder, true};
                     }
                     ImGui::EndPopup();
                 }
@@ -1074,7 +1104,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                         // stray click on the top of the menu cannot reach them.
                         ImGui::Separator();
                         if (ImGui::MenuItem(AV("delete_asset").c_str())) {
-                            confirm_state() = {true, e.logical_path, false};
+                            confirm_state() = {true, true, e.logical_path, false};
                         }
                         ImGui::EndPopup();
                     }
@@ -1151,7 +1181,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                     }
                     ImGui::Separator();
                     if (ImGui::MenuItem(AV("delete_folder").c_str())) {
-                        confirm_state() = {true, folder, true};
+                        confirm_state() = {true, true, folder, true};
                     }
                     ImGui::EndPopup();
                 }
@@ -1247,7 +1277,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                     }
                     ImGui::Separator();
                     if (ImGui::MenuItem(AV("delete_asset").c_str())) {
-                        confirm_state() = {true, e.logical_path, false};
+                        confirm_state() = {true, true, e.logical_path, false};
                     }
                     ImGui::EndPopup();
                 }
@@ -1418,38 +1448,78 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
 
 namespace {
 
-// Rename: a single text field prefilled with the current name. The modal's
-// lifetime is governed by RenameState::open, not by BeginPopup's return value,
-// so a click elsewhere in the dock closes it instead of leaving an invisible
-// popup swallowing every key.
+// Rename: a single text field prefilled with the current name.
+//
+// The popup is a REAL popup: OpenPopup() + BeginPopup()/EndPopup(). The old
+// code called OpenPopup() and then EndPopup() with no BeginPopup() in
+// between, which ImGui 1.93 rejects — EndPopup() asserts that the current
+// window is a popup, so the editor ABORTED the moment the user chose
+// "Rename". In a build with NDEBUG the assert was compiled out, the "modal"
+// was drawn inline in the dock instead of over it, and the OpenPopupStack
+// entry was never popped, which changed the click-outside behaviour of every
+// OTHER context menu in the editor.
+//
+// The modal's lifetime is split in two, because two different things own it:
+// ImGui owns the popup (a click outside closes it) and the editor owns the
+// pending rename. `requested` opens the popup exactly once; the popup being
+// open is what keeps the modal alive, and a click outside ends the
+// interaction for good.
 void draw_rename_modal(EditorApp& app) {
     RenameState& s = rename_state();
-    if (!s.open) {
+    if (s.requested) {
+        s.requested = false;
+        ImGui::OpenPopup("##rename_asset");
+    }
+    if (!ImGui::BeginPopup("##rename_asset")) {
+        // Not open: either it was never opened, or ImGui closed it (a click
+        // outside). Both end the interaction — and the state is dropped, so a
+        // stale name can never be committed by a later keystroke.
+        s.open = false;
+        s.name.clear();
+        s.from.clear();
         return;
     }
-    ImGui::OpenPopup("##rename_asset");
-    ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 320.0f));
-    ImGui::InputText("##renametext", s.name, sizeof(s.name));
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", AV("name_no_spaces").c_str());
+    if (s.open) {
+        ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 320.0f));
+        input_text("##renametext", s.name);
+        // Enter commits, Escape abandons — but only while the text field has
+        // the focus. The key test is GLOBAL, so an Enter pressed anywhere else
+        // in the editor (the inspector, the console) used to commit the
+        // rename.
+        const bool name_focused = ImGui::IsItemFocused();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", AV("name_no_spaces").c_str());
+        }
+        ImGui::Separator();
+        // Cancel first: the safe action is the one a stray Enter lands on
+        // next to, and a half-typed name is always a mistake, never an
+        // intention.
+        if (ImGui::Button(AV("cancel").c_str(), ImVec2(100.0f, 0.0f))) {
+            s.open = false;
+            s.name.clear();
+            s.from.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(AV("rename_asset").c_str(), ImVec2(100.0f, 0.0f))) {
+            (void)finish_rename(app, s);
+        }
+        if (name_focused && (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
+                             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))) {
+            (void)finish_rename(app, s);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            s.open = false;
+            s.name.clear();
+            s.from.clear();
+        }
     }
-    ImGui::Separator();
-    // Cancel first: the safe action is the one a stray Enter lands on next to,
-    // and a half-typed name is always a mistake, never an intention.
-    if (ImGui::Button(AV("cancel").c_str(), ImVec2(100.0f, 0.0f))) {
-        s.open = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(AV("rename_asset").c_str(), ImVec2(100.0f, 0.0f))) {
-        (void)finish_rename(app, s);
-    }
-    // Enter commits, Escape abandons. Checked after the widgets so the field
-    // gets first refusal on the key, as a text field should.
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
-        (void)finish_rename(app, s);
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        s.open = false;
+    // The modal is over: the state was cleared by the commit, by Cancel or by
+    // Escape — or it was cleared from outside (the asset was deleted under
+    // the modal). Close the popup in every one of those cases, or an
+    // invisible popup is left on ImGui's stack and swallows every click in
+    // the dock.
+    if (!s.open) {
+        ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }
@@ -1457,35 +1527,56 @@ void draw_rename_modal(EditorApp& app) {
 // Delete confirm: names the target, states the consequence, and colours Delete
 // with the danger role so the irreversible action is the one that reads as
 // irreversible. Cancel sits first, so it is what a stray Enter lands on.
+//
+// Same popup contract as the rename modal: OpenPopup() + BeginPopup()/
+// EndPopup(), and a popup whose state was cleared is closed rather than left
+// on ImGui's stack.
 void draw_delete_confirm(EditorApp& app) {
     ConfirmState& c = confirm_state();
-    if (!c.open) {
+    if (c.requested) {
+        c.requested = false;
+        ImGui::OpenPopup("##delete_confirm");
+    }
+    if (!ImGui::BeginPopup("##delete_confirm")) {
+        c.open = false;
+        c.path.clear();
+        c.folder = false;
         return;
     }
-    ImGui::OpenPopup("##delete_confirm");
-    const std::string shown = file_name_of(c.path);
-    // Wrapped: a long name plus a full sentence will not fit one line in the
-    // popup, and a clipped "Delete 'Environm…" is not a confirmation.
-    if (c.folder) {
-        ImGui::TextWrapped("%s", AVF("delete_confirm_folder", shown.c_str()).c_str());
-    } else {
-        ImGui::TextWrapped("%s", AVF("delete_confirm", shown.c_str()).c_str());
+    if (c.open) {
+        const std::string shown = file_name_of(c.path);
+        // Wrapped: a long name plus a full sentence will not fit one line in
+        // the popup, and a clipped "Delete 'Environm…" is not a confirmation.
+        if (c.folder) {
+            ImGui::TextWrapped("%s", AVF("delete_confirm_folder", shown.c_str()).c_str());
+        } else {
+            ImGui::TextWrapped("%s", AVF("delete_confirm", shown.c_str()).c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button(AV("cancel").c_str(), ImVec2(100.0f, 0.0f))) {
+            c.open = false;
+            c.path.clear();
+            c.folder = false;
+        }
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::danger());
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::danger());
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::danger());
+        if (ImGui::Button(AV("delete_confirm_title").c_str(), ImVec2(100.0f, 0.0f))) {
+            (void)finish_delete(app, c);
+        }
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            c.open = false;
+            c.path.clear();
+            c.folder = false;
+        }
     }
-    ImGui::Spacing();
-    if (ImGui::Button(AV("cancel").c_str(), ImVec2(100.0f, 0.0f))) {
-        c.open = false;
-    }
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button, theme::danger());
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::danger());
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::danger());
-    if (ImGui::Button(AV("delete_confirm_title").c_str(), ImVec2(100.0f, 0.0f))) {
-        c.open = false;
-        (void)finish_delete(app, c);
-    }
-    ImGui::PopStyleColor(3);
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        c.open = false;
+    // The confirm is over — the state was cleared by the delete, by Cancel or
+    // by Escape, or it was cleared from outside. Close the popup either way:
+    // an invisible popup on ImGui's stack swallows every click in the dock.
+    if (!c.open) {
+        ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }

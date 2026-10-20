@@ -26,6 +26,17 @@ namespace nf::editor {
 
 class ProfilerSession {
 public:
+    // The recorded window is BOUNDED, not a log.
+    //
+    // The editor calls capture_frame() once per editor frame and the buffer
+    // was only cleared when a play session started — so an editor left open
+    // over lunch accumulated a lunch's worth of events and never gave any of
+    // it back. The cap is generous enough for a long profiling run (at 60 Hz
+    // this is several minutes of frames) and constant, so the memory a
+    // session can hold is a known quantity rather than "however long the
+    // editor was open".
+    static constexpr std::size_t kMaxSessionEvents = 200000;
+
     // Appends the profiler's last merged frame. Call after
     // Profiler::end_frame(); before it, last_events() is the previous frame.
     void capture_frame();

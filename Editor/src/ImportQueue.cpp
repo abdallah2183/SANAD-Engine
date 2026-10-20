@@ -4,6 +4,9 @@
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Assets/MeshImport.hpp>
 #include <NF/Core/Hash.hpp>
+#include <NF/Core/FileSystem.hpp>
+#include <NF/Core/Logger.hpp>
+#include <NF/Editor/AssetRegistryPaths.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 #include <NF/Rendering/ImageDecode.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
@@ -15,9 +18,26 @@
 #include <filesystem>
 #include <fstream>
 
+#ifdef _WIN32
+    #include <process.h>
+#else
+    #include <unistd.h>
+#endif
+
 namespace nf::editor {
 
 namespace {
+
+// The id of the current process, used to make a temp file name unique across
+// the processes that share %TEMP%. The job counter alone is per-process, so
+// two editors picked the SAME scratch file name.
+unsigned long current_process_id() {
+#ifdef _WIN32
+    return static_cast<unsigned long>(_getpid());
+#else
+    return static_cast<unsigned long>(getpid());
+#endif
+}
 
 std::string lower_ext(const std::string& path) {
     const size_t dot = path.find_last_of('.');
@@ -126,7 +146,7 @@ bool is_model_source(assets::MeshImportFormat format) {
 /// pointing at bytes that are about to be replaced.
 void remove_previous_import(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
                             const std::string& logical) {
-    if (auto prev = reg.find_by_path(logical)) {
+    if (auto prev = find_asset(reg, logical)) {
         const std::string prev_cooked = prev->cooked_path;
         reg.remove(prev->id);
         if (!prev_cooked.empty()) {
@@ -142,7 +162,89 @@ void remove_previous_import(assets::VirtualFileSystem& vfs, assets::AssetRegistr
     }
 }
 
+/// What a destination looked like BEFORE an overwrite replaced it.
+///
+/// The import is all-or-nothing, so the previous bytes have to be
+/// recoverable: a write that fails halfway must put the user's mesh back,
+/// not leave them with nothing. The old implementation deleted the file, the
+/// cooked copy and the registry entry and then wrote the new ones, so a
+/// failed write destroyed the previous asset — the opposite of what
+/// "all-or-nothing" means.
+struct ImportBackup {
+    std::string logical;
+    std::vector<uint8_t> content;
+    bool had_content = false;
+    std::string cooked_path;
+    std::vector<uint8_t> cooked;
+    bool had_cooked = false;
+    assets::AssetMetadata meta;
+    bool had_registry = false;
+};
+
+ImportBackup backup_import(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
+                            const std::string& logical) {
+    ImportBackup backup;
+    backup.logical = logical;
+    if (auto bytes = vfs.read_bytes(logical); bytes.ok) {
+        backup.content = bytes.value;
+        backup.had_content = true;
+    }
+    if (const assets::AssetMetadata* prev = find_asset(reg, logical)) {
+        backup.meta = *prev;
+        backup.had_registry = true;
+        backup.cooked_path = prev->cooked_path;
+        if (!prev->cooked_path.empty()) {
+            if (auto cooked = vfs.read_bytes(prev->cooked_path); cooked.ok) {
+                backup.cooked = cooked.value;
+                backup.had_cooked = true;
+            }
+        }
+    }
+    return backup;
+}
+
+/// Puts a destination back the way the backup found it: the content bytes,
+/// the cooked copy and the registry entry, in that order.
+void restore_import_backups(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
+                            const std::vector<ImportBackup>& backups) {
+    for (const ImportBackup& backup : backups) {
+        if (backup.had_content) {
+            vfs.write_bytes(backup.logical, std::span<const uint8_t>(backup.content));
+        }
+        if (backup.had_cooked && !backup.cooked_path.empty()) {
+            vfs.write_bytes(backup.cooked_path, std::span<const uint8_t>(backup.cooked));
+        }
+        if (backup.had_registry && !reg.contains(backup.meta.id)) {
+            std::string add_err;
+            if (!reg.add(backup.meta, add_err)) {
+                NF_LOG_WARN(nf::LogCategory::Editor,
+                            "Import rollback: the registry refused '{}': {}",
+                            backup.meta.logical_path, add_err);
+            }
+        }
+    }
+}
+
 } // namespace
+
+ImportQueue::ImportQueue() : m_scratch_dir(nf::FileSystem::scratch_directory()) {}
+
+void ImportQueue::set_scratch_dir(std::filesystem::path dir) {
+    if (dir.empty()) {
+        return;
+    }
+    std::error_code ec;
+    // The directory has to exist before a worker writes into it: the editor
+    // points this at a folder inside the project that may not be there yet.
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        NF_LOG_WARN(nf::LogCategory::Editor,
+                    "Import scratch directory '{}' could not be created: {}",
+                    dir.string(), ec.message());
+        return;
+    }
+    m_scratch_dir = std::move(dir);
+}
 
 assets::AssetType ImportQueue::type_for_extension(const std::string& ext_lower) {
     // Mesh sources: the cooked container plus every format the reader accepts.
@@ -248,7 +350,8 @@ void ImportQueue::clear_finished() {
 void ImportQueue::run_cpu_stages(const std::string& src_absolute, const std::string& dst_dir,
                                  assets::AssetType type,
                                  assets::MeshImportFormat source_format, size_t job_id,
-                                 const std::shared_ptr<ImportStaged>& staged) {
+                                 const std::shared_ptr<ImportStaged>& staged,
+                                 const std::filesystem::path& scratch_dir) {
     // The destination names are derived here rather than passed in, so a worker
     // needs nothing but the source path, the destination directory and the two
     // enums.
@@ -446,10 +549,23 @@ void ImportQueue::run_cpu_stages(const std::string& src_absolute, const std::str
             files.push_back(std::move(file));
         } else if (type == assets::AssetType::Scene) {
             // Scene validation needs a file for the loader but must not touch
-            // VFS (shared): use a uniquely-named temp file, cleaned below.
+            // VFS (shared): use a uniquely-named scratch file, cleaned below.
+            //
+            // The name carries the PROCESS id as well as the job id. The job
+            // id alone is a per-process counter starting at 1, so two editor
+            // instances (or an editor and a test run) both wrote
+            // "%TEMP%\nf_import_validate_1.tmp" — and the file is opened with
+            // trunc, so the second one clobbered the first's scratch file in
+            // the middle of its validation.
+            //
+            // The scratch file lands in the scratch directory the caller
+            // chose, which is not always the system temp directory: a
+            // sandboxed process may not write outside its own tree, and the
+            // validation then failed with "Scratch write failed" for a file
+            // the user never touched.
             const std::string scratch =
-                (std::filesystem::temp_directory_path() /
-                 ("nf_import_validate_" + std::to_string(job_id) + ".tmp"))
+                (scratch_dir / ("nf_import_validate_" + std::to_string(current_process_id()) +
+                                 "_" + std::to_string(job_id) + ".tmp"))
                     .string();
             {
                 std::ofstream o(scratch, std::ios::binary | std::ios::trunc);
@@ -535,6 +651,13 @@ bool ImportQueue::commit_staged(assets::VirtualFileSystem& vfs, assets::AssetReg
     // Pass 1: refuse or clear every destination BEFORE writing any of them, so
     // a multi-file import (meshes + textures + materials) is all-or-nothing
     // instead of half-applied when one of its files already exists.
+    //
+    // "Clear" means the previous bytes are READ INTO MEMORY first. The old
+    // code deleted the file, the cooked copy and the registry entry and only
+    // then wrote the new ones, so a write that failed halfway left the user
+    // with NO mesh at all — the opposite of what "all-or-nothing" means. With
+    // the backup in hand, a failed write restores the previous state exactly.
+    std::vector<ImportBackup> backups;
     for (const ImportStagedFile& file : files) {
         auto ex = vfs.exists(file.logical_path);
         if (ex.ok && ex.value) {
@@ -544,15 +667,20 @@ bool ImportQueue::commit_staged(assets::VirtualFileSystem& vfs, assets::AssetReg
                 job.staged.reset();
                 return true;
             }
+            backups.push_back(backup_import(vfs, reg, file.logical_path));
             remove_previous_import(vfs, reg, file.logical_path);
         }
     }
 
-    // Pass 2: write, cook and register.
+    // Pass 2: write, cook and register. Every failure here rolls the
+    // destinations back to the state the backup captured, so the import is
+    // genuinely all-or-nothing.
     for (const ImportStagedFile& file : files) {
         const std::string& logical = file.logical_path;
         if (!vfs.write_bytes(logical, std::span<const uint8_t>(file.bytes)).ok) {
             job.error = "Failed to write '" + logical + "'";
+            restore_import_backups(vfs, reg, backups);
+            job.written.clear();
             job.state = ImportJob::State::Failed;
             job.staged.reset();
             return true;
@@ -566,6 +694,8 @@ bool ImportQueue::commit_staged(assets::VirtualFileSystem& vfs, assets::AssetReg
         const std::string cooked = "cache://" + rel;
         if (!vfs.write_bytes(cooked, std::span<const uint8_t>(file.bytes)).ok) {
             job.error = "Failed to write cooked '" + cooked + "'";
+            restore_import_backups(vfs, reg, backups);
+            job.written.clear();
             job.state = ImportJob::State::Failed;
             job.staged.reset();
             return true;
@@ -580,7 +710,10 @@ bool ImportQueue::commit_staged(assets::VirtualFileSystem& vfs, assets::AssetReg
             meta.id = file.file_id;
         }
         meta.type = file.type;
-        meta.logical_path = logical;
+        // The canonical spelling: the registry keys paths by an exact string,
+        // but the filesystem behind it is case-insensitive on Windows, so two
+        // spellings of one file would be two assets with two ids.
+        meta.logical_path = canonical_registry_path(logical);
         meta.cooked_path = cooked;
         meta.fingerprint = fingerprint;
         meta.format = (file.type == assets::AssetType::Mesh) ? "nfmesh-v1" : "img-v1";
@@ -588,6 +721,8 @@ bool ImportQueue::commit_staged(assets::VirtualFileSystem& vfs, assets::AssetReg
         std::string aerr;
         if (!reg.add(meta, aerr)) {
             job.error = "Registry rejected import: " + aerr;
+            restore_import_backups(vfs, reg, backups);
+            job.written.clear();
             job.state = ImportJob::State::Failed;
             job.staged.reset();
             return true;
@@ -619,7 +754,7 @@ bool ImportQueue::process_next(assets::VirtualFileSystem& vfs, assets::AssetRegi
     job->progress = 0.1f;
     auto staged = std::make_shared<ImportStaged>();
     run_cpu_stages(job->src_absolute, job->dst_dir, job->type, job->source_format, job->id,
-                   staged);
+                   staged, m_scratch_dir);
     job->staged = staged;
     commit_staged(vfs, reg, *job);
     return true;
@@ -642,11 +777,13 @@ const ImportJob* ImportQueue::pump_async(assets::VirtualFileSystem& vfs, assets:
         j.progress = 0.1f;
         if (threaded) {
             JobSystem::instance().enqueue([staged = j.staged, src = j.src_absolute, dir = j.dst_dir,
-                                           type = j.type, format = j.source_format, id = j.id] {
-                run_cpu_stages(src, dir, type, format, id, staged);
+                                           type = j.type, format = j.source_format, id = j.id,
+                                           scratch = m_scratch_dir] {
+                run_cpu_stages(src, dir, type, format, id, staged, scratch);
             });
         } else {
-            run_cpu_stages(j.src_absolute, j.dst_dir, j.type, j.source_format, j.id, j.staged);
+            run_cpu_stages(j.src_absolute, j.dst_dir, j.type, j.source_format, j.id, j.staged,
+                           m_scratch_dir);
         }
     }
     // Mirror worker progress for the UI, then commit in submit order,

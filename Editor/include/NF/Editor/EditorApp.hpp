@@ -34,6 +34,7 @@
 #include <NF/Runtime/Runtime.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <string>
 
@@ -105,6 +106,13 @@ public:
         m_browser.browser_root = 1;
         m_browser.current_folder.clear();
         m_browser_cache_dirty = true;
+        // The import scratch file lands inside the user's own project folder
+        // (its Cache folder, which is git-ignored and holds cooked output):
+        // a sandboxed process may not write to the system temp directory, and
+        // the scene validation then failed for a file the user never touched.
+        if (!m_project_path.empty()) {
+            m_imports.set_scratch_dir(std::filesystem::path(m_project_path) / "Cache");
+        }
     }
     const std::string& project_path() const { return m_project_path; }
     const std::string& project_name() const { return m_project_name; }
@@ -371,6 +379,14 @@ public:
 
     // --- Prefabs (.nfscene templates + linked instances) ---
     bool create_prefab(ecs::Entity root, const std::string& prefab_path, std::string& out_err);
+    // The canonical prefab path for an entity: "content://Prefabs/<Name>.nfscene".
+    //
+    // The name comes from the entity's NameComponent where it has one, and
+    // from its id where it does not. The id alone is not enough: the ECS
+    // RECYCLES ids, so a prefab named after an id is overwritten by the next
+    // entity that gets the same id — a different prefab, silently gone, with
+    // no undo entry.
+    std::string prefab_path_for(ecs::Entity root) const;
     bool instantiate_prefab(const std::string& prefab_path, ecs::Entity parent, std::string& out_err);
     bool apply_prefab(ecs::Entity instance_root, std::string& out_err);
     bool revert_prefab(ecs::Entity instance_root, std::string& out_err);

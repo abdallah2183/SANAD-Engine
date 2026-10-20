@@ -80,6 +80,29 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* au = sw.get<audio::AudioComponent>(se)) {
             dw.add<audio::AudioComponent>(de, *au);
         }
+        // The audio ENVIRONMENT: a reverb zone, the level's music and its
+        // ambience bed. The runtime reads all three from the LIVE world, so a
+        // clone that dropped them took the whole audio environment with it —
+        // and the snapshot is what Stop restores the scene FROM, so the scene
+        // came back without its echo, its music and its wind.
+        if (const auto* rz = sw.get<audio::ReverbZoneComponent>(se)) {
+            dw.add<audio::ReverbZoneComponent>(de, *rz);
+        }
+        if (const auto* mu = sw.get<audio::MusicComponent>(se)) {
+            // The decoded samples travel with it: the component is the ONLY
+            // record of the track (the path is re-resolved on load), and a
+            // clone without them would restore a silent music bed.
+            dw.add<audio::MusicComponent>(de, *mu);
+        }
+        if (const auto* am = sw.get<audio::AmbienceComponent>(se)) {
+            dw.add<audio::AmbienceComponent>(de, *am);
+        }
+        // The day/night cycle. It attaches to the same entity as the sky and
+        // drives it, and the runtime advances it from the LIVE world: a clone
+        // without it left the sun at the authored hour and the sky frozen.
+        if (const auto* tod = sw.get<runtime::TimeOfDayComponent>(se)) {
+            dw.add<runtime::TimeOfDayComponent>(de, *tod);
+        }
         if (const auto* g = sw.get<gameplay::GameplayModuleComponent>(se)) {
             dw.add<gameplay::GameplayModuleComponent>(de, *g);
         }
@@ -159,6 +182,14 @@ std::string signature_of(const ecs::World& w, ecs::Entity e) {
     s += w.has<runtime::DestructibleComponent>(e) ? "D" : "-";
     s += w.has<animation::AnimationComponent>(e) ? "A" : "-";
     s += w.has<audio::AudioComponent>(e) ? "U" : "-";
+    // The audio environment and the day/night cycle are part of the scene's
+    // structure: a clone that dropped them looked identical to the original
+    // and the comparison said so, which is how a Stop that restored a scene
+    // without its echo passed the integrity check.
+    s += w.has<audio::ReverbZoneComponent>(e) ? "Z" : "-";
+    s += w.has<audio::MusicComponent>(e) ? "Y" : "-";
+    s += w.has<audio::AmbienceComponent>(e) ? "Q" : "-";
+    s += w.has<runtime::TimeOfDayComponent>(e) ? "O" : "-";
     s += w.has<gameplay::GameplayModuleComponent>(e) ? "G" : "-";
     s += w.has<scripting::ScriptComponent>(e) ? "X" : "-";
     s += w.has<vfx::ParticleComponent>(e) ? "V" : "-";

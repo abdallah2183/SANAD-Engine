@@ -32,8 +32,10 @@ void TexturePreviewCache::shutdown() {
         m_device->wait_idle();
     }
     m_entries.clear(); // unique_ptr members destroy the GPU objects
+    m_retired.clear();
     m_sampler.reset();
     m_device = nullptr;
+    m_cycle = 0;
     m_next_id = kFirstId;
 }
 
@@ -126,7 +128,20 @@ uintptr_t TexturePreviewCache::acquire(assets::VirtualFileSystem& vfs,
 }
 
 void TexturePreviewCache::invalidate(const std::string& logical_path) {
-    m_entries.erase(logical_path);
+    // The entry is RETIRED, not erased. The renderer keeps a raw pointer to
+    // the view of every preview it drew and dereferences it when it writes
+    // the descriptor set, so destroying the view here left that pointer
+    // dangling for the rest of the frame — a hot reload of a texture was
+    // enough to make the UI renderer write a descriptor from freed memory.
+    //
+    // The retired entry keeps its GPU objects alive until the drain cycles
+    // have passed, by which time no descriptor set can still name its view.
+    auto it = m_entries.find(logical_path);
+    if (it == m_entries.end()) {
+        return;
+    }
+    m_retired.push_back(Retired{m_cycle, std::move(it->second)});
+    m_entries.erase(it);
 }
 
 std::vector<TexturePreviewCache::Binding> TexturePreviewCache::drain_used() {
@@ -137,6 +152,13 @@ std::vector<TexturePreviewCache::Binding> TexturePreviewCache::drain_used() {
         }
         entry.used = false;
         out.push_back(Binding{entry.id, entry.view.get(), m_sampler.get()});
+    }
+    // Age the retired entries and drop the ones that no drain can name any
+    // more. The cycle counter is bumped AFTER the bindings are collected, so
+    // an entry invalidated during this frame survives this drain.
+    ++m_cycle;
+    while (!m_retired.empty() && m_retired.front().cycle + kRetireCycles <= m_cycle) {
+        m_retired.pop_front();
     }
     return out;
 }

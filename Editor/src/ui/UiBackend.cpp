@@ -8,6 +8,8 @@
 #include <NF/Editor/UiShell.hpp>
 #include <NF/Editor/UiTheme.hpp>
 
+#include <NF/Core/Logger.hpp>
+
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
 
@@ -98,19 +100,44 @@ const char* kFontDirOverride = NF_FONT_DIR;
 // The string must outlive ImGui's use of it — ImGui keeps the pointer.
 const char* layout_ini_path() {
     static const std::string path = [] {
-        std::string dir = ".";
+        std::string dir;
 #ifdef _WIN32
+        // GetEnvironmentVariableA returns 0 when the variable is UNSET, and the
+        // REQUIRED SIZE (including the terminator) when the buffer was too
+        // small. The old code treated both as "no APPDATA" and silently kept
+        // dir = ".", so the layout file was written as ./editor_layout.ini
+        // into whatever directory the editor happened to be launched from.
         char buf[MAX_PATH * 4] = {};
-        if (::GetEnvironmentVariableA("APPDATA", buf, sizeof(buf)) != 0) {
+        const DWORD need = ::GetEnvironmentVariableA("APPDATA", buf, sizeof(buf));
+        if (need > 0 && need < sizeof(buf)) {
             dir = buf;
             dir += "\\SANAD";
+        } else {
+            // No usable APPDATA: fall back to the directory the executable
+            // lives in, so the layout lands next to the editor instead of in
+            // the current working directory. Logged, because a layout file
+            // that quietly moves between runs is exactly the kind of thing
+            // that reads as "the editor forgot my work".
+            wchar_t exe[MAX_PATH * 4] = {};
+            const DWORD exe_len =
+                ::GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(sizeof(exe) / sizeof(exe[0])));
+            if (exe_len > 0 && exe_len < sizeof(exe) / sizeof(exe[0])) {
+                dir = std::filesystem::path(exe).parent_path().string();
+            }
+            if (dir.empty()) {
+                dir = ".";
+            }
+            NF_LOG_WARN(nf::LogCategory::Editor,
+                        "APPDATA is unavailable — the dock layout is stored next to the "
+                        "executable ('{}') instead",
+                        dir);
         }
 #else
         dir = ".";
 #endif
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
-        return dir + "\\editor_layout.ini";
+        return (std::filesystem::path(dir) / "editor_layout.ini").string();
     }();
     return path.c_str();
 }

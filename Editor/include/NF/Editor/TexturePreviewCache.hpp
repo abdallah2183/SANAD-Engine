@@ -21,6 +21,7 @@
 #include <NF/RHI/RHI.hpp>
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -74,9 +75,26 @@ private:
         bool used = false;
     };
 
+    // An entry that was invalidated but whose view may still be named by the
+    // renderer. The renderer keeps a raw pointer to every view it drew and
+    // dereferences it when it writes the descriptor set, so the view has to
+    // outlive the frame in which it was last referenced.
+    struct Retired {
+        int cycle = 0;
+        Entry entry;
+    };
+
+    // How many drain cycles an invalidated entry survives. The renderer's
+    // binding table is replaced by the drain that follows the invalidation,
+    // and the draw that used the old pointer has been recorded by then — so
+    // two cycles of slack cover the frame in between.
+    static constexpr int kRetireCycles = 2;
+
     rhi::IGraphicsDevice* m_device = nullptr;
     std::unique_ptr<rhi::Sampler> m_sampler;
     std::unordered_map<std::string, Entry> m_entries;
+    std::deque<Retired> m_retired;
+    int m_cycle = 0;
     uintptr_t m_next_id = kFirstId;
 };
 

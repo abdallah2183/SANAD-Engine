@@ -62,6 +62,23 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* au = src.get<audio::AudioComponent>(from)) {
         dst.add<audio::AudioComponent>(to, *au);
     }
+    // The audio environment and the day/night cycle. The restore is what
+    // brings the scene back after a play session, so an entry that is not
+    // copied here is a component the user LOSES by pressing Play and Stop:
+    // the reverb zone, the music, the ambience and the clock all vanished
+    // from the scene the moment the session ended.
+    if (const auto* rz = src.get<audio::ReverbZoneComponent>(from)) {
+        dst.add<audio::ReverbZoneComponent>(to, *rz);
+    }
+    if (const auto* mu = src.get<audio::MusicComponent>(from)) {
+        dst.add<audio::MusicComponent>(to, *mu);
+    }
+    if (const auto* am = src.get<audio::AmbienceComponent>(from)) {
+        dst.add<audio::AmbienceComponent>(to, *am);
+    }
+    if (const auto* tod = src.get<runtime::TimeOfDayComponent>(from)) {
+        dst.add<runtime::TimeOfDayComponent>(to, *tod);
+    }
     if (const auto* g = src.get<gameplay::GameplayModuleComponent>(from)) {
         dst.add<gameplay::GameplayModuleComponent>(to, *g);
     }

@@ -754,7 +754,10 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             if (ImGui::MenuItem(AV("save_prefab").c_str(), nullptr, false, has_sel)) {
                 std::string err;
                 const ecs::Entity sel = app.selection().primary();
-                const std::string path = "content://Prefabs/" + std::to_string(sel.id) + ".nfscene";
+                // The path comes from the entity's NAME, not from its id: the
+                // ECS recycles ids, so a prefab named after one was
+                // overwritten by the next entity that got the same id.
+                const std::string path = app.prefab_path_for(sel);
                 if (!app.create_prefab(sel, path, err)) {
                     push_error_console(app, "Save prefab failed", err);
                 } else {

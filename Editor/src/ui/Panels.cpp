@@ -13,6 +13,7 @@
 #include <NF/Editor/ReflectedInspector.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Core/Profiler.hpp>
+#include <NF/Core/FileSystem.hpp>
 #include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/PrefabLink.hpp>
@@ -1421,7 +1422,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.2f, 0.2f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.1f, 0.1f, 1.0f));
-            if (ImGui::Button("■ STOP (Esc)")) {
+            if (ImGui::Button((AV("stop") + " (Esc)").c_str())) {
                 std::string stop_err;
                 if (!app.stop(stop_err)) {
                     push_error(app.console(), "Stop failed", stop_err);
@@ -4182,7 +4183,7 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
             if (ImGui::Button(AV("save_trace").c_str())) {
                 namespace fs = std::filesystem;
                 std::error_code ec;
-                const fs::path path = fs::temp_directory_path(ec) / "nf_profile_trace.json";
+                const fs::path path = nf::FileSystem::scratch_directory() / "nf_profile_trace.json";
                 std::string err;
                 // The session, not the last frame: the engine profiler's own
                 // export would cover 1/60s, because end_frame() clears it.
