@@ -8,7 +8,7 @@
 
 **محرك ألعاب ثلاثي الأبعاد مكتوب بـ C++23 وVulkan — ومحرر يتكلم العربية من أول يوم.**
 
-<a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0"><img alt="الإصدار 0.2.0" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
+<a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0"><img alt="الإصدار 0.2.0" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
 <a href="LICENSE"><img alt="الترخيص Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
 <a href="#"><img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=flat-square&logo=c%2B%2B"></a>
 <a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
@@ -18,7 +18,7 @@
 
 <br>
 
-[**تنزيل 0.2.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0) ·
+[**تنزيل 0.2.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0) ·
 [**شاهد الفيديو (43 ثانية)**](Docs/media/demo.mp4) ·
 [**التوثيق**](Docs/) ·
 [**English**](README.md)
@@ -60,12 +60,12 @@
 
 ### 1. نزّل النسخة
 
-من صفحة [إصدار 0.2.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0):
+من صفحة [إصدار 0.2.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0):
 
 | الملف | ماذا تفعل |
 |:---|:---|
-| [`SANAD-0.2.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD-0.2.0-Windows-x64-Portable.zip) | فك الضغط في أي مكان → شغّل `SANADEditor.exe` |
-| [`SANAD_Engine_0.2.0_Demo.mp4`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD_Engine_0.2.0_Demo.mp4) | فيديو الديمو (43 ثانية) |
+| [`SANAD-0.3.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.3.0/SANAD-0.3.0-Windows-x64-Portable.zip) | فك الضغط في أي مكان → شغّل `SANADEditor.exe` |
+| [`SANAD_Engine_0.2.0_Demo.mp4`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.3.0/SANAD_Engine_0.2.0_Demo.mp4) | فيديو الديمو (43 ثانية) |
 
 > [!NOTE]
 > **لا يوجد مثبّت في هذا الديمو** ولا توقيع بعد. قد تظهر رسالة "ناشر غير معروف".
@@ -154,7 +154,7 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 - **Play** يرفع نافذة اللعبة إلى المقدمة بدل فتحها خلف المحرر.
 - قوالب محمولة: المحرر من الحزمة يجد `Templates` بجانب الملف التنفيذي.
 - توثيق محدّث: [ملاحظات الديمو](Docs/Demo_Release.md) و
-  [ملاحظات الإصدار](RELEASE_NOTES_0.2.0.md).
+  [ملاحظات الإصدار](RELEASE_NOTES_0.3.0.md).
 
 ## 🧱 المزايا
 

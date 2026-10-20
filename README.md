@@ -8,7 +8,7 @@
 <br>
 محرك ألعاب ثلاثي الأبعاد مكتوب بـ C++23 وVulkan — ومحرر يتكلم العربية من أول يوم.
 
-<a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0"><img alt="Release 0.2.0" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
+<a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0"><img alt="Release 0.3.0" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
 <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
 <a href="#"><img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=flat-square&logo=c%2B%2B"></a>
 <a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
@@ -19,7 +19,7 @@
 
 <br>
 
-[**Download 0.2.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0) ·
+[**Download 0.3.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0) ·
 [**Watch the 43s demo**](Docs/media/demo.mp4) ·
 [**Docs**](Docs/) ·
 [**العربية**](README.ar.md)
@@ -33,7 +33,7 @@
 ---
 
 > [!IMPORTANT]
-> **0.2.0 is a public demo, not a beta.** It ships as a **portable Windows x64 zip**.
+> **0.3.0 is a public release, not a beta.** It ships as a **portable Windows x64 zip**.
 > The executables are **unsigned** — Windows Smart App Control or WDAC may block
 > them; if that happens, check the signature/policy warning rather than disabling
 > your security settings. A Vulkan-capable GPU driver is required.
@@ -60,11 +60,11 @@
 
 ### 1. Download
 
-Grab the portable build from the [0.2.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.2.0):
+Grab the portable build from the [0.3.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0):
 
 | File | What to do |
 |:---|:---|
-| [`SANAD-0.2.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD-0.2.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
+| [`SANAD-0.3.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.3.0/SANAD-0.3.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
 | [`SANAD_Engine_0.2.0_Demo.mp4`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.2.0/SANAD_Engine_0.2.0_Demo.mp4) | The 43-second demo video (also in `Docs/media/`) |
 
 > [!NOTE]
@@ -130,12 +130,16 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
 
 > [!NOTE]
-> TreeWorld lives on **`main`** and is built from source. The packaged **0.2.0**
-> portable zip below predates it, so use `build_nf.bat Release` (or a newer
-> release) to play the sample.
+> TreeWorld ships **in the 0.3.0 portable zip** under `Games/`, and on
+> **`main`** as source. `nf run --project Games\TreeWorld\TreeWorld.nfproj`
+> builds and plays it from the repository; the packaged copy plays the same
+> scene standalone.
 
-## 🧪 Latest on `main` (after 0.2.0)
+## ✨ What's in 0.3.0
 
+- **A real game, not a tech demo** — TreeWorld is packaged and played by the
+  shipped player, and CI accepts it by the player's own log line
+  (`Validation errors: 0`), not by "the folder looks right".
 - **Agent-ready from the first command.** `AGENTS.md`, `CLAUDE.md`, Cursor rules,
   `llms.txt`, a per-project `AGENTS.md`, and `nf guide` all teach an AI the same
   native scene/Lua workflow — no HTML fallback.
@@ -145,12 +149,14 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 - **A playable starter.** `nf new --template ThirdPerson` now creates **Crate
   Hunter** — a real collect-and-win game, not a walk-around scene.
 - **Editor safety.** Subtree duplicate (`Ctrl+D`) and a recovery draft with
-  **File → Recover Last Draft**.
+  **File → Recover Last Draft**. A rename moves the registry entry and the
+  cooked copy with the file; a delete purges them.
 - **Authored atmosphere.** Distance fog in `PostProcess:`, plus the TreeWorld
   sample with PBR materials, shadows, bloom, and ACES grading.
-
-## ✨ What's in 0.2.0
-
+- **The foundations, fixed.** The Vulkan backend tracks the image layout the
+  GPU is really in, the physics world no longer outlives what it points at,
+  the dedicated server bounds what a peer can make it hold, and a malformed
+  scene file fails to load instead of taking the process down.
 - **Neutral, focused editor UI** — state uses one blue accent instead of decorating
   every control, so the viewport stays the star.
 - **Arabic RTL everywhere** — menus, panels, tooltips, onboarding, and the save
@@ -163,7 +169,7 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
   executable, so a fresh folder can create a Third-Person project without the dev
   tree.
 - **Docs that match the build** — [demo notes](Docs/Demo_Release.md),
-  [release notes](RELEASE_NOTES_0.2.0.md), and a five-minute quick start.
+  [release notes](RELEASE_NOTES_0.3.0.md), and a five-minute quick start.
 
 ## 🧱 Features
 
@@ -259,7 +265,7 @@ cmake --build build\release --parallel
 
 > [!NOTE]
 > The release script `packaging/windows/build_installer.ps1` can produce an Inno
-> Setup installer on a machine that has Inno Setup. The 0.2.0 demo intentionally
+> Setup installer on a machine that has Inno Setup. This release intentionally
 > ships the portable zip only.
 
 ## 🎮 Make a game
