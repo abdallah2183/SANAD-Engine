@@ -336,6 +336,13 @@ jobs:
       # The player is the shipped one, from inside the package, with no
       # --project pointing at the build tree: what a user downloads has to
       # render on its own.
+      #
+      # TWO runs, because they prove different things. The headless run is
+      # the simulation contract: 120 frames, no window, a clean Vulkan log.
+      # The WINDOWED run is the rendering contract, and it is the one that
+      # catches a game that loads its scene and draws nothing — a headless
+      # run has no swapchain to present to, so it reports zero draws no
+      # matter what the scene contains.
       - name: TreeWorld acceptance (headless)
         shell: bash
         run: |
@@ -368,7 +375,35 @@ jobs:
           if ! grep -q 'Alive RHI objects before shutdown: 0' treeworld.log; then
             echo "TreeWorld leaked RHI objects"; exit 1
           fi
-          echo "TreeWorld OK: packaged, played 120 frames, validation clean, no leaked RHI objects."
+          echo "TreeWorld headless OK: 120 frames, validation clean, no leaked RHI objects."
+
+      - name: TreeWorld acceptance (renders the scene)
+        shell: bash
+        run: |
+          set -o pipefail
+          cd Games/TreeWorld/dist
+          "./NFPlayer.exe" --project TreeWorld.nfproj --frames 120 --validation > treeworld_window.log 2>&1
+          code=$?
+          tail -25 treeworld_window.log
+          if [ "$code" -ne 0 ]; then echo "TreeWorld player exited $code"; exit 1; fi
+          # The draw counters are the claim: the scene loaded AND the renderer
+          # actually drew it. "Rendered 120 frames" alone only proves the loop
+          # ran.
+          stats=$(grep -E 'Last frame: extracted=' treeworld_window.log | tail -1)
+          echo "$stats"
+          if ! printf '%s' "$stats" | grep -qE 'extracted=[1-9][0-9]*'; then
+            echo "TreeWorld extracted nothing from the scene"; exit 1
+          fi
+          if ! printf '%s' "$stats" | grep -qE 'visible=[1-9][0-9]*'; then
+            echo "TreeWorld drew nothing visible"; exit 1
+          fi
+          if ! printf '%s' "$stats" | grep -qE 'draws=[1-9][0-9]*'; then
+            echo "TreeWorld issued no draw calls"; exit 1
+          fi
+          if ! grep -q 'Validation errors: 0' treeworld_window.log; then
+            echo "TreeWorld validation is not clean"; exit 1
+          fi
+          echo "TreeWorld render OK: the shipped player drew the scene."
 
       # The portable zip is what a user downloads, so the acceptance is the
       # zip: it is staged, zipped, extracted into a folder that has never

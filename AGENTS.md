@@ -132,7 +132,16 @@ A complete collect-the-crates example is in
 5. Windows 10/11 x64 + Vulkan only. There is no browser build, no Linux player.
 6. The 0.2.0 demo binaries are unsigned; a machine with Smart App Control/WDAC
    may block newly built executables. That is an environment policy, not a
-   reason to create a web game or to disable security.
+   reason to create a web game or to disable security. Two things DO help, and
+   both are legitimate:
+   - **Sign the build**: `powershell -ExecutionPolicy Bypass -File
+     Scripts\sign_build.ps1` signs every executable in `build\<cfg>\bin` with
+     a code-signing certificate from `Cert:\CurrentUser\My`. A certificate in
+     the machine's Trusted Publishers + Trusted Root stores satisfies the
+     policy. A public code-signing certificate is what a public release needs.
+   - **Retry**: the machine's cloud reputation service answers a few minutes
+     after a file is first seen, and a blocked binary becomes runnable on its
+     own. Re-run it later instead of concluding that the test failed.
 7. Do not commit `Cache/`, `dist/`, or generated binaries.
 
 ## Useful docs

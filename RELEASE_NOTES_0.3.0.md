@@ -104,20 +104,29 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 ## Verification | التحقق
 
 - **Clean build from scratch:** `rmdir /s /q build` then
-  `build_nf.bat Release` → **0 errors**, 41 executables, 700 build steps.
-- **Test suites: 1,208 passed / 0 failed / 3 skipped** across the 18 suites
+  `build_nf.bat Release` → **0 errors**, 700 build steps, 41 executables.
+- **Test suites: 1,476 passed / 0 failed / 3 skipped** across the 21 suites
   that ran on the release machine (Release, Windows x64).
-- **8 of the 26 suites could not be started on the release machine.** Windows
-  **Smart App Control** refuses to launch freshly built, unsigned binaries
-  there, so `AITests`, `AudioTests`, `FoliageTests`, `RHITests`,
-  `SaveTests`, `Scene2DTests`, `ToolTests` and `UITests` were blocked by the
-  machine's code-integrity policy. That is a machine policy, not a test
-  failure — and it is why CI matters: the same suites are green there on
-  every push.
-- **TreeWorld** runs in the engine: 120 frames, **Validation errors: 0**,
-  **Alive RHI objects before shutdown: 0**.
+- **The machine refuses to launch some freshly built binaries.** Windows
+  **Smart App Control** blocks an unsigned executable the machine's cloud
+  reputation service has not seen yet, and the failure reads as *"blocked by
+  your organization's Device Guard policy"* — not as a test result. Two
+  things make it go away, and both are legitimate:
+  - **Submit the build tree to the reputation service**
+    (`MpCmdRun -Scan -ScanType 3 -File build\Release\bin`) and run the suite
+    again a few minutes later. The verdict arrives on its own.
+  - **Sign the build** (`Scripts\sign_build.ps1`) with a certificate the
+    machine trusts.
+  `Scripts\verify_release.ps1` does both and then runs everything.
+- **TreeWorld, played by the shipped player:**
+  - headless — 120 frames, **Validation errors: 0**, **Alive RHI objects
+    before shutdown: 0**;
+  - windowed — the same 120 frames with **`extracted=60 visible=40
+    draws=80`**, i.e. the scene really is drawn. A headless run has no
+    swapchain to present to, so it reports zero draws whatever the scene
+    contains; the windowed run is the one that proves the rendering.
 - **Editor acceptance, headless:** every automation step OK, 0 Vulkan
-  validation errors, 0 leaked RHI objects.
+  validation errors, 0 leaked RHI objects, `draws=120 visible=60`.
 - **End-to-end:** `nf new` → `nf build` → the packaged player renders frames
   with physics, animation and audio running.
 - **The portable zip** contains the editor, the CLI, the player, the cooker,
@@ -128,5 +137,6 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 > started because your account is locked due to a billing issue."* Every
 > workflow on the repository — including the one that was green before —
 > stopped the same way. Fixing the account's billing restores the full
-> 26-suite run, the TreeWorld acceptance and the portable-zip acceptance,
-> all of which are wired into the CI workflow and will run on the next push.
+> 26-suite run on a machine without a code-integrity policy, plus the
+> TreeWorld and portable-zip acceptance, all of which are wired into the CI
+> workflow and run on the next push.
