@@ -1,6 +1,6 @@
 # SANAD Asset Registry
 version: 1
-count: 28
+count: 29
 ---
 id: 85cdd6f6-8666-4a95-ad39-796ef66967ae
 type: Material
@@ -224,4 +224,12 @@ logical: content://Scenes/Main.nfscene
 cooked: cache://Scenes/Main.nfscene
 fingerprint: 1000818a16a1f573
 format: nfscene-v1
+version: 1
+---
+id: aa3e8de3-a764-4d75-9a49-0a9c57e5404a
+type: Mesh
+logical: content://meshes/ground.nfmesh
+cooked: cache://Meshes/ground.nfmesh
+fingerprint: 48c8321851008330
+format: nfmesh-v1
 version: 1

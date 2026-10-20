@@ -6,8 +6,8 @@
 
 **SHA-256:**
 ```
-81231b9d3e098aa0de557014c9192ed48978339ac912f51423281d46024b76d4  SANAD-0.3.0-Windows-x64-Portable.zip
-5cd49a16b523d9739fa7370b280fa2b4017653d336505a0af8c03d33f2547db1  SANAD-0.3.0-TreeWorld.zip
+77782ac8f27774bfbae2c82fc2b1c1b750077195a2ef97c1016b4a65a36cfcac  SANAD-0.3.0-Windows-x64-Portable.zip
+da2cf2a645dcdd3e9a39373836e999c2807c85535d5c03037d9baccf8b2a7afc  SANAD-0.3.0-TreeWorld.zip
 ```
 
 Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (English available)
