@@ -97,9 +97,16 @@ void blend_poses(const std::vector<const std::vector<LocalPose>*>& poses,
     const usize n = poses[0]->size();
     out.resize(n);
 
+    // A pose list and a weight list are two independent inputs, so they can
+    // disagree in length. Everything below is driven by the POSE count, so
+    // the weights have to be limited to it: summing the weights past the
+    // last pose would skew the normalisation, and reading weights[p] for a
+    // p that has no weight is an out-of-bounds read.
+    const usize count = std::min(poses.size(), weights.size());
+
     // Normalize weights.
     f32 total = 0.0f;
-    for (f32 w : weights) total += w;
+    for (usize p = 0; p < count; ++p) total += weights[p];
     if (total <= 1e-8f) {
         // Degenerate: just copy the first pose.
         out = *poses[0];
@@ -114,7 +121,7 @@ void blend_poses(const std::vector<const std::vector<LocalPose>*>& poses,
         Vec3 scale = {0, 0, 0};
         f32 first_weight = 1.0f;
 
-        for (usize p = 0; p < poses.size(); ++p) {
+        for (usize p = 0; p < count; ++p) {
             if (poses[p] == nullptr) continue;
             const auto& pose = *poses[p];
             if (i >= pose.size()) continue;

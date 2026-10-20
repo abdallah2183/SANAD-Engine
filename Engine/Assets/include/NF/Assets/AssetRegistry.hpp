@@ -1,6 +1,7 @@
 #pragma once
 
 #include <NF/Assets/AssetId.hpp>
+#include <NF/Assets/AssetPath.hpp>
 #include <NF/Assets/AssetTypes.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 
@@ -24,6 +25,14 @@ public:
     bool contains_path(const std::string& logical_path) const;
 
     const AssetMetadata* find(AssetId id) const;
+    /// The entry for a logical path, whichever spelling it is stored under.
+    ///
+    /// The registry keys assets by an EXACT string, but the filesystem behind
+    /// it is case-insensitive on Windows, so one file can be spelled two ways.
+    /// A lookup that only matched the exact spelling would miss the entry the
+    /// editor wrote (canonical) when the caller asks with the file's own case
+    /// (the cooker), and the asset would be cooked again every time. The
+    /// canonical spelling is tried next, and on Windows a full scan follows.
     const AssetMetadata* find_by_path(const std::string& logical_path) const;
     AssetMetadata* find(AssetId id);
     AssetMetadata* find_by_path(const std::string& logical_path);

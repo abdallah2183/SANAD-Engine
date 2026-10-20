@@ -64,17 +64,32 @@ std::shared_ptr<MeshHandle> AssetManager::load_mesh(AssetId id) {
 std::shared_ptr<MeshHandle> AssetManager::load_mesh_sync(AssetId id) {
     auto handle = load_mesh(id);
     // Already cached and terminal -> nothing to do.
-    if (handle->state == AssetState::Ready || handle->state == AssetState::Failed) {
+    if (handle->state.load(std::memory_order_acquire) == AssetState::Ready ||
+        handle->state.load(std::memory_order_acquire) == AssetState::Failed) {
         return handle;
     }
 
-    // load_mesh already kicked off an async job. For the sync path, do the CPU
-    // read+parse directly here so the caller observes Ready/Failed on return.
-    // The async job, when it lands, will see a handle that is no longer Loading
-    // and will not overwrite a terminal state (it pushes a CompletedLoad; the
-    // finalizer only flips Loading -> Ready, never the reverse).
     const AssetMetadata* meta = m_registry.find(id);
     if (!meta) return handle;
+
+    // The worker job and this path can both be loading the SAME handle:
+    // load_mesh() already enqueued the async job, and then the synchronous
+    // path did the read+parse itself. Two threads assigning the same
+    // std::shared_ptr is undefined behaviour, and a std::string assignment
+    // tears. The handle's own mutex makes the two paths mutually exclusive:
+    // whoever gets there first does the work, the other finds the result
+    // already there.
+    std::lock_guard<std::mutex> handle_lock(handle->mutex);
+
+    if (handle->state.load(std::memory_order_acquire) == AssetState::Ready ||
+        handle->state.load(std::memory_order_acquire) == AssetState::Failed) {
+        return handle;
+    }
+    if (handle->asset) {
+        // The worker already produced the asset; only the state was missing.
+        handle->state.store(AssetState::Ready, std::memory_order_release);
+        return handle;
+    }
 
     auto vfs_result = m_vfs.read_bytes(meta->cooked_path);
     if (!vfs_result.ok && meta->logical_path != meta->cooked_path) {
@@ -87,23 +102,23 @@ std::shared_ptr<MeshHandle> AssetManager::load_mesh_sync(AssetId id) {
         vfs_result = m_vfs.read_bytes(meta->logical_path);
     }
     if (!vfs_result.ok) {
-        handle->state = AssetState::Failed;
         handle->error = vfs_result.error;
+        handle->state.store(AssetState::Failed, std::memory_order_release);
         return handle;
     }
 
     std::string parse_error;
     auto asset = MeshAsset::load_from_bytes(std::span<const uint8_t>(vfs_result.value), parse_error);
     if (!asset) {
-        handle->state = AssetState::Failed;
         handle->error = parse_error;
+        handle->state.store(AssetState::Failed, std::memory_order_release);
         return handle;
     }
 
     handle->asset = std::shared_ptr<MeshAsset>(std::move(asset));
     // Phase 11 W1: no GPU upload here. The caller (Runtime) turns the CPU asset
     // into a StaticMesh via rendering::make_static_mesh and uploads it.
-    handle->state = AssetState::Ready;
+    handle->state.store(AssetState::Ready, std::memory_order_release);
 
     // Drain any CompletedLoad the racing async job may have queued for this id;
     // a leftover would be a no-op (state is already terminal) but leaving it
@@ -124,9 +139,14 @@ void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<M
     AssetId id = meta.id;
 
     auto do_load = [this, cooked_path, authored_path, id, handle]() {
+        // The handle's mutex serialises this worker against the synchronous
+        // path, which may be loading the same handle right now. Without it
+        // both would assign handle->asset concurrently.
+        std::lock_guard<std::mutex> handle_lock(handle->mutex);
+
         // A sync load may have already finalized this handle. Never overwrite a
         // terminal state from a worker.
-        if (handle->state != AssetState::Loading) {
+        if (handle->state.load(std::memory_order_acquire) != AssetState::Loading) {
             return;
         }
         auto vfs_result = m_vfs.read_bytes(cooked_path);
@@ -135,15 +155,15 @@ void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<M
             vfs_result = m_vfs.read_bytes(authored_path);
         }
         if (!vfs_result.ok) {
-            handle->state = AssetState::Failed;
             handle->error = vfs_result.error;
+            handle->state.store(AssetState::Failed, std::memory_order_release);
             return;
         }
         std::string parse_error;
         auto asset = MeshAsset::load_from_bytes(std::span<const uint8_t>(vfs_result.value), parse_error);
         if (!asset) {
-            handle->state = AssetState::Failed;
             handle->error = parse_error;
+            handle->state.store(AssetState::Failed, std::memory_order_release);
             return;
         }
         handle->asset = std::shared_ptr<MeshAsset>(std::move(asset));
@@ -174,16 +194,20 @@ size_t AssetManager::update() {
     for (auto& c : completed_copy) {
         auto handle = c.handle;
         if (!handle) continue;
+        // The handle's mutex guards the asset/error writes. The state is
+        // atomic, so the check below is safe against a worker that is
+        // publishing a failure at the same time.
+        std::lock_guard<std::mutex> handle_lock(handle->mutex);
         // Only finalize a load that is still pending. A sync path or a later
         // unload may have changed the state already; do not clobber it.
-        if (handle->state != AssetState::Loading) continue;
+        if (handle->state.load(std::memory_order_acquire) != AssetState::Loading) continue;
         if (!handle->asset) {
-            handle->state = AssetState::Failed;
             handle->error = "CPU parse produced no asset";
+            handle->state.store(AssetState::Failed, std::memory_order_release);
             ++finalized;
             continue;
         }
-        handle->state = AssetState::Ready;
+        handle->state.store(AssetState::Ready, std::memory_order_release);
         ++finalized;
     }
     return finalized;

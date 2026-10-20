@@ -5,6 +5,7 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,9 +27,19 @@ struct MeshHandle {
     // GPU-side StaticMesh lived here too, which is what dragged RHI and
     // Rendering into this header. The GPU copy is Runtime's business now
     // (rendering::MeshLibrary).
+    //
+    // `asset` and `error` are written by whichever thread wins the load
+    // (the worker job or the synchronous path) and read by the main thread.
+    // They are written under `mutex`: two threads assigning the same
+    // std::shared_ptr object is undefined behaviour, and a std::string
+    // assignment tears.
     std::shared_ptr<MeshAsset> asset;
-    AssetState state = AssetState::Unloaded;
+    // The state is observed from both threads, so it is atomic. It is stored
+    // with release semantics AFTER the asset/error writes, so a reader that
+    // acquires the state and then reads the asset sees a consistent pair.
+    std::atomic<AssetState> state{AssetState::Unloaded};
     std::string error;
+    mutable std::mutex mutex;
     bool operator==(const MeshHandle& o) const { return id == o.id; }
 };
 

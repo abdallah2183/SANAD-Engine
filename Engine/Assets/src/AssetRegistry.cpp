@@ -25,6 +25,24 @@ bool AssetRegistry::add(const AssetMetadata& meta, std::string& out_error) {
         out_error = "Duplicate logical_path: " + meta.logical_path;
         return false;
     }
+    // Two spellings of one file are one asset, not two. On a case-insensitive
+    // filesystem "content://Meshes/cube.nfmesh" and
+    // "content://meshes/cube.nfmesh" name the SAME file, and registering both
+    // gives it two AssetIds: the cooker's "unchanged, skip" check never fires,
+    // the file is cooked twice, and a scene that references one spelling
+    // stops resolving to the other.
+#if defined(_WIN32)
+    {
+        const std::string canonical = canonical_asset_path(meta.logical_path);
+        for (const auto& entry : m_entries) {
+            if (canonical_asset_path(entry.second.logical_path) == canonical) {
+                out_error = "Duplicate logical_path: " + meta.logical_path +
+                            " (already registered as '" + entry.second.logical_path + "')";
+                return false;
+            }
+        }
+    }
+#endif
     m_entries[meta.id] = meta;
     m_path_to_id[meta.logical_path] = meta.id;
     return true;
@@ -43,7 +61,20 @@ bool AssetRegistry::contains(AssetId id) const {
 }
 
 bool AssetRegistry::contains_path(const std::string& logical_path) const {
-    return m_path_to_id.find(logical_path) != m_path_to_id.end();
+    if (m_path_to_id.find(logical_path) != m_path_to_id.end()) {
+        return true;
+    }
+#if defined(_WIN32)
+    // The filesystem behind the registry is case-insensitive, so the entry
+    // under a different spelling is the same file. See find_by_path().
+    const std::string canonical = canonical_asset_path(logical_path);
+    for (const auto& entry : m_entries) {
+        if (canonical_asset_path(entry.second.logical_path) == canonical) {
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 const AssetMetadata* AssetRegistry::find(AssetId id) const {
@@ -53,8 +84,22 @@ const AssetMetadata* AssetRegistry::find(AssetId id) const {
 
 const AssetMetadata* AssetRegistry::find_by_path(const std::string& logical_path) const {
     auto it = m_path_to_id.find(logical_path);
-    if (it == m_path_to_id.end()) return nullptr;
-    return find(it->second);
+    if (it != m_path_to_id.end()) return find(it->second);
+#if defined(_WIN32)
+    // The registry keys assets by an EXACT string, but the filesystem behind
+    // it is case-insensitive on Windows: one file can be spelled two ways, and
+    // the editor writes the canonical spelling while the cooker asks with the
+    // file's own case. A lookup that only matched the exact string would miss
+    // the asset and re-cook it every time. The canonical spelling is tried
+    // next, and the full scan after it only runs when the cheap steps miss.
+    const std::string canonical = canonical_asset_path(logical_path);
+    for (const auto& entry : m_entries) {
+        if (canonical_asset_path(entry.second.logical_path) == canonical) {
+            return &entry.second;
+        }
+    }
+#endif
+    return nullptr;
 }
 
 AssetMetadata* AssetRegistry::find(AssetId id) {
@@ -64,8 +109,16 @@ AssetMetadata* AssetRegistry::find(AssetId id) {
 
 AssetMetadata* AssetRegistry::find_by_path(const std::string& logical_path) {
     auto it = m_path_to_id.find(logical_path);
-    if (it == m_path_to_id.end()) return nullptr;
-    return find(it->second);
+    if (it != m_path_to_id.end()) return find(it->second);
+#if defined(_WIN32)
+    const std::string canonical = canonical_asset_path(logical_path);
+    for (auto& entry : m_entries) {
+        if (canonical_asset_path(entry.second.logical_path) == canonical) {
+            return &entry.second;
+        }
+    }
+#endif
+    return nullptr;
 }
 
 static std::string trim(const std::string& s) {

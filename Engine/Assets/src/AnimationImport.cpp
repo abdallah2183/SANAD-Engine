@@ -313,9 +313,23 @@ bool make_clip(const GltfImportResult& result, const GltfAnimationInfo& anim,
         times.insert(times.end(), rc.times.begin(), rc.times.end());
         times.insert(times.end(), sc.times.begin(), sc.times.end());
         std::sort(times.begin(), times.end());
-        times.erase(std::unique(times.begin(), times.end(),
-                                [](float a, float b) { return std::fabs(a - b) < 1e-6f; }),
-                    times.end());
+        // std::unique needs an EQUIVALENCE predicate, and "|a-b| < eps" is
+        // not one (it is not transitive: 0, 0.9e-6 and 1.8e-6 each differ
+        // from their neighbour by less than eps while the first and last
+        // differ by more). Using it makes the removal undefined behaviour.
+        // An explicit epsilon-aware pass keeps the first (smallest) member
+        // of each near-duplicate group and leaves the times themselves
+        // untouched — no snapping, so the keyframe times stay exact.
+        {
+            std::vector<float> deduped;
+            deduped.reserve(times.size());
+            for (float t : times) {
+                if (deduped.empty() || std::fabs(t - deduped.back()) >= 1e-6f) {
+                    deduped.push_back(t);
+                }
+            }
+            times = std::move(deduped);
+        }
 
         const nf::animation::Bone& rest = skeleton.bones[bone];
         nf::animation::AnimationTrack track;

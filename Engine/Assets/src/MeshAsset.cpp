@@ -73,6 +73,20 @@ std::unique_ptr<MeshAsset> MeshAsset::load_from_bytes(std::span<const uint8_t> d
         out_error="Counts too large (corrupt?)";
         return nullptr;
     }
+    // The counts are bounded, but they are not yet checked against the bytes
+    // that are actually there. Without this, a 40-byte corrupt file claiming
+    // 1e6 vertices allocates ~90 MB of vertices/indices BEFORE the read
+    // fails — the allocation is the expensive part, and it happens for a file
+    // that was never going to load. Validate the whole payload up front.
+    const size_t payload_bytes =
+        static_cast<size_t>(vert_count) * sizeof(AssetVertex) +
+        static_cast<size_t>(idx_count) * sizeof(uint32_t) +
+        static_cast<size_t>(sub_count) * sizeof(AssetSubMesh) +
+        sizeof(AssetAABB) + sizeof(AssetSphere);
+    if (payload_bytes > data.size() - off) {
+        out_error="Truncated mesh payload (corrupt?)";
+        return nullptr;
+    }
     auto asset = std::make_unique<MeshAsset>();
     asset->id = id;
     asset->logical_path = logical_path;
@@ -99,8 +113,11 @@ bool MeshAsset::save_to_file(const std::string& physical_path, std::string& out_
 std::unique_ptr<MeshAsset> MeshAsset::load_from_file(const std::string& physical_path, std::string& out_error) {
     std::ifstream in(physical_path, std::ios::binary | std::ios::ate);
     if (!in) { out_error="Failed to open file for reading: " + physical_path; return nullptr; }
-    auto size = static_cast<size_t>(in.tellg());
+    const std::streampos end = in.tellg();
+    if (end == std::streampos(-1)) { out_error="Failed to determine file size: " + physical_path; return nullptr; }
     in.seekg(0, std::ios::beg);
+    if (!in) { out_error="Failed to seek file: " + physical_path; return nullptr; }
+    const size_t size = static_cast<size_t>(end);
     std::vector<uint8_t> data(size);
     if (size>0) {
         in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));

@@ -173,8 +173,19 @@ VFSResult<std::vector<u8>> VirtualFileSystem::read_bytes(std::string_view logica
     std::ifstream file(r.value, std::ios::binary);
     if (!file) return VFSResult<std::vector<u8>>::failure("Failed to open file for reading: '" + std::string(logical_path) + "'");
     file.seekg(0, std::ios::end);
-    size_t size = static_cast<size_t>(file.tellg());
+    // tellg() answers -1 when the seek or the tell fails; casting that to an
+    // unsigned size yields SIZE_MAX and the allocation below then throws
+    // std::length_error — uncaught, so the process aborts. A file whose size
+    // cannot be determined is a failed read, not a SIZE_MAX-byte one.
+    const std::streampos end = file.tellg();
+    if (end == std::streampos(-1)) {
+        return VFSResult<std::vector<u8>>::failure("Failed to determine file size: '" + std::string(logical_path) + "'");
+    }
     file.seekg(0, std::ios::beg);
+    if (!file) {
+        return VFSResult<std::vector<u8>>::failure("Failed to seek file: '" + std::string(logical_path) + "'");
+    }
+    const size_t size = static_cast<size_t>(end);
     std::vector<u8> data(size);
     if (size>0) {
         file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
