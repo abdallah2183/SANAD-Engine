@@ -13,6 +13,7 @@
 // was filled, a mix buffer with signal in it.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -122,7 +123,7 @@ float max_rotation_deviation(Runtime& rt, int frames) {
 } // namespace
 
 NF_TEST(runtime_steps_animation_and_moves_entity) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_anim_step";
+    auto tmp = nf::test::temp_root() / "nf_rt_anim_step";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 
@@ -180,7 +181,7 @@ NF_TEST(runtime_steps_animation_and_moves_entity) {
 }
 
 NF_TEST(runtime_paused_animation_does_not_move) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_anim_paused";
+    auto tmp = nf::test::temp_root() / "nf_rt_anim_paused";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 
@@ -223,7 +224,7 @@ NF_TEST(runtime_paused_animation_does_not_move) {
 }
 
 NF_TEST(runtime_audio_mixes_generated_tone) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_audio_mix";
+    auto tmp = nf::test::temp_root() / "nf_rt_audio_mix";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 
@@ -274,7 +275,7 @@ NF_TEST(runtime_audio_mixes_generated_tone) {
 }
 
 NF_TEST(runtime_audio_silent_without_sources) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_audio_silent";
+    auto tmp = nf::test::temp_root() / "nf_rt_audio_silent";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 
@@ -340,7 +341,7 @@ namespace {
 /// existing audio tests, so the tone is 440 Hz at 0.4 source volume; only the
 /// bus routing differs. Returns -1 when no device could be created.
 float peak_with_bus_volume(BusId bus, float volume, int frames = 120) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_audio_bridge";
+    auto tmp = nf::test::temp_root() / "nf_rt_audio_bridge";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 
@@ -480,7 +481,7 @@ NF_TEST(runtime_audio_persists_the_fractional_cursor_across_blocks) {
     // Persisting only the first re-seeks a rate-converted buffer to a truncated
     // position every block, so the sound drifts. This pins that the runtime
     // keeps both, and that they stay consistent.
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_audio_cursor";
+    auto tmp = nf::test::temp_root() / "nf_rt_audio_cursor";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 
@@ -543,7 +544,7 @@ NF_TEST(scene_audio_bus_and_occlusion_round_trip) {
     // Voice slider and to keep a UI blip from being muffled by a wall. Both are
     // entity component lines, so they need no format migration.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_bus";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_bus";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -587,7 +588,7 @@ NF_TEST(scene_audio_bus_and_occlusion_round_trip) {
 }
 
 NF_TEST(runtime_scene_round_trip_keeps_animation_moving) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_anim_roundtrip";
+    auto tmp = nf::test::temp_root() / "nf_rt_anim_roundtrip";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
 

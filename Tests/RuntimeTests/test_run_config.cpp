@@ -9,6 +9,7 @@
 // need a real window and device to test a decision that is pure policy.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Runtime/RunConfigResolver.hpp>
 #include <NF/Runtime/Application.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -23,7 +24,7 @@ using namespace nf::assets;
 namespace {
 
 std::filesystem::path cfg_temp_dir(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::remove_all(p);
     std::filesystem::create_directories(p);
     return p;
@@ -120,7 +121,7 @@ NF_TEST(run_config_explicit_scene_wins_over_the_project) {
 
 NF_TEST(run_config_reports_a_missing_project_file) {
     ApplicationConfig cfg;
-    cfg.project_path = (std::filesystem::temp_directory_path() / "nf_nope.nfproj").string();
+    cfg.project_path = (nf::test::temp_root() / "nf_nope.nfproj").string();
 
     VirtualFileSystem vfs;
     ResolvedRunConfig out;

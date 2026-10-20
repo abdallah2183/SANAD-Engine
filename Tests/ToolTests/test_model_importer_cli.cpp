@@ -15,6 +15,7 @@
 
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -226,7 +227,7 @@ struct CliSandbox {
 
     explicit CliSandbox(const std::string& name) {
         std::error_code ec;
-        root = std::filesystem::temp_directory_path() / name;
+        root = nf::test::temp_root() / name;
         std::filesystem::remove_all(root, ec);
         std::filesystem::create_directories(root, ec);
         ok = !ec;
@@ -490,6 +491,16 @@ NF_TEST(model_importer_refuses_an_incomplete_invocation) {
         run_importer(sb.root, "--input " + quoted(sb.root / "nope.glb") + " --info");
     NF_CHECK(missing.exit_code == 1);
     NF_CHECK(contains(missing.log, "import failed"));
+
+    // A known option whose VALUE is missing is not an unknown argument: the
+    // tool used to say "unknown argument: --input", which is both wrong and
+    // unhelpful. It must name the option that wants a value.
+    for (const char* option : {"--input", "--output", "--mesh"}) {
+        const RunResult no_value = run_importer(sb.root, option);
+        NF_CHECK(no_value.exit_code == 2);
+        NF_CHECK(contains(no_value.log, std::string(option) + " requires"));
+        NF_CHECK(!contains(no_value.log, "unknown argument"));
+    }
 }
 
 // ---------------------------------------------------------------------------

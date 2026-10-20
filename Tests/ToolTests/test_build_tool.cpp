@@ -7,6 +7,7 @@
 // outer-quote parsing failure.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
@@ -14,6 +15,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -55,7 +57,7 @@ void require(bool condition, const std::string& message) {
 
 class TempDir {
 public:
-    explicit TempDir(const std::string& name) : root_(std::filesystem::temp_directory_path() / name) {
+    explicit TempDir(const std::string& name) : root_(nf::test::temp_root() / name) {
         std::error_code ec;
         std::filesystem::remove_all(root_, ec);
         std::filesystem::create_directories(root_, ec);
@@ -81,6 +83,34 @@ std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path) {
     require(static_cast<bool>(input), "failed to read '" + path.string() + "'");
     return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(input)),
                                      std::istreambuf_iterator<char>());
+}
+
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    return std::string((std::istreambuf_iterator<char>(input)),
+                       std::istreambuf_iterator<char>());
+}
+
+// Runs the player with its output captured.
+//
+// run_windows_process_and_wait inherits the console, which a test cannot
+// read — and the argument checks this file pins print their reason and exit,
+// so the message IS the assertion. The command starts with `cd`, not a quote:
+// cmd.exe strips the outer quotes of a command that begins with one, which
+// turns a quoted exe path into garbage.
+int run_player_capturing(const std::filesystem::path& player,
+                         const std::filesystem::path& workdir,
+                         const std::string& args,
+                         std::string& out_log) {
+    const auto log_path = workdir.parent_path() / (workdir.filename().string() + "_player.log");
+    const std::string cmd = "cd /d \"" + workdir.string() + "\" && \"" + player.string() +
+                            "\" " + args + " > \"" + log_path.string() + "\" 2>&1";
+    const int exit_code = std::system(cmd.c_str());
+    out_log = read_text(log_path);
+    std::error_code ec;
+    std::filesystem::remove(log_path, ec);
+    return exit_code;
 }
 
 struct TemplateSpec {
@@ -328,5 +358,86 @@ NF_TEST(nf_run_launches_player_and_forwards_validation_flags) {
             "nf run did not build the package before launching the player");
     require(std::filesystem::exists(scratch.path() / "dist" / "NFPlayer.exe"),
             "nf run package is missing NFPlayer.exe");
+#endif
+}
+
+NF_TEST(nf_refuses_an_option_without_its_value) {
+#if !defined(_WIN32)
+    NF_SKIP("nf is a Windows-only workflow");
+#else
+    if (std::string(NF_CLI_EXE).empty() || std::string(NF_TEMPLATE_DIR).empty()) {
+        NF_SKIP("nf or template directory not built (NF_BUILD_TOOLS=OFF)");
+    }
+
+    TempDir scratch("nf_cli_missing_values");
+    ScaffoldOptions options;
+    options.root = scratch.path();
+    options.name = "ValueGame";
+    options.template_dir = NF_TEMPLATE_DIR;
+    std::string error;
+    require(scaffold_project(options, error), "fixture scaffold failed: " + error);
+
+    // `nf build --project` with nothing after it used to leave the option
+    // empty, and the CLI then searched the current directory AND FOUR
+    // PARENTS for a .nfproj — silently building whatever it found. A missing
+    // value is a mistake, and a mistake must not build the wrong project.
+    // (The scaffold creates an empty dist/, so the marker of a real build is
+    // the manifest the packager writes.)
+    error.clear();
+    const int project_rc = run_windows_process_and_wait(
+        NF_CLI_EXE, scratch.path(), {"build", "--project"}, error);
+    require(error.empty(), "nf build launch failed: " + error);
+    require(project_rc != 0, "nf build --project (no value) did not fail");
+    require(!std::filesystem::exists(scratch.path() / "dist" / "manifest.txt"),
+            "nf build --project (no value) built a project anyway");
+
+    // The same for the other value-taking options: an option that swallows
+    // the next option is a typo waiting to become a wrong build.
+    error.clear();
+    const int out_rc = run_windows_process_and_wait(
+        NF_CLI_EXE, scratch.path(), {"build", "--out"}, error);
+    require(error.empty(), "nf build --out launch failed: " + error);
+    require(out_rc != 0, "nf build --out (no value) did not fail");
+    require(!std::filesystem::exists(scratch.path() / "dist" / "manifest.txt"),
+            "nf build --out (no value) built a project anyway");
+
+    // `nf new <dir> --name` used to infer the name from the directory and
+    // create a project nobody asked for.
+    TempDir new_root("nf_cli_missing_name");
+    error.clear();
+    const int name_rc = run_windows_process_and_wait(
+        NF_CLI_EXE, new_root.path(), {"new", new_root.path().string(), "--name"}, error);
+    require(error.empty(), "nf new launch failed: " + error);
+    require(name_rc != 0, "nf new --name (no value) did not fail");
+    require(!std::filesystem::exists(new_root.path() /
+                                     (new_root.path().filename().string() + ".nfproj")),
+            "nf new --name (no value) created a project anyway");
+#endif
+}
+
+NF_TEST(nf_player_rejects_a_frame_count_it_cannot_use) {
+#if !defined(_WIN32)
+    NF_SKIP("NFPlayer is a Windows-only workflow");
+#else
+    if (std::string(NF_PLAYER_EXE).empty()) {
+        NF_SKIP("NFPlayer not built (NF_BUILD_TOOLS=OFF)");
+    }
+
+    const std::filesystem::path player(NF_PLAYER_EXE);
+    TempDir scratch("nf_player_frames");
+
+    // A missing, malformed or negative count used to become 0 through atoi,
+    // which means "run until the window closes" — so a CI run meant to be
+    // bounded hung forever — and a negative count became a frame count near
+    // 2^32. The player must refuse all of them, at once, and say why.
+    for (const char* args : {"--frames", "--frames abc", "--frames -5", "--frames=abc",
+                             "--frames=4294967296"}) {
+        std::string log;
+        const int exit_code = run_player_capturing(player, scratch.path(), args, log);
+        require(exit_code == 1, std::string("NFPlayer accepted '") + args + "' (exit " +
+                                    std::to_string(exit_code) + ")");
+        require(contains(log, "requires a frame count"),
+                std::string("NFPlayer '") + args + "' did not explain the frame count: " + log);
+    }
 #endif
 }

@@ -242,6 +242,39 @@ NF_TEST(dedicated_server_counts_malformed_packets) {
     server.stop();
 }
 
+NF_TEST(dedicated_server_header_only_datagram_earns_no_player_slot) {
+    // A well-formed CHANNEL HEADER is not a client: it proves nothing about
+    // the sender's intent, and it is the only thing a scanner needs to spray
+    // at the port. A player slot is earned by a COMPLETE, well-formed first
+    // message — one that carries a payload the server can decode.
+    DedicatedServerConfig config;
+    DedicatedServer server(config);
+    NF_CHECK(server.start());
+
+    UdpSocket client_sock;
+    NF_CHECK(client_sock.open(0, true, nullptr));
+    NetPacket header_only;
+    header_only.seq = 0;
+    header_only.ack = 0;
+    const std::vector<u8> bytes = encode_packet(header_only); // 13 bytes, no payload
+    NF_CHECK(client_sock.send_to(bytes, kIpv4Loopback, server.local_port()));
+    server.pump(0);
+    NF_CHECK(server.player_count() == 0);   // no slot was reserved
+    NF_CHECK(server.malformed_packets() == 1);
+
+    // The same client now sends a COMPLETE first message: it connects.
+    NetInput in;
+    in.tick = 0;
+    in.move_x = 1.0f;
+    NetPacket first;
+    first.seq = 0;
+    first.payload = encode_input(in);
+    NF_CHECK(client_sock.send_to(encode_packet(first), kIpv4Loopback, server.local_port()));
+    server.pump(0);
+    NF_CHECK(server.player_count() == 1);
+    server.stop();
+}
+
 NF_TEST(client_connects_to_the_headless_server_binary) {
     // The §81 deliverable: the REAL binary, started headless on an ephemeral
     // port, with a real client connecting to it over real UDP. Not a library

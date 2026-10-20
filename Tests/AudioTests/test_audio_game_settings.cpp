@@ -12,6 +12,7 @@
 // mixer's own settings object -> the mix the player actually hears.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Audio/AudioScene.hpp>
 #include <NF/Audio/GameSettingsBridge.hpp>
@@ -28,7 +29,7 @@ using namespace nf::audio;
 namespace {
 
 std::filesystem::path settings_path(const char* tag) {
-    return std::filesystem::temp_directory_path() /
+    return nf::test::temp_root() /
            (std::string("nf_game_audio_") + tag + ".settings");
 }
 
@@ -198,7 +199,7 @@ NF_TEST(saving_into_a_directory_that_does_not_exist_still_works) {
     // First-run path: the game has never written a settings file, so the folder
     // is not there either. Refusing the first write would be the worst possible
     // moment to fail.
-    const auto dir = std::filesystem::temp_directory_path() / "nf_game_audio_nested";
+    const auto dir = nf::test::temp_root() / "nf_game_audio_nested";
     std::filesystem::remove_all(dir);
     const auto path = dir / "deeper" / "audio.settings";
 

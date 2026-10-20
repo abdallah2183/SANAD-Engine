@@ -6,6 +6,7 @@
 // scene already holds.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
@@ -38,7 +39,7 @@ public:
 };
 
 std::filesystem::path gameplay_temp_dir(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::remove_all(p);
     std::filesystem::create_directories(p);
     return p;
@@ -189,4 +190,4 @@ NF_TEST(editor_detach_gameplay_module_removes_the_component) {
     NF_CHECK(!err.empty());
 
     std::filesystem::remove_all(tmp);
-}
+}

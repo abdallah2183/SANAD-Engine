@@ -19,6 +19,7 @@
 // the shipping artifact rather than a test-only harness.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
 
@@ -150,7 +151,7 @@ struct ShipSandbox {
     bool ok = false;
 
     explicit ShipSandbox(const std::string& name) {
-        root = std::filesystem::temp_directory_path() / name;
+        root = nf::test::temp_root() / name;
         std::filesystem::remove_all(root);
         ScaffoldOptions o;
         o.root = root;

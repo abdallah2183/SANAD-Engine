@@ -1,6 +1,7 @@
 // Editor delete: selection never survives its entity; undo restores content.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -26,7 +27,7 @@ using namespace nf::assets;
 namespace {
 
 std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::create_directories(p);
     return p;
 }
@@ -204,4 +205,4 @@ NF_TEST(editor_delete_is_immediate_and_undoable) {
     NF_CHECK(app.status().entity_count == before + 1);
     // The restored entity is still a mesh, not a name-only husk.
     NF_CHECK(app.world()->has<runtime::MeshComponent>(*restored));
-}
+}

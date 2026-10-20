@@ -7,6 +7,7 @@
 
 #include <NF/Assets/GltfImport.hpp>
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -242,7 +243,7 @@ NF_TEST(gltf_rejects_invalid_documents) {
 NF_TEST(gltf_external_bin_roundtrip) {
     auto buf = make_tri_buffer(true, true);
     std::string json = tri_json("test_tri.bin", true, true, 4);
-    const auto dir = std::filesystem::temp_directory_path() / "nf_gltf_test";
+    const auto dir = nf::test::temp_root() / "nf_gltf_test";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     {

@@ -5,6 +5,7 @@
 
 #include <NF/Core/Profiler.hpp>
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <filesystem>
 #include <string>
@@ -123,7 +124,7 @@ NF_TEST(profiler_chrome_trace_export) {
         ProfileZone inner("trace_inner");
     }
     Profiler::instance().end_frame();
-    const auto tmp = std::filesystem::temp_directory_path() / "nf_test_trace.json";
+    const auto tmp = nf::test::temp_root() / "nf_test_trace.json";
     std::string err;
     NF_CHECK(Profiler::instance().save_chrome_trace(tmp.string(), err));
     NF_CHECK(err.empty());

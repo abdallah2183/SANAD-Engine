@@ -342,6 +342,40 @@ NF_TEST(constraint_event_rejects_corruption) {
     NF_CHECK(!decode_constraint_event(encode_constraint_event(rm).data(), 12, bad, err));
 }
 
+NF_TEST(constraint_event_encoder_normalises_the_kind_of_remove_and_clone) {
+    // Remove and Clone carry no kind on the wire, and the kind byte is part
+    // of the header: the encoder must write Fixed for both, or the
+    // decoder's exact-size check refuses a packet the encoder just produced
+    // (the joint is then never torn down, silently).
+    ConstraintEvent remove;
+    remove.op = ConstraintOp::Remove;
+    remove.kind = ConstraintKind::Hinge; // meaningless for a Remove
+    remove.net_id = 100;
+    ConstraintEvent clone;
+    clone.op = ConstraintOp::Clone;
+    clone.kind = ConstraintKind::SixDOF; // meaningless for a Clone
+    clone.net_id = 200;
+    clone.source = 100;
+    clone.body_a = 13;
+    clone.body_b = 14;
+
+    std::string err;
+    ConstraintEvent back;
+    const std::vector<u8> rbytes = encode_constraint_event(remove);
+    NF_CHECK(rbytes.size() == 12);
+    NF_CHECK(decode_constraint_event(rbytes.data(), rbytes.size(), back, err));
+    NF_CHECK(back.op == ConstraintOp::Remove);
+    NF_CHECK(back.kind == ConstraintKind::Fixed); // normalised
+    NF_CHECK(back.net_id == 100);
+
+    const std::vector<u8> cbytes = encode_constraint_event(clone);
+    NF_CHECK(cbytes.size() == 24);
+    NF_CHECK(decode_constraint_event(cbytes.data(), cbytes.size(), back, err));
+    NF_CHECK(back.op == ConstraintOp::Clone);
+    NF_CHECK(back.kind == ConstraintKind::Fixed); // normalised
+    NF_CHECK(back.net_id == 200 && back.source == 100);
+}
+
 // --- server input queue -----------------------------------------------------------
 
 NF_TEST(input_queue_tick_matched_consume) {
@@ -385,6 +419,58 @@ NF_TEST(input_queue_resubmit_wins_and_old_drops) {
     NF_CHECK(!queue.consume(9, 0, out));
     NF_CHECK(out.entity == 9 && out.throttle == 0.0f);
     NF_CHECK(queue.pending(8) == 1 && queue.pending(999) == 0);
+}
+
+NF_TEST(input_queue_refuses_ticks_outside_the_window) {
+    // A peer names both the vehicle and the tick: a tick far ahead of the
+    // server's clock is refused (the server would hold a tick it will never
+    // reach), and a tick far behind it is dropped (late input never
+    // rewinds). The queue stays bounded either way.
+    VehicleInputQueue queue;
+    VehicleDriveInput out;
+    NF_CHECK(!queue.consume(7, 0, out)); // nothing queued yet
+    VehicleDriveInput far;
+    far.tick = 10'000'000;
+    far.entity = 7;
+    NF_CHECK(!queue.submit_drive_input(7, far));
+    NF_CHECK(queue.pending(7) == 0);
+    NF_CHECK(queue.dropped_inputs() == 1);
+
+    // Inside the window: accepted.
+    VehicleDriveInput near;
+    near.tick = 10;
+    near.entity = 7;
+    NF_CHECK(queue.submit_drive_input(7, near));
+    NF_CHECK(queue.pending(7) == 1);
+    NF_CHECK(queue.consume(7, 10, out));
+    NF_CHECK(out.throttle == 0.0f);
+    NF_CHECK(queue.pending(7) == 0);
+}
+
+NF_TEST(ghost_client_evicts_vehicles_the_server_stopped_replicating) {
+    // The ghost table is rebuilt from every snapshot: a vehicle the server
+    // no longer names must not linger, or a server that names thousands of
+    // entity ids per snapshot would grow the map without bound.
+    VehicleGhostClient ghost(7);
+    VehicleSnapshot s0;
+    s0.tick = 0;
+    VehicleNetState v;
+    v.entity = 7;
+    s0.vehicles.push_back(v);
+    VehicleNetState other;
+    other.entity = 12;
+    s0.vehicles.push_back(other);
+    ghost.apply_vehicle_snapshot(s0);
+    NF_CHECK(ghost.ghost_count() == 2);
+
+    VehicleSnapshot s1;
+    s1.tick = 1;
+    s1.vehicles.push_back(v); // 12 is gone
+    ghost.apply_vehicle_snapshot(s1);
+    NF_CHECK(ghost.ghost_count() == 1);
+    VehicleNetState read;
+    NF_CHECK(!ghost.state(12, read));
+    NF_CHECK(ghost.state(7, read));
 }
 
 // --- client ghosts ------------------------------------------------------------------

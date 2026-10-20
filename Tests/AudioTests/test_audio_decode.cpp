@@ -6,6 +6,7 @@
 // by the sniffing tests plus manual verification against real files.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Audio/AudioDecoder.hpp>
 
 #include <cmath>
@@ -252,7 +253,7 @@ NF_TEST(decode_file_missing_and_roundtrip) {
 
     // Round-trip through a real temp file.
     auto bytes = make_wav(22050, {330.0f}, 0.05f);
-    const auto tmp = std::filesystem::temp_directory_path() / "nf_test_decode_roundtrip.wav";
+    const auto tmp = nf::test::temp_root() / "nf_test_decode_roundtrip.wav";
     {
         std::FILE* f = nullptr;
 #if defined(_MSC_VER)

@@ -2,6 +2,7 @@
 // real Runtime scene render with pixel proof — no swapchain, no present.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -22,7 +23,7 @@ using namespace nf::test;
 using namespace nf::assets;
 
 static std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::create_directories(p);
     return p;
 }
@@ -266,4 +267,4 @@ NF_TEST(editor_grid_axis_colour_tracks_the_origin_not_the_pivot) {
     NF_CHECK(!editor::grid_cell_is_world_axis(1, 0.25f));
     // A non-positive step has no lattice, so nothing is an axis.
     NF_CHECK(!editor::grid_cell_is_world_axis(0, 0.0f));
-}
+}

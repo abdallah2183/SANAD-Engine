@@ -10,6 +10,7 @@
 //     module*, not about the registry being populated.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -165,7 +166,7 @@ void write_minimal_scene(VirtualFileSystem& vfs, const std::string& logical) {
 class RuntimeHarness {
 public:
     explicit RuntimeHarness(const std::string& tag) {
-        m_tmp = std::filesystem::temp_directory_path() / ("nf_gameplay_" + tag);
+        m_tmp = nf::test::temp_root() / ("nf_gameplay_" + tag);
         std::filesystem::remove_all(m_tmp);
         std::filesystem::create_directories(m_tmp);
         m_vfs.mount("content://", m_tmp);

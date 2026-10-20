@@ -5,6 +5,7 @@
 // same temp-dir VFS pattern as the other scene tests.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -23,7 +24,7 @@ using namespace nf::runtime;
 
 NF_TEST(scene_sky_and_shadow_tuning_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_sky_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_sky_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -102,7 +103,7 @@ NF_TEST(scene_sky_and_shadow_tuning_round_trip) {
 
 NF_TEST(scene_time_of_day_round_trips_through_the_file) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_tod_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_tod_test";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -145,7 +146,7 @@ NF_TEST(scene_time_of_day_line_wraps_hours_and_keeps_defaults) {
     // loader's tolerance is part of the contract: 25.0 means 1am, and an absent
     // key keeps the component default rather than resetting the whole line.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_tod_parse";
+    auto tmp = nf::test::temp_root() / "nf_scene_tod_parse";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -178,7 +179,7 @@ NF_TEST(scene_without_time_of_day_writes_no_time_of_day_line) {
     // emitted the line would silently add a day/night cycle to every existing
     // level on the first save.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_tod_absent";
+    auto tmp = nf::test::temp_root() / "nf_scene_tod_absent";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -208,7 +209,7 @@ NF_TEST(runtime_advances_the_scene_clock_and_the_sun_follows_it) {
     // actually moves, with no C++ host. Before this, only the samples could do it
     // and a game had to copy one to get a day/night cycle.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_tod_advance";
+    auto tmp = nf::test::temp_root() / "nf_rt_tod_advance";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -287,7 +288,7 @@ NF_TEST(runtime_frozen_clock_does_not_advance) {
     // legitimate authoring choice, so it must render the same frame forever
     // rather than being treated as a broken value.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_tod_frozen";
+    auto tmp = nf::test::temp_root() / "nf_rt_tod_frozen";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -347,7 +348,7 @@ NF_TEST(scene_old_light_line_keeps_shadow_defaults) {
     // from them — so a default light round-trips through a file that never
     // mentions cascades at all, which is what a pre-cascade scene is.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_sky_compat_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_sky_compat_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 

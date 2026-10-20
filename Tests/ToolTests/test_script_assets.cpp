@@ -4,6 +4,7 @@
 // the cooker refuses to cook is a script the packaged game silently loses.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Project/ProjectCooker.hpp>
@@ -21,7 +22,7 @@ using namespace nf::project;
 #endif
 
 NF_TEST(cooker_cooks_lua_as_a_script_asset) {
-    auto tmp = std::filesystem::temp_directory_path() / "nf_cook_lua";
+    auto tmp = nf::test::temp_root() / "nf_cook_lua";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp / "Content" / "Scripts");
     std::filesystem::create_directories(tmp / "Cache");

@@ -1,6 +1,7 @@
 // Tests/RuntimeTests/test_runtime_3b.cpp — Phase 3B Runtime tests (real rendering)
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -20,7 +21,7 @@ using namespace nf::assets;
 using namespace nf::runtime;
 
 static std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::create_directories(p);
     return p;
 }

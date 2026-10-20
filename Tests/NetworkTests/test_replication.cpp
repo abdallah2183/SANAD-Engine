@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -37,6 +38,93 @@ NF_TEST(net_input_codec_roundtrip) {
     std::vector<u8> corrupt = bytes;
     corrupt[12] = 7;
     NF_CHECK(!decode_input(corrupt.data(), corrupt.size(), bad, err));
+}
+
+NF_TEST(net_input_codec_rejects_non_finite_movement) {
+    // A NaN in a movement axis is STICKY: one hostile packet would put NaN
+    // into the authoritative position, into every snapshot published from
+    // then on, and into every client that applies one. The codec refuses it
+    // like every other codec in the module does.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    std::string err;
+    NetInput out;
+    NetInput in;
+    in.tick = 7;
+    in.move_x = nan;
+    NF_CHECK(!decode_input(encode_input(in).data(), 16, out, err));
+    NF_CHECK(!err.empty());
+    in.move_x = 0.0f;
+    in.move_z = inf;
+    NF_CHECK(!decode_input(encode_input(in).data(), 16, out, err));
+    NF_CHECK(!err.empty());
+    in.move_z = -inf;
+    NF_CHECK(!decode_input(encode_input(in).data(), 16, out, err));
+
+    // Gameplay only ever writes the axes in [-1, 1]: anything else is
+    // corruption and is clamped back into the gameplay range.
+    in.move_x = 4.0f;
+    in.move_z = -9.0f;
+    NF_CHECK(decode_input(encode_input(in).data(), 16, out, err));
+    NF_CHECK(out.move_x == 1.0f);
+    NF_CHECK(out.move_z == -1.0f);
+}
+
+NF_TEST(server_input_queue_is_bounded) {
+    // A client can name any tick and any entity: neither may be trusted to
+    // stay small. An unregistered entity is refused, and a tick outside the
+    // window is never stored — otherwise a client could submit ticks
+    // 1..10'000'000 and make the server hold ten million entries.
+    AuthoritativeServer server;
+    server.add_player(1, 0, 0, 0);
+    NF_CHECK(!server.submit_input(999, NetInput{})); // unregistered entity
+
+    NetInput far_future;
+    far_future.tick = 10'000'000;
+    NF_CHECK(!server.submit_input(1, far_future));
+    NF_CHECK(!server.submit_input(1, far_future));
+
+    // A tick inside the window is accepted.
+    NetInput ok;
+    ok.tick = 5;
+    NF_CHECK(server.submit_input(1, ok));
+
+    // Walking the server forward drops the ticks that fell out of the
+    // window instead of holding them forever.
+    for (u32 t = 0; t < 600; ++t) server.tick();
+    NF_CHECK(server.tick_index() == 600);
+}
+
+NF_TEST(snapshot_generation_rejects_a_stale_entity) {
+    // The wire carries a per-entity generation so a stale record for a
+    // RECYCLED id can be rejected: the local id was re-issued after that
+    // snapshot was taken, so the record describes an entity that no longer
+    // exists.
+    NetWorld world;
+    world.add_entity(7, 1.0f, 2.0f, 3.0f);
+    Snapshot snap = world.to_snapshot(1);
+    NF_CHECK(snap.entities.size() == 1);
+    NF_CHECK(snap.entities[0].generation == 1);
+
+    // The id is recycled: a new entity, a new generation.
+    world.add_entity(7, 9.0f, 9.0f, 9.0f);
+    const Snapshot fresh = world.to_snapshot(2);
+    NF_CHECK(fresh.entities[0].generation == 2);
+
+    // The client still holds the OLD entity: the stale record is refused.
+    NetWorld client;
+    client.apply_snapshot(snap);
+    float x = 0, y = 0, z = 0;
+    NF_CHECK(client.position(7, x, y, z));
+    NF_CHECK_NEAR(x, 1.0f, 1e-6f);
+    client.apply_snapshot(fresh);
+    NF_CHECK(client.position(7, x, y, z));
+    NF_CHECK_NEAR(x, 9.0f, 1e-6f);
+
+    // ...and a record that arrives LATE (older generation) never rewinds it.
+    client.apply_snapshot(snap);
+    NF_CHECK(client.position(7, x, y, z));
+    NF_CHECK_NEAR(x, 9.0f, 1e-6f);
 }
 
 NF_TEST(server_integrates_tick_matched_inputs) {

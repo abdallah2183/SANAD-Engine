@@ -1,6 +1,7 @@
 // Tests/AssetTests/test_asset_manager.cpp — AssetManager tests
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -19,7 +20,7 @@ NF_TEST(asset_loading_cooked_nfmesh) {
     auto& device = *f.device;
 
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_mgr_test";
+    auto tmp = nf::test::temp_root() / "nf_asset_mgr_test";
     std::filesystem::create_directories(tmp / "Content" / "Meshes");
     std::filesystem::create_directories(tmp / "Cache" / "Meshes");
     vfs.mount("content://", tmp / "Content");
@@ -66,7 +67,7 @@ NF_TEST(asset_loading_falls_back_to_the_authored_mesh_without_a_cache) {
     const GpuFixture& f = require_gpu();
     (void)f;
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_authored_only_test";
+    auto tmp = nf::test::temp_root() / "nf_asset_authored_only_test";
     std::filesystem::create_directories(tmp / "Content" / "Meshes");
     std::filesystem::create_directories(tmp / "Cache" / "Meshes");
     vfs.mount("content://", tmp / "Content");
@@ -106,7 +107,7 @@ NF_TEST(asset_loading_falls_back_to_the_authored_mesh_without_a_cache) {
 // longer needs a device -- and therefore runs everywhere instead of skipping.
 NF_TEST(asset_cache_identity) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_cache_test";
+    auto tmp = nf::test::temp_root() / "nf_asset_cache_test";
     std::filesystem::create_directories(tmp / "Content");
     std::filesystem::create_directories(tmp / "Cache");
     vfs.mount("content://", tmp / "Content");
@@ -135,7 +136,7 @@ NF_TEST(asset_cache_identity) {
 
 NF_TEST(asset_missing_fails_safely) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_missing_test";
+    auto tmp = nf::test::temp_root() / "nf_asset_missing_test";
     std::filesystem::create_directories(tmp / "Content");
     vfs.mount("content://", tmp / "Content");
     AssetRegistry reg;
@@ -153,7 +154,7 @@ NF_TEST(asset_async_cpu_then_gpu_upload) {
     if (!nf::JobSystem::instance().is_initialized()) nf::JobSystem::instance().init(2);
 
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_async_test";
+    auto tmp = nf::test::temp_root() / "nf_asset_async_test";
     std::filesystem::create_directories(tmp / "Content" / "Meshes");
     std::filesystem::create_directories(tmp / "Cache" / "Meshes");
     vfs.mount("content://", tmp / "Content");
@@ -189,7 +190,7 @@ NF_TEST(asset_async_cpu_then_gpu_upload) {
 // CPU-only since Phase 11, W1, same as asset_cache_identity above.
 NF_TEST(asset_unloading_and_reload_no_leaks) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_asset_unload_test";
+    auto tmp = nf::test::temp_root() / "nf_asset_unload_test";
     std::filesystem::create_directories(tmp / "Content");
     std::filesystem::create_directories(tmp / "Cache");
     vfs.mount("content://", tmp / "Content");

@@ -12,6 +12,7 @@
 // is available rather than reporting a pass that verified nothing.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -47,7 +48,7 @@ struct HeadlessRuntime {
     std::unique_ptr<Runtime> runtime;
 
     HeadlessRuntime() : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / "nf_runtime_scene_script";
+        tmp = nf::test::temp_root() / "nf_runtime_scene_script";
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp);
         vfs.mount("content://", tmp);
@@ -92,7 +93,7 @@ void write_script(VirtualFileSystem& vfs, const std::string& logical, const std:
 
 NF_TEST(script_line_round_trips_through_scene_text) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_script_rt";
+    auto tmp = nf::test::temp_root() / "nf_scene_script_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -125,7 +126,7 @@ NF_TEST(script_line_round_trips_through_scene_text) {
 
 NF_TEST(script_line_rejects_unknown_lang_and_missing_path) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_script_bad";
+    auto tmp = nf::test::temp_root() / "nf_scene_script_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);

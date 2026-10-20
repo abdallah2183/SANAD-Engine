@@ -6,6 +6,7 @@
 // (validation-clean runs, alive-object counters) where pixels don't apply.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/RHI/RHI.hpp>
@@ -247,7 +248,7 @@ NF_TEST(mesh_asset_cook_import) {
     // writes is the one the runtime reads.
     auto cube = StaticMesh::create_cube(1.0f);
 
-    const fs::path tmp = fs::temp_directory_path() / "nfme_roundtrip.nfmesh";
+    const fs::path tmp = nf::test::temp_root() / "nfme_roundtrip.nfmesh";
     auto asset = rendering::make_mesh_asset(*cube, assets::AssetId::generate(),
                                             "content://Meshes/rt.nfmesh");
     NF_CHECK(asset != nullptr);
@@ -303,7 +304,7 @@ NF_TEST(mesh_asset_cook_import_gpu_upload) {
 
     auto cube = StaticMesh::create_cube(1.0f);
 
-    const fs::path tmp = fs::temp_directory_path() / "nfme_roundtrip_gpu.nfmesh";
+    const fs::path tmp = nf::test::temp_root() / "nfme_roundtrip_gpu.nfmesh";
     auto asset = rendering::make_mesh_asset(*cube, assets::AssetId::generate(),
                                             "content://Meshes/rt_gpu.nfmesh");
     std::string err;

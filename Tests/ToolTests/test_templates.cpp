@@ -14,6 +14,7 @@
 // about the built artifact, not about the scene file.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Project/ProjectPackager.hpp>
@@ -73,7 +74,7 @@ struct TemplateSpec {
 };
 
 std::filesystem::path scaffold_dir(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::remove_all(p);
     return p;
 }

@@ -6,6 +6,7 @@
 // names the asset rather than only counting it.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Project/ProjectCooker.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -28,7 +29,7 @@ struct CookSandbox {
     AssetRegistry registry;
 
     explicit CookSandbox(const std::string& name) {
-        root = std::filesystem::temp_directory_path() / name;
+        root = nf::test::temp_root() / name;
         std::filesystem::remove_all(root);
         std::filesystem::create_directories(root / "Content");
         std::filesystem::create_directories(root / "Cache");
@@ -284,7 +285,7 @@ NF_TEST(cooker_cook_all_names_each_failure) {
 
 NF_TEST(cooker_cook_all_fails_on_a_missing_content_root) {
     VirtualFileSystem vfs;
-    vfs.mount("cache://", std::filesystem::temp_directory_path() / "nf_cook_noroot_cache");
+    vfs.mount("cache://", nf::test::temp_root() / "nf_cook_noroot_cache");
     AssetRegistry registry;
     CookReport report;
     std::string err;

@@ -1,6 +1,7 @@
 // Tests/AssetTests/test_vfs.cpp — VFS tests
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 
 #include <filesystem>
@@ -11,7 +12,7 @@ using namespace nf::assets;
 
 NF_TEST(vfs_mount_resolution) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vfs_test_mount";
+    auto tmp = nf::test::temp_root() / "nf_vfs_test_mount";
     std::filesystem::create_directories(tmp);
     auto r = vfs.mount("content://", tmp);
     NF_CHECK(r.ok);
@@ -23,7 +24,7 @@ NF_TEST(vfs_mount_resolution) {
 
 NF_TEST(vfs_path_traversal_rejection) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vfs_test_traversal";
+    auto tmp = nf::test::temp_root() / "nf_vfs_test_traversal";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     auto r1 = vfs.resolve("content://../outside.txt");
@@ -38,7 +39,7 @@ NF_TEST(vfs_path_traversal_rejection) {
 
 NF_TEST(vfs_read_write_inside_mount) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vfs_test_rw";
+    auto tmp = nf::test::temp_root() / "nf_vfs_test_rw";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     std::string text = "hello world";
@@ -52,7 +53,7 @@ NF_TEST(vfs_read_write_inside_mount) {
 
 NF_TEST(vfs_missing_file) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vfs_test_missing";
+    auto tmp = nf::test::temp_root() / "nf_vfs_test_missing";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     auto r = vfs.read_text("content://does_not_exist.txt");
@@ -64,7 +65,7 @@ NF_TEST(vfs_missing_file) {
 
 NF_TEST(vfs_windows_path_normalization) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vfs_test_win";
+    auto tmp = nf::test::temp_root() / "nf_vfs_test_win";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     // Windows backslashes should be normalized to forward slashes
@@ -89,7 +90,7 @@ struct DeleteFixture {
     VirtualFileSystem vfs;
     std::filesystem::path tmp;
     explicit DeleteFixture(const char* name) {
-        tmp = std::filesystem::temp_directory_path() / name;
+        tmp = nf::test::temp_root() / name;
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp / "Meshes" / "Props");
         vfs.mount("content://", tmp);

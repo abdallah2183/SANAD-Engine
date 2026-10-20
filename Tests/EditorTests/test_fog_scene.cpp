@@ -2,6 +2,7 @@
 // save/load round trip, and the two values the line must refuse.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
@@ -26,7 +27,7 @@ const char* kSceneHeader =
 
 NF_TEST(scene_fog_round_trips_through_the_writer) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_ed_fog_rt";
+    auto tmp = nf::test::temp_root() / "nf_ed_fog_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -70,7 +71,7 @@ NF_TEST(scene_fog_round_trips_through_the_writer) {
 
 NF_TEST(scene_fog_one_key_keeps_neutral_defaults) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_ed_fog_min";
+    auto tmp = nf::test::temp_root() / "nf_ed_fog_min";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -97,7 +98,7 @@ NF_TEST(scene_fog_one_key_keeps_neutral_defaults) {
 
 NF_TEST(scene_fog_refuses_negative_colour_and_zero_end) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_ed_fog_bad";
+    auto tmp = nf::test::temp_root() / "nf_ed_fog_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -131,4 +132,4 @@ NF_TEST(scene_fog_refuses_negative_colour_and_zero_end) {
     NF_CHECK(end_warned);
 
     std::filesystem::remove_all(tmp);
-}
+}

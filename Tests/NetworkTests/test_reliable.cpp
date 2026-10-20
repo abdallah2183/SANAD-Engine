@@ -7,6 +7,7 @@
 #include <NF/Networking/Snapshot.hpp>
 #include <NF/Test/TestFramework.hpp>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -105,6 +106,94 @@ NF_TEST(reliable_sequence_wraps_cleanly) {
     NF_CHECK(a.unacked_count() == 0);
 }
 
+NF_TEST(reliable_ack_history_frees_out_of_order_packets) {
+    // The ack history names the sequences that arrived OUT OF ORDER: bit n is
+    // set for the packet (ack + 1 + n). That is the information the sender
+    // needs — a packet sitting in the receiver's out-of-order buffer is
+    // already delivered, so the sender may free it now instead of resending
+    // it until the gap in front of it fills.
+    ReliableChannel a, b;
+    NF_CHECK(a.send_reliable(bytes("A")));
+    NF_CHECK(a.send_reliable(bytes("B")));
+    NF_CHECK(a.send_reliable(bytes("C")));
+    const auto flight = a.poll_outgoing(0);
+    NF_CHECK(flight.size() == 3);
+
+    // Only C arrives: it is buffered, and B is still missing.
+    std::vector<std::vector<u8>> got;
+    for (const auto& payload : b.receive(flight[2])) got.push_back(payload);
+    NF_CHECK(got.empty());
+    NF_CHECK(b.buffered_count() == 1);
+
+    // The ack b sends back names C in the ack history.
+    const auto acks = b.poll_outgoing(0);
+    NF_CHECK(acks.size() == 1);
+    NF_CHECK(acks[0].ack_bits != 0);
+    for (const auto& pkt : acks) {
+        for (const auto& payload : a.receive(pkt)) (void)payload;
+    }
+    // C is freed on the strength of that bit, even though B never arrived:
+    // only A and B are still in flight.
+    NF_CHECK(a.unacked_count() == 2);
+
+    // A arrives next: it is delivered in order and the cumulative ack frees it.
+    for (const auto& payload : b.receive(flight[0])) got.push_back(payload);
+    NF_CHECK(got.size() == 1 && got[0] == bytes("A"));
+    const auto acks2 = b.poll_outgoing(0);
+    for (const auto& pkt : acks2) {
+        for (const auto& payload : a.receive(pkt)) (void)payload;
+    }
+    NF_CHECK(a.unacked_count() == 1); // only B is still missing
+}
+
+NF_TEST(reliable_stream_wraps_without_dropping_payloads) {
+    // 65600 payloads cross the 16-bit wire-sequence wrap (65536). The
+    // in-flight queue is keyed by an INTERNAL 32-bit sequence: the old code
+    // keyed it by the wire sequence, so the second lap collided with the
+    // first and the payload was dropped SILENTLY while the send still
+    // reported success.
+    ReliableChannel a(0, 1000000), b(0, 1000000); // no resends during the run
+    std::vector<std::vector<u8>> got;
+    got.reserve(65600);
+    for (u32 i = 0; i < 65600; ++i) {
+        NF_CHECK(a.send_reliable(bytes("p")));
+        if (i % 64 == 63) {
+            // Deliver a batch and let the acks come home, so the in-flight
+            // queue never grows past its cap.
+            for (const auto& pkt : a.poll_outgoing(i)) {
+                for (const auto& payload : b.receive(pkt)) got.push_back(payload);
+            }
+            for (const auto& pkt : b.poll_outgoing(i)) {
+                for (const auto& payload : a.receive(pkt)) (void)payload;
+            }
+        }
+    }
+    for (const auto& pkt : a.poll_outgoing(65600)) {
+        for (const auto& payload : b.receive(pkt)) got.push_back(payload);
+    }
+    for (const auto& pkt : b.poll_outgoing(65600)) {
+        for (const auto& payload : a.receive(pkt)) (void)payload;
+    }
+    NF_CHECK(got.size() == 65600); // not one payload lost on the way round
+    NF_CHECK(a.unacked_count() == 0);
+}
+
+NF_TEST(reliable_refuses_to_grow_the_queue_without_bound) {
+    // A peer that never acks must not be able to make the sender's queue
+    // grow without limit. The send is REFUSED — and reported — instead of
+    // the payload being dropped silently.
+    ReliableChannel a;
+    usize sent = 0;
+    for (usize i = 0; i < 5000; ++i) {
+        if (a.send_reliable(bytes("x"))) ++sent;
+    }
+    NF_CHECK(sent > 0);
+    NF_CHECK(sent < 5000); // the queue is capped
+    NF_CHECK(a.unacked_count() == sent);
+    NF_CHECK(!a.send_reliable(bytes("x"))); // refused, and REPORTED
+    NF_CHECK(a.unacked_count() == sent);
+}
+
 NF_TEST(reliable_rejects_empty_payload) {
     ReliableChannel a;
     NF_CHECK(!a.send_reliable({}));
@@ -138,6 +227,34 @@ NF_TEST(snapshot_roundtrip_sorted_and_versioned) {
     Snapshot back_empty;
     NF_CHECK(decode_snapshot(empty_bytes.data(), empty_bytes.size(), back_empty, err));
     NF_CHECK(back_empty.tick == 7 && back_empty.entities.empty());
+}
+
+NF_TEST(snapshot_rejects_non_finite_positions) {
+    // A NaN position is STICKY: it survives every integration step, so one
+    // malformed datagram would poison the predicted world and every
+    // snapshot derived from it. The snapshot refuses it like every other
+    // codec in the module.
+    Snapshot s;
+    s.tick = 1;
+    s.entities.push_back(SnapshotEntity{1, 0, 1.0f, 2.0f, 3.0f});
+    const std::vector<u8> good = encode_snapshot(s);
+    Snapshot out;
+    std::string err;
+    NF_CHECK(decode_snapshot(good.data(), good.size(), out, err));
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    Snapshot bad_snapshot;
+    bad_snapshot.tick = 1;
+    bad_snapshot.entities.push_back(SnapshotEntity{1, 0, nan, 0.0f, 0.0f});
+    NF_CHECK(!decode_snapshot(encode_snapshot(bad_snapshot).data(), 14 + 20, out, err));
+    NF_CHECK(!err.empty());
+    bad_snapshot.entities[0].x = 0.0f;
+    bad_snapshot.entities[0].y = inf;
+    NF_CHECK(!decode_snapshot(encode_snapshot(bad_snapshot).data(), 14 + 20, out, err));
+    bad_snapshot.entities[0].y = 0.0f;
+    bad_snapshot.entities[0].z = -inf;
+    NF_CHECK(!decode_snapshot(encode_snapshot(bad_snapshot).data(), 14 + 20, out, err));
 }
 
 NF_TEST(snapshot_rejects_corruption) {

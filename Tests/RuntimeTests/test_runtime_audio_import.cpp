@@ -5,6 +5,7 @@
 // the file is missing).
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Audio/Components.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
@@ -78,7 +79,7 @@ void write_file(const std::filesystem::path& path, const void* data, usize size)
 
 NF_TEST(scene_audio_buffer_resolves_and_decodes) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_import_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_import_test";
     std::filesystem::create_directories(tmp / "Audio");
     std::filesystem::create_directories(tmp / "Scenes");
     vfs.mount("content://", tmp);
@@ -111,7 +112,7 @@ NF_TEST(scene_audio_buffer_resolves_and_decodes) {
 
 NF_TEST(scene_audio_missing_buffer_warns_loudly) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_missing_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_missing_test";
     std::filesystem::create_directories(tmp / "Scenes");
     vfs.mount("content://", tmp);
 

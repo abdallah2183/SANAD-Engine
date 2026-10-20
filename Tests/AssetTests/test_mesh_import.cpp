@@ -12,6 +12,7 @@
 // still checked against a triangle set computed by hand.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/MeshExport.hpp>
 #include <NF/Assets/MeshImport.hpp>
@@ -41,7 +42,7 @@ struct Scratch {
 
     explicit Scratch(const std::string& name) {
         std::error_code ec;
-        root = std::filesystem::temp_directory_path() / name;
+        root = nf::test::temp_root() / name;
         std::filesystem::remove_all(root, ec);
         std::filesystem::create_directories(root, ec);
     }

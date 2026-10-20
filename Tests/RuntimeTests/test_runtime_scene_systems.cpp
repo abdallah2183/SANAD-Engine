@@ -9,6 +9,7 @@
 // NF_SKIP when no Vulkan device is available.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -45,7 +46,7 @@ struct HeadlessRuntime {
     std::unique_ptr<Runtime> runtime;
 
     HeadlessRuntime() : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / "nf_runtime_scene_systems";
+        tmp = nf::test::temp_root() / "nf_runtime_scene_systems";
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp);
         vfs.mount("content://", tmp);
@@ -99,7 +100,7 @@ ecs::Entity add_floor(ecs::World& w) {
 
 NF_TEST(particles_line_round_trips_through_scene_text) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_particles_rt";
+    auto tmp = nf::test::temp_root() / "nf_scene_particles_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -134,7 +135,7 @@ NF_TEST(particles_line_round_trips_through_scene_text) {
 
 NF_TEST(particles_line_rejects_invalid_values) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_particles_bad";
+    auto tmp = nf::test::temp_root() / "nf_scene_particles_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -159,7 +160,7 @@ NF_TEST(particles_line_rejects_invalid_values) {
 
 NF_TEST(cloth_line_round_trips_through_scene_text) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_cloth_rt";
+    auto tmp = nf::test::temp_root() / "nf_scene_cloth_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -190,7 +191,7 @@ NF_TEST(cloth_line_round_trips_through_scene_text) {
 
 NF_TEST(character_line_round_trips_through_scene_text) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_character_rt";
+    auto tmp = nf::test::temp_root() / "nf_scene_character_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -227,7 +228,7 @@ NF_TEST(audio_min_max_distance_round_trips_through_scene_text) {
     // Regression: the inspector edited min/max for months while the loader
     // silently dropped them — every tuned falloff reverted on reopen.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_range";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_range";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);

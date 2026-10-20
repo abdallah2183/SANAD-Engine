@@ -1,6 +1,7 @@
 // Tests/AssetTests/test_registry.cpp — AssetRegistry tests
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 
@@ -9,7 +10,7 @@ using namespace nf::assets;
 
 NF_TEST(registry_save_load_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_reg_test";
+    auto tmp = nf::test::temp_root() / "nf_reg_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -55,7 +56,7 @@ NF_TEST(registry_duplicate_ids) {
 
 NF_TEST(registry_invalid_corrupt) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_reg_corrupt";
+    auto tmp = nf::test::temp_root() / "nf_reg_corrupt";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     // Write a corrupt registry file

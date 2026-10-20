@@ -1,6 +1,7 @@
 // Tests/RuntimeTests/test_runtime_scene.cpp — Scene .nfscene tests
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
@@ -21,7 +22,7 @@ using namespace nf::audio;
 
 NF_TEST(scene_animation_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_anim_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_anim_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -57,7 +58,7 @@ NF_TEST(scene_animation_round_trip) {
 
 NF_TEST(scene_audio_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -97,7 +98,7 @@ NF_TEST(scene_audio_round_trip) {
 
 NF_TEST(scene_animation_audio_combined_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_aa_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_aa_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -141,7 +142,7 @@ NF_TEST(scene_animation_audio_combined_round_trip) {
 
 NF_TEST(scene_save_load_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_rt_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_rt_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -166,7 +167,7 @@ NF_TEST(scene_save_load_round_trip) {
 
 NF_TEST(scene_light_shadow_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_light_shadow_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_light_shadow_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -213,7 +214,7 @@ NF_TEST(scene_light_shadow_round_trip) {
 
 NF_TEST(scene_hierarchy_preservation) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_hierarchy_test";
+    auto tmp = nf::test::temp_root() / "nf_scene_hierarchy_test";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -246,7 +247,7 @@ NF_TEST(scene_hierarchy_preservation) {
 
 NF_TEST(scene_missing_asset_behavior) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_missing_asset";
+    auto tmp = nf::test::temp_root() / "nf_scene_missing_asset";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -267,7 +268,7 @@ NF_TEST(scene_missing_asset_behavior) {
 
 NF_TEST(scene_malformed_rejection) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_malformed";
+    auto tmp = nf::test::temp_root() / "nf_scene_malformed";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -294,7 +295,7 @@ NF_TEST(scene_cyclic_hierarchy_rejection) {
     // Now save and load a scene that has a cycle manually crafted
     // For the test, we just verify that the loader detects cycles
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_cycle";
+    auto tmp = nf::test::temp_root() / "nf_scene_cycle";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     // Manually craft a scene file with a cycle: entity 1 parent 2, entity 2 parent 1
@@ -309,7 +310,7 @@ NF_TEST(scene_cyclic_hierarchy_rejection) {
 
 NF_TEST(scene_version_rejection) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_version";
+    auto tmp = nf::test::temp_root() / "nf_scene_version";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
     vfs.write_text("content://Scenes/old.nfscene", "# SANAD Scene v1\nversion: 999\nname: Old\nentity_count: 0\n");
@@ -330,7 +331,7 @@ NF_TEST(scene_version_rejection) {
 
 NF_TEST(scene_physics_rigid_body_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_phys_rb";
+    auto tmp = nf::test::temp_root() / "nf_scene_phys_rb";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -373,7 +374,7 @@ NF_TEST(scene_physics_rigid_body_round_trip) {
 
 NF_TEST(scene_physics_collider_box_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_phys_col_box";
+    auto tmp = nf::test::temp_root() / "nf_scene_phys_col_box";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -402,7 +403,7 @@ NF_TEST(scene_physics_collider_box_round_trip) {
 
 NF_TEST(scene_physics_collider_sphere_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_phys_col_sph";
+    auto tmp = nf::test::temp_root() / "nf_scene_phys_col_sph";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -429,7 +430,7 @@ NF_TEST(scene_physics_collider_sphere_round_trip) {
 
 NF_TEST(scene_physics_collider_plane_round_trip) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_phys_col_pl";
+    auto tmp = nf::test::temp_root() / "nf_scene_phys_col_pl";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
@@ -459,7 +460,7 @@ NF_TEST(scene_physics_combined_round_trip) {
     // three survive the round-trip together, which is what the runtime relies
     // on when rebuilding bodies from a loaded scene.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_phys_all";
+    auto tmp = nf::test::temp_root() / "nf_scene_phys_all";
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 

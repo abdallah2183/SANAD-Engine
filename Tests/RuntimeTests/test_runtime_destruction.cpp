@@ -15,6 +15,7 @@
 // verified nothing.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -107,7 +108,7 @@ struct HeadlessRuntime {
     std::unique_ptr<Runtime> runtime;
 
     HeadlessRuntime() : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / "nf_runtime_destruction";
+        tmp = nf::test::temp_root() / "nf_runtime_destruction";
         std::filesystem::create_directories(tmp);
         vfs.mount("content://", tmp);
 

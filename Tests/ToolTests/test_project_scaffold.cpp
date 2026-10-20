@@ -1,12 +1,15 @@
 // Tests/ToolTests/test_project_scaffold.cpp — `nf new`
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <string>
 
 using namespace nf;
 using namespace nf::project;
@@ -19,7 +22,7 @@ using namespace nf::assets;
 namespace {
 
 std::filesystem::path scaffold_dir(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::remove_all(p);
     return p;
 }
@@ -67,6 +70,20 @@ NF_TEST(scaffold_creates_the_mount_directories) {
     }
     // Generated output must not be committed.
     NF_CHECK(std::filesystem::exists(root / ".gitignore"));
+
+    // Every generated tree has to be ignored: Cache/ holds the cooked assets,
+    // dist/ the package, and Shaders/ the compiled SPIR-V that `nf build`
+    // stages. A .gitignore that misses one of them drops build output into
+    // the user's repository on the first build.
+    {
+        std::ifstream ignore_file(root / ".gitignore");
+        const std::string ignore((std::istreambuf_iterator<char>(ignore_file)),
+                                 std::istreambuf_iterator<char>());
+        NF_CHECK(ignore.find("Cache/") != std::string::npos);
+        NF_CHECK(ignore.find("dist/") != std::string::npos);
+        NF_CHECK(ignore.find("Shaders/") != std::string::npos);
+    } // the stream is closed here: an open file cannot be removed on Windows
+
     std::filesystem::remove_all(root);
 }
 
@@ -111,6 +128,20 @@ NF_TEST(scaffold_rejects_an_invalid_name) {
 
     ScaffoldOptions empty = opts_for(root, "");
     NF_CHECK(!scaffold_project(empty, err));
+
+    // The name becomes a .nfproj file name, so the rules are the ones Windows
+    // enforces on a file name. A name Explorer cannot open is a project the
+    // user cannot open, and `nf new "My|Game"` used to produce exactly that.
+    for (const char* bad : {"My|Game", "My<Game", "My>Game", "My?Game", "My*Game",
+                            "My\"Game", "My Game.", "My Game ", "CON", "con", "NUL",
+                            "COM1", "LPT9", "Game\x01"}) {
+        ScaffoldOptions invalid = opts_for(root, bad);
+        NF_CHECK(!scaffold_project(invalid, err));
+    }
+
+    // A name Windows accepts still works, including a dot inside it.
+    ScaffoldOptions valid = opts_for(root, "My.Game 2");
+    NF_CHECK(scaffold_project(valid, err));
 
     std::filesystem::remove_all(root);
 }

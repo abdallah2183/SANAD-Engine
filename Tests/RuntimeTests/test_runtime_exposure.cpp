@@ -14,6 +14,7 @@
 // the wrapper or nowhere.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -30,7 +31,7 @@ using namespace nf::runtime;
 
 NF_TEST(runtime_exposure_setter_reaches_the_renderer) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_exposure";
+    auto tmp = nf::test::temp_root() / "nf_rt_exposure";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);

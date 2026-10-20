@@ -8,6 +8,7 @@
 // malformed or future-versioned file instead of a half-parse.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 
@@ -20,7 +21,7 @@ using namespace nf::assets;
 namespace {
 
 std::filesystem::path proj_temp_dir(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::remove_all(p);
     std::filesystem::create_directories(p);
     return p;
@@ -238,7 +239,7 @@ NF_TEST(project_descriptor_apply_mounts_drives_the_vfs) {
 
 NF_TEST(project_descriptor_apply_mounts_names_the_failing_mount) {
     auto desc = ProjectDescriptor::make_default(
-        std::filesystem::temp_directory_path() / "nf_proj_apply_fail", "Fail");
+        nf::test::temp_root() / "nf_proj_apply_fail", "Fail");
     VirtualFileSystem vfs;
     std::string err;
 
@@ -250,13 +251,13 @@ NF_TEST(project_descriptor_apply_mounts_names_the_failing_mount) {
     NF_CHECK(!desc.apply_mounts(vfs, second_err));
     NF_CHECK(second_err.find("project://") != std::string::npos);
 
-    std::filesystem::remove_all(std::filesystem::temp_directory_path() / "nf_proj_apply_fail");
+    std::filesystem::remove_all(nf::test::temp_root() / "nf_proj_apply_fail");
 }
 
 NF_TEST(project_descriptor_load_reports_a_missing_file) {
     std::string err;
     auto d = ProjectDescriptor::load_from_file(
-        std::filesystem::temp_directory_path() / "nf_does_not_exist.nfproj", err);
+        nf::test::temp_root() / "nf_does_not_exist.nfproj", err);
     NF_CHECK(!d.has_value());
     NF_CHECK(!err.empty());
 }

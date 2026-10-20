@@ -7,6 +7,7 @@
 // validation that runs before any launch instead.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Editor/ExternalIde.hpp>
 
 #include <filesystem>
@@ -29,7 +30,7 @@ const char* canned_runner(std::string& out_error) {
 }
 
 std::filesystem::path ide_temp_dir(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::remove_all(p);
     std::filesystem::create_directories(p);
     return p;
@@ -143,4 +144,4 @@ NF_TEST(open_in_ide_refuses_missing_files_before_any_launch) {
                            IdeChoice{IdeKind::VisualStudio, tmp / "devenv.exe"}, err));
     NF_CHECK(!err.empty());
     std::filesystem::remove_all(tmp);
-}
+}

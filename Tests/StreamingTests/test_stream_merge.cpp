@@ -7,6 +7,7 @@
 // so the merge understands exactly what the loader understands.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetId.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Physics/Components.hpp>
@@ -22,7 +23,7 @@ using namespace nf;
 namespace {
 
 std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::create_directories(p);
     return p;
 }

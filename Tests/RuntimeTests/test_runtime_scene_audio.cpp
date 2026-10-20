@@ -17,6 +17,7 @@
 //      driven" failure this engine has shipped before.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -119,7 +120,7 @@ const char* kPlainScene =
 
 NF_TEST(scene_audio_environment_round_trips) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_env_rt";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_env_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -198,7 +199,7 @@ NF_TEST(scene_without_audio_environment_writes_no_lines) {
     // byte — the rule the Sky, TimeOfDay and PostProcess lines follow, and the
     // reason none of them may be written unconditionally.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_audio_env_plain";
+    auto tmp = nf::test::temp_root() / "nf_scene_audio_env_plain";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -262,7 +263,7 @@ NF_TEST(reverb_zone_with_a_non_positive_radius_is_refused) {
 
 NF_TEST(runtime_builds_the_audio_environment_from_the_scene) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_audio_env";
+    auto tmp = nf::test::temp_root() / "nf_rt_audio_env";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp / "Audio");
     std::filesystem::create_directories(tmp / "Scenes");
@@ -325,7 +326,7 @@ NF_TEST(runtime_replaces_the_previous_scene_audio_environment) {
     // opposite of the post-process rule on purpose: those are renderer settings
     // a caller may have configured directly, these are per-scene artefacts.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_audio_env_swap";
+    auto tmp = nf::test::temp_root() / "nf_rt_audio_env_swap";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp / "Audio");
     std::filesystem::create_directories(tmp / "Scenes");

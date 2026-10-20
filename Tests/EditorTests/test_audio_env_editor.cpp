@@ -10,6 +10,7 @@
 // decoded samples when the path did not change.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -252,7 +253,7 @@ NF_TEST(editor_set_music_resolves_the_path_and_keeps_the_samples) {
     const nf::test::GpuFixture& f = nf::test::require_gpu();
     auto& device = *f.device;
 
-    auto tmp = std::filesystem::temp_directory_path() / "nf_ed_audio_env";
+    auto tmp = nf::test::temp_root() / "nf_ed_audio_env";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp / "Content" / "Audio");
     std::filesystem::create_directories(tmp / "Cache");
@@ -328,4 +329,4 @@ NF_TEST(editor_set_music_resolves_the_path_and_keeps_the_samples) {
     }
 
     std::filesystem::remove_all(tmp);
-}
+}

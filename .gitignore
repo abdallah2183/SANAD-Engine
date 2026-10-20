@@ -77,6 +77,20 @@ Samples/MedievalVillage/Content/Medieval/Textures/
 # needed to build, and it contains copies of shipped binaries.
 .work/
 
+# Test scratch roots. The suites write their fixtures into the system temp
+# directory when the process may write there, and into .nftest/ when it may
+# not (a sandboxed CI, a machine under an application-control policy).
+# .nf_scratch/ is the same idea for a running process: the editor's import
+# validation writes a temporary copy of a scene it is checking.
+.nftest/
+.nf_scratch/
+
+# Development screenshots: 6.9 MB of working captures (two 2.6 MB BMPs
+# included) that were being tracked alongside the curated ones. The curated
+# screenshots live in Docs/images/ and website/assets/screenshots/; these are
+# the scratch copies and are not part of the documentation.
+shots/
+
 # Session scratch: build logs, probes
 build_out.txt
 editor_tests_out.txt

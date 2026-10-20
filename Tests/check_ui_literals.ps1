@@ -18,8 +18,13 @@
 # - SANAD ............ product brand (never translated)
 # - content:// ........... technical URI prefix (paths, not wording)
 # - Ctrl+/Del ............ physical keyboard shortcuts (printed on the keys)
+# - "F1" ................... function-key shortcut hint, same reason as Del
 # - viewport lit=, Frame %, GPU %, Render CPU, Memory:, session events,
 #   [import # ............ profiler/debug diagnostics (technical counters)
+# - "%u x %u" ............. viewport dimensions (a measurement, not wording)
+# - "%.1f h" .............. the time-of-day slider's unit suffix
+# - "Entity %u (gen %u)" ... entity id/generation diagnostic (English on
+#   purpose, like every other technical diagnostic in the editor)
 # - no widget for this type, unregistered enum ... reflected-inspector
 #   diagnostics for unsupported metadata (developer-facing, like log lines)
 
@@ -29,10 +34,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$files = @(
-    (Join-Path $RepoRoot 'Editor/src/ui/Toolbar.cpp'),
-    (Join-Path $RepoRoot 'Editor/src/ui/Panels.cpp')
-)
+# Every file in Editor/src/ui that draws with ImGui. The list used to hold two
+# of the seven, so five panels were never checked at all — a gate that covers
+# 2 of 7 files is a sample, not a gate. The whole directory is scanned now,
+# and it is a GLOB: a hard-coded list would silently stop covering a panel
+# the day someone adds one.
+$uiDir = Join-Path $RepoRoot 'Editor/src/ui'
+if (-not (Test-Path -LiteralPath $uiDir)) {
+    Write-Error " The editor UI directory is missing: $uiDir"
+    exit 1
+}
+$files = @(Get-ChildItem -LiteralPath $uiDir -Filter '*.cpp' | Sort-Object Name | ForEach-Object { $_.FullName })
+if ($files.Count -eq 0) {
+    Write-Error " No editor UI sources found under $uiDir - the gate would check nothing."
+    exit 1
+}
 
 $widgetCall = 'ImGui::(Text|TextDisabled|TextWrapped|TextUnformatted|TextColored|Button|SmallButton|MenuItem|Checkbox|RadioButton|Combo|Begin|BeginMenu|BeginChild|InputText|InputTextWithHint|DragFloat|DragFloat3|SliderFloat|SliderInt|ColorEdit3|Selectable|SeparatorText|SetTooltip|BulletText)\s*\('
 $literal = '"((?:[^"\\]|\\.)*)"'
@@ -45,6 +61,8 @@ $allowLine = @(
     'content://',
     'Ctrl\+',
     '"Del"',
+    '"F1"',
+    '\(Esc\)',
     'viewport lit=',
     'Frame %',
     'GPU %',
@@ -52,6 +70,9 @@ $allowLine = @(
     'Memory:',
     'session events',
     '\[import #',
+    '"%u x %u"',
+    '"%.1f h"',
+    '"Entity %u \(gen %u\)"',
     'no widget for this type',
     'unregistered enum'
 )

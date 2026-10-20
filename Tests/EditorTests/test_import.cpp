@@ -1,12 +1,14 @@
 // Editor import queue: external files become content assets (or clean errors).
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/MeshAsset.hpp>
 #include <NF/Assets/MeshExport.hpp>
 #include <NF/Assets/MeshImport.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Editor/ImportQueue.hpp>
+#include <NF/Editor/AssetRegistryPaths.hpp>
 #include <NF/Jobs/JobSystem.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
 #include <NF/Rendering/MeshUpload.hpp>
@@ -22,9 +24,28 @@ using namespace nf;
 using namespace nf::assets;
 
 static std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
+    // A scratch directory that starts EMPTY. It used to be created on top of
+    // whatever the previous run left behind, so one failed run (which skips
+    // its own cleanup) made every later run fail on a destination that
+    // "already exists" — a failure that had nothing to do with the code
+    // under test.
+    std::filesystem::remove_all(p);
     std::filesystem::create_directories(p);
     return p;
+}
+
+// The registry entry for a logical path, whichever spelling it is stored
+// under.
+//
+// The registry keys a path by an EXACT string, and the editor stores the
+// CANONICAL spelling of it — lowercased on Windows, where the filesystem is
+// case-insensitive — so that one file is one asset with one name. This is
+// the editor's own lookup, and it is what "the import registered the asset"
+// means.
+static const assets::AssetMetadata* registered(const assets::AssetRegistry& reg,
+                                               const std::string& logical) {
+    return nf::editor::find_asset(reg, logical);
 }
 
 static void write_file(const std::filesystem::path& p, const std::vector<uint8_t>& bytes) {
@@ -137,7 +158,7 @@ NF_TEST(import_mesh_file_case) {
     // Content copy + cooked copy + registry entry, all consistent.
     NF_CHECK(vfs.exists("content://Meshes/cube.nfmesh").value);
     NF_CHECK(vfs.exists("cache://Meshes/cube.nfmesh").value);
-    const AssetMetadata* meta = reg.find_by_path("content://Meshes/cube.nfmesh");
+    const AssetMetadata* meta = registered(reg, "content://Meshes/cube.nfmesh");
     NF_CHECK(meta != nullptr);
     NF_CHECK(meta->type == AssetType::Mesh);
     NF_CHECK(meta->id == q.jobs()[0].assigned_id);
@@ -163,7 +184,7 @@ NF_TEST(import_texture_file) {
     NF_CHECK(q.submit(src.string(), "content://Textures", false, err) != 0);
     q.process_all(vfs, reg);
     NF_CHECK(q.jobs()[0].state == editor::ImportJob::State::Done);
-    const AssetMetadata* meta = reg.find_by_path("content://Textures/red.bmp");
+    const AssetMetadata* meta = registered(reg, "content://Textures/red.bmp");
     NF_CHECK(meta != nullptr);
     NF_CHECK(meta->type == AssetType::Texture);
     NF_CHECK(vfs.exists("cache://Textures/red.bmp").value);
@@ -312,8 +333,8 @@ NF_TEST(import_async_completes_on_workers) {
         NF_CHECK(j.progress > 0.99f);
     }
     // Same end state as the synchronous path would produce.
-    NF_CHECK(reg.find_by_path("content://Meshes/cube.nfmesh") != nullptr);
-    NF_CHECK(reg.find_by_path("content://Textures/red.bmp") != nullptr);
+    NF_CHECK(registered(reg, "content://Meshes/cube.nfmesh") != nullptr);
+    NF_CHECK(registered(reg, "content://Textures/red.bmp") != nullptr);
     NF_CHECK(reg.size() == 2u);
     NF_CHECK(vfs.exists("content://Materials/Blue.nfmat").value);
     NF_CHECK(q.jobs()[0].assigned_id.valid() && q.jobs()[1].assigned_id.valid());
@@ -418,7 +439,7 @@ NF_TEST(import_accepts_every_format_the_dialog_offers) {
         NF_CHECK(job.dst_logical.size() > 7);
         NF_CHECK(job.dst_logical.substr(job.dst_logical.size() - 7) == ".nfmesh");
         NF_CHECK(fx.vfs.exists(job.dst_logical).value);
-        NF_CHECK(fx.reg.find_by_path(job.dst_logical) != nullptr);
+        NF_CHECK(registered(fx.reg, job.dst_logical) != nullptr);
     }
 }
 
@@ -447,7 +468,7 @@ NF_TEST(import_glb_source_cooks_to_a_registered_nfmesh) {
     NF_CHECK(fx.vfs.exists("content://Meshes/Hero.nfmesh").value);
     NF_CHECK(fx.vfs.exists("cache://Meshes/Hero.nfmesh").value);
 
-    const assets::AssetMetadata* meta = fx.reg.find_by_path("content://Meshes/Hero.nfmesh");
+    const assets::AssetMetadata* meta = registered(fx.reg, "content://Meshes/Hero.nfmesh");
     NF_CHECK(meta != nullptr);
     NF_CHECK(meta->type == assets::AssetType::Mesh);
     NF_CHECK(meta->id == done.assigned_id);
@@ -492,8 +513,8 @@ NF_TEST(import_multi_mesh_source_writes_one_nfmesh_per_mesh) {
     NF_CHECK(fx.vfs.exists("content://Meshes/Tank_1.nfmesh").value);
     NF_CHECK(fx.vfs.exists("cache://Meshes/Tank_1.nfmesh").value);
     NF_CHECK(fx.reg.size() == 2u);
-    NF_CHECK(fx.reg.find_by_path("content://Meshes/Tank.nfmesh") != nullptr);
-    NF_CHECK(fx.reg.find_by_path("content://Meshes/Tank_1.nfmesh") != nullptr);
+    NF_CHECK(registered(fx.reg, "content://Meshes/Tank.nfmesh") != nullptr);
+    NF_CHECK(registered(fx.reg, "content://Meshes/Tank_1.nfmesh") != nullptr);
 }
 
 NF_TEST(import_surfaces_what_the_reader_could_not_carry) {
@@ -591,7 +612,7 @@ NF_TEST(import_model_writes_its_textures_and_materials) {
     NF_CHECK(fx.vfs.exists("content://Textures/Panel_wood.png").value);
     NF_CHECK(fx.vfs.exists("cache://Textures/Panel_wood.png").value);
     const assets::AssetMetadata* texture =
-        fx.reg.find_by_path("content://Textures/Panel_wood.png");
+        registered(fx.reg, "content://Textures/Panel_wood.png");
     NF_CHECK(texture != nullptr);
     if (texture != nullptr) {
         NF_CHECK(texture->type == assets::AssetType::Texture);
@@ -682,5 +703,5 @@ NF_TEST(import_model_overwrite_replaces_textures_and_materials_too) {
     fx.queue.process_all(fx.vfs, fx.reg);
     NF_CHECK(fx.queue.jobs()[2].state == editor::ImportJob::State::Done);
     NF_CHECK(fx.reg.size() == 1u);
-    NF_CHECK(fx.reg.find_by_path("content://Meshes/Panel.nfmesh") != nullptr);
-}
+    NF_CHECK(registered(fx.reg, "content://Meshes/Panel.nfmesh") != nullptr);
+}

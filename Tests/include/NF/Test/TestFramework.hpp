@@ -10,6 +10,11 @@
 #include <vector>
 #include <iostream>
 #include <cstdint>
+// std::abs for the floating-point comparison in NF_CHECK_NEAR, and for the
+// integral overload. The header used to rely on a transitive include, which
+// is one refactor away from failing to compile.
+#include <cmath>
+#include <cstdlib>
 
 namespace nf::test {
 
@@ -40,6 +45,10 @@ public:
     /// Runs every registered case (optionally only those whose name contains
     /// `filter`, for isolating a single test in its own process — GPU tests
     /// poison a shared device when they misbehave, so isolation matters).
+    ///
+    /// Returns 0 only when at least one case ran and none failed: a run that
+    /// executed nothing (a filter that matches no case, an empty suite) is a
+    /// failure, not a pass.
     int run_all(const std::string& filter = {}) {
         u32 passed = 0;
         u32 failed = 0;
@@ -60,6 +69,15 @@ public:
             } catch (const std::exception& e) {
                 std::cout << "[  FAILED  ] " << tc.name << " — " << e.what() << "\n";
                 ++failed;
+            } catch (...) {
+                // A test that throws anything that is not a std::exception
+                // (an int, a std::string) used to escape run_all entirely,
+                // unwind through main and terminate the whole suite: every
+                // test after it never ran and no summary was ever printed.
+                // It is a failure of THAT test, so it is counted as one.
+                std::cout << "[  FAILED  ] " << tc.name
+                          << " — unknown exception (not derived from std::exception)\n";
+                ++failed;
             }
         }
 
@@ -69,6 +87,21 @@ public:
         std::cout << "Passed: " << passed << " | Failed: " << failed
                   << " | Skipped: " << skipped << " | Total: " << run << "\n";
         std::cout << "========================================\n";
+
+        // A run that executed nothing is not a green run. A filter that
+        // matches no case is a typo (a renamed test, a wrong substring), and
+        // reporting "0 passed | 0 failed" with exit code 0 let exactly that
+        // look like a success. The summary LINE format is unchanged — the CI
+        // and Scripts/run_tests.sh both parse it — so the explanation goes on
+        // its own line after it.
+        if (run == 0) {
+            if (!filter.empty()) {
+                std::cout << "No test matched the filter '" << filter << "'.\n";
+            } else {
+                std::cout << "No test case is registered — this suite verifies nothing.\n";
+            }
+            return 1;
+        }
 
         return failed == 0 ? 0 : 1;
     }
@@ -112,10 +145,18 @@ struct TestRegistrar {
         } \
     } while (0)
 
+/// Approximate comparison with an explicit tolerance.
+///
+/// The comparison is NEGATED, not reversed. Every IEEE-754 comparison that
+/// involves NaN is false, so "abs(a - b) > eps" is false for a NaN and the
+/// check would silently PASS on the one value a broken matrix, a zero-length
+/// normal or a divide-by-zero actually produces — the worst possible blind
+/// spot in a graphics/physics test. "!(abs(a - b) <= eps)" is true for NaN
+/// and leaves a normal passing comparison unaffected.
 #define NF_CHECK_NEAR(a, b, eps) \
     do { \
-        if (std::abs((a) - (b)) > (eps)) { \
-            throw std::runtime_error(std::string("NF_CHECK_NEAR failed: |" #a " - " #b "| > " #eps " at ") + \
+        if (!(std::abs((a) - (b)) <= (eps))) { \
+            throw std::runtime_error(std::string("NF_CHECK_NEAR failed: |" #a " - " #b "| is not within " #eps " at ") + \
                 std::string(__FILE__) + ":" + std::to_string(__LINE__)); \
         } \
     } while (0)

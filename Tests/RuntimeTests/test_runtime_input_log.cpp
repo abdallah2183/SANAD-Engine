@@ -12,6 +12,7 @@
 // everything the simulation consumed.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -110,7 +111,7 @@ private:
 class InputHarness {
 public:
     explicit InputHarness(const std::string& tag) {
-        m_tmp = std::filesystem::temp_directory_path() / ("nf_input_" + tag);
+        m_tmp = nf::test::temp_root() / ("nf_input_" + tag);
         std::filesystem::remove_all(m_tmp);
         std::filesystem::create_directories(m_tmp / "Content" / "Scenes");
         m_vfs.mount("content://", m_tmp / "Content");
@@ -202,7 +203,7 @@ void write_move_log(const std::filesystem::path& file, int frames, float value) 
 } // namespace
 
 NF_TEST(replay_flag_loads_a_log_file_from_disk) {
-    auto dir = std::filesystem::temp_directory_path() / "nf_replay_flag_load";
+    auto dir = nf::test::temp_root() / "nf_replay_flag_load";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const auto log_file = dir / "session.nfinput";
@@ -224,7 +225,7 @@ NF_TEST(replay_flag_loads_a_log_file_from_disk) {
 }
 
 NF_TEST(replay_flag_rejects_a_missing_file) {
-    auto dir = std::filesystem::temp_directory_path() / "nf_replay_flag_missing";
+    auto dir = nf::test::temp_root() / "nf_replay_flag_missing";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
 
@@ -244,7 +245,7 @@ NF_TEST(replay_flag_rejects_a_missing_file) {
 }
 
 NF_TEST(replay_flag_distinguishes_an_empty_log_from_a_corrupt_one) {
-    auto dir = std::filesystem::temp_directory_path() / "nf_replay_flag_corrupt";
+    auto dir = nf::test::temp_root() / "nf_replay_flag_corrupt";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
 
@@ -326,7 +327,7 @@ NF_TEST(a_log_from_disk_drives_the_entity_through_a_fresh_runtime) {
     }
     harness.write_scene("content://Scenes/Input.nfscene");
 
-    auto dir = std::filesystem::temp_directory_path() / "nf_replay_from_file";
+    auto dir = nf::test::temp_root() / "nf_replay_from_file";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const auto log_file = dir / "drive.nfinput";
@@ -433,7 +434,7 @@ NF_TEST(a_recorded_log_replays_to_the_same_place_it_was_recorded) {
     }
     harness.write_scene("content://Scenes/Input.nfscene");
 
-    auto dir = std::filesystem::temp_directory_path() / "nf_replay_determinism";
+    auto dir = nf::test::temp_root() / "nf_replay_determinism";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const auto log_file = dir / "session.nfinput";

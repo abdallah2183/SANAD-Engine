@@ -1,6 +1,7 @@
 // Tests/RuntimeTests/test_runtime.cpp — Runtime/Application tests
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/Application.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
@@ -19,7 +20,7 @@ using namespace nf::assets;
 
 NF_TEST(runtime_headless_load_scene) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_runtime_headless";
+    auto tmp = nf::test::temp_root() / "nf_runtime_headless";
     std::filesystem::create_directories(tmp / "Content" / "Scenes");
     std::filesystem::create_directories(tmp / "Cache" / "Meshes");
     vfs.mount("content://", tmp / "Content");

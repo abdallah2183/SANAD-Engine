@@ -2,6 +2,7 @@
 // dirty protection, and deletion safety — all pixel-proven where it matters.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -24,7 +25,7 @@ using namespace nf::test;
 using namespace nf::assets;
 
 static std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::filesystem::create_directories(p);
     return p;
 }
@@ -361,4 +362,4 @@ NF_TEST(hotreload_mesh_rebuilds_live) {
     device.wait_idle();
     std::filesystem::remove_all(hs.tmp);
     rhi::reset_validation_error_count();
-}
+}

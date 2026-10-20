@@ -1,6 +1,7 @@
 // Tests/RHITests/test_rendering_pipeline.cpp — Pipeline Cache + Shader Hot Reload + Reflection tests
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Assert.hpp>
@@ -355,7 +356,7 @@ NF_TEST(shader_compile_failure_keeps_previous_version) {
     auto& dev = *f.device;
 
     // Create a temp shader file with valid GLSL
-    std::filesystem::path tmp = std::filesystem::temp_directory_path() / "nf_test_shader.frag";
+    std::filesystem::path tmp = nf::test::temp_root() / "nf_test_shader.frag";
     {
         std::ofstream out(tmp);
         out << "#version 450\nlayout(location=0) out vec4 c; void main(){ c = vec4(1,0,0,1); }";
@@ -393,7 +394,7 @@ NF_TEST(shader_reload_rebuilds_pipeline) {
     auto rp=dev.create_render_pass(rpd);
 
     // Create a temp shader file
-    std::filesystem::path tmp = std::filesystem::temp_directory_path() / "nf_test_reload.frag";
+    std::filesystem::path tmp = nf::test::temp_root() / "nf_test_reload.frag";
     {
         std::ofstream out(tmp);
         out << "#version 450\nlayout(location=0) out vec4 c; void main(){ c = vec4(1,0,0,1); }";
@@ -458,7 +459,7 @@ NF_TEST(shader_async_compile_via_job_system) {
         nf::JobSystem::instance().init(2);
     }
 
-    std::filesystem::path tmp = std::filesystem::temp_directory_path() / "nf_test_async.frag";
+    std::filesystem::path tmp = nf::test::temp_root() / "nf_test_async.frag";
     {
         std::ofstream out(tmp);
         out << "#version 450\nlayout(location=0) out vec4 c; void main(){ c = vec4(0,0,1,1); }";

@@ -22,6 +22,7 @@ add_executable(CoreTests
     CoreTests/test_reflection.cpp
     CoreTests/test_profiler.cpp
     CoreTests/test_crash_handler.cpp
+    CoreTests/test_testframework.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)
@@ -108,6 +109,16 @@ if(NF_GLSLC_EXECUTABLE)
     add_dependencies(RHITests NFTriangleShaders NFQuadShaders NFRHIPushShaders
         NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders
         NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
+    # The present pass is its own shader target (present_vert.spv /
+    # present_frag.spv). Renderer3D::present_texture() — the path
+    # Runtime::update() takes every frame — loads those two files, and
+    # without them the present stage loses its pipeline and the frame never
+    # reaches the screen. Editor/CMakeLists.txt already depends on this
+    # target; the test suites did not, so a suite that renders could be
+    # pointed at a shader directory with no present pass in it.
+    if(TARGET NFBasic3DPresentShaders)
+        add_dependencies(RHITests NFBasic3DPresentShaders)
+    endif()
 endif()
 
 add_executable(AssetTests
@@ -340,8 +351,19 @@ target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)
 nf_target_set_warnings(NetworkTests)
 # The binary-spawn test needs the built server exe's absolute path (spaces in
 # the repo path are quoted by the test itself).
-target_compile_definitions(NetworkTests PRIVATE "NF_SERVER_EXE=\"$<TARGET_FILE:SANADServer>\"")
-add_dependencies(NetworkTests SANADServer)
+#
+# SANADServer is a SAMPLE target, so it only exists when the samples are
+# built. Referencing a non-existent target in a generator expression is a
+# configure-time error, not a warning: with -DNF_BUILD_SAMPLES=OFF the whole
+# configure failed with "Error evaluating generator expression". The spawn
+# test is skipped when the path is empty, which is what the sample-less
+# configuration needs.
+if(TARGET SANADServer)
+    target_compile_definitions(NetworkTests PRIVATE "NF_SERVER_EXE=\"$<TARGET_FILE:SANADServer>\"")
+    add_dependencies(NetworkTests SANADServer)
+else()
+    target_compile_definitions(NetworkTests PRIVATE "NF_SERVER_EXE=\"\"")
+endif()
 
 # --- AI tests (grid pathfinding, behavior trees, perception, state machines) ---
 add_executable(AITests
@@ -493,6 +515,12 @@ if(NF_GLSLC_EXECUTABLE)
     # The packager copies these, so they must exist before the tests run.
     add_dependencies(ToolTests NFBasic3DDepthShaders NFBasic3DGBufferShaders
         NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
+    # The present pass too: a packaged scene is driven through the Runtime,
+    # whose frame ends in Renderer3D::present_texture(), and the packaged
+    # shader set has to carry present_vert.spv / present_frag.spv with it.
+    if(TARGET NFBasic3DPresentShaders)
+        add_dependencies(ToolTests NFBasic3DPresentShaders)
+    endif()
 endif()
 
 # --- Editor tests (window-independent editor logic + headless GPU viewport) ---
@@ -569,27 +597,9 @@ if(NF_BUILD_EDITOR)
     endif()
 endif()
 
-# Temporary crash probe (remove before closing the milestone)
-add_executable(HeadlessProbe EXCLUDE_FROM_ALL
-    HeadlessProbe.cpp
-)
-target_include_directories(HeadlessProbe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(HeadlessProbe PRIVATE NFCore NFRHI NFRendering NFEcs NFScene NFRuntime)
-target_compile_definitions(HeadlessProbe PRIVATE
-    "NF_RHI_TEST_SHADER_DIR=\"${NF_TRIANGLE_SHADER_DIR}\""
-    "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
-)
-if(NF_GLSLC_EXECUTABLE)
-    add_dependencies(HeadlessProbe NFTriangleShaders NFBasic3DDepthShaders
-        NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders)
-endif()
-if(MSVC)
-    set_property(TARGET HeadlessProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
 # MSVC: match the static runtime used by engine libraries
 if(MSVC)
-    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests HeadlessProbe ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests Scene2DTests DestructionTests PerfTests FoliageTests WaterTests)
+    foreach(_t nf_test_framework CoreTests JobTests ECSTests AssetTests RuntimeTests RHITests PhysicsTests AnimationTests AudioTests GameplayTests SaveTests StreamingTests ToolTests ScriptTests UITests PlatformTests InputTests NetworkTests AITests VFXTests Scene2DTests DestructionTests PerfTests FoliageTests WaterTests)
         set_property(TARGET ${_t} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     if(NF_BUILD_EDITOR)

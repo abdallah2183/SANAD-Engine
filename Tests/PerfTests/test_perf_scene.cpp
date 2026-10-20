@@ -39,6 +39,7 @@
 #endif
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -271,7 +272,7 @@ struct PerfHarness {
     std::unique_ptr<Runtime> runtime;
 
     PerfHarness() : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / "nf_perf_gate";
+        tmp = nf::test::temp_root() / "nf_perf_gate";
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp / "Content" / "Scenes");
         std::filesystem::create_directories(tmp / "Content" / "Materials");
@@ -580,7 +581,7 @@ double measure_mesh_law_scene(MeshLawHarness& h,
 /// the report blamed.
 double measure_mesh_law(u32 entities, u32 distinct_meshes, u32& out_draws) {
     MeshLawHarness h;
-    h.tmp = std::filesystem::temp_directory_path() /
+    h.tmp = nf::test::temp_root() /
             ("nf_mesh_law_" + std::to_string(entities) + "_" +
              std::to_string(distinct_meshes));
     std::filesystem::remove_all(h.tmp);
@@ -866,7 +867,7 @@ NF_TEST(perf_gate_reports_but_does_not_fail_on_another_machines_timing) {
 // proof that a regression fails loudly — it runs on every machine, GPU or not.
 NF_TEST(perf_gate_fails_loudly_on_a_deliberate_regression) {
     const std::filesystem::path csv =
-        std::filesystem::temp_directory_path() / "nf_perf_gate_selftest.csv";
+        nf::test::temp_root() / "nf_perf_gate_selftest.csv";
     {
         std::ofstream out(csv);
         NF_CHECK(static_cast<bool>(out));

@@ -465,7 +465,11 @@ NF_TEST(applier_clone_over_the_wire) {
     NF_CHECK(applier.constraints().has(71));
 }
 
-NF_TEST(applier_clone_with_missing_template_fails_loudly) {
+NF_TEST(applier_clone_with_missing_template_is_deferred_not_failed) {
+    // A Clone whose TEMPLATE joint has not been applied yet cannot be
+    // built, but it must not be FAILED either: the template is one reliable
+    // packet away, and failing the clone permanently would lose the joint
+    // for good. The clone waits, and lands the moment the template does.
     FakeWorld world;
     ConstraintApplier applier(world);
     ApplyResult r;
@@ -473,7 +477,7 @@ NF_TEST(applier_clone_with_missing_template_fails_loudly) {
     NF_CHECK(applier.apply_body(encode_body_event(make_body_spawn(1, 1, 0, 0, 0)), r, err));
     NF_CHECK(applier.apply_body(encode_body_event(make_body_spawn(2, 1, 1, 0, 0)), r, err));
 
-    // Clone references a template net id that was never spawned.
+    // Clone references a template net id that has not been spawned.
     ConstraintEvent clone;
     clone.op = ConstraintOp::Clone;
     clone.net_id = 71;
@@ -481,8 +485,22 @@ NF_TEST(applier_clone_with_missing_template_fails_loudly) {
     clone.body_a = 1;
     clone.body_b = 2;
     NF_CHECK(applier.apply_constraint(encode_constraint_event(clone), r, err));
-    NF_CHECK(r.failed_events == 1);
+    NF_CHECK(r.deferred_events == 1);
+    NF_CHECK(r.failed_events == 0); // deferred, NOT dropped
     NF_CHECK(world.count(RecordedCall::Kind::Clone) == 0);
+    NF_CHECK(applier.pending_count() == 1);
+
+    // The template arrives: the deferred clone lands with it.
+    r = ApplyResult{};
+    NF_CHECK(applier.apply_constraint(
+        encode_constraint_event(make_joint_spawn(ConstraintKind::Hinge, 999, 1, 2)), r, err));
+    NF_CHECK(r.constraints_spawned == 1);
+    r = ApplyResult{};
+    applier.flush_pending(r);
+    NF_CHECK(r.constraints_cloned == 1);
+    NF_CHECK(world.count(RecordedCall::Kind::Clone) == 1);
+    NF_CHECK(applier.pending_count() == 0);
+    NF_CHECK(applier.constraints().has(71));
 }
 
 NF_TEST(applier_reports_physics_failures) {
@@ -734,6 +752,24 @@ NF_TEST(body_event_rejects_bad_physics_values) {
     e = make_body_spawn(5, 1, 0, 0, 0);
     e.x = std::numeric_limits<float>::quiet_NaN();
     NF_CHECK(!decode_body_event(encode_body_event(e).data(), 49, bad, err));
+}
+
+NF_TEST(applier_caps_the_deferred_joint_queue) {
+    // A peer naming body ids that never arrive would fill the waiting room
+    // forever, and flush_pending() scans it on every packet. The queue is
+    // capped: the OLDEST wait is dropped and counted as a failure, so both
+    // the memory and the scan cost stay bounded.
+    FakeWorld world;
+    ConstraintApplier applier(world);
+    ApplyResult r;
+    std::string err;
+    for (u32 i = 0; i < 1100; ++i) {
+        NF_CHECK(applier.apply_constraint(
+            encode_constraint_event(make_joint_spawn(ConstraintKind::Fixed, 1000 + i, 1, 2)), r, err));
+    }
+    NF_CHECK(applier.pending_count() <= 1024);
+    NF_CHECK(r.failed_events > 0); // the overflow was counted, not hidden
+    NF_CHECK(r.deferred_events == 1100);
 }
 
 NF_TEST(applier_body_remove_tears_down_its_joints) {

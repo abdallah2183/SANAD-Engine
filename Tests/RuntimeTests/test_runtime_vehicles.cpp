@@ -12,6 +12,7 @@
 // Vulkan device is available (the Runtime constructs a renderer on adopt).
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -49,7 +50,7 @@ struct HeadlessRuntime {
     std::unique_ptr<Runtime> runtime;
 
     explicit HeadlessRuntime(const char* dir) : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / dir;
+        tmp = nf::test::temp_root() / dir;
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp);
         vfs.mount("content://", tmp);
@@ -136,7 +137,7 @@ physics::VehicleComponent* car_component(HeadlessRuntime& env, ecs::Entity car) 
 
 NF_TEST(vehicle_line_round_trips_through_scene_text) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vehicle_rt";
+    auto tmp = nf::test::temp_root() / "nf_vehicle_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -185,7 +186,7 @@ NF_TEST(vehicle_line_round_trips_through_scene_text) {
 
 NF_TEST(vehicle_line_refuses_impossible_values) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_vehicle_bad";
+    auto tmp = nf::test::temp_root() / "nf_vehicle_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);

@@ -12,6 +12,7 @@
 //      is the test that would have caught it.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -46,7 +47,7 @@ NF_TEST(scene_post_process_round_trip) {
     // writer emits but the parser does not read (or vice versa) is exactly the
     // drift a round trip catches and a hand-written fixture does not.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_pp_rt";
+    auto tmp = nf::test::temp_root() / "nf_scene_pp_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -152,7 +153,7 @@ NF_TEST(scene_post_process_line_keeps_defaults_for_absent_keys) {
     // must be a complete line: `bloom=true` alone means "bloom with the default
     // threshold, knee, intensity and radius", not "bloom with zeroes".
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_pp_min";
+    auto tmp = nf::test::temp_root() / "nf_scene_pp_min";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -187,7 +188,7 @@ NF_TEST(scene_post_process_line_refuses_a_zero_radius) {
     // that blurs nothing, which reads as "bloom is broken" rather than "bloom is
     // misconfigured". The line is ignored with a warning that names the key.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_pp_bad";
+    auto tmp = nf::test::temp_root() / "nf_scene_pp_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -215,7 +216,7 @@ NF_TEST(scene_without_post_process_writes_no_line) {
     // add a post block to every existing level on its first save, and — because
     // the defaults are neutral — nobody would notice until someone edited one.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_pp_absent";
+    auto tmp = nf::test::temp_root() / "nf_scene_pp_absent";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -244,7 +245,7 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
     // renderer's own state, not a counter, because "the component exists" is
     // true even when nothing reads it.
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_rt_pp_apply";
+    auto tmp = nf::test::temp_root() / "nf_rt_pp_apply";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -385,7 +386,7 @@ NF_TEST(scene_fog_keeps_defaults_when_only_the_switch_is_written) {
     // renderer's neutral defaults rather than becoming zeroes (which would be a
     // black wall of haze with a division by zero in the ramp).
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_fog_min";
+    auto tmp = nf::test::temp_root() / "nf_scene_fog_min";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -416,7 +417,7 @@ NF_TEST(scene_fog_keeps_defaults_when_only_the_switch_is_written) {
 
 NF_TEST(scene_fog_refuses_an_invalid_colour_or_a_zero_end) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_scene_fog_bad";
+    auto tmp = nf::test::temp_root() / "nf_scene_fog_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);

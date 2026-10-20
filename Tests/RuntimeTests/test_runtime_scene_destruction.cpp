@@ -20,6 +20,7 @@
 // available rather than reporting a pass that verified nothing.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -118,7 +119,7 @@ struct HeadlessRuntime {
     std::unique_ptr<Runtime> runtime;
 
     HeadlessRuntime() : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / "nf_runtime_scene_destruction";
+        tmp = nf::test::temp_root() / "nf_runtime_scene_destruction";
         std::filesystem::create_directories(tmp);
         vfs.mount("content://", tmp);
 
@@ -190,7 +191,7 @@ NF_TEST(destructible_component_round_trips_through_scene_text) {
     NF_CHECK(text.find("enabled=false") != std::string::npos);
 
     const std::filesystem::path file =
-        std::filesystem::temp_directory_path() / "nf_destructible_roundtrip.nfscene";
+        nf::test::temp_root() / "nf_destructible_roundtrip.nfscene";
     {
         std::ofstream out(file, std::ios::binary | std::ios::trunc);
         NF_CHECK(out.good());

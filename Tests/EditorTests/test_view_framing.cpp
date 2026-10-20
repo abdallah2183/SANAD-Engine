@@ -14,6 +14,7 @@
 //     undo step, and never survives into a saved file.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -57,7 +58,7 @@ struct FramingScene {
     ecs::Entity cam = ecs::kInvalidEntity;
 
     bool build(rhi::IGraphicsDevice& device) {
-        tmp = std::filesystem::temp_directory_path() / "nf_ed_framing";
+        tmp = nf::test::temp_root() / "nf_ed_framing";
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp / "Content" / "Scenes");
         std::filesystem::create_directories(tmp / "Cache" / "Meshes");
@@ -396,4 +397,4 @@ NF_TEST(world_bounds_is_the_box_framing_and_picking_both_use) {
 
     fx.teardown(device);
     rhi::reset_validation_error_count();
-}
+}

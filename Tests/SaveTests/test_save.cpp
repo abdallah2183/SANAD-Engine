@@ -7,6 +7,7 @@
 // loudly rather than write something plausible.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -74,7 +75,7 @@ void write_file(const std::filesystem::path& path, const std::string& text) {
 class SaveHarness {
 public:
     explicit SaveHarness(const std::string& tag) {
-        m_tmp = std::filesystem::temp_directory_path() / ("nf_save_" + tag);
+        m_tmp = nf::test::temp_root() / ("nf_save_" + tag);
         std::filesystem::remove_all(m_tmp);
         std::filesystem::create_directories(m_tmp / "Content");
         m_vfs.mount("content://", m_tmp / "Content");

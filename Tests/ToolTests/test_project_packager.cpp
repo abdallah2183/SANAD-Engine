@@ -6,6 +6,7 @@
 // instead of shipping, and a rebuild does not leave stale files behind.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
@@ -32,7 +33,7 @@ struct PackSandbox {
     std::filesystem::path project_file;
 
     explicit PackSandbox(const std::string& name) {
-        root = std::filesystem::temp_directory_path() / name;
+        root = nf::test::temp_root() / name;
         std::filesystem::remove_all(root);
         ScaffoldOptions o;
         o.root = root;
@@ -98,7 +99,7 @@ NF_TEST(packager_package_is_relocatable) {
     std::string err;
     NF_CHECK(build_project(sb.options(), report, err));
 
-    const auto moved = std::filesystem::temp_directory_path() / "nf_pack_reloc_moved";
+    const auto moved = nf::test::temp_root() / "nf_pack_reloc_moved";
     std::filesystem::remove_all(moved);
     std::filesystem::copy(sb.dist(), moved, std::filesystem::copy_options::recursive);
 
@@ -199,9 +200,31 @@ NF_TEST(packager_reports_a_missing_shader_directory) {
     NF_CHECK(err.find("shader directory does not exist") != std::string::npos);
 }
 
+NF_TEST(packager_refuses_to_ship_a_game_without_compiled_shaders) {
+    PackSandbox sb("nf_pack_nospv");
+    if (!sb.ok) { NF_SKIP("template unavailable"); }
+
+    // A shader directory with sources but no compiled SPIR-V is what an engine
+    // built without a shader compiler hands to the packager. Packaging it
+    // would ship a game that opens a black window and never says why, so the
+    // build has to stop here instead.
+    auto opts = sb.options();
+    opts.shader_dir = sb.root / "shader_sources";
+    std::filesystem::create_directories(opts.shader_dir);
+    {
+        std::ofstream f(opts.shader_dir / "gbuffer_vert.glsl", std::ios::binary);
+        f << "// GLSL source, not SPIR-V\n";
+    }
+
+    BuildReport report;
+    std::string err;
+    NF_CHECK(!build_project(opts, report, err));
+    NF_CHECK(err.find("not built with shaders") != std::string::npos);
+}
+
 NF_TEST(packager_reports_a_missing_project_file) {
     BuildOptions opts;
-    opts.project_file = std::filesystem::temp_directory_path() / "nf_no_such_project.nfproj";
+    opts.project_file = nf::test::temp_root() / "nf_no_such_project.nfproj";
     BuildReport report;
     std::string err;
     NF_CHECK(!build_project(opts, report, err));

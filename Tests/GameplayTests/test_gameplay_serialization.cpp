@@ -8,6 +8,7 @@
 // — a bug that only shows up in someone's save file.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -61,7 +62,7 @@ public:
 class ContentHarness {
 public:
     explicit ContentHarness(const std::string& tag) {
-        m_tmp = std::filesystem::temp_directory_path() / ("nf_gameplay_ser_" + tag);
+        m_tmp = nf::test::temp_root() / ("nf_gameplay_ser_" + tag);
         std::filesystem::remove_all(m_tmp);
         std::filesystem::create_directories(m_tmp);
         m_vfs.mount("content://", m_tmp);

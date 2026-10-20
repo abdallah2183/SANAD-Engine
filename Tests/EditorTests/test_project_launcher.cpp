@@ -11,6 +11,7 @@
 // it into the header.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Editor/ProjectLauncher.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
 
@@ -28,7 +29,7 @@ using namespace nf::editor;
 namespace {
 
 std::filesystem::path temp_dir_for(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / name;
+    auto p = nf::test::temp_root() / name;
     std::error_code ec;
     std::filesystem::remove_all(p, ec);
     std::filesystem::create_directories(p, ec);
@@ -182,7 +183,7 @@ NF_TEST(launcher_settings_json_round_trip) {
 // the candidate that really contains the requested template, never the baked
 // path just because it is first.
 NF_TEST(launcher_template_root_prefers_a_candidate_that_contains_the_template) {
-    const auto tmp = std::filesystem::temp_directory_path() / "nf_template_root_test";
+    const auto tmp = nf::test::temp_root() / "nf_template_root_test";
     std::error_code ec;
     std::filesystem::remove_all(tmp, ec);
     std::filesystem::create_directories(tmp / "build_tree", ec); // exists, empty
@@ -315,4 +316,4 @@ NF_TEST(launcher_gallery_offers_every_real_template) {
                                      "' but no enabled gallery card offers it");
         }
     }
-}
+}

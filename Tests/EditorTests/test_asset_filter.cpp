@@ -1,6 +1,7 @@
 // Editor asset browser: listing, name/type filtering, double-click dispatch.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Editor/AssetBrowser.hpp>
@@ -23,7 +24,7 @@ static void mount_tmp(assets::VirtualFileSystem& vfs, const std::filesystem::pat
 
 NF_TEST(editor_asset_list_and_filter) {
     assets::VirtualFileSystem vfs;
-    const auto tmp = std::filesystem::temp_directory_path() / "nf_ed_assets";
+    const auto tmp = nf::test::temp_root() / "nf_ed_assets";
     mount_tmp(vfs, tmp);
 
     // One cooked mesh in the registry + one scene file on disk.
@@ -116,7 +117,7 @@ NF_TEST(editor_project_prefab_path_detection) {
 
 NF_TEST(editor_project_listing_shows_only_the_projects_assets) {
     assets::VirtualFileSystem vfs;
-    const auto tmp = std::filesystem::temp_directory_path() / "nf_ed_project_browser";
+    const auto tmp = nf::test::temp_root() / "nf_ed_project_browser";
     std::error_code ec;
     std::filesystem::remove_all(tmp, ec);
     std::filesystem::create_directories(tmp / "Scenes", ec);
@@ -326,7 +327,7 @@ struct FileOpsFixture {
 
     explicit FileOpsFixture(const char* name)
         : manager(vfs, reg), app(vfs, reg, manager, console) {
-        tmp = std::filesystem::temp_directory_path() / name;
+        tmp = nf::test::temp_root() / name;
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp / "Content" / "Scenes");
         std::filesystem::create_directories(tmp / "Content" / "Meshes" / "Props");
@@ -424,4 +425,4 @@ NF_TEST(editor_rename_asset_to_the_same_name_is_a_no_op) {
                                 "content://Meshes/cube.nfmesh", err));
     NF_CHECK(err.empty());
     NF_CHECK(f.vfs.exists("content://Meshes/cube.nfmesh").ok);
-}
+}

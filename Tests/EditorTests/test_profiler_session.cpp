@@ -9,6 +9,7 @@
 // GPU.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Core/Profiler.hpp>
 #include <NF/Editor/ProfilerSession.hpp>
 
@@ -102,7 +103,7 @@ NF_TEST(profiler_session_export_is_chrome_trace_json) {
     frame.close();
     session.capture_frame();
 
-    const auto path = std::filesystem::temp_directory_path() / "nf_test_profile_session.json";
+    const auto path = nf::test::temp_root() / "nf_test_profile_session.json";
     std::error_code ec;
     std::filesystem::remove(path, ec);
 
@@ -142,7 +143,7 @@ NF_TEST(profiler_session_export_is_chrome_trace_json) {
 // rather than fail or crash.
 NF_TEST(profiler_session_empty_export_is_valid_trace) {
     editor::ProfilerSession session;
-    const auto path = std::filesystem::temp_directory_path() / "nf_test_profile_empty.json";
+    const auto path = nf::test::temp_root() / "nf_test_profile_empty.json";
     std::error_code ec;
     std::filesystem::remove(path, ec);
 
@@ -164,7 +165,7 @@ NF_TEST(profiler_session_escapes_json_specials) {
     frame.close();
     session.capture_frame();
 
-    const auto path = std::filesystem::temp_directory_path() / "nf_test_profile_esc.json";
+    const auto path = nf::test::temp_root() / "nf_test_profile_esc.json";
     std::error_code ec;
     std::filesystem::remove(path, ec);
     std::string err;
@@ -198,4 +199,4 @@ NF_TEST(profiler_session_clear_after_capture_resets_count) {
     NF_CHECK_EQ(session.event_count(), 1u);
     // The surviving event is the new session's, not the old one's.
     NF_CHECK(session.events().front().name == std::string("Test::zone_b"));
-}
+}
