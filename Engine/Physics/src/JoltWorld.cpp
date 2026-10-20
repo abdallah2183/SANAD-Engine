@@ -230,13 +230,26 @@ JoltBody create_body_from_shape(JPH::PhysicsSystem& physics, const JPH::ShapeRef
 } // namespace
 
 struct JoltWorld::Impl {
+    // The PhysicsSystem holds RAW pointers to the layer filters, the
+    // broadphase, the job system and the temp allocator, so all of them must
+    // OUTLIVE it. Members are destroyed in reverse declaration order, so
+    // `physics` is declared LAST among them and therefore destroyed FIRST.
+    // Before this was fixed the filters were deleted in the destructor body
+    // — which runs while the PhysicsSystem is still alive — and the system
+    // was left holding pointers to freed objects.
+    std::unique_ptr<JPH::BroadPhaseLayerInterfaceTable> broadphase;
+    std::unique_ptr<JPH::ObjectLayerPairFilterTable> layer_filter;
+    std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> bp_filter;
+    std::unique_ptr<JPH::TempAllocatorImpl> temp;
+    std::unique_ptr<JPH::JobSystemSingleThreaded> jobs;
     JPH::PhysicsSystem physics;
-    JPH::TempAllocatorImpl* temp = nullptr;
-    JPH::JobSystemSingleThreaded* jobs = nullptr;
-    JPH::BroadPhaseLayerInterfaceTable* broadphase = nullptr;
-    JPH::ObjectLayerPairFilterTable* layer_filter = nullptr;
-    JPH::ObjectVsBroadPhaseLayerFilterTable* bp_filter = nullptr;
     std::map<JPH::uint32, JPH::Ref<JPH::Constraint>> constraints;
+    // The two bodies each constraint joins. A TwoBodyConstraint holds RAW
+    // Body pointers and Jolt does NOT clean constraints up when a body is
+    // destroyed, so the world has to know which constraints reference which
+    // bodies: removing a body has to remove its constraints first, or the
+    // next step() dereferences freed memory.
+    std::map<JPH::uint32, std::pair<JPH::uint32, JPH::uint32>> constraint_bodies;
     JPH::uint32 next_constraint = 1;
     // Vehicle testers keyed by the same id as `constraints`: the
     // VehicleConstraint only holds a RAW tester pointer, so the world must
@@ -250,6 +263,12 @@ struct JoltWorld::Impl {
     };
     std::map<JPH::uint32, RagdollEntry> ragdolls;
     JPH::uint32 next_ragdoll = 1;
+    // The GroupID a ragdoll is created with. Jolt requires it to be unique
+    // throughout the PhysicsSystem: it is the key of the group filter table
+    // that DisableParentChildCollisions() installs, so two ragdolls sharing
+    // one would (a) pass through each other and (b) overwrite each other's
+    // group filter. A fixed constant had both effects.
+    JPH::uint32 next_ragdoll_group_id = 0x10000;
     // Characters (design §39): one JPH::CharacterVirtual each plus the two
     // capsule shapes a crouch swaps between. These are NOT bodies — the system
     // knows nothing about them, so they never show up in body_count() and no
@@ -272,15 +291,36 @@ struct JoltWorld::Impl {
     bool ok = false;
 
     ~Impl() {
-        constraints.clear(); // released before the system dies
+        // Unregister everything from the PhysicsSystem BEFORE releasing it.
+        // The constraints are registered in two places: the Ref map below and
+        // Jolt's ConstraintManager (raw pointers). Releasing the Refs first
+        // deleted the constraint objects while Jolt still pointed at them.
+        for (auto& entry : constraints) {
+            if (auto* step = dynamic_cast<JPH::PhysicsStepListener*>(entry.second.GetPtr())) {
+                physics.RemoveStepListener(step);
+            }
+            physics.RemoveConstraint(entry.second);
+        }
+        constraints.clear();
+        constraint_bodies.clear();
         vehicle_testers.clear();
+
+        // A ragdoll owns bodies that are STILL ADDED to the physics system.
+        // ~Ragdoll() destroys them without removing them first, and Jolt
+        // requires RemoveFromPhysicsSystem() before that (the assert is
+        // compiled out in this build, so the violation was silent: the
+        // bodies were freed while the broadphase still tracked their ids).
+        for (auto& entry : ragdolls) {
+            if (entry.second.ragdoll) {
+                entry.second.ragdoll->RemoveFromPhysicsSystem();
+            }
+        }
         ragdolls.clear();
         characters.clear();
-        delete bp_filter;
-        delete layer_filter;
-        delete broadphase;
-        delete jobs;
-        delete temp;
+        // The filters, the broadphase, the job system and the temp allocator
+        // are NOT deleted here: they are unique_ptr members declared before
+        // `physics`, so they are destroyed after it, which is the order the
+        // PhysicsSystem requires (it holds raw pointers to all of them).
     }
 };
 
@@ -295,16 +335,16 @@ JoltWorld::JoltWorld(const PhysicsSettings& settings) : m_settings(settings) {
             JPH::RegisterTypes();
         }
     }
-    impl.temp = new JPH::TempAllocatorImpl(10 * 1024 * 1024);
-    impl.jobs = new JPH::JobSystemSingleThreaded(JPH::cMaxPhysicsJobs);
+    impl.temp = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
+    impl.jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
     impl.broadphase =
-        new JPH::BroadPhaseLayerInterfaceTable(Layers::kNumObjectLayers, Layers::kNumBroadPhaseLayers);
+        std::make_unique<JPH::BroadPhaseLayerInterfaceTable>(Layers::kNumObjectLayers, Layers::kNumBroadPhaseLayers);
     impl.broadphase->MapObjectToBroadPhaseLayer(Layers::kNonMoving, Layers::kBpNonMoving);
     impl.broadphase->MapObjectToBroadPhaseLayer(Layers::kMoving, Layers::kBpMoving);
-    impl.layer_filter = new JPH::ObjectLayerPairFilterTable(Layers::kNumObjectLayers);
+    impl.layer_filter = std::make_unique<JPH::ObjectLayerPairFilterTable>(Layers::kNumObjectLayers);
     impl.layer_filter->EnableCollision(Layers::kMoving, Layers::kMoving);
     impl.layer_filter->EnableCollision(Layers::kMoving, Layers::kNonMoving);
-    impl.bp_filter = new JPH::ObjectVsBroadPhaseLayerFilterTable(
+    impl.bp_filter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(
         *impl.broadphase, Layers::kNumBroadPhaseLayers, *impl.layer_filter, Layers::kNumObjectLayers);
 
     constexpr JPH::uint kMaxBodies = 4096;
@@ -607,10 +647,48 @@ void JoltWorld::remove_body(JoltBody handle) {
     if (!valid() || !handle.valid()) return;
     Impl& impl = *m_impl;
     JPH::BodyID id(handle.id);
+
+    // 1. Every constraint that joins this body to another has to go FIRST.
+    //    A TwoBodyConstraint holds RAW Body pointers, and Jolt does NOT clean
+    //    constraints up when a body is destroyed: BodyManager::DestroyBodies
+    //    only frees the body. The next step() would then call
+    //    TwoBodyConstraint::IsActive() on freed memory — a use-after-free
+    //    that reads and writes wherever the allocator put the block, not a
+    //    clean crash.
+    remove_constraints_for_body(handle.id);
+
+    // 2. Destroy the body exactly once. Jolt encodes a freed body slot as
+    //    the sentinel pointer 0xFFFF...FFFF, and the second DestroyBody
+    //    dereferences it (an access violation at that address). It also
+    //    leaves the body-ID freelist as a self-referential cycle, so no body
+    //    ID is ever recycled and the 4096-body pool leaks a slot per double
+    //    removal. Locking the body is the cheapest way to ask Jolt whether
+    //    it still exists: Succeeded() is false for a destroyed or stale id.
+    {
+        JPH::BodyLockWrite probe(impl.physics.GetBodyLockInterfaceNoLock(), id);
+        if (!probe.Succeeded()) return;
+    }
     if (impl.physics.GetBodyInterface().IsAdded(id)) {
         impl.physics.GetBodyInterface().RemoveBody(id);
     }
     impl.physics.GetBodyInterface().DestroyBody(id);
+}
+
+void JoltWorld::remove_constraints_for_body(u32 body_id) {
+    Impl& impl = *m_impl;
+    // Collect first: remove_constraint() mutates the map we would be
+    // iterating.
+    std::vector<JPH::uint32> doomed;
+    for (const auto& entry : impl.constraint_bodies) {
+        if (entry.second.first == body_id || entry.second.second == body_id) {
+            doomed.push_back(entry.first);
+        }
+    }
+    for (JPH::uint32 cid : doomed) {
+        JoltConstraint c;
+        c.id = cid;
+        remove_constraint(c);
+    }
 }
 
 bool JoltWorld::is_alive(JoltBody handle) const {
@@ -844,7 +922,7 @@ void JoltWorld::add_torque(JoltBody handle, const Vec3& torque) {
 void JoltWorld::step(float dt) {
     if (!valid() || !(dt > 0.0f)) return;
     Impl& impl = *m_impl;
-    impl.physics.Update(dt, 1, impl.temp, impl.jobs);
+    impl.physics.Update(dt, 1, impl.temp.get(), impl.jobs.get());
 }
 
 usize JoltWorld::body_count() const {
@@ -872,6 +950,7 @@ JoltConstraint JoltWorld::add_fixed(JoltBody a, JoltBody b) {
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
@@ -903,6 +982,7 @@ JoltConstraint JoltWorld::add_hinge(JoltBody a, JoltBody b, Vec3 world_point, Ve
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
@@ -923,6 +1003,7 @@ JoltConstraint JoltWorld::add_point(JoltBody a, JoltBody b, Vec3 world_point) {
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
@@ -938,6 +1019,7 @@ void JoltWorld::remove_constraint(JoltConstraint handle) {
         impl.physics.RemoveStepListener(step);
     impl.physics.RemoveConstraint(it->second);
     impl.constraints.erase(it);
+    impl.constraint_bodies.erase(handle.id);
     impl.vehicle_testers.erase(handle.id);
 }
 
@@ -1041,6 +1123,10 @@ JoltWorld::VehicleHandle JoltWorld::vehicle_create(const JoltVehicleConfig& conf
     impl.physics.AddStepListener(constraint);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = constraint;
+    // The vehicle constraint holds the chassis (and the wheel bodies it
+    // creates) as raw pointers, so the world has to know that removing the
+    // chassis has to take the constraint with it.
+    impl.constraint_bodies[id] = {chassis.id, chassis.id};
     impl.vehicle_testers[id] = tester;
     out.constraint_id = id;
     return out;
@@ -1165,7 +1251,13 @@ JoltWorld::RagdollHandle JoltWorld::ragdoll_create(const std::vector<RagdollJoin
     for (usize i = 0; i < joints.size(); ++i) {
         const auto& j = joints[i];
         JPH::RagdollSettings::Part& part = settings->mParts[i];
-        part.SetShape(new JPH::SphereShape(j.radius));
+        // The radius has to be validated like the mass two lines below. A
+        // zero-radius sphere has no volume, so CalculateMassProperties
+        // produces a zero/NaN inertia and the part can never rotate; a
+        // negative radius reaches Jolt's shape builder, which asserts on
+        // non-finite input (and the assert is compiled out in this build).
+        const float radius = (std::isfinite(j.radius) && j.radius > 1e-3f) ? j.radius : 0.15f;
+        part.SetShape(new JPH::SphereShape(radius));
         part.mPosition = JPH::RVec3(spawn.x + j.local_offset.x,
                                     spawn.y + j.local_offset.y,
                                     spawn.z + j.local_offset.z);
@@ -1198,9 +1290,12 @@ JoltWorld::RagdollHandle JoltWorld::ragdoll_create(const std::vector<RagdollJoin
     settings->Stabilize();
     settings->DisableParentChildCollisions();
 
-    // NOTE: fixed group id is fine while ragdolls are short-lived test
-    // objects; production code needs a per-ragdoll unique GroupID.
-    JPH::Ref<JPH::Ragdoll> ragdoll = settings->CreateRagdoll(0x12345, 0, &impl.physics);
+    // The GroupID has to be unique throughout the PhysicsSystem: it is the
+    // key of the group filter table that DisableParentChildCollisions()
+    // installs, so a fixed id meant two live ragdolls passed through each
+    // other AND the second ragdoll overwrote the first's group filter.
+    JPH::Ref<JPH::Ragdoll> ragdoll =
+        settings->CreateRagdoll(impl.next_ragdoll_group_id++, 0, &impl.physics);
     if (!ragdoll) return out;
     ragdoll->AddToPhysicsSystem(JPH::EActivation::Activate);
 
@@ -1531,6 +1626,7 @@ JoltConstraint JoltWorld::add_slider(JoltBody a, JoltBody b, Vec3 world_point, V
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
@@ -1555,6 +1651,7 @@ JoltConstraint JoltWorld::add_distance(JoltBody a, JoltBody b, Vec3 anchor_a, Ve
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
@@ -1583,6 +1680,7 @@ JoltConstraint JoltWorld::add_cone(JoltBody a, JoltBody b, Vec3 world_point, Vec
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
@@ -1614,9 +1712,125 @@ JoltConstraint JoltWorld::add_sixdof(JoltBody a, JoltBody b, Vec3 world_point,
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {a.id, b.id};
     out.id = id;
     return out;
 }
+
+// --- Clone support ----------------------------------------------------------
+//
+namespace {
+
+// A world-space constraint stores its anchor (and its axis directions) in
+// WORLD coordinates. A clone onto a different pair of bodies therefore kept
+// the anchor where the TEMPLATE was: the solver dragged the new bodies
+// across the world to reach it in a single step — a 50-metre yank for a
+// joint cloned from a template at the origin.
+//
+// Re-homing a value means: express it in the SOURCE body's local frame, then
+// re-express that local offset in the DESTINATION body's frame. The joint
+// then keeps the same relationship to the bodies it was built with, which is
+// what "created in their CURRENT relative pose" means.
+struct BodyFrame {
+    JPH::RVec3 com;
+    JPH::Quat rot;
+};
+
+bool read_body_frame(JPH::PhysicsSystem& physics, JPH::uint32 body_id, BodyFrame& out) {
+    JPH::BodyLockWrite lock(physics.GetBodyLockInterfaceNoLock(), JPH::BodyID(body_id));
+    if (!lock.Succeeded()) return false;
+    const JPH::Body& body = lock.GetBody();
+    out.com = body.GetCenterOfMassPosition();
+    out.rot = body.GetRotation();
+    return true;
+}
+
+JPH::RVec3 rehome_point(const BodyFrame& src, const BodyFrame& dst, const JPH::RVec3& world) {
+    return dst.com + dst.rot * (src.rot.Conjugated() * (world - src.com));
+}
+
+JPH::Vec3 rehome_dir(const BodyFrame& src, const BodyFrame& dst, const JPH::Vec3& world) {
+    return dst.rot * (src.rot.Conjugated() * world);
+}
+
+void rehome_world_space_settings(JPH::EConstraintSubType subtype,
+                                 JPH::TwoBodyConstraintSettings& two,
+                                 const BodyFrame& src_a, const BodyFrame& src_b,
+                                 const BodyFrame& dst_a, const BodyFrame& dst_b) {
+    // mSpace lives on the concrete settings class, not on the base, so the
+    // world-space test is repeated per case.
+    switch (subtype) {
+    case JPH::EConstraintSubType::Fixed: {
+        auto& s = static_cast<JPH::FixedConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        // A fixed constraint with mAutoDetectPoint makes Jolt compute the
+        // anchor from the two bodies' CURRENT positions, which is exactly
+        // the new pair's relative pose.
+        s.mAutoDetectPoint = true;
+        break;
+    }
+    case JPH::EConstraintSubType::Point: {
+        auto& s = static_cast<JPH::PointConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        s.mPoint1 = rehome_point(src_a, dst_a, s.mPoint1);
+        s.mPoint2 = rehome_point(src_b, dst_b, s.mPoint2);
+        break;
+    }
+    case JPH::EConstraintSubType::Distance: {
+        auto& s = static_cast<JPH::DistanceConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        s.mPoint1 = rehome_point(src_a, dst_a, s.mPoint1);
+        s.mPoint2 = rehome_point(src_b, dst_b, s.mPoint2);
+        break;
+    }
+    case JPH::EConstraintSubType::Hinge: {
+        auto& s = static_cast<JPH::HingeConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        s.mPoint1 = rehome_point(src_a, dst_a, s.mPoint1);
+        s.mPoint2 = rehome_point(src_b, dst_b, s.mPoint2);
+        s.mHingeAxis1 = rehome_dir(src_a, dst_a, s.mHingeAxis1);
+        s.mHingeAxis2 = rehome_dir(src_b, dst_b, s.mHingeAxis2);
+        s.mNormalAxis1 = rehome_dir(src_a, dst_a, s.mNormalAxis1);
+        s.mNormalAxis2 = rehome_dir(src_b, dst_b, s.mNormalAxis2);
+        break;
+    }
+    case JPH::EConstraintSubType::Slider: {
+        auto& s = static_cast<JPH::SliderConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        s.mPoint1 = rehome_point(src_a, dst_a, s.mPoint1);
+        s.mPoint2 = rehome_point(src_b, dst_b, s.mPoint2);
+        s.mNormalAxis1 = rehome_dir(src_a, dst_a, s.mNormalAxis1);
+        s.mNormalAxis2 = rehome_dir(src_b, dst_b, s.mNormalAxis2);
+        break;
+    }
+    case JPH::EConstraintSubType::Cone: {
+        auto& s = static_cast<JPH::ConeConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        s.mPoint1 = rehome_point(src_a, dst_a, s.mPoint1);
+        s.mPoint2 = rehome_point(src_b, dst_b, s.mPoint2);
+        s.mTwistAxis1 = rehome_dir(src_a, dst_a, s.mTwistAxis1);
+        s.mTwistAxis2 = rehome_dir(src_b, dst_b, s.mTwistAxis2);
+        break;
+    }
+    case JPH::EConstraintSubType::SixDOF: {
+        auto& s = static_cast<JPH::SixDOFConstraintSettings&>(two);
+        if (s.mSpace != JPH::EConstraintSpace::WorldSpace) break;
+        s.mPosition1 = rehome_point(src_a, dst_a, s.mPosition1);
+        s.mPosition2 = rehome_point(src_b, dst_b, s.mPosition2);
+        s.mAxisX1 = rehome_dir(src_a, dst_a, s.mAxisX1);
+        s.mAxisX2 = rehome_dir(src_b, dst_b, s.mAxisX2);
+        s.mAxisY1 = rehome_dir(src_a, dst_a, s.mAxisY1);
+        s.mAxisY2 = rehome_dir(src_b, dst_b, s.mAxisY2);
+        break;
+    }
+    default:
+        // An unknown subtype keeps its settings as they are: the clone is
+        // still a valid constraint, just not re-homed.
+        break;
+    }
+}
+
+} // namespace
 
 JoltConstraint JoltWorld::clone_constraint(JoltConstraint source, JoltBody new_a, JoltBody new_b) {
     JoltConstraint out;
@@ -1634,6 +1848,17 @@ JoltConstraint JoltWorld::clone_constraint(JoltConstraint source, JoltBody new_a
     JPH::Ref<JPH::ConstraintSettings> settings = src->GetConstraintSettings();
     if (settings == nullptr) return out;
 
+    // The source constraint's own bodies. A world-space constraint stores its
+    // anchor in WORLD coordinates, so a clone onto a different pair of bodies
+    // kept the anchor where the TEMPLATE was and the solver dragged the new
+    // bodies across the world to reach it in a single step. Re-homing the
+    // anchor means expressing it in the source body's local frame and then
+    // re-expressing that local offset in the destination body's frame, which
+    // is what "created between new_a and new_b in their CURRENT relative
+    // pose" means.
+    const auto src_bodies = impl.constraint_bodies.find(source.id);
+    if (src_bodies == impl.constraint_bodies.end()) return out;
+
     JPH::BodyLockWrite lock_a(impl.physics.GetBodyLockInterfaceNoLock(), JPH::BodyID(new_a.id));
     JPH::BodyLockWrite lock_b(impl.physics.GetBodyLockInterfaceNoLock(), JPH::BodyID(new_b.id));
     if (!lock_a.Succeeded() || !lock_b.Succeeded()) return out;
@@ -1641,11 +1866,28 @@ JoltConstraint JoltWorld::clone_constraint(JoltConstraint source, JoltBody new_a
     // is polymorphic, so Create() dispatches to the original constraint's type.
     JPH::TwoBodyConstraintSettings& two =
         static_cast<JPH::TwoBodyConstraintSettings&>(*settings);
+
+    const u32 src_a_id = src_bodies->second.first;
+    const u32 src_b_id = src_bodies->second.second;
+    // Cloning onto the same pair needs no re-homing, and locking a body
+    // twice on one thread would deadlock.
+    if (src_a_id != new_a.id || src_b_id != new_b.id) {
+        BodyFrame src_a{}, src_b{}, dst_a{}, dst_b{};
+        if (!read_body_frame(impl.physics, src_a_id, src_a)) return out;
+        if (!read_body_frame(impl.physics, src_b_id, src_b)) return out;
+        dst_a.com = lock_a.GetBody().GetCenterOfMassPosition();
+        dst_a.rot = lock_a.GetBody().GetRotation();
+        dst_b.com = lock_b.GetBody().GetCenterOfMassPosition();
+        dst_b.rot = lock_b.GetBody().GetRotation();
+        rehome_world_space_settings(src->GetSubType(), two, src_a, src_b, dst_a, dst_b);
+    }
+
     JPH::Ref<JPH::Constraint> c = two.Create(lock_a.GetBody(), lock_b.GetBody());
     if (!c) return out;
     impl.physics.AddConstraint(c);
     const JPH::uint32 id = impl.next_constraint++;
     impl.constraints[id] = c;
+    impl.constraint_bodies[id] = {new_a.id, new_b.id};
     out.id = id;
     return out;
 }

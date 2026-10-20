@@ -2,6 +2,8 @@
 
 #include <NF/Core/Types.hpp>
 
+#include <cstdint>
+
 namespace nf::physics {
 
 /// Fixed-timestep accumulator.
@@ -29,7 +31,17 @@ public:
         }
         const f32 budget = m_step * static_cast<f32>(m_max_substeps);
         if (frame_delta > budget) {
-            m_dropped += static_cast<u32>((frame_delta - budget) / m_step);
+            // Saturate: converting a float larger than UINT_MAX to u32 is
+            // undefined behaviour, and a single enormous frame delta (a
+            // machine that was suspended for hours) would reach it. The count
+            // is a diagnostic, so clamping it costs nothing.
+            const f64 dropped = (static_cast<f64>(frame_delta) - static_cast<f64>(budget)) /
+                                static_cast<f64>(m_step);
+            if (dropped >= static_cast<f64>(UINT32_MAX)) {
+                m_dropped = UINT32_MAX;
+            } else {
+                m_dropped += static_cast<u32>(dropped);
+            }
             frame_delta = budget;
         }
 

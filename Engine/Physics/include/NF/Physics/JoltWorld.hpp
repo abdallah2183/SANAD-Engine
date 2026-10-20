@@ -586,6 +586,13 @@ private:
     /// the bookkeeping remove_body/is_alive/body_count already rely on.
     JoltBody add_body_internal(const BodyDesc& desc, bool sensor);
 
+    /// Removes every constraint that joins the given body to another. A
+    /// TwoBodyConstraint holds RAW Body pointers and Jolt does not clean
+    /// constraints up when a body is destroyed, so a body has to take its
+    /// constraints with it — otherwise the next step() dereferences freed
+    /// memory through the constraint's mBody1/mBody2.
+    void remove_constraints_for_body(u32 body_id);
+
     struct Impl;
     std::unique_ptr<Impl> m_impl;
     PhysicsSettings m_settings;
