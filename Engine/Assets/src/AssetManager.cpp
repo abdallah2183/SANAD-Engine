@@ -177,7 +177,13 @@ void AssetManager::start_async_load(const AssetMetadata& meta, std::shared_ptr<M
     };
 
     if (nf::JobSystem::instance().is_initialized()) {
-        nf::JobSystem::instance().enqueue([do_load]() { do_load(); });
+        if (!nf::JobSystem::instance().enqueue([do_load]() { do_load(); })) {
+            // The job was DROPPED (the system shut down between the check and
+            // the enqueue). Nothing will ever set the handle's state, so it
+            // would stay in Loading forever and the mesh would silently never
+            // appear. Do the work here instead.
+            do_load();
+        }
     } else {
         do_load();
     }

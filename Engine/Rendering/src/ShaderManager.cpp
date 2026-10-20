@@ -234,7 +234,7 @@ void ShaderManager::reload_async(const std::string& path) {
     if (it == m_shaders.end()) return;
     rhi::ShaderStage stage = it->second->stage();
     // Enqueue compile job
-    JobSystem::instance().enqueue([this, path, stage]() {
+    const bool queued = JobSystem::instance().enqueue([this, path, stage]() {
         std::vector<u8> spirv;
         ReflectionData refl;
         std::string error;
@@ -254,6 +254,15 @@ void ShaderManager::reload_async(const std::string& path) {
             NF_LOG_WARN(LogCategory::Core, "Async compile failed '{}': {}", path, error);
         }
     });
+    if (!queued) {
+        // The job was DROPPED (the job system has no workers, or it shut
+        // down). Nothing will ever publish a result, so the shader keeps the
+        // pipeline it had -- and a shader that was never compiled stays
+        // missing, which is a black screen with no error. Say so.
+        NF_LOG_ERROR(LogCategory::Core,
+                     "Async shader reload of '{}' was dropped: the job system had no workers",
+                     path);
+    }
 }
 
 void ShaderManager::poll() {

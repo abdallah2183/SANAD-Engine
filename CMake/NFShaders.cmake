@@ -36,8 +36,13 @@ if(NOT NF_GLSLC_EXECUTABLE AND WIN32 AND IS_DIRECTORY "C:/VulkanSDK")
     file(GLOB _nf_vulkan_versions RELATIVE "C:/VulkanSDK" "C:/VulkanSDK/*")
     set(_nf_best_sdk_version "")
     foreach(_v IN LISTS _nf_vulkan_versions)
-        if(IS_DIRECTORY "C:/VulkanSDK/${_v}" AND "${_v}" STRGREATER "${_nf_best_sdk_version}")
-            set(_nf_best_sdk_version "${_v}")
+        if(IS_DIRECTORY "C:/VulkanSDK/${_v}" AND "${_v}" VERSION_GREATER_EQUAL "1.1.0")
+            # Compared as VERSIONS, not as text: "1.10.0" sorts BELOW "1.9.0"
+            # as a string (10 < 9), so a lexicographic comparison would pick
+            # the OLDER SDK's glslc.
+            if("${_v}" VERSION_GREATER "${_nf_best_sdk_version}")
+                set(_nf_best_sdk_version "${_v}")
+            endif()
         endif()
     endforeach()
     if(NOT _nf_best_sdk_version STREQUAL "")

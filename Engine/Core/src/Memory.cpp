@@ -55,6 +55,19 @@ constexpr usize kHeaderBytes = sizeof(AllocHeader);
 
 void* GeneralAllocator::allocate(usize size, usize alignment) {
     if (alignment == 0) alignment = alignof(std::max_align_t);
+    // The header is two usize fields, so the BASE has to be aligned for them
+    // too: NF_NEW(alloc, char) asks for alignof(char) == 1, and a one-byte
+    // aligned base makes the header's own stores misaligned -- undefined
+    // behaviour, and deallocate() reads those same fields back.
+    // A non-power-of-two alignment has no mask arithmetic that works, so it
+    // is refused rather than rounded into something the caller did not ask
+    // for.
+    if (alignment < alignof(AllocHeader)) {
+        alignment = alignof(AllocHeader);
+    }
+    if ((alignment & (alignment - 1)) != 0) {
+        return nullptr;
+    }
     // The offset must be a multiple of the alignment so the payload keeps it,
     // and must be at least large enough for the two header fields.
     const usize offset = (kHeaderBytes + alignment - 1) & ~(alignment - 1);
@@ -159,9 +172,15 @@ PoolAllocator::~PoolAllocator() {
 void* PoolAllocator::allocate(usize size, usize alignment) {
     if (size > m_block_size) return nullptr;
     // A block can only satisfy an alignment stricter than the pool's own if
-    // the stride happens to be a multiple of it. Refuse rather than hand out
-    // a misaligned pointer.
-    if (alignment > m_alignment && (m_block_size % alignment) != 0) return nullptr;
+    // BOTH the stride and the pool's base address are multiples of it. The
+    // stride check alone is not enough: the pool is allocated at m_alignment
+    // and the free list is built from that base, so a 16-aligned base hands
+    // out a block that is 16 bytes off a 64-byte boundary -- a misaligned
+    // pointer, from a function whose comment says it refuses to hand one out.
+    if (alignment > m_alignment) {
+        if ((m_block_size % alignment) != 0) return nullptr;
+        if ((reinterpret_cast<usize>(m_base) % alignment) != 0) return nullptr;
+    }
 
     std::lock_guard lock(m_mutex);
     if (!m_free_list) return nullptr;

@@ -2624,12 +2624,33 @@ void retarget_registry_entry(assets::VirtualFileSystem& vfs, assets::AssetRegist
     if (!reg.add(meta, add_err)) {
         NF_LOG_ERROR(LogCategory::Editor, "Registry rejected the renamed asset '{}': {}",
                      to_logical, add_err);
+        // Put the entry back under its OLD name. The rename moved the file,
+        // but an asset that is registered under a name the registry refuses
+        // is an asset the user cannot see or load -- and the old name at
+        // least still names something. The registry is the only place that
+        // knows the asset exists, so losing the entry loses the asset.
+        std::string restore_err;
+        assets::AssetMetadata original = source;
+        if (!reg.add(original, restore_err)) {
+            NF_LOG_ERROR(LogCategory::Editor,
+                         "Could not restore the asset '{}' after a failed rename: {}",
+                         source.logical_path, restore_err);
+        }
         return;
     }
     if (!old_cooked.empty() && old_cooked != new_cooked) {
         auto old_res = vfs.resolve(old_cooked);
         auto new_res = vfs.resolve(new_cooked);
-        if (old_res.ok && new_res.ok) {
+        if (!new_res.ok) {
+            // The destination's cache folder does not exist yet. The registry
+            // now names a cooked copy that is not there, and the asset loads
+            // uncooked. The old copy is still the right content, so it stays
+            // where it is and the next cook writes the new one.
+            NF_LOG_WARN(LogCategory::Editor,
+                        "The cooked copy of '{}' stays at '{}': the cache folder for '{}' "
+                        "does not exist yet.",
+                        to_logical, old_cooked, new_cooked);
+        } else if (old_res.ok) {
             std::error_code ec;
             std::filesystem::rename(old_res.value, new_res.value, ec);
             if (ec) {
@@ -2736,11 +2757,17 @@ bool EditorApp::rename_asset(const std::string& from_logical, const std::string&
             moves.push_back(RegistryMove{entry.second, canonical_registry_path(to_logical) + tail});
         }
     }
-    // The clash check comes BEFORE the file moves: an entry already
-    // registered under the destination would make the re-add a duplicate, and
-    // a duplicate add loses the asset. Such an entry is stale by definition —
-    // the VFS refuses to rename onto an existing file, so the file it names
-    // is not there.
+    // The clash check: an entry already registered under the destination
+    // would make the re-add a duplicate, and a duplicate add loses the
+    // asset. Such an entry is stale by definition -- the VFS refuses to
+    // rename onto an existing file, so the file it names is not there.
+    //
+    // The stale entries are NOT removed yet. The rename below can still
+    // fail, and an entry removed before the failure is gone for good for a
+    // file that is still on disk: the user renames 'content://Props' to
+    // 'content://Art', the VFS refuses because Art exists, and
+    // 'content://Art/hero.nfmesh' has already been unregistered -- invisible
+    // in the browser and unloadable.
     const std::string canonical_to = canonical_registry_path(to_logical);
     std::vector<assets::AssetId> stale;
     for (const auto& entry : m_registry.entries()) {
@@ -2763,13 +2790,15 @@ bool EditorApp::rename_asset(const std::string& from_logical, const std::string&
             stale.push_back(entry.first);
         }
     }
-    for (const assets::AssetId& id : stale) {
-        m_registry.remove(id);
-    }
     const auto renamed = m_vfs.rename(from_logical, to_logical);
     if (!renamed.ok) {
         out_err = "Rename failed: " + renamed.error;
         return false;
+    }
+    // The file moved, so the stale entries under the destination name files
+    // that are not there any more. Now they can go.
+    for (const assets::AssetId& id : stale) {
+        m_registry.remove(id);
     }
     for (const RegistryMove& mv : moves) {
         retarget_registry_entry(m_vfs, m_registry, mv.meta, mv.new_logical);
@@ -3300,8 +3329,12 @@ std::string prefab_stem_from_name(const std::string& name, const std::string& fa
             out.push_back('_');
         }
     }
-    while (!out.empty() && out.front() == '_') out.erase(out.begin());
-    while (!out.empty() && out.back() == '_') out.pop_back();
+    const size_t first = out.find_first_not_of('_');
+    if (first == std::string::npos) {
+        return fallback;
+    }
+    const size_t last = out.find_last_not_of('_');
+    out = out.substr(first, last - first + 1);
     return out.empty() ? fallback : out;
 }
 
@@ -3311,12 +3344,31 @@ std::string EditorApp::prefab_path_for(ecs::Entity root) const {
     const ecs::World* w = world();
     const std::string fallback = "entity_" + std::to_string(root.id);
     std::string stem = fallback;
-    if (w != nullptr && root.valid() && w->is_alive(root)) {
+    const bool alive = w != nullptr && root.valid() && w->is_alive(root);
+    if (alive) {
         if (const auto* name = w->get<scene::NameComponent>(root)) {
             stem = prefab_stem_from_name(name->name, fallback);
         }
     }
-    return "content://Prefabs/" + stem + ".nfscene";
+    const std::string path = "content://Prefabs/" + stem + ".nfscene";
+
+    // Two entities can carry the SAME name -- "Cube" is the most common name
+    // in the engine -- and one prefab path per name would make the second one
+    // unsaveable. When the name's path is taken by somebody else, the entity
+    // id disambiguates it.
+    //
+    // The id alone is NOT enough: the ECS RECYCLES ids, so a prefab named
+    // after an id is overwritten by the next entity that gets the same id --
+    // a different prefab, silently gone, with no undo entry. Name + id is
+    // enough, because the name is what makes the file readable.
+    const auto* link = alive ? w->get<scene::PrefabLinkComponent>(root) : nullptr;
+    if (link == nullptr || link->prefab_path != path) {
+        auto existing = m_vfs.exists(path);
+        if (existing.ok && existing.value) {
+            return "content://Prefabs/" + stem + "_" + std::to_string(root.id) + ".nfscene";
+        }
+    }
+    return path;
 }
 
 bool EditorApp::create_prefab(ecs::Entity root, const std::string& prefab_path, std::string& out_err) {

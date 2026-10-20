@@ -477,14 +477,58 @@ int main(int argc, char** argv) {
 
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
-        auto next = [&]() -> std::string { return (i + 1 < argc) ? argv[++i] : std::string(); };
-        if (arg == "--project") project_arg = next();
-        else if (arg.rfind("--project=", 0) == 0) project_arg = arg.substr(10);
-        else if (arg == "--out") out_dir = next();
-        else if (arg.rfind("--out=", 0) == 0) out_dir = arg.substr(6);
-        else if (arg == "--name") name = next();
-        else if (arg.rfind("--name=", 0) == 0) name = arg.substr(7);
-        else if (arg == "--template") {
+        // An option that takes a value must not swallow the NEXT option, and
+        // must not fall through to the project search when the value is
+        // missing. `nf build --project` used to leave project_arg empty, and
+        // resolve_project("") then searched the current directory AND FOUR
+        // PARENTS — so a typo silently built some unrelated project. The
+        // same rule the --template option already follows.
+        //
+        // A value must exist, must not be empty (an empty string falls
+        // through to the same project search), and must not start with '-'
+        // (that is the next option, not a path).
+        auto takes_value = [&](int index) {
+            if (index + 1 >= argc) return false;
+            const char* value = argv[index + 1];
+            return value[0] != '\0' && value[0] != '-';
+        };
+        if (arg == "--project") {
+            if (!takes_value(i)) {
+                std::cerr << "nf: --project requires a path to a .nfproj file\n";
+                return 1;
+            }
+            project_arg = argv[++i];
+        } else if (arg.rfind("--project=", 0) == 0) {
+            project_arg = arg.substr(10);
+            if (project_arg.empty()) {
+                std::cerr << "nf: --project requires a path to a .nfproj file\n";
+                return 1;
+            }
+        } else if (arg == "--out") {
+            if (!takes_value(i)) {
+                std::cerr << "nf: --out requires a directory path\n";
+                return 1;
+            }
+            out_dir = argv[++i];
+        } else if (arg.rfind("--out=", 0) == 0) {
+            out_dir = arg.substr(6);
+            if (out_dir.empty()) {
+                std::cerr << "nf: --out requires a directory path\n";
+                return 1;
+            }
+        } else if (arg == "--name") {
+            if (!takes_value(i)) {
+                std::cerr << "nf: --name requires a project name\n";
+                return 1;
+            }
+            name = argv[++i];
+        } else if (arg.rfind("--name=", 0) == 0) {
+            name = arg.substr(7);
+            if (name.empty()) {
+                std::cerr << "nf: --name requires a project name\n";
+                return 1;
+            }
+        } else if (arg == "--template") {
             template_requested = true;
             if (i + 1 >= argc || argv[i + 1][0] == '-') {
                 std::cerr << "nf: --template requires a name; valid templates: "
@@ -500,13 +544,17 @@ int main(int argc, char** argv) {
             // Takes a value. It must be consumed here, not left to fall through:
             // an unconsumed number lands on the positional branch and is read as
             // the project name.
-            passthrough.push_back(arg);
-            const auto v = next();
-            if (v.empty()) {
+            //
+            // The value may not be another option: `nf run --frames --headless`
+            // would otherwise forward "--frames --headless" to the player, and
+            // the player would complain about ITS option instead of nf naming
+            // the offending one.
+            if (!takes_value(i)) {
                 std::cerr << "nf: --frames requires a count\n";
                 return 1;
             }
-            passthrough.push_back(v);
+            passthrough.push_back(arg);
+            passthrough.push_back(argv[++i]);
         } else if (arg == "--headless" || arg == "--validation" ||
                    arg == "--replay-strict") {
             // Forwarded verbatim to the player: no value follows these.
@@ -515,13 +563,12 @@ int main(int argc, char** argv) {
             // Same as --frames: the path is consumed here. Without the `next()` it
             // would fall through to the positional branch and `nf run --replay
             // a.nfinput` would treat the log path as the project name.
-            passthrough.push_back(arg);
-            const auto v = next();
-            if (v.empty()) {
+            if (!takes_value(i)) {
                 std::cerr << "nf: " << arg << " requires a file path\n";
                 return 1;
             }
-            passthrough.push_back(v);
+            passthrough.push_back(arg);
+            passthrough.push_back(argv[++i]);
         } else if (arg.rfind("--replay=", 0) == 0 || arg.rfind("--input-log=", 0) == 0) {
             passthrough.push_back(arg);
         } else if (!arg.empty() && arg[0] != '-') {

@@ -44,6 +44,11 @@ namespace {
 // frame or leaves a backlog the mixer can never drain.
 constexpr float kMaxFrameDelta = 0.25f;
 
+// How many frames a headless run renders when nobody said how many. A
+// headless run has no window to close, so "until the window closes" never
+// arrives and the loop would spin forever.
+constexpr uint32_t kHeadlessDefaultFrames = 120;
+
 } // namespace
 
 Application::Application(const ApplicationConfig& config) : m_config(config) {}
@@ -217,6 +222,19 @@ int Application::run() {
     // before swapchain/device shutdown below. Destroying them after
     // vkDestroyDevice would leak and trip validation.
     uint32_t frame_count = 0;
+    // The frame limit. max_frames == 0 means "until the window closes", and a
+    // headless run has no window to close -- so an unbounded headless run
+    // spins forever and never returns. It is bounded here, and the bound is
+    // ANNOUNCED: the old code stopped after ten frames with no message at
+    // all, which read as a clean but truncated validation run.
+    uint32_t frame_limit = m_config.max_frames;
+    if (m_config.headless && frame_limit == 0) {
+        frame_limit = kHeadlessDefaultFrames;
+        NF_LOG_WARN(LogCategory::Core,
+                    "Headless run without --frames: stopping after {} frames. "
+                    "Pass --frames N to choose the count.",
+                    frame_limit);
+    }
     // Set when a scene loaded successfully but nothing was ever drawn. That is
     // the signature of an uncooked asset cache: every mesh reference resolves to
     // a missing cache:// file, so the run would otherwise exit 0 with zero
@@ -495,15 +513,15 @@ int Application::run() {
             }
 
             ++frame_count;
-            if (m_config.max_frames > 0 && frame_count >= m_config.max_frames) {
+            if (frame_limit > 0 && frame_count >= frame_limit) {
                 break;
             }
-            // No second limit here. max_frames == 0 means "no limit"
-            // everywhere else in the engine (see the check above), and the
-            // old headless-only branch silently stopped a headless run after
-            // ten frames when --frames was omitted — a hard-to-diagnose
-            // truncation of a validation run, and a disagreement with the
-            // windowed path, which kept running.
+            // There is no second limit here. max_frames == 0 means "no limit"
+            // for a windowed run, and the headless case above has already
+            // been given a bound. The old headless-only branch silently
+            // stopped a headless run after ten frames when --frames was
+            // omitted -- a hard-to-diagnose truncation of a validation run,
+            // and a disagreement with the windowed path, which kept running.
         }
 
         NF_LOG_INFO(LogCategory::Core, "Rendered {} frames (meshes={})", frame_count, runtime.mesh_count());

@@ -84,6 +84,17 @@ bool DedicatedServer::provision_rate_limited(u32 ip, u64 now_ms) {
     // well-formed first messages must not be able to burn the player table
     // faster than real clients can connect. 0 disables the limit.
     if (m_config.max_provisions_per_ip == 0) return false;
+    // The window table is keyed by a SPOOFABLE address, so it has to be
+    // pruned: a scanner that sprays from a different source address for
+    // every packet would otherwise grow the map for ever, and the map is
+    // consulted on every datagram.
+    for (auto it = m_provision_windows.begin(); it != m_provision_windows.end();) {
+        if (now_ms - it->second.start_ms >= kProvisionWindowMs * 4) {
+            it = m_provision_windows.erase(it);
+        } else {
+            ++it;
+        }
+    }
     auto& window = m_provision_windows[ip];
     if (now_ms - window.start_ms >= kProvisionWindowMs) {
         window.start_ms = now_ms;

@@ -2278,7 +2278,15 @@ bool Runtime::streaming_load_chunk(const scene::ChunkCoord& coord,
         job->finished = true;
     };
     if (JobSystem::instance().is_initialized()) {
-        JobSystem::instance().enqueue(std::move(run_parse));
+        // The task is passed BY VALUE, so the copy here is what the job
+        // system owns. If it refuses the job, nothing will ever set
+        // job->finished and a caller waiting for that flag would wait
+        // forever -- so the work is done here instead. The call deliberately
+        // does NOT move run_parse: a moved-from std::function is empty, and
+        // calling it throws.
+        if (!JobSystem::instance().enqueue(run_parse)) {
+            run_parse();
+        }
     } else {
         // No workers (tests, tools): deterministic inline parse. Same
         // contract — this call still returns false; the commit lands on the

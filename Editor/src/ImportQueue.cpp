@@ -179,15 +179,34 @@ struct ImportBackup {
     bool had_cooked = false;
     assets::AssetMetadata meta;
     bool had_registry = false;
+    // True when the destination did NOT exist before the import. A rollback
+    // has to DELETE it again: the import is all-or-nothing, and a
+    // half-applied multi-file import (the mesh written, the material not)
+    // is exactly the state the backup exists to prevent.
+    bool was_absent = false;
+    // The read of the previous bytes failed. The import must not go on:
+    // the previous file is about to be deleted, and the rollback cannot put
+    // it back, so a failed write would destroy the user's asset.
+    bool read_failed = false;
+    std::string read_error;
 };
 
 ImportBackup backup_import(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
                             const std::string& logical) {
     ImportBackup backup;
     backup.logical = logical;
-    if (auto bytes = vfs.read_bytes(logical); bytes.ok) {
+    auto existing = vfs.exists(logical);
+    if (existing.ok && existing.value) {
+        auto bytes = vfs.read_bytes(logical);
+        if (!bytes.ok) {
+            backup.read_failed = true;
+            backup.read_error = bytes.error;
+            return backup;
+        }
         backup.content = bytes.value;
         backup.had_content = true;
+    } else {
+        backup.was_absent = true;
     }
     if (const assets::AssetMetadata* prev = find_asset(reg, logical)) {
         backup.meta = *prev;
@@ -204,10 +223,25 @@ ImportBackup backup_import(assets::VirtualFileSystem& vfs, assets::AssetRegistry
 }
 
 /// Puts a destination back the way the backup found it: the content bytes,
-/// the cooked copy and the registry entry, in that order.
+/// the cooked copy and the registry entry, in that order. A destination that
+/// did not exist before is REMOVED again.
 void restore_import_backups(assets::VirtualFileSystem& vfs, assets::AssetRegistry& reg,
                             const std::vector<ImportBackup>& backups) {
     for (const ImportBackup& backup : backups) {
+        if (backup.was_absent) {
+            // The import created it and the import failed, so it must not
+            // survive: a half-applied import is the state this whole
+            // mechanism exists to prevent.
+            vfs.remove(backup.logical);
+            if (!backup.cooked_path.empty()) {
+                vfs.remove(backup.cooked_path);
+            }
+            // The registry entry the import added goes with it.
+            if (const assets::AssetMetadata* meta = find_asset(reg, backup.logical)) {
+                reg.remove(meta->id);
+            }
+            continue;
+        }
         if (backup.had_content) {
             vfs.write_bytes(backup.logical, std::span<const uint8_t>(backup.content));
         }
@@ -667,8 +701,34 @@ bool ImportQueue::commit_staged(assets::VirtualFileSystem& vfs, assets::AssetReg
                 job.staged.reset();
                 return true;
             }
-            backups.push_back(backup_import(vfs, reg, file.logical_path));
+            ImportBackup backup = backup_import(vfs, reg, file.logical_path);
+            if (backup.read_failed) {
+                // The previous bytes could not be read, so they cannot be
+                // restored. The import is about to DELETE the file, and a
+                // failed write after that would leave the user with nothing.
+                // Refuse instead: the asset is still there, and the user can
+                // free it themselves.
+                job.error = "Cannot read the existing '" + file.logical_path +
+                            "' to replace it safely: " + backup.read_error;
+                job.state = ImportJob::State::Failed;
+                job.staged.reset();
+                return true;
+            }
+            backups.push_back(std::move(backup));
             remove_previous_import(vfs, reg, file.logical_path);
+        } else {
+            // The destination does not exist yet, so the rollback has to
+            // DELETE it again if a later write fails -- and the cooked copy
+            // the import is about to write has to go with it.
+            ImportBackup absent;
+            absent.logical = file.logical_path;
+            absent.was_absent = true;
+            if (file.registered &&
+                file.logical_path.rfind("content://", 0) == 0) {
+                absent.cooked_path = "cache://" +
+                    file.logical_path.substr(std::string("content://").size());
+            }
+            backups.push_back(std::move(absent));
         }
     }
 
@@ -776,11 +836,18 @@ const ImportJob* ImportQueue::pump_async(assets::VirtualFileSystem& vfs, assets:
         j.state = ImportJob::State::Working;
         j.progress = 0.1f;
         if (threaded) {
-            JobSystem::instance().enqueue([staged = j.staged, src = j.src_absolute, dir = j.dst_dir,
-                                           type = j.type, format = j.source_format, id = j.id,
-                                           scratch = m_scratch_dir] {
+            // The worker is passed BY VALUE, so the copy the job system owns
+            // is independent of the lambda below. If the job is DROPPED, the
+            // stages would never run and the job would sit in Working for
+            // ever, so the work is done here instead.
+            auto worker = [staged = j.staged, src = j.src_absolute, dir = j.dst_dir,
+                           type = j.type, format = j.source_format, id = j.id,
+                           scratch = m_scratch_dir] {
                 run_cpu_stages(src, dir, type, format, id, staged, scratch);
-            });
+            };
+            if (!JobSystem::instance().enqueue(worker)) {
+                worker();
+            }
         } else {
             run_cpu_stages(j.src_absolute, j.dst_dir, j.type, j.source_format, j.id, j.staged,
                            m_scratch_dir);
