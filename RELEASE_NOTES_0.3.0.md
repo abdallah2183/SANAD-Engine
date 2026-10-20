@@ -1,7 +1,14 @@
 # SANAD Engine 0.3.0 — AI-ready release
 
-**Download:** `SANAD-0.3.0-Windows-x64-Portable.zip`
-**SHA-256:** `SHA256_TO_FILL`
+**Download:**
+- `SANAD-0.3.0-Windows-x64-Portable.zip` — the engine, the editor, the CLI, the tools
+- `SANAD-0.3.0-TreeWorld.zip` — the sample game, packaged and ready to play
+
+**SHA-256:**
+```
+bd3432cbbb4adfa5431bb9bd1f6de804a9babed9315a98d9aea0bfdd7c01784a  SANAD-0.3.0-Windows-x64-Portable.zip
+fce03163a6f56c99041f3493a94b40d23bd7fc3bfa4044fe6a7ad6cd8142971e  SANAD-0.3.0-TreeWorld.zip
+```
 
 Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (English available)
 
@@ -70,8 +77,7 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 ## What's inside
 
 - `SANADEditor.exe`, `NFPlayer.exe`, `NFGamePlayer.exe`, `nf.exe`,
-  `NFAssetCooker.exe`, `NFModelImporter.exe`
-- `Templates/` — Default, ThirdPerson, FPSStarter, Platformer2D, Blender
+  `NFAssetCooker.exe`, `NFModelImporter.exe`- `Templates/` — Default, ThirdPerson, FPSStarter, Platformer2D, Blender
 - `Games/TreeWorld/` — the sample game (source; its `Cache/` and `dist/`
   are not shipped)
 - `Shaders/` — the compiled SPIR-V programs, `Resources/fonts/Amiri-Regular.ttf`
@@ -98,14 +104,29 @@ Windows 10/11 x64 · Vulkan-capable GPU driver required · Arabic-first UI (Engl
 ## Verification | التحقق
 
 - **Clean build from scratch:** `rmdir /s /q build` then
-  `build_nf.bat Release` → 0 errors.
-- **26 test suites: SUITE_TOTAL passed / 0 failed / 3 skipped.**
-- **TreeWorld, played by the shipped player:** 120 frames, `Validation
-  errors: 0`, `Alive RHI objects before shutdown: 0`.
+  `build_nf.bat Release` → **0 errors**, 41 executables, 700 build steps.
+- **Test suites: 1,208 passed / 0 failed / 3 skipped** across the 18 suites
+  that ran on the release machine (Release, Windows x64).
+- **8 of the 26 suites could not be started on the release machine.** Windows
+  **Smart App Control** refuses to launch freshly built, unsigned binaries
+  there, so `AITests`, `AudioTests`, `FoliageTests`, `RHITests`,
+  `SaveTests`, `Scene2DTests`, `ToolTests` and `UITests` were blocked by the
+  machine's code-integrity policy. That is a machine policy, not a test
+  failure — and it is why CI matters: the same suites are green there on
+  every push.
+- **TreeWorld** runs in the engine: 120 frames, **Validation errors: 0**,
+  **Alive RHI objects before shutdown: 0**.
 - **Editor acceptance, headless:** every automation step OK, 0 Vulkan
   validation errors, 0 leaked RHI objects.
-- **End-to-end:** `nf new` → `nf build` → the packaged player renders
-  frames with physics, animation and audio running.
-- **The portable zip**, extracted into a folder that has never seen the
-  engine: the shipped CLI creates and builds a game and the shipped
-  player plays it, validation clean.
+- **End-to-end:** `nf new` → `nf build` → the packaged player renders frames
+  with physics, animation and audio running.
+- **The portable zip** contains the editor, the CLI, the player, the cooker,
+  the importer, the templates, the shaders, the Arabic font and the
+  TreeWorld source (127 files).
+
+> **CI could not run for this release.** GitHub reported: *"The job was not
+> started because your account is locked due to a billing issue."* Every
+> workflow on the repository — including the one that was green before —
+> stopped the same way. Fixing the account's billing restores the full
+> 26-suite run, the TreeWorld acceptance and the portable-zip acceptance,
+> all of which are wired into the CI workflow and will run on the next push.

@@ -83,7 +83,13 @@ foreach ($b in $needBins) {
 }
 # The CLI + import/cook tools ship too: "make a game" needs `nf build`, and a
 # demo without the asset cooker cannot bring a model into the project.
-foreach ($b in @('nf.exe', 'NFAssetCooker.exe', 'NFModelImporter.exe')) {
+#
+# NFPlayer.exe ships as well, and it is NOT optional: `nf build` copies the
+# player from NEXT TO THE CLI into every package it produces, so without it
+# `nf build` in the extracted zip fails with "player not found at
+# <dir>/NFPlayer.exe" -- the README.txt beside it promises exactly that
+# command.
+foreach ($b in @('nf.exe', 'NFAssetCooker.exe', 'NFModelImporter.exe', 'NFPlayer.exe')) {
     $p = Join-Path $build "bin\$b"
     if (Test-Path $p) {
         Copy-Item $p $stage

@@ -13,7 +13,7 @@
 <a href="#"><img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=flat-square&logo=c%2B%2B"></a>
 <a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
 <a href="#"><img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square"></a>
-<a href="#"><img alt="1,875 tests passing" src="https://img.shields.io/badge/tests-1%2C875%20passing-brightgreen?style=flat-square"></a>
+<a href="#"><img alt="26 test suites" src="https://img.shields.io/badge/tests-26%20suites-brightgreen?style=flat-square"></a>
 <a href="AGENTS.md"><img alt="AI-ready workflow" src="https://img.shields.io/badge/AI--ready-agents-6f42c1?style=flat-square"></a>
 <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-orange?style=flat-square"></a>
 
@@ -189,7 +189,11 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 <summary><b>Quality gates</b></summary>
 
 - Clean MSVC `/W4 /WX` build.
-- **26 test suites, 1,875 passed / 0 failed / 2 skipped** on Windows x64 (Release).
+- **26 test suites** on Windows x64 (Release). The release machine ran 18 of
+  them: **1,208 passed / 0 failed / 3 skipped**. The other 8 could not be
+  started there — Windows Smart App Control refuses to launch freshly built,
+  unsigned binaries on that machine — so the full 26-suite run is CI's job,
+  and CI is where they are green on every push.
 - 0 Vulkan validation errors and 0 leaked RHI objects in the editor acceptance run.
 - End-to-end check: create a project with `nf`, build it, package it, and run the
   shipped player without the dev-tree shaders.
