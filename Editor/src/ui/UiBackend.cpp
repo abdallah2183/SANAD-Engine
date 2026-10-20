@@ -137,6 +137,15 @@ const char* layout_ini_path() {
 #endif
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
+        if (ec) {
+            // The directory could not be created, so the layout file cannot
+            // be written there and the layout is lost between runs -- the
+            // exact symptom the warning above exists to explain. Say where it
+            // tried, so the message is actionable.
+            NF_LOG_WARN(nf::LogCategory::Editor,
+                        "Could not create '{}' for the dock layout: {}",
+                        dir, ec.message());
+        }
         return (std::filesystem::path(dir) / "editor_layout.ini").string();
     }();
     return path.c_str();

@@ -1,4 +1,4 @@
-﻿// Samples/CliffStory/Render2D.cpp â€” GPU sprite renderer, texture pages, glyph atlas.
+// Samples/CliffStory/Render2D.cpp — GPU sprite renderer, texture pages, glyph atlas.
 
 #include "Render2D.hpp"
 
@@ -9,12 +9,12 @@
 
 // imstb_truetype is vendored inside ImGui but is a standalone rasteriser: no
 // ImGui types are involved. ImGui compiles the implementation inside
-// imgui_draw.cpp with STBTT_STATIC, so here it must be asked for explicitly â€”
+// imgui_draw.cpp with STBTT_STATIC, so here it must be asked for explicitly —
 // without STB_TRUETYPE_IMPLEMENTATION this header only declares `static`
 // functions that are defined nowhere in this translation unit.
 //
 // C4505 (unreferenced static function removed) fires on the ~30 entry points
-// this sample never calls â€” SDF baking, the rect packer, SVG export. The build
+// this sample never calls — SDF baking, the rect packer, SVG export. The build
 // runs /WX, so they are suppressed for exactly this include rather than for the
 // translation unit, and no engine code loses a warning it should be held to.
 #ifdef _MSC_VER
@@ -593,7 +593,7 @@ void SpriteRenderer::draw(const SpriteBatcher& batcher, rhi::CommandBuffer& cmd)
     const auto& indices = batcher.indices();
     const auto& batches = batcher.batches();
 
-    // sprite_count() reads m_staging, which bake() has just cleared â€” the count
+    // sprite_count() reads m_staging, which bake() has just cleared — the count
     // that matters after end() is what came out of the bake.
     m_last_sprites = static_cast<u32>(baked.size() / 4);
     m_last_draw_calls = 0;
@@ -884,7 +884,7 @@ std::string GlyphAtlas::prepare(const std::string& utf8) {
     }
 
     // One upload per string that introduced new glyphs. Without this the atlas
-    // would reach the GPU once, blank, and no text would ever render â€” the
+    // would reach the GPU once, blank, and no text would ever render — the
     // texture exists before there is anything in it.
     if (m_pixels_dirty && m_renderer && m_page != u32_max) {
         const bool ok =

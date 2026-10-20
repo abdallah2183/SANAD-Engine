@@ -1,17 +1,18 @@
-// Tests/RuntimeTests/test_runtime_nav_agents.cpp â€” Phase 28 (navigation)
+// Tests/RuntimeTests/test_runtime_nav_agents.cpp — Phase 28 (navigation)
 //
-// Rule 0 for navigation. `nf::ai::NavMesh` is unit-tested in AITests â€” the
+// Rule 0 for navigation. `nf::ai::NavMesh` is unit-tested in AITests — the
 // voxel pipeline, the walkable classification, the polygon cover, the links
 // and the A* all have their own suite, CPU-only. What that suite cannot see is
 // whether a shipped game can use any of it: no scene could name a volume, no
 // frame stepped an agent. This file is the integration half, and it follows
-// the Phase 25 pattern exactly â€” a scene that merely DECLARES the components
+// the Phase 25 pattern exactly — a scene that merely DECLARES the components
 // ends up baked and walked, with nothing driving the seam by hand.
 //
 // Headless like the destruction reachability suite: NF_SKIP when no Vulkan
 // device is available (the Runtime constructs a renderer on adopt).
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
@@ -50,7 +51,7 @@ struct HeadlessRuntime {
     std::unique_ptr<Runtime> runtime;
 
     HeadlessRuntime() : manager(vfs, registry) {
-        tmp = std::filesystem::temp_directory_path() / "nf_runtime_nav_agents";
+        tmp = nf::test::temp_root() / "nf_runtime_nav_agents";
         std::filesystem::remove_all(tmp);
         std::filesystem::create_directories(tmp);
         vfs.mount("content://", tmp);
@@ -113,7 +114,7 @@ void add_nav_scene(Scene& s, bool enable = true) {
 }
 
 f32 path_distance(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
-    // Maximum XZ mismatch between two paths of the same length â€” the
+    // Maximum XZ mismatch between two paths of the same length — the
     // determinism measure (AITests pins the mesh itself bit-identically; this
     // pins the route an agent actually walks).
     if (a.size() != b.size() || a.empty()) {
@@ -134,7 +135,7 @@ f32 path_distance(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
 
 NF_TEST(navmesh_and_agent_lines_round_trip_through_scene_text) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_nav_rt";
+    auto tmp = nf::test::temp_root() / "nf_nav_rt";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
@@ -194,13 +195,13 @@ NF_TEST(navmesh_and_agent_lines_round_trip_through_scene_text) {
 
 NF_TEST(navmesh_line_rejects_invalid_values) {
     VirtualFileSystem vfs;
-    auto tmp = std::filesystem::temp_directory_path() / "nf_nav_bad";
+    auto tmp = nf::test::temp_root() / "nf_nav_bad";
     std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     vfs.mount("content://", tmp);
 
     // A zero cell size is a divide-by-zero in the voxeliser, so the whole line
-    // is refused rather than clamped â€” same contract as the light lines.
+    // is refused rather than clamped — same contract as the light lines.
     const std::string text =
         "# SANAD Scene v1\n"
         "version: 1\n"

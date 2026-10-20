@@ -1,4 +1,4 @@
-﻿// Samples/CliffStory/main.cpp — حكاية الجرف / The Cliff's Tale.
+// Samples/CliffStory/main.cpp — حكاية الجرف / The Cliff's Tale.
 //
 // A 2D story climb, and the first game in the engine to render through
 // NFScene2D. The split of labour across the three files here is:
@@ -1018,7 +1018,7 @@ void Game::draw_parallax_layers() {
         // The offsets sit to the RIGHT of the playable face on purpose. A distant
         // ridge should appear past the edge of the cliff, not fill the frame: with
         // both layers straddling the centre the three walls overlapped into one
-        // purple slab and the sky â€” the thing that gives the cliff its height â€”
+        // purple slab and the sky — the thing that gives the cliff its height —
         // disappeared entirely.
         {kParallaxFar, kDepthFar, 14.0f, 5.0f, 0.075f, Vec3{0.50f, 0.45f, 0.66f}, 0.95f},
         {kParallaxMid, kDepthMid, 7.0f, 3.4f, 0.165f, Vec3{0.42f, 0.38f, 0.56f}, 0.97f},
@@ -1139,7 +1139,7 @@ void Game::draw_ledges() {
 
         // Top surface: a band that catches the light, hotter at the two ends. This is
         // the game's only affordance for "you can stand here", so it is drawn
-        // emphatic â€” but it is lit like everything else. Unlit, these strips read as
+        // emphatic — but it is lit like everything else. Unlit, these strips read as
         // glowing white bars pasted over the rock.
   m_batcher.push(solid(Vec2{x, ledge.y - 0.16f}, Vec2{ledge.w, 0.26f},
    mul(kTintStone, lit) * 1.45f, 0.92f, kDepthLedge + 0.5f));
@@ -1367,7 +1367,7 @@ void Game::draw_glows() {
 /// This is written out rather than delegated to Camera2D::screen_to_world
 /// because that helper does not round-trip in Y: a marker drawn at pixel row 30
 /// came out at row ~690, mirrored about the viewport centre. Every HUD element
-/// went through it, so the whole interface â€” labels, gauge, story line â€” was
+/// went through it, so the whole interface — labels, gauge, story line — was
 /// upside-down relative to the world, which was drawn correctly all along and
 /// made the bug look like a font problem.
 ///

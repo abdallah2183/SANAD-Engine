@@ -1,4 +1,4 @@
-// NF/Scripting/ScriptSystem.cpp â€” per-entity sandboxed script ticking.
+// NF/Scripting/ScriptSystem.cpp — per-entity sandboxed script ticking.
 
 #include <NF/Scripting/ScriptEngine.hpp>
 #include <NF/Core/Logger.hpp>
@@ -65,7 +65,7 @@ struct ScriptSystem::Impl {
             return LUA_NOREF;
         }
         // Stack: [chunk]. Build the sandbox env, stash it in the registry,
-        // and point the chunk's _ENV at it â€” before running anything.
+        // and point the chunk's _ENV at it — before running anything.
         lua_newtable(L); // [chunk, env]
         lua_pushvalue(L, -1); // [chunk, env, env] (one copy is stashed)
         lua_newtable(L); // [chunk, env, env, mt]

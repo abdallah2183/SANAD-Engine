@@ -54,7 +54,11 @@ inline bool input_text(const char* label, std::string& value, ImGuiInputTextFlag
     std::string buf = value;
     buf.resize(buf.size() + 64); // room to type into before the first grow
     flags |= ImGuiInputTextFlags_CallbackResize;
-    const bool changed = ImGui::InputText(label, buf.data(), buf.capacity(), flags,
+    // The buffer size is the string's LENGTH plus the terminator, not its
+    // capacity. std::string only guarantees that data() is writable for
+    // size() + 1 bytes, and ImGui writes a NUL-terminated string into the
+    // buffer it is given.
+    const bool changed = ImGui::InputText(label, buf.data(), static_cast<int>(buf.size()) + 1, flags,
                                           &input_text_resize_callback, &buf);
     value.assign(buf.c_str());
     return changed;
@@ -66,7 +70,8 @@ inline bool input_text_with_hint(const char* label, const char* hint, std::strin
     std::string buf = value;
     buf.resize(buf.size() + 64);
     flags |= ImGuiInputTextFlags_CallbackResize;
-    const bool changed = ImGui::InputTextWithHint(label, hint, buf.data(), buf.capacity(), flags,
+    const bool changed = ImGui::InputTextWithHint(label, hint, buf.data(),
+                                                   static_cast<int>(buf.size()) + 1, flags,
                                                    &input_text_resize_callback, &buf);
     value.assign(buf.c_str());
     return changed;
