@@ -75,6 +75,16 @@ CameraEdit read_camera(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.fov_y = c->fov_y;
     out.near_plane = c->near_plane;
     out.far_plane = c->far_plane;
+    out.follow_target = c->follow_target;
+    out.pivot_x = c->pivot_x;
+    out.pivot_y = c->pivot_y;
+    out.pivot_z = c->pivot_z;
+    out.distance = c->distance;
+    out.yaw = c->yaw;
+    out.pitch = c->pitch;
+    out.smoothing = c->smoothing;
+    out.collision_radius = c->collision_radius;
+    out.avoid_collision = c->avoid_collision;
     return out;
 }
 
@@ -141,7 +151,9 @@ std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
         out_err = "Entity is not alive";
         return nullptr;
     }
-    if (!all_finite({edit.fov_y, edit.near_plane, edit.far_plane})) {
+    if (!all_finite({edit.fov_y, edit.near_plane, edit.far_plane, edit.pivot_x, edit.pivot_y,
+                     edit.pivot_z, edit.distance, edit.yaw, edit.pitch, edit.smoothing,
+                     edit.collision_radius})) {
         out_err = "Camera values must be finite numbers";
         return nullptr;
     }
@@ -160,11 +172,33 @@ std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
     const auto* cur = world.get<runtime::CameraComponent>(e);
     const bool had = (cur != nullptr);
     const runtime::CameraComponent before = had ? *cur : runtime::CameraComponent{};
+    if (edit.distance < 0.0f) {
+        out_err = "Follow distance must not be negative";
+        return nullptr;
+    }
+    if (edit.smoothing < 0.0f) {
+        out_err = "Follow smoothing must not be negative";
+        return nullptr;
+    }
+    if (edit.collision_radius < 0.0f) {
+        out_err = "Camera collision radius must not be negative";
+        return nullptr;
+    }
     runtime::CameraComponent after = before;
     after.is_active = edit.active;
     after.fov_y = edit.fov_y;
     after.near_plane = edit.near_plane;
     after.far_plane = edit.far_plane;
+    after.follow_target = edit.follow_target;
+    after.pivot_x = edit.pivot_x;
+    after.pivot_y = edit.pivot_y;
+    after.pivot_z = edit.pivot_z;
+    after.distance = edit.distance;
+    after.yaw = edit.yaw;
+    after.pitch = edit.pitch;
+    after.smoothing = edit.smoothing;
+    after.collision_radius = edit.collision_radius;
+    after.avoid_collision = edit.avoid_collision;
     return std::make_unique<SetCameraCommand>(e, had, before, after);
 }
 

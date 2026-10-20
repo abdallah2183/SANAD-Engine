@@ -718,6 +718,35 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 size_t far_pos = line.find("far=");
                 if (far_pos != std::string::npos) sscanf(line.c_str()+far_pos, "far=%f", &cam.far_plane);
                 cam.is_active = line.find("active=true") != std::string::npos;
+                // The follow camera. Every field is optional and a missing one
+                // leaves the default in place, so a scene written before the
+                // follow camera existed loads exactly as it did: a camera that
+                // looks at the origin.
+                size_t follow_pos = line.find("follow=");
+                if (follow_pos != std::string::npos) {
+                    // The name runs to the next space, so a name with no
+                    // spaces is the whole value.
+                    const std::string follow_value = line.substr(follow_pos + 7);
+                    const size_t end = rest.find(' ');
+                    cam.follow_target = (end == std::string::npos) ? follow_value : follow_value.substr(0, end);
+                }
+                auto scan_vec3 = [&](const char* prefix, float& x, float& y, float& z) {
+                    const size_t pos = line.find(prefix);
+                    if (pos == std::string::npos) return;
+                    sscanf(line.c_str() + pos, "%*[^=]=%f,%f,%f", &x, &y, &z);
+                };
+                scan_vec3("pivot=", cam.pivot_x, cam.pivot_y, cam.pivot_z);
+                size_t dist_pos = line.find("distance=");
+                if (dist_pos != std::string::npos) sscanf(line.c_str()+dist_pos, "distance=%f", &cam.distance);
+                size_t yaw_pos = line.find("yaw=");
+                if (yaw_pos != std::string::npos) sscanf(line.c_str()+yaw_pos, "yaw=%f", &cam.yaw);
+                size_t pitch_pos = line.find("pitch=");
+                if (pitch_pos != std::string::npos) sscanf(line.c_str()+pitch_pos, "pitch=%f", &cam.pitch);
+                size_t smooth_pos = line.find("smoothing=");
+                if (smooth_pos != std::string::npos) sscanf(line.c_str()+smooth_pos, "smoothing=%f", &cam.smoothing);
+                size_t radius_pos = line.find("radius=");
+                if (radius_pos != std::string::npos) sscanf(line.c_str()+radius_pos, "radius=%f", &cam.collision_radius);
+                cam.avoid_collision = line.find("avoid=0") == std::string::npos;
                 scene->world().add<CameraComponent>(e, cam);
             } else if (line.rfind("  RigidBody:",0)==0) {
                 physics::RigidBodyComponent rb;
@@ -1494,7 +1523,18 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {
-            out << "  Camera: fov=" << c->fov_y << " aspect=" << c->aspect << " near=" << c->near_plane << " far=" << c->far_plane << " active=" << (c->is_active ? "true" : "false") << "\n";
+            out << "  Camera: fov=" << c->fov_y << " aspect=" << c->aspect << " near=" << c->near_plane << " far=" << c->far_plane << " active=" << (c->is_active ? "true" : "false");
+            // The follow camera. The name is written LAST and runs to the end
+            // of the line: it is the only free-form value on the line, and a
+            // name with a space in it would otherwise be read as two fields.
+            out << " pivot=" << c->pivot_x << "," << c->pivot_y << "," << c->pivot_z
+                << " distance=" << c->distance << " yaw=" << c->yaw << " pitch=" << c->pitch
+                << " smoothing=" << c->smoothing << " radius=" << c->collision_radius
+                << " avoid=" << (c->avoid_collision ? "1" : "0");
+            if (!c->follow_target.empty()) {
+                out << " follow=" << c->follow_target;
+            }
+            out << "\n";
         }
         // Physics. The runtime body handle is deliberately NOT written: it is a
         // per-session identity (generation-checked), and a stale one from a

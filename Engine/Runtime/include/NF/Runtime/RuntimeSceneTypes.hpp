@@ -306,6 +306,55 @@ struct CameraComponent {
     float far_plane = 1000.0f;
     bool is_active = false;
     // Position is stored in Transform, not here
+
+    // --- The follow camera ------------------------------------------------
+    //
+    // A camera that always looks at the origin is a camera that can only
+    // show a scene arranged around the origin, and no third-person game is
+    // that. These fields make the camera follow an entity instead: where it
+    // looks (the pivot), how far it sits and from which angle (the orbit),
+    // how fast it catches up (smoothing), and what it does when a tree is
+    // in the way (the collision sphere).
+    //
+    // The maths is in NF/Runtime/CameraFollow.hpp; this is the scene data
+    // for it.
+
+    /// The name of the entity the camera follows. Empty = no follow: the
+    /// camera is wherever its own Transform says and looks at the origin,
+    /// which is exactly what every camera did before.
+    ///
+    /// A NAME and not a handle: the scene file cannot point at another
+    /// entity yet, and a handle that resolves to nothing at load time is a
+    /// silent no-op. A name that matches nothing leaves the camera where it
+    /// was, rather than snapping it to the origin.
+    std::string follow_target;
+
+    /// The pivot, in the TARGET'S local space: the point the camera orbits
+    /// and looks at. (0, 1.6, 0) is roughly a character's head.
+    float pivot_x = 0.0f;
+    float pivot_y = 1.6f;
+    float pivot_z = 0.0f;
+
+    /// How far the camera sits from the pivot.
+    float distance = 5.0f;
+
+    /// The orbit angles, in degrees. yaw is the horizontal rotation (0 = the
+    /// camera is behind the target); pitch is the vertical one (negative =
+    /// looking down).
+    float yaw = 0.0f;
+    float pitch = -15.0f;
+
+    /// How fast the camera catches up with the target, in units of the
+    /// remaining distance per second. 0 means "no smoothing".
+    float smoothing = 8.0f;
+
+    /// The radius of the camera's collision sphere, in metres. When something
+    /// solid is between the pivot and the camera, the camera is pulled in
+    /// front of it by this much, so it never ends up inside a tree.
+    float collision_radius = 0.35f;
+
+    /// Whether the camera pulls in when something is in the way.
+    bool avoid_collision = true;
 };
 
 /// The navigation volume: where the walkable mesh is baked, and how (design doc

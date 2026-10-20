@@ -13,6 +13,7 @@ set(NFRUNTIME_SOURCES
     src/PlayerControllerModule.cpp
     src/OrbitCameraModule.cpp
     src/KeyboardInput.cpp
+    src/CameraFollow.cpp
 )
 
 nf_engine_library(NFRuntime

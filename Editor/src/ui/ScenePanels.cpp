@@ -558,6 +558,35 @@ void camera_panel(EditorApp& app) {
                          "%.0f");
     }
 
+    // The follow camera. A camera that always looks at the origin cannot
+    // show a third-person game, so the panel exposes the orbit: the entity
+    // to follow, the pivot on it, the distance and the angles, how fast the
+    // camera catches up, and what it does when a tree is in the way.
+    if (section(AV("follow").c_str())) {
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputText((AV("follow_target") + "##cft").c_str(), c.edit.follow_target.data(),
+                         c.edit.follow_target.capacity());
+        hint(AV("follow_hint"));
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::DragFloat3((AV("follow_pivot") + "##cpv").c_str(), &c.edit.pivot_x, 0.05f);
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("follow_distance") + "##cd").c_str(), &c.edit.distance, 0.1f, 0.0f,
+                         100.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("follow_yaw") + "##cy").c_str(), &c.edit.yaw, 0.5f, -360.0f, 360.0f,
+                         "%.1f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("follow_pitch") + "##cpi").c_str(), &c.edit.pitch, 0.5f, -89.0f,
+                         89.0f, "%.1f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("follow_smoothing") + "##cs").c_str(), &c.edit.smoothing, 0.1f, 0.0f,
+                         60.0f, "%.1f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("follow_collision") + "##cc").c_str(), &c.edit.collision_radius, 0.05f,
+                         0.0f, 10.0f, "%.2f");
+        ImGui::Checkbox((AV("follow_avoid") + "##ca").c_str(), &c.edit.avoid_collision);
+    }
+
     if (section(AV("transform").c_str())) {
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::DragFloat3((AV("position") + "##cp").c_str(), &c.xf.px, 0.05f);

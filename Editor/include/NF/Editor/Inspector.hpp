@@ -37,6 +37,19 @@ struct CameraEdit {
     float fov_y = 60.0f;
     float near_plane = 0.1f;
     float far_plane = 1000.0f;
+    // The follow camera. The target is a NAME (the scene file cannot point
+    // at another entity yet), and an empty name means "the camera does not
+    // follow anything" -- which is what every camera did before.
+    std::string follow_target;
+    float pivot_x = 0.0f;
+    float pivot_y = 1.6f;
+    float pivot_z = 0.0f;
+    float distance = 5.0f;
+    float yaw = 0.0f;
+    float pitch = -15.0f;
+    float smoothing = 8.0f;
+    float collision_radius = 0.35f;
+    bool avoid_collision = true;
 };
 
 struct LightEdit {

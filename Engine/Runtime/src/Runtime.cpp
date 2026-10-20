@@ -639,6 +639,11 @@ void Runtime::update(float dt) {
     step_destruction(dt);
     auto& world = m_scene_data_ptr->scene->world();
     scene::propagate_transforms(world);
+    // The camera is placed AFTER the transforms are final, so it follows the
+    // character where the character actually IS this frame and not where it
+    // was. It is also after the scripts, so a script that moved the player
+    // is followed in the same frame.
+    update_follow_camera(dt);
 }
 
 u32 Runtime::step_animation(float dt) {
@@ -3217,17 +3222,27 @@ bool Runtime::extract_camera(uint32_t target_width, uint32_t target_height, rend
         if (const auto* t = world.get<scene::Transform>(e)) {
             out.position = {t->world_x, t->world_y, t->world_z};
         }
-        out.target = {0.0f, 0.0f, 0.0f};
-        out.up = {0.0f, 1.0f, 0.0f};
-        // A camera serialized at the origin (e.g. the Example scene default)
-        // would sit inside the mesh; fall back to a sensible orbit position so the
-        // scene is actually visible instead of degenerate.
-        const float dx = out.position.x;
-        const float dy = out.position.y;
-        const float dz = out.position.z;
-        const float dist2 = dx * dx + dy * dy + dz * dz;
-        if (dist2 < 0.25f) {
-            out.position = {0.0f, 2.0f, 5.0f};
+        // A follow camera decides for itself where it is and what it looks
+        // at. Its Transform is the pivot of the ORBIT, not the camera: the
+        // camera's position is the RESULT of the follow, and reading it back
+        // from the Transform would make the camera chase the position it was
+        // placed in last frame.
+        if (m_follow_active) {
+            out.position = m_follow_camera.position;
+            out.target = m_follow_camera.target;
+        } else {
+            out.target = {0.0f, 0.0f, 0.0f};
+            out.up = {0.0f, 1.0f, 0.0f};
+            // A camera serialized at the origin (e.g. the Example scene default)
+            // would sit inside the mesh; fall back to a sensible orbit position so the
+            // scene is actually visible instead of degenerate.
+            const float dx = out.position.x;
+            const float dy = out.position.y;
+            const float dz = out.position.z;
+            const float dist2 = dx * dx + dy * dy + dz * dz;
+            if (dist2 < 0.25f) {
+                out.position = {0.0f, 2.0f, 5.0f};
+            }
         }
         rendering::update_camera(out);
         return true;
@@ -3235,6 +3250,194 @@ bool Runtime::extract_camera(uint32_t target_width, uint32_t target_height, rend
     // No active camera: keep the default orbit camera.
     rendering::update_camera(out);
     return false;
+}
+
+namespace {
+
+// The living entity with this name, or kInvalidEntity.
+//
+// The same lookup the Lua binding does (nf.find_entity), so a camera that
+// follows "Player" and a script that finds "Player" agree on what "Player"
+// is.
+ecs::Entity find_entity_by_name(ecs::World& world, const std::string& name) {
+    if (name.empty()) {
+        return ecs::kInvalidEntity;
+    }
+    for (ecs::Entity e : world.all_entities()) {
+        if (!world.is_alive(e)) {
+            continue;
+        }
+        const scene::NameComponent* n = world.get<scene::NameComponent>(e);
+        if (n != nullptr && n->name == name) {
+            return e;
+        }
+    }
+    return ecs::kInvalidEntity;
+}
+
+} // namespace
+
+std::vector<Runtime::CameraObstacle> Runtime::collect_camera_obstacles(ecs::World& world) const {
+    std::vector<CameraObstacle> out;
+    for (auto e : world.query<physics::ColliderComponent>()) {
+        const auto* col = world.get<physics::ColliderComponent>(e);
+        const auto* rb = world.get<physics::RigidBodyComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (col == nullptr || t == nullptr) {
+            continue;
+        }
+        // Static scenery only: a dynamic body moves, and a wall that moved
+        // every frame would be a wall the camera kept missing.
+        if (rb != nullptr && rb->type != physics::BodyType::Static) {
+            continue;
+        }
+        // The voxeliser is AABB-based and the camera's test is the same
+        // shape, so anything else is skipped rather than approximated.
+        if (col->shape.type != physics::ShapeType::Box) {
+            continue;
+        }
+        CameraObstacle box;
+        const Vec3 centre{t->world_x, t->world_y, t->world_z};
+        const Vec3 half{col->shape.box.half_extents.x * std::abs(t->world_scale_x),
+                        col->shape.box.half_extents.y * std::abs(t->world_scale_y),
+                        col->shape.box.half_extents.z * std::abs(t->world_scale_z)};
+        box.min = Vec3{centre.x - half.x, centre.y - half.y, centre.z - half.z};
+        box.max = Vec3{centre.x + half.x, centre.y + half.y, centre.z + half.z};
+        out.push_back(box);
+    }
+    return out;
+}
+
+float Runtime::camera_obstacle_hit(const std::vector<CameraObstacle>& obstacles, const Vec3& origin,
+                                   const Vec3& direction, float max_distance, float radius) const {
+    // A swept sphere against a box, one axis at a time: the slab test gives
+    // the entry and exit parameters, and the sphere is the box grown by the
+    // radius.
+    //
+    // Growing the box is an approximation (a sphere is not a box), and it is
+    // the approximation a camera wants: the camera keeps its distance from
+    // the wall, and the corner case is a corner the camera slides past.
+    float closest = max_distance;
+    bool hit = false;
+    for (const CameraObstacle& box : obstacles) {
+        const Vec3 lo{box.min.x - radius, box.min.y - radius, box.min.z - radius};
+        const Vec3 hi{box.max.x + radius, box.max.y + radius, box.max.z + radius};
+        const float origin_axis[3] = {origin.x, origin.y, origin.z};
+        const float dir_axis[3] = {direction.x, direction.y, direction.z};
+        const float lo_axis[3] = {lo.x, lo.y, lo.z};
+        const float hi_axis[3] = {hi.x, hi.y, hi.z};
+        float t_enter = 0.0f;
+        float t_exit = closest;
+        bool miss = false;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (std::abs(dir_axis[axis]) < 1e-8f) {
+                // Parallel to this slab: a miss when the origin is outside it.
+                if (origin_axis[axis] < lo_axis[axis] || origin_axis[axis] > hi_axis[axis]) {
+                    miss = true;
+                    break;
+                }
+                continue;
+            }
+            const float inv = 1.0f / dir_axis[axis];
+            float t0 = (lo_axis[axis] - origin_axis[axis]) * inv;
+            float t1 = (hi_axis[axis] - origin_axis[axis]) * inv;
+            if (t0 > t1) {
+                std::swap(t0, t1);
+            }
+            t_enter = std::max(t_enter, t0);
+            t_exit = std::min(t_exit, t1);
+            if (t_enter > t_exit) {
+                miss = true;
+                break;
+            }
+        }
+        if (miss) {
+            continue;
+        }
+        if (t_enter >= 0.0f && t_enter < closest) {
+            closest = t_enter;
+            hit = true;
+        }
+    }
+    return hit ? closest : -1.0f;
+}
+
+void Runtime::update_follow_camera(float dt) {
+    m_follow_active = false;
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+
+    const CameraComponent* cam = nullptr;
+    for (auto e : world.query<CameraComponent>()) {
+        const auto* c = world.get<CameraComponent>(e);
+        if (c == nullptr || !c->is_active) {
+            continue;
+        }
+        cam = c;
+        break;
+    }
+    if (cam == nullptr || cam->follow_target.empty()) {
+        return;
+    }
+
+    const ecs::Entity target = find_entity_by_name(world, cam->follow_target);
+    if (target == ecs::kInvalidEntity) {
+        // The named entity is not there. The camera keeps its last position
+        // instead of snapping to the origin: a camera that teleports because
+        // a name is wrong is worse than one that waits for the entity.
+        m_follow_active = m_follow_camera.initialised;
+        return;
+    }
+    const scene::Transform* t = world.get<scene::Transform>(target);
+    if (t == nullptr) {
+        m_follow_active = m_follow_camera.initialised;
+        return;
+    }
+
+    // The pivot: the target's position plus the offset, in the target's own
+    // space, so the pivot stays on the character's head when the character
+    // turns.
+    const Vec3 offset{cam->pivot_x, cam->pivot_y, cam->pivot_z};
+    const Vec3 rotated = t->world_rot.rotate(offset);
+    const Vec3 pivot{t->world_x + rotated.x, t->world_y + rotated.y, t->world_z + rotated.z};
+
+    // Where the camera wants to be, and where it looks.
+    Vec3 desired = runtime::follow_camera_position(pivot, cam->yaw, cam->pitch, cam->distance);
+
+    // The collision pull-in: something solid between the pivot and the camera
+    // moves the camera in front of it. Without this the camera ends up
+    // inside a tree and the player sees the inside of a trunk.
+    if (cam->avoid_collision && cam->collision_radius > 0.0f) {
+        const Vec3 delta = desired - pivot;
+        const f32 length = delta.length();
+        if (length > 1e-4f) {
+            const Vec3 direction = delta / length;
+            const auto obstacles = collect_camera_obstacles(world);
+            const f32 hit = camera_obstacle_hit(obstacles, pivot, direction, length,
+                                                cam->collision_radius);
+            if (hit >= 0.0f) {
+                desired = runtime::follow_camera_avoid(pivot, desired, hit, cam->collision_radius,
+                                                      cam->collision_radius * 2.0f);
+            }
+        }
+    }
+
+    const f32 blend = runtime::follow_camera_blend(cam->smoothing, dt);
+    if (!m_follow_camera.initialised) {
+        // The first frame: snap. A camera that eases in from the origin
+        // spends the first second of every game flying across the map.
+        m_follow_camera.position = desired;
+        m_follow_camera.target = pivot;
+        m_follow_camera.initialised = true;
+    } else {
+        const Vec3 position = m_follow_camera.position + (desired - m_follow_camera.position) * blend;
+        const Vec3 look = m_follow_camera.target + (pivot - m_follow_camera.target) * blend;
+        m_follow_camera.position = position;
+        m_follow_camera.target = look;
+    }
+    m_follow_active = true;
 }
 
 void Runtime::advance_time_of_day(f32 dt) {

@@ -14,6 +14,7 @@
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Runtime/CameraFollow.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Physics/FixedTimestep.hpp>
 #include <NF/Physics/PhysicsWorld.hpp>
@@ -839,7 +840,34 @@ public:
     // from maintaining a second camera path that can desync.
     bool extract_camera(uint32_t target_width, uint32_t target_height, rendering::Camera& out);
 
+    /// The camera's follow state, for the editor's viewport overlay and for
+    /// the tests. `active` is false when no camera follows anything.
+    const runtime::FollowCameraState& follow_camera_state() const { return m_follow_camera; }
+    bool follow_camera_active() const { return m_follow_active; }
+
 private:
+    /// Places the follow camera for this frame: the pivot on the target, the
+    /// orbit around it, the collision pull-in, and the smoothing.
+    ///
+    /// Called from update() so the camera moves with the same clock as
+    /// everything else. A camera placed by the render path would be one frame
+    /// behind the thing it follows.
+    void update_follow_camera(float dt);
+
+    /// The scene's static box colliders, as world-space boxes. The camera's
+    /// collision test uses the same list the navigation volume does, so the
+    /// camera and the AI agree about what a wall is.
+    struct CameraObstacle {
+        Vec3 min{0.0f, 0.0f, 0.0f};
+        Vec3 max{0.0f, 0.0f, 0.0f};
+    };
+    std::vector<CameraObstacle> collect_camera_obstacles(ecs::World& world) const;
+
+    /// How far a sphere of `radius` travels from `origin` along `direction`
+    /// before it hits one of the obstacles. -1 when nothing was hit.
+    float camera_obstacle_hit(const std::vector<CameraObstacle>& obstacles, const Vec3& origin,
+                               const Vec3& direction, float max_distance, float radius) const;
+
     struct SceneRuntimeData {
         std::unique_ptr<scene::Scene> scene;
     };
@@ -857,6 +885,13 @@ private:
     // for the id pass. Null when unavailable — callers fall back to CPU picking.
     std::unique_ptr<rendering::GpuPicker> m_picker;
     std::unique_ptr<physics::PhysicsWorld> m_physics;
+
+    /// The follow camera's state: where it is, where it looks, and whether
+    /// it has been placed at all. `m_follow_active` says whether any camera
+    /// is following anything right now; without it a camera that stopped
+    /// following would keep its last position forever.
+    runtime::FollowCameraState m_follow_camera;
+    bool m_follow_active = false;
     /// 1/60 s is the conventional choice: fine enough that a fast-moving body
     /// does not tunnel through a thin one, coarse enough to stay cheap.
     physics::FixedTimestep m_physics_clock{1.0f / 60.0f, 8};
