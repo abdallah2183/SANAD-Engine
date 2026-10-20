@@ -1,0 +1,8 @@
+# SANAD Material v1
+name: Character
+base_color: 0.82 0.62 0.48 1
+metallic: 0.0
+roughness: 0.65
+ao: 1
+emission: 0 0 0
+emission_strength: 0

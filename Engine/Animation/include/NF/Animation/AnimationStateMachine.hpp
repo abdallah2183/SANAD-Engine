@@ -55,6 +55,12 @@ public:
     /// Add a state. The first state added is the default/entry state.
     void add_state(const AnimState& state);
 
+    /// The states, so a caller can attach the transitions to them. The
+    /// transitions hang off the state they leave, and a state machine built
+    /// from a file's clips only knows the states once they all exist.
+    std::vector<AnimState>& states() { return m_states; }
+    const std::vector<AnimState>& states() const { return m_states; }
+
     /// Set a parameter value by name.
     void set_param(const std::string& name, ParamValue value);
 

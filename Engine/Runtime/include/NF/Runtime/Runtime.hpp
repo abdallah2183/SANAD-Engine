@@ -15,6 +15,7 @@
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/Runtime/CameraFollow.hpp>
+#include <NF/Runtime/CharacterComponent.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Physics/FixedTimestep.hpp>
 #include <NF/Physics/PhysicsWorld.hpp>
@@ -142,6 +143,11 @@ public:
 
     bool has_scene() const { return m_scene_data_ptr && m_scene_data_ptr->scene; }
     size_t mesh_count() const { return m_mesh_library ? m_mesh_library->size() : 0; }
+    /// The mesh library, for the callers that have to reach a mesh the
+    /// runtime owns: a skinned character's vertices are rewritten every
+    /// frame, and only the owner of the buffer can do that.
+    rendering::MeshLibrary* mesh_library() { return m_mesh_library.get(); }
+    const rendering::MeshLibrary* mesh_library() const { return m_mesh_library.get(); }
 
     // --- Physics ------------------------------------------------------------
     //
@@ -843,9 +849,28 @@ public:
     /// The camera's follow state, for the editor's viewport overlay and for
     /// the tests. `active` is false when no camera follows anything.
     const runtime::FollowCameraState& follow_camera_state() const { return m_follow_camera; }
+    /// How far the characters' meshes have moved from their bind pose over
+    /// the run. It is the character's version of the animated-transform
+    /// deviation: a character's motion is in its mesh, not in its placement.
+    float character_max_deviation() const { return m_character_max_deviation; }
+    /// How many RIGGED characters the scene has and the engine loaded. Not
+    /// the physics characters: those are controllers, these are the meshes
+    /// with a skeleton.
+    size_t rigged_character_count() const { return m_character_count; }
     bool follow_camera_active() const { return m_follow_active; }
 
 private:
+    /// Loads the characters the scene declares: a glTF with a skin and
+    /// animations becomes a mesh, a skeleton, the clips and the skin data.
+    ///
+    /// Called after the scene is adopted and before the first frame, so a
+    /// character is ready before anything draws it.
+    void load_characters();
+
+    /// Moves the characters: the speed drives the locomotion state machine,
+    /// the pose becomes a skin palette, and the palette deforms the mesh.
+    void step_characters(float dt);
+
     /// Places the follow camera for this frame: the pivot on the target, the
     /// orbit around it, the collision pull-in, and the smoothing.
     ///
@@ -892,6 +917,16 @@ private:
     /// following would keep its last position forever.
     runtime::FollowCameraState m_follow_camera;
     bool m_follow_active = false;
+
+    /// The skin palette of the character being stepped: one matrix per
+    /// bone, recomputed every frame. It is scratch space, so it is a member
+    /// rather than an allocation per frame.
+    std::vector<Mat4> m_character_palette;
+    /// The largest distance any character's vertices travelled from their bind
+    /// pose over the run.
+    float m_character_max_deviation = 0.0f;
+    /// How many characters the scene declared and the runtime loaded.
+    size_t m_character_count = 0;
     /// 1/60 s is the conventional choice: fine enough that a fast-moving body
     /// does not tunnel through a thin one, coarse enough to stay cheap.
     physics::FixedTimestep m_physics_clock{1.0f / 60.0f, 8};

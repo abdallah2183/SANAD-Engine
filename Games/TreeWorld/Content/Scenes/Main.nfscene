@@ -1,12 +1,12 @@
 # SANAD Scene v1
 version: 1
 name: TreeWorld
-entity_count: 63
+entity_count: 56
 ---
 entity: 1:0
   Name: MainCamera
   Transform: local(0,8.5,19.0) world(0,8.5,19.0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Camera: fov=60 aspect=1.7777778 near=0.1 far=220 active=true
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=220 active=true follow=Player pivot=0,1.45,0 distance=5.2 yaw=0 pitch=-13 smoothing=9 radius=0.35 avoid=1
 ---
 entity: 2:0
   Name: Sun
@@ -28,39 +28,10 @@ entity: 4:0
 ---
 entity: 5:0
   Name: Player
-  Transform: local(0,1.05,0) world(0,1.05,0) rot(0,0,0) scale(0.5,0.72,0.4) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Shirt
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Mesh: material=content://Materials/Character
+  CharacterRig: file=content://Characters/Explorer.gltf
   Script: lang=lua path=content://Scripts/explorer.lua
----
-entity: 6:0
-  Name: Head
-  Transform: local(0,1.55,0) world(0,1.55,0) rot(0,0,0) scale(0.36,0.36,0.36) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Skin
----
-entity: 7:0
-  Name: Hair
-  Transform: local(0,1.64,0) world(0,1.64,0) rot(0,0,0) scale(0.38,0.22,0.38) parent(4294967295:0)
-  Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Hair
----
-entity: 8:0
-  Name: LegL
-  Transform: local(-0.18,0.35,0) world(-0.18,0.35,0) rot(0,0,0) scale(0.16,0.55,0.18) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Pants
----
-entity: 9:0
-  Name: LegR
-  Transform: local(0.18,0.35,0) world(0.18,0.35,0) rot(0,0,0) scale(0.16,0.55,0.18) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Pants
----
-entity: 10:0
-  Name: ArmL
-  Transform: local(-0.30,1.05,0) world(-0.30,1.05,0) rot(0,0,0) scale(0.12,0.48,0.12) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Shirt
----
-entity: 11:0
-  Name: ArmR
-  Transform: local(0.30,1.05,0) world(0.30,1.05,0) rot(0,0,0) scale(0.12,0.48,0.12) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Shirt
 ---
 entity: 12:0
   Name: Tree1Trunk
@@ -316,8 +287,3 @@ entity: 62:0
   Name: Firefly5
   Transform: local(2.8,1.25,-2.5) world(2.8,1.25,-2.5) rot(0,0,0) scale(0.13,0.13,0.13) parent(4294967295:0)
   Mesh: asset_id=3d8f8b09-3e06-448e-94d4-c4c5a1921bc6 material=content://Materials/Glow
----
-entity: 63:0
-  Name: Neck
-  Transform: local(0,1.43,0) world(0,1.43,0) rot(0,0,0) scale(0.13,0.16,0.13) parent(4294967295:0)
-  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Skin

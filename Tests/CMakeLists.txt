@@ -140,6 +140,7 @@ add_executable(RuntimeTests
     TestFramework.cpp
     RuntimeTests/test_runtime_scene.cpp
     RuntimeTests/test_camera_follow.cpp
+    RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp
     RuntimeTests/test_runtime.cpp
     RuntimeTests/test_runtime_3b.cpp
@@ -203,6 +204,10 @@ add_executable(RuntimeTests
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)
+# The character the engine ships, so the character tests exercise the real
+# asset rather than a fixture that could drift away from it.
+target_compile_definitions(RuntimeTests PRIVATE
+    "NF_CHARACTER_PATH=\"${CMAKE_SOURCE_DIR}/Games/TreeWorld/Content/Characters/Explorer.gltf\"")
 nf_target_set_warnings(RuntimeTests)
 
 # --- Physics tests (shapes, broadphase, narrowphase, solver, determinism) ---

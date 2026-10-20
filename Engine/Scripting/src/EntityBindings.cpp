@@ -79,6 +79,28 @@ int l_set_entity_pos(lua_State* L) {
     return 1;
 }
 
+int l_set_entity_rot(lua_State* L) {
+    ecs::World* w = bound_world(L);
+    ecs::Entity e;
+    if (!check_entity(L, 1, e) || !w) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    scene::Transform* t = w->get<scene::Transform>(e);
+    if (!t) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    // The yaw, in degrees. A character that walks sideways because nothing
+    // told it which way it was going is the most visible thing a third-person
+    // game can get wrong, and the script is the only thing that knows which
+    // way the player pressed.
+    t->rot_y = static_cast<float>(luaL_checknumber(L, 3));
+    t->dirty = true;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int l_find_entity(lua_State* L) {
     ecs::World* w = bound_world(L);
     const char* name = luaL_checkstring(L, 1);
@@ -200,6 +222,8 @@ void install_ecs_bindings(LuaVM& vm, ecs::World& world) {
     lua_setfield(L, -2, "set_entity_pos");
     lua_pushcfunction(L, l_set_entity_scale);
     lua_setfield(L, -2, "set_entity_scale");
+    lua_pushcfunction(L, l_set_entity_rot);
+    lua_setfield(L, -2, "set_entity_rot");
     lua_pushcfunction(L, l_find_entity);
     lua_setfield(L, -2, "find_entity");
     lua_pushcfunction(L, l_entity_name);

@@ -409,6 +409,10 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     m_scene_data_ptr = std::make_unique<SceneRuntimeData>();
     m_scene_data_ptr->scene = std::move(scene);
     m_loaded_scene_path = logical_path;
+    // The characters load here, before the first frame: a character is a
+    // glTF with a skin and animations, and the mesh it needs has to exist
+    // before anything tries to draw it.
+    load_characters();
     // A freshly loaded scene gets a fresh attempt at every mesh. Failure was
     // recorded per-asset, and the asset may have been cooked since it last
     // failed, so the previous scene's verdicts must not carry over.
@@ -639,6 +643,10 @@ void Runtime::update(float dt) {
     step_destruction(dt);
     auto& world = m_scene_data_ptr->scene->world();
     scene::propagate_transforms(world);
+    // The characters move AFTER the animation has been sampled (the pose is
+    // what the skinning reads) and after the transforms are final (the speed
+    // that drives the locomotion state machine is measured from them).
+    step_characters(dt);
     // The camera is placed AFTER the transforms are final, so it follows the
     // character where the character actually IS this frame and not where it
     // was. It is also after the scripts, so a script that moved the player
@@ -711,7 +719,15 @@ u32 Runtime::step_animation(float dt) {
         // Drive the entity from the root bone so the motion reaches the renderer
         // and the editor. The delta is taken from the rest pose, so a clip that
         // leaves the root alone leaves the entity exactly where it was authored.
-        if (transform != nullptr && anim->has_base_transform && !anim->last_local_pose.empty()) {
+        //
+        // A CHARACTER is the exception: its motion IS the mesh, and the mesh
+        // is skinned from the same pose. Driving the entity from the root bone
+        // as well would move the character twice -- once through the skinning
+        // and once through its placement -- and a character's placement
+        // belongs to the game (a script, a controller, the player), not to
+        // the clip.
+        if (transform != nullptr && anim->has_base_transform && !anim->last_local_pose.empty() &&
+            !world.has<CharacterComponent>(e)) {
             const animation::LocalPose& bone = anim->last_local_pose[0];
             const animation::Bone& rest = anim->skeleton.bones[0];
 
@@ -758,8 +774,23 @@ std::vector<Runtime::AnimatedTransformSample> Runtime::animated_transform_sample
         if (t == nullptr) {
             continue;
         }
+        // A CHARACTER's animation does not drive its transform: its motion is
+        // in its mesh, and its placement belongs to the game. Reporting the
+        // transform here would say "this entity never moved" about a character
+        // that is walking perfectly well.
+        if (world.has<CharacterComponent>(e)) {
+            continue;
+        }
         AnimatedTransformSample s;
         s.entity_id = e.id;
+        {
+            // TEMPORARY DIAGNOSTIC
+            std::string nm = "?";
+            if (const auto* nc = world.get<scene::NameComponent>(e)) {
+                nm = nc->name;
+            }
+            NF_LOG_WARN(LogCategory::Core, "DIAG animated entity id={} name={}", e.id, nm);
+        }
         s.translation = Vec3(t->local_x, t->local_y, t->local_z);
         s.rotation_euler_degrees = Vec3(t->rot_x, t->rot_y, t->rot_z);
         s.scale = Vec3(t->scale_x, t->scale_y, t->scale_z);

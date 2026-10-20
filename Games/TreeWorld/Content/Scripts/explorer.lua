@@ -1,13 +1,14 @@
 -- content://Scripts/explorer.lua
--- TreeWorld ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a small third-person forest walk.
+-- TreeWorld — a small third-person forest walk.
 --
--- WASD / arrows move the explorer; collect five fireflies. The camera is a
--- fixed wide shot so the whole clearing stays readable.
+-- WASD / arrows move the explorer; collect five fireflies. The camera
+-- follows the explorer, so this is a third-person game rather than a
+-- fixed wide shot.
 --
--- The character is six ordinary scene entities (Player body, Head, two arms,
--- two legs) rather than a parent chain: the loader's hierarchy guard is strict,
--- and a flat group is easier to inspect in the outliner. explorer.lua moves the
--- body and places the other five parts around it every frame.
+-- The explorer is ONE entity with a rig: a glTF that carries a skeleton
+-- and three clips (idle, walk, run). The engine skins it and plays the
+-- clip that matches how fast the character is moving -- this script moves
+-- the character, and the locomotion does the rest.
 
 local speed = 3.2
 local bound = 5.2
@@ -18,18 +19,9 @@ local won = false
 local clock = 0
 local announced = false
 
-local parts = {}
-local function part(name)
-    if not parts[name] then
-        local id, gen = nf.find_entity(name)
-        parts[name] = { id = id, gen = gen }
-    end
-    return parts[name].id, parts[name].gen
-end
-
 local function close_enough(ax, az, bx, bz, r)
-    local dx, dz = ax - bx, az - bz
-    return dx * dx + dz * dz < r * r
+    local dx, az_ = ax - bx, az - bz
+    return dx * dx + az_ * az_ < r * r
 end
 
 function update(dt)
@@ -51,27 +43,16 @@ function update(dt)
     x = nf.clamp(x + mx * speed * dt, -bound, bound)
     z = nf.clamp(z + mz * speed * dt, -bound, bound)
 
-    -- The body is the root entity (mesh + script). y stays at chest height.
-    nf.set_entity_pos(self_id, self_gen, x, 1.05, z)
+    -- The character stands on the ground: the rig's origin is at its feet.
+    nf.set_entity_pos(self_id, self_gen, x, 0, z)
 
-    -- Layer a compact walk cycle on top. All positions are absolute because the
-    -- parts are siblings, not children.
-    local bob = math.sin(clock * 8.0) * 0.045
-    local swing = math.sin(clock * 8.0) * 0.12
-    local head, head_gen = part("Head")
-    if head then nf.set_entity_pos(head, head_gen, x, 1.55 + bob, z) end
-    local neck, neck_gen = part("Neck")
-    if neck then nf.set_entity_pos(neck, neck_gen, x, 1.43 + bob, z) end
-    local hair, hair_gen = part("Hair")
-    if hair then nf.set_entity_pos(hair, hair_gen, x, 1.64 + bob, z) end
-    local arm_l, arm_l_gen = part("ArmL")
-    if arm_l then nf.set_entity_pos(arm_l, arm_l_gen, x - 0.30, 1.05, z + swing) end
-    local arm_r, arm_r_gen = part("ArmR")
-    if arm_r then nf.set_entity_pos(arm_r, arm_r_gen, x + 0.30, 1.05, z - swing) end
-    local leg_l, leg_l_gen = part("LegL")
-    if leg_l then nf.set_entity_pos(leg_l, leg_l_gen, x - 0.18, 0.35, z - swing) end
-    local leg_r, leg_r_gen = part("LegR")
-    if leg_r then nf.set_entity_pos(leg_r, leg_r_gen, x + 0.18, 0.35, z + swing) end
+    -- And it faces where it is going. A character that slides sideways while
+    -- its legs swing forward is the most visible thing a third-person game can
+    -- get wrong, and the script is the only thing that knows which way the
+    -- player pressed.
+    if len > 0.05 then
+        nf.set_entity_rot(self_id, self_gen, math.deg(math.atan(mx, mz)))
+    end
 
     for _, name in ipairs(flies) do
         if not collected[name] then
@@ -90,6 +71,6 @@ function update(dt)
 
     if score >= #flies and not won then
         won = true
-        print("ALL FIREFLIES FOUND ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the forest is awake")
+        print("ALL FIREFLIES FOUND — the forest is awake")
     end
 end

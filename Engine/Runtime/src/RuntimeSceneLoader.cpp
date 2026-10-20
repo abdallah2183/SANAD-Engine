@@ -1,5 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Runtime/CharacterComponent.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Assets/AssetId.hpp>
 #include <NF/Audio/AudioDecoder.hpp>
@@ -570,7 +571,16 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 }
             } else if (line.rfind("  Mesh:",0)==0) {
                 size_t id_pos = line.find("asset_id=");
-                if (id_pos != std::string::npos) {
+                size_t mat_pos0 = line.find("material=");
+                if (id_pos == std::string::npos && mat_pos0 != std::string::npos) {
+                    // A material without a mesh. A rigged character gets its
+                    // geometry from the rig, and the material is a separate
+                    // thing: refusing the line would leave the character with
+                    // the engine's grey fallback.
+                    MeshComponent comp;
+                    comp.material = trim(line.substr(mat_pos0 + 9));
+                    scene->world().add<MeshComponent>(e, comp);
+                } else if (id_pos != std::string::npos) {
                     size_t start = id_pos+9;
                     size_t end = line.find(" ", start);
                     std::string id_str = trim(line.substr(start, end-start));
@@ -819,6 +829,17 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 (void)field_float(line, "blast_radius=", d.blast_radius);
                 d.enabled = line.find("enabled=false") == std::string::npos;
                 scene->world().add<DestructibleComponent>(e, d);
+            } else if (line.rfind("  CharacterRig:",0)==0) {
+                // The RIG: a glTF that carries the mesh, the skin and the
+                // clips. The file is the only field -- everything else (the
+                // skeleton, the clips, the locomotion) comes from it.
+                //
+                // Its own line, not "Character:": that one is the physics
+                // character controller, and a scene may carry both (the
+                // controller moves, the rig draws).
+                CharacterComponent rigged;
+                rigged.source = field_value(line, "file=");
+                scene->world().add<CharacterComponent>(e, rigged);
             } else if (line.rfind("  Animation:",0)==0) {
                 animation::AnimationComponent anim;
 
@@ -1520,6 +1541,13 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " fog_color(" << pp->fog_r << "," << pp->fog_g << "," << pp->fog_b << ")"
                 << " fog_start=" << pp->fog_start << " fog_end=" << pp->fog_end;
             out << "\n";
+        }
+        const auto* rigged = scene_obj.world().get<CharacterComponent>(e);
+        if (rigged) {
+            // Only the source is written: the skeleton, the clips and the
+            // skin data all come from the file, and writing a copy of them
+            // would be a second source of truth that can disagree with it.
+            out << "  CharacterRig: file=" << rigged->source << "\n";
         }
         const auto* c = scene_obj.world().get<CameraComponent>(e);
         if (c) {

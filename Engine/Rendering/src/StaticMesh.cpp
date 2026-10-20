@@ -97,7 +97,7 @@ void StaticMesh::compute_bounds(MeshLOD& lod) {
     }
 }
 
-bool StaticMesh::upload(rhi::IGraphicsDevice& device) {
+bool StaticMesh::upload(rhi::IGraphicsDevice& device, bool dynamic_vertices) {
     if (m_lods.empty()) {
         NF_LOG_ERROR(LogCategory::Core, "StaticMesh '{}' has no LODs", m_name);
         return false;
@@ -155,7 +155,12 @@ bool StaticMesh::upload(rhi::IGraphicsDevice& device) {
         rhi::BufferDesc vb_desc{};
         vb_desc.size = vb_size;
         vb_desc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::TransferDst;
-        vb_desc.memory = rhi::MemoryUsage::GPUOnly;
+        // A dynamic mesh's vertices are rewritten every frame, and the
+        // per-frame path is Buffer::update(): a device-local buffer would
+        // stage the copy and wait for the queue, which is a full GPU stall
+        // per frame. Host-visible memory makes it a memcpy.
+        vb_desc.memory = dynamic_vertices ? rhi::MemoryUsage::CPUToGPU
+                                          : rhi::MemoryUsage::GPUOnly;
         auto vb = device.create_buffer(vb_desc);
         if (!vb) return false;
 

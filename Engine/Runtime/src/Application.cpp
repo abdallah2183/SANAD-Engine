@@ -546,8 +546,8 @@ int Application::run() {
         // rather than a first-vs-last one.
         if (!first_anim_sample.empty()) {
             NF_LOG_INFO(LogCategory::Core,
-                        "Animated entities: {} (max transform deviation over {} frames: {})",
-                        first_anim_sample.size(), frame_count, anim_max_deviation);
+                         "Animated entities: {} (max transform deviation over {} frames: {})",
+                         first_anim_sample.size(), frame_count, anim_max_deviation);
             if (anim_max_deviation <= 1e-4f) {
                 NF_LOG_ERROR(LogCategory::Core,
                              "Scene has {} animated entit{} but no driven transform moved over {} "
@@ -556,6 +556,23 @@ int Application::run() {
                              first_anim_sample.size(),
                              first_anim_sample.size() == 1 ? "y" : "ies", frame_count,
                              anim_max_deviation);
+                animation_stalled = true;
+            }
+        } else if (runtime.rigged_character_count() > 0) {
+            // A RIGGED character's animation moves its mesh, not its
+            // transform: its placement belongs to the game. So a scene whose
+            // only animation is a character is checked by the character's own
+            // deformation -- otherwise the check would report a walking
+            // character as "an animation that is not running".
+            const float character_deviation = runtime.character_max_deviation();
+            NF_LOG_INFO(LogCategory::Core,
+                        "Animated characters: {} (max mesh deviation over {} frames: {})",
+                        runtime.rigged_character_count(), frame_count, character_deviation);
+            if (character_deviation <= 1e-4f) {
+                NF_LOG_ERROR(LogCategory::Core,
+                             "Scene has {} character(s) whose mesh never moved over {} frames (max "
+                             "deviation {}). The rig is loaded but the pose is not reaching the mesh.",
+                             runtime.rigged_character_count(), frame_count, character_deviation);
                 animation_stalled = true;
             }
         }

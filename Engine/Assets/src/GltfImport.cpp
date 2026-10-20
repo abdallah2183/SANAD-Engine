@@ -715,6 +715,28 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
 
 } // namespace
 
+// The parser's verdict, in words.
+//
+// The parser distinguishes a broken JSON from a missing buffer from an
+// allocation failure, and an error that says only "not valid glTF" sends
+// the reader looking in the wrong place: a file with a typo in its JSON is
+// not the same problem as a file whose .bin is missing.
+const char* gltf_result_name(cgltf_result result) {
+    switch (result) {
+        case cgltf_result_success: return "ok";
+        case cgltf_result_data_too_short: return "the document is too short";
+        case cgltf_result_unknown_format: return "unknown container format";
+        case cgltf_result_invalid_json: return "the JSON is malformed";
+        case cgltf_result_invalid_gltf: return "the document is not a valid glTF";
+        case cgltf_result_invalid_options: return "the parser options are invalid";
+        case cgltf_result_file_not_found: return "the file was not found";
+        case cgltf_result_io_error: return "an I/O error";
+        case cgltf_result_out_of_memory: return "out of memory";
+        case cgltf_result_legacy_gltf: return "the document is glTF 1.0";
+        default: return "unknown error";
+    }
+}
+
 GltfImportResult import_gltf_memory(const void* data, usize size, const std::string& logical_path) {
     GltfImportResult result;
     if (!data || size == 0) {
@@ -728,8 +750,14 @@ GltfImportResult import_gltf_memory(const void* data, usize size, const std::str
     const bool glb_container = size >= 4 && std::memcmp(data, "glTF", 4) == 0;
     cgltf_options options{};
     cgltf_data* parsed = nullptr;
-    if (cgltf_parse(&options, data, size, &parsed) != cgltf_result_success || !parsed) {
-        result.error = "not a valid glTF document";
+    const cgltf_result parse_result = cgltf_parse(&options, data, size, &parsed);
+    if (parse_result != cgltf_result_success || !parsed) {
+        // The RESULT CODE, not just "not a valid glTF document": the parser
+        // distinguishes a broken JSON from a missing buffer from an
+        // allocation failure, and an error that says only "not valid" sends
+        // the reader looking in the wrong place.
+        result.error = std::string("not a valid glTF document (") +
+                       gltf_result_name(parse_result) + ")";
         return result;
     }
     // Resolves embedded (base64) buffers; external .bin needs the file path
@@ -812,9 +840,13 @@ GltfImportResult import_gltf_file(const std::string& path) {
 
     cgltf_options options{};
     cgltf_data* parsed = nullptr;
-    if (cgltf_parse(&options, bytes.data(), bytes.size(), &parsed) != cgltf_result_success ||
-        !parsed) {
-        result.error = std::string("not a valid glTF document: ") + path;
+    const cgltf_result parse_result = cgltf_parse(&options, bytes.data(), bytes.size(), &parsed);
+    if (parse_result != cgltf_result_success || !parsed) {
+        // The parser's verdict, in words: a malformed JSON and a missing
+        // buffer are not the same problem, and "not valid glTF" sends the
+        // reader looking in the wrong place.
+        result.error = std::string("not a valid glTF document: ") + path + " (" +
+                       gltf_result_name(parse_result) + ")";
         return result;
     }
     if (cgltf_load_buffers(&options, parsed, path.c_str()) != cgltf_result_success) {
