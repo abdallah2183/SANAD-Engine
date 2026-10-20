@@ -36,6 +36,11 @@ f32 compute_attenuation(const SpatialSettings& s, f32 distance) {
         case AttenuationModel::Inverse:
             return 1.0f / (1.0f + s.rolloff * d);
         case AttenuationModel::Exponential: {
+            // min_distance is a divisor here. A zero (or denormal) value made
+            // the ratio infinite and the result NaN — which then propagated
+            // into the whole mix. Without a reference distance there is no
+            // ratio to speak of, so fall back to the un-attenuated value.
+            if (s.min_distance <= 1e-8f) return 1.0f;
             f32 ratio = distance / s.min_distance;
             if (ratio < 1e-6f) return 1.0f;
             return std::pow(ratio, -s.rolloff);
@@ -204,9 +209,22 @@ void AudioBus::mix_source(AudioSource& source,
         position += source_step;
     }
 
-    source.sample_cursor =
-        static_cast<usize>(std::floor(position));
-    source.sample_position = position;
+    // The cursor is an integer index into the buffer, so it has to be brought
+    // into range BEFORE the cast. `position` can leave the usize range: a
+    // source with an extreme (but finite and positive) pitch pushes the step
+    // far past the buffer, and converting an out-of-range float to an
+    // integer type is undefined behaviour. Clamping keeps the conversion
+    // defined; the buffer length is the real ceiling for a cursor.
+    f64 cursor = position;
+    if (!std::isfinite(cursor) || cursor < 0.0) {
+        cursor = 0.0;
+    }
+    const f64 max_cursor = static_cast<f64>(frames_available);
+    if (cursor > max_cursor) {
+        cursor = max_cursor;
+    }
+    source.sample_cursor = static_cast<usize>(std::floor(cursor));
+    source.sample_position = cursor;
 }
 
 // ---------------------------------------------------------------------------

@@ -114,6 +114,12 @@ public:
     f32 bus_peak(BusId bus) const;
 
 private:
+    /// Grows EVERY bus accumulator to `num_frames` and raises the block size.
+    /// All buses must stay the same length: finalize() and bus_peak() sweep
+    /// m_frames frames over every bus, so a bus left shorter than the block
+    /// would be read past its end.
+    void grow_block(usize num_frames);
+
     std::vector<f32> m_left[kBusCount];
     std::vector<f32> m_right[kBusCount];
     usize m_frames = 0;

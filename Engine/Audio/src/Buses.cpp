@@ -123,6 +123,26 @@ void BusMixer::begin_block(usize num_frames) {
     }
 }
 
+void BusMixer::grow_block(usize num_frames) {
+    // EVERY bus accumulator must be as long as the block. finalize() and
+    // bus_peak() iterate m_frames frames over every bus, so a bus that was
+    // left at the old (shorter) length would be read past its end — the
+    // garbage samples in the master mix came from exactly that.
+    //
+    // resize() (not assign()) keeps the samples the bus already holds: a bus
+    // that was fed a shorter block keeps its audio, it just gets zero-padded
+    // to the new length.
+    for (u32 b = 0; b < kBusCount; ++b) {
+        if (m_left[b].size() < num_frames) {
+            m_left[b].resize(num_frames, 0.0f);
+            m_right[b].resize(num_frames, 0.0f);
+        }
+    }
+    if (num_frames > m_frames) {
+        m_frames = num_frames;
+    }
+}
+
 void BusMixer::mix_source(AudioSource& source,
                           const Vec3& listener_pos,
                           const Vec3& listener_forward,
@@ -134,12 +154,11 @@ void BusMixer::mix_source(AudioSource& source,
     if (index >= kBusCount || num_frames == 0) {
         return;
     }
-    // Contract is begin_block first; resize defensively so a mis-sized block
-    // degrades to correct output instead of writing out of bounds.
+    // Contract is begin_block first; grow the whole block defensively so a
+    // mis-sized block degrades to correct output instead of writing out of
+    // bounds (and so the other buses stay in step with this one).
     if (m_left[index].size() < num_frames) {
-        m_left[index].assign(num_frames, 0.0f);
-        m_right[index].assign(num_frames, 0.0f);
-        m_frames = num_frames;
+        grow_block(num_frames);
     }
 
     AudioBus router;
@@ -157,9 +176,7 @@ void BusMixer::mix_buffer(const f32* left, const f32* right, usize num_frames,
         return;
     }
     if (m_left[index].size() < num_frames) {
-        m_left[index].assign(num_frames, 0.0f);
-        m_right[index].assign(num_frames, 0.0f);
-        m_frames = num_frames;
+        grow_block(num_frames);
     }
     const usize frames = std::min(num_frames, m_left[index].size());
     for (usize i = 0; i < frames; ++i) {
@@ -198,7 +215,12 @@ void BusMixer::finalize(f32* out_left, f32* out_right, usize num_frames) {
         if (scale == 0.0f) {
             continue; // muted bus: skip the sweep, accumulators clear below
         }
-        for (usize i = 0; i < frames; ++i) {
+        // Clamp to the bus's own length: a bus that was never fed this block
+        // is shorter than the block, and reading it up to `frames` would run
+        // off the end of the accumulator (read_bus already clamps the same
+        // way — the header promises missing frames read as silence).
+        const usize bus_frames = std::min(frames, m_left[b].size());
+        for (usize i = 0; i < bus_frames; ++i) {
             out_left[i] += m_left[b][i] * scale;
             out_right[i] += m_right[b][i] * scale;
         }
@@ -216,7 +238,10 @@ f32 BusMixer::bus_peak(BusId bus) const {
         return 0.0f;
     }
     f32 peak = 0.0f;
-    for (usize i = 0; i < m_frames; ++i) {
+    // Clamp to the bus's own length for the same reason finalize() does: a
+    // bus that was not fed this block is shorter than m_frames.
+    const usize frames = std::min(m_frames, m_left[index].size());
+    for (usize i = 0; i < frames; ++i) {
         peak = std::max(peak, std::fabs(m_left[index][i]));
         peak = std::max(peak, std::fabs(m_right[index][i]));
     }
