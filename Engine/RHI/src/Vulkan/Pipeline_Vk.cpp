@@ -420,8 +420,8 @@ VulkanPipeline::VulkanPipeline(VulkanDevice* device, const PipelineDesc& desc)
         blend.srcColorBlendFactor = to_vk_blend_factor(attachment.src_color);
         blend.dstColorBlendFactor = to_vk_blend_factor(attachment.dst_color);
         blend.colorBlendOp = to_vk_blend_op(attachment.color_blend_op);
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blend.srcAlphaBlendFactor = to_vk_blend_factor(attachment.src_alpha);
+        blend.dstAlphaBlendFactor = to_vk_blend_factor(attachment.dst_alpha);
         blend.alphaBlendOp = VK_BLEND_OP_ADD;
         blend_attachments.push_back(blend);
     }

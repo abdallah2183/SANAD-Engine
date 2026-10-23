@@ -159,4 +159,72 @@ void move_relative(f32 move_x, f32 move_z, f32 camera_yaw_deg, f32& out_x, f32& 
 /// The deadzone is clamped to [0, 0.95]: at 1.0 nothing could ever pass it.
 void stick_deadzone(f32& x, f32& y, f32 deadzone);
 
+// --- aiming down sights ------------------------------------------------------
+//
+// Holding "aim" pulls the camera in and slows the look. Three numbers, and
+// all three are the same kind of decision as the four above: they belong to
+// the scene, they are geometry, and they are testable without a device.
+//
+// The blend is a separate value rather than a boolean because a camera that
+// teleports between two distances reads as a bug. It is stepped towards the
+// target exponentially, so the same speed produces the same curve at 30, 60
+// or 144 frames per second.
+
+/// Step an aim blend one frame towards `aiming`.
+///
+/// `speed` is the rate of an exponential approach, in units of "fraction of
+/// the remaining distance per second": 12 closes 95% of the gap in a quarter
+/// of a second, which is the usual snap-to-sights feel. `speed <= 0` means
+/// instant, and `dt <= 0` leaves the blend where it is (a paused frame must
+/// not advance the animation).
+f32 aim_blend_step(f32 blend, bool aiming, f32 speed, f32 dt);
+
+/// The camera distance for a blend: `base` at 0, `ads_distance` at 1.
+///
+/// Linear in the blend on purpose — the blend is already the eased value, and
+/// easing twice makes the last centimetres crawl.
+f32 aim_distance(f32 base_distance, f32 ads_distance, f32 blend);
+
+/// The look-sensitivity multiplier for a blend: 1 at 0, `scale` at 1.
+///
+/// Slowing the look while aiming is what makes a scoped shot possible; the
+/// scene says how much, and 1.0 is exactly "no change".
+f32 aim_sensitivity_scale(f32 scale, f32 blend);
+
+// --- recoil ------------------------------------------------------------------
+//
+// A kick is an OFFSET on the view, not a change to where the player aimed.
+// That distinction is the whole design: the aim the player built with the
+// mouse is preserved, the kick rides on top of it, and recovery returns the
+// view to exactly that aim — so a burst does not leave the camera pointing
+// somewhere the player never chose. It is also what makes the feature
+// testable: add a kick, recover, and the state must be back to zero.
+
+/// The angular offset a kick is currently adding to the view, in degrees.
+///
+/// `pitch` is positive for a kick that raises the view (a gun's muzzle climb)
+/// and negative for one that pushes it down; `yaw` is positive to the left,
+/// matching the yaw convention above.
+struct RecoilState {
+    f32 pitch = 0.0f;
+    f32 yaw = 0.0f;
+};
+
+/// Adds a kick to the offset, clamped to +/- `max_abs` on each axis.
+///
+/// Clamped rather than accumulated without limit: a held trigger that adds
+/// two degrees per shot would otherwise point the camera at the sky after a
+/// magazine, and no amount of recovery would bring it back inside one burst.
+/// A non-finite kick is ignored — a script can produce one with a division,
+/// and it would otherwise poison every later frame.
+void recoil_add(RecoilState& state, f32 pitch_deg, f32 yaw_deg, f32 max_abs);
+
+/// Recovers the offset towards zero over `dt` seconds.
+///
+/// Exponential, like the aim blend: `rate` is "fraction of the remaining
+/// offset per second", so 8 leaves about 2% after half a second and the same
+/// curve appears at any frame rate. `rate <= 0` freezes the offset (a scene
+/// that wants permanent recoil, or a test that wants to read it).
+RecoilState recoil_recover(RecoilState state, f32 rate, f32 dt);
+
 } // namespace nf::runtime

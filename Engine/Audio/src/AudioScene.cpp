@@ -183,7 +183,21 @@ void AudioScene::finalize(f32* out_left, f32* out_right) {
         m_echo_configured = false;
     }
 
-    m_mixer.finalize(out_left, out_right, m_frames);
+    // --- master bus: dynamics, then out -------------------------------------
+    //
+    // Only the mixer's contribution is processed. `out_left`/`out_right` may
+    // already contain the device's own base mix, and a master compressor must
+    // not duck that: it belongs to the game's mix, not to whatever the audio
+    // backend put underneath it. The mixer ADDS, so zero the scratch first.
+    std::fill(m_scratch_left.begin(), m_scratch_left.end(), 0.0f);
+    std::fill(m_scratch_right.begin(), m_scratch_right.end(), 0.0f);
+    m_mixer.finalize(m_scratch_left.data(), m_scratch_right.data(), m_frames);
+    m_dynamics.process(m_scratch_left.data(), m_scratch_right.data(), m_frames,
+                       m_sample_rate);
+    for (usize i = 0; i < m_frames; ++i) {
+        out_left[i] += m_scratch_left[i];
+        out_right[i] += m_scratch_right[i];
+    }
 }
 
 } // namespace nf::audio

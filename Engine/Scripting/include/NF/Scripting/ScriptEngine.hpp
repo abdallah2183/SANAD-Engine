@@ -61,6 +61,20 @@ struct ScriptInput {
     /// happen somewhere, and it happens here, once, instead of in every
     /// script's trigonometry.
     std::function<void(f32&, f32&)> camera_move;
+
+    /// Add camera shake, as trauma in [0, 1]. A script that fires an
+    /// explosion or lands a hit calls `nf.shake(0.6)`; the runtime owns the
+    /// clock and the camera owns the trim, so a script needs neither.
+    ///
+    /// Empty means the shake is dropped — a headless run has no camera to
+    /// shake, and that is not an error.
+    std::function<void(f32)> shake;
+
+    /// Add recoil, in degrees: positive pitch raises the view, positive yaw
+    /// turns it left. A weapon script calls `nf.recoil(1.2, 0.3)` per shot;
+    /// the camera recovers on its own and the view returns to the player's
+    /// aim, so the script never has to undo anything.
+    std::function<void(f32, f32)> recoil;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

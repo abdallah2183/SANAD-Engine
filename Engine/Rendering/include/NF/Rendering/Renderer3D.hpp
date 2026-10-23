@@ -474,6 +474,12 @@ public:
         // 1). Zero means the pass recorded no draw and the frame is pixel-
         // identical to one this renderer produced before the pass existed.
         u32 transparent_objects = 0;
+        // Projected decals (Phase 36): enabled decals received in the
+        // RenderWorld, and draws actually recorded after screen-rect culling.
+        // The pair is what a test asserts: "the scene has decals" and "the
+        // decal pass drew" are different claims.
+        u32 decals_submitted = 0;
+        u32 decals_recorded = 0;
         // Bloom passes recorded this frame: 0 when the stage is off, and
         // kBloomLevels when it is on (one prefilter plus kBloomLevels-1
         // downsamples). Exposed for the same reason `transparent_objects` is —
@@ -494,9 +500,29 @@ public:
               u32 width, u32 height);
     void shutdown();
 
+    /// The OUTPUT size this renderer was sized to — the window, or the editor
+    /// viewport panel. Not the size the 3D passes run at when render_scale is
+    /// anything but 1: use render_width()/render_height() for that.
     u32 width() const { return m_width; }
     u32 height() const { return m_height; }
+    /// `width`/`height` are the output size; the internal targets are rebuilt
+    /// from it and the current render scale.
     void resize(u32 width, u32 height);
+
+    // --- Internal render scale (Phase 37) ---
+    //
+    // 1.0 renders one internal texel per output pixel. Above 1 is
+    // supersampling: the deferred chain runs larger and the tonemap pass's
+    // bilinear read averages the extra texels down (2.0 = exact 2x2 SSAA).
+    // Below 1 is a cheaper render that the same read upscales. Clamped to
+    // [kMinRenderScale, kMaxRenderScale]; NaN is treated as 1.0. Rebuilding
+    // targets is not free, so callers that animate this should step it, not
+    // set a new random value every frame.
+    void set_render_scale(f32 scale);
+    f32 render_scale() const { return m_render_scale; }
+    /// The size the 3D passes actually render at (output size x scale).
+    u32 render_width() const { return m_render_width; }
+    u32 render_height() const { return m_render_height; }
 
     /// The renderer resolves RenderObject mesh handles against this library.
     /// Must be set before render(); ownership stays with the caller.
@@ -614,6 +640,35 @@ public:
         return m_postfx.bloom.enabled && m_bloom_pipeline != nullptr;
     }
 
+    // --- Anti-aliasing (FXAA) ---
+    // Off by default, and "unset is a no-op" like every other optional stage:
+    // a renderer that never calls set_fxaa_enabled() records exactly the frame
+    // it recorded before this stage existed — tonemap writes straight to the
+    // output target and no extra pass is added.
+    //
+    // When it is on, tonemap renders into a renderer-owned LDR image and the
+    // FXAA pass resolves that image into the output target. The pass runs on
+    // the TONEMAPPED colour (see fxaa.frag for why), so it must sit after
+    // tonemap and before present.
+    //
+    // `fxaa_active()` is the honest question, the same one bloom_active()
+    // answers: true only when the stage is enabled AND its pipeline came up.
+    // A shader directory without fxaa_*.spv leaves this false while the frame
+    // still renders.
+    void set_fxaa_enabled(bool enabled) { m_fxaa_enabled = enabled; }
+    bool fxaa_enabled() const { return m_fxaa_enabled; }
+    bool fxaa_active() const {
+        return m_fxaa_enabled && m_fxaa_pipeline_off != nullptr;
+    }
+    /// Edge sensitivity. `threshold` is the RELATIVE luma range that counts as
+    /// an edge (0.125 = the classic 1/8); `threshold_min` is the absolute
+    /// floor that keeps dark, low-contrast areas from being treated as edges.
+    /// Both are clamped to sane ranges so a zero cannot turn every pixel into
+    /// an edge.
+    void set_fxaa_thresholds(float threshold, float threshold_min);
+    float fxaa_threshold() const { return m_fxaa_threshold; }
+    float fxaa_threshold_min() const { return m_fxaa_threshold_min; }
+
     // --- Terrain layer splat (design 59: splat maps) ---
     // A surface the mesh has classified carries `uv1 = (slot, blend)`; slot 0
     // is the base material itself, so the palette only answers for the layers
@@ -668,6 +723,12 @@ public:
     /// The effective global cascade settings (sanitised).
     CascadeConfig shadow_config() const { return sanitize_cascade_config(m_cascades); }
 
+    /// True when the decal stage is available on this device: decal_vert.spv /
+    /// decal_frag.spv loaded and the pipeline was created. A renderer missing
+    /// the shaders still renders every other pass; it just draws no decals, and
+    /// init() does not fail for them (the same contract bloom/SSAO follow).
+    bool decals_supported() const { return m_decal_pipeline != nullptr; }
+
     /// Records one full frame into `cmd` (which must be in recording state):
     ///   Frustum Culling → Shadow atlases → DepthPrepass → GBuffer → Lighting
     ///     → Transparency → Tonemap.
@@ -718,6 +779,10 @@ public:
     rhi::Texture* hdr_target() { return m_graph->get_texture(m_hdr_handle); }
 
 private:
+    /// Creates the graph-owned targets at the current output size and render
+    /// scale. Shared by init() and both rebuild triggers (output resize, scale
+    /// change) so the three paths cannot size the same chain differently.
+    bool create_graph_targets();
     bool create_resolution_dependent(u32 width, u32 height);
     void destroy_resolution_dependent();
     /// Registers the bloom mip chain with the graph. MUST run before
@@ -862,9 +927,18 @@ private:
 
     rhi::IGraphicsDevice* m_device = nullptr;
 
-    // Resolution-dependent pass resources
+    // Resolution-dependent pass resources.
+    //
+    // m_width/m_height are the OUTPUT size (window/panel); the passes run at
+    // m_render_width/m_render_height, which is that size times m_render_scale.
+    // Keeping the pair explicit is what lets Runtime compare the renderer's
+    // size against the swapchain without the scale making them disagree every
+    // frame.
     u32 m_width = 0;
     u32 m_height = 0;
+    u32 m_render_width = 0;
+    u32 m_render_height = 0;
+    f32 m_render_scale = 1.0f;
     std::unique_ptr<RenderGraph> m_graph; // owns Depth/GBuffer/HDR targets
 
     // --- shaders / pipelines (owned) ---
@@ -873,6 +947,10 @@ private:
     std::unique_ptr<rhi::ShaderModule> m_lighting_vs, m_lighting_fs;
     std::unique_ptr<rhi::ShaderModule> m_forward_vs, m_forward_fs;
     std::unique_ptr<rhi::ShaderModule> m_tonemap_vs, m_tonemap_fs;
+    // FXAA (see set_fxaa_enabled). Optional at init on the same terms as the
+    // bloom and present pairs: a shader directory without fxaa_*.spv only
+    // leaves the stage inactive.
+    std::unique_ptr<rhi::ShaderModule> m_fxaa_vs, m_fxaa_fs;
     // Bloom chain (see BloomParams). One shader pair serves every level: the
     // prefilter and the downsample are the same "sample one texture, write one
     // colour" shape and differ only in the kernel, which rides a push-constant
@@ -890,10 +968,19 @@ private:
     rhi::Pipeline* m_depth_pipeline = nullptr;    // owned by m_pipeline_cache
     rhi::Pipeline* m_lighting_pipeline = nullptr; // owned by m_pipeline_cache
     rhi::Pipeline* m_forward_pipeline = nullptr;  // owned by m_pipeline_cache
+    // Decal pass (Phase 36), optional at init like bloom: without the shader
+    // pair this stays null and no decal draw is recorded.
+    rhi::Pipeline* m_decal_pipeline = nullptr;    // owned by m_pipeline_cache
+    std::unique_ptr<rhi::ShaderModule> m_decal_vs, m_decal_fs;
     rhi::Pipeline* m_tonemap_pipeline_off = nullptr;
     rhi::Pipeline* m_tonemap_pipeline_present = nullptr;
     rhi::Pipeline* m_present_pipeline_off = nullptr;   // owned by m_pipeline_cache
     rhi::Pipeline* m_present_pipeline_present = nullptr;
+    // FXAA runs on the same LDR render pass as tonemap (one R8G8B8A8 colour
+    // attachment), so it needs no render pass of its own — only a pipeline per
+    // pass flavour, exactly like the present pair.
+    rhi::Pipeline* m_fxaa_pipeline_off = nullptr;      // owned by m_pipeline_cache
+    rhi::Pipeline* m_fxaa_pipeline_present = nullptr;
     rhi::Pipeline* m_bloom_pipeline = nullptr;         // owned by m_pipeline_cache
 
     /// Lazily creates the swapchain-variant tonemap/present render pass and
@@ -905,6 +992,11 @@ private:
     std::unique_ptr<rhi::DescriptorSetLayout> m_material_layout;   // set 0: UBO + albedo
     std::unique_ptr<rhi::DescriptorSetLayout> m_lighting_layout;   // set 0: 5 textures + UBO
     std::unique_ptr<rhi::DescriptorSetLayout> m_tonemap_layout;    // set 0: HDR texture
+    // FXAA's own set: one sampled image (the LDR intermediate). Separate from
+    // the tonemap layout for the same reason the bloom layout is separate —
+    // the two describe different things, and a future FXAA binding must not
+    // silently appear in the tonemap shader's set.
+    std::unique_ptr<rhi::DescriptorSetLayout> m_fxaa_layout;      // set 0: LDR source
     // The transparency pass needs BOTH the frame/shadow bindings the lighting
     // pass uses AND the material bindings the gbuffer pass uses, but the RHI
     // pipeline takes one layout — so this is the union in a single set. The
@@ -918,6 +1010,11 @@ private:
     // different things and a future bloom binding (a per-level weight table)
     // must not silently appear in the tonemap shader's set.
     std::unique_ptr<rhi::DescriptorSetLayout> m_bloom_layout;      // set 0: source level
+    // Decal set: depth + GBuffer1 normal + the frame block prefix + the
+    // material block + albedo. One set, because the decal shader reads all five
+    // or none of them. Deliberately not the material layout: a decal needs the
+    // depth and normal textures the gbuffer pass has no binding for.
+    std::unique_ptr<rhi::DescriptorSetLayout> m_decal_layout;      // set 0: depth, normal, frame, material, albedo
 
     // --- render passes (owned) ---
     std::unique_ptr<rhi::RenderPass> m_depth_rp;
@@ -935,6 +1032,12 @@ private:
     // render pass and differ only in the framebuffer bound to it. A pass per
     // level would be four identical VkRenderPass objects.
     std::unique_ptr<rhi::RenderPass> m_bloom_rp;
+    // Decal pass (Phase 36): GBuffer0 + GBuffer2 as colour attachments, LOADed,
+    // blended. No depth attachment — depth is a sampled read-only input, and a
+    // render pass that declared it both ways would ask the driver to read and
+    // write one image at once. Occlusion is decided by the decal's own box
+    // test, not by a depth test.
+    std::unique_ptr<rhi::RenderPass> m_decal_rp;
     // The present-source variant is created lazily on first use: it needs the
     // swapchain extension, which a headless/CI device does not have — creating
     // it eagerly would fail vkCreateRenderPass there.
@@ -969,6 +1072,8 @@ private:
     std::unique_ptr<rhi::Framebuffer> m_gbuffer_fb;
     std::unique_ptr<rhi::Framebuffer> m_lighting_fb;
     std::unique_ptr<rhi::Framebuffer> m_transparency_fb;
+    // GBuffer0 + GBuffer2 (LOADed, blended), depth sampled not attached.
+    std::unique_ptr<rhi::Framebuffer> m_decal_fb;
     std::unique_ptr<rhi::Framebuffer> m_bloom_fbs[kBloomLevels];
     // Keyed by creation serial, NEVER by raw pointer: heap address reuse
     // across create/destroy cycles used to resurrect framebuffers whose image
@@ -1003,6 +1108,26 @@ private:
     static constexpr usize kMaxTonemapFramebuffers = 8;
     std::unordered_map<TonemapFBKey, std::unique_ptr<rhi::Framebuffer>, TonemapFBKeyHash> m_tonemap_fbs;
 
+    // FXAA's LDR intermediate: what tonemap writes when the stage is on, and
+    // what the FXAA pass resolves into the caller's target.
+    //
+    // Keyed by SIZE, not by output target: the image has to match whatever the
+    // caller hands render() — a swapchain image or the editor's viewport
+    // texture — and the renderer owns neither. The framebuffer for it reuses
+    // m_tonemap_fbs (same render pass, same format), so this cache holds only
+    // the texture and its view. Bounded like the framebuffer cache; an
+    // overflow drops the whole map and rebuilds on demand.
+    struct FxaaTarget {
+        std::unique_ptr<rhi::Texture> texture;
+        std::unique_ptr<rhi::TextureView> view;
+    };
+    static constexpr usize kMaxFxaaTargets = 4;
+    std::unordered_map<u64, FxaaTarget> m_fxaa_targets;
+    /// Returns the LDR intermediate for this size, creating it on first use.
+    /// Null means the device refused, and the caller then renders without the
+    /// stage rather than failing the frame.
+    FxaaTarget* fxaa_target(u32 width, u32 height);
+
     // Per-frame data, one set of each per IN-FLIGHT frame slot. While the GPU
     // executes frame N the CPU records frame N+1 into the other slot: frame
     // uniforms are rewritten every frame (they would corrupt an in-flight
@@ -1036,9 +1161,23 @@ private:
         u32 lod = 0;
         float distance = 0.0f;                 // camera -> surface, for the sort
     };
+    /// One decal ready to record: its source instance, the per-frame descriptor
+    /// set (held by m_decal_sets until execute() returns), and the CPU-projected
+    /// screen rect that becomes the draw's scissor.
+    struct PreparedDecal {
+        const DecalInstance* decal;
+        const rhi::DescriptorSet* set; // non-owning: held by m_decal_sets
+        DecalScreenRect rect;
+    };
     std::vector<PreparedDraw> m_prepared;
     std::vector<TransparentDraw> m_transparent;
+    std::vector<PreparedDecal> m_prepared_decals;
+    // Sorted copies of this frame's decals. Held separately because the sort
+    // reorders them and the pointers in m_prepared_decals must stay valid until
+    // execute() returns; capacity survives frames like the other scratch.
+    std::vector<DecalInstance> m_sorted_decals;
     std::vector<std::unique_ptr<rhi::DescriptorSet>> m_forward_sets;
+    std::vector<std::unique_ptr<rhi::DescriptorSet>> m_decal_sets;
 
     // State
     MeshLibrary* m_mesh_library = nullptr;
@@ -1050,6 +1189,12 @@ private:
     float m_exposure = 1.0f;
     TonemapMode m_tonemap_mode = TonemapMode::Exponential;
     PostFxParams m_postfx{};
+    // Anti-aliasing state. The thresholds are the FXAA 3.11 console defaults:
+    // an edge must span 1/8 of the local luma to be filtered, with a 1/32
+    // absolute floor so a dark gradient is not read as an edge.
+    bool m_fxaa_enabled = false;
+    float m_fxaa_threshold = 0.125f;
+    float m_fxaa_threshold_min = 0.0312f;
     // The colour-grading LUT, owned by the CALLER (the runtime's texture cache).
     // Null means none is bound, and the tonemap pass then binds the white
     // texture in the slot.

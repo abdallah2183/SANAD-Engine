@@ -64,6 +64,19 @@ struct CameraEdit {
     float zoom_max = 12.0f;
     float zoom_step = 0.6f;
     float align_speed = 0.0f;
+    // Aiming down sights and camera shake. ADS pulls the camera in and slows
+    // the look while the `aim` action is held; shake is trauma that scripts
+    // add with nf.shake(), trimmed by these two numbers.
+    bool ads_enabled = false;
+    float ads_distance = 2.2f;
+    float ads_sensitivity = 0.55f;
+    float ads_speed = 12.0f;
+    float shake_strength = 1.0f;
+    float shake_decay = 1.4f;
+    // Recoil: scripts add the kick (nf.recoil), these two decide how fast it
+    // settles and how far it may go.
+    float recoil_recover = 8.0f;
+    float recoil_max = 12.0f;
 };
 
 struct LightEdit {
@@ -108,6 +121,19 @@ struct TimeOfDayEdit {
     bool drive_light = true;
 };
 
+// Projected decal for the selected entity (Phase 36). Mirrors
+// runtime::DecalComponent with a char buffer for the material path because the
+// widget edits text in place. Placement and facing are deliberately NOT here:
+// they come from the entity Transform, which the Transform section already owns.
+struct DecalEdit {
+    char material[256] = {0};
+    float size_x = 1.0f;
+    float size_y = 1.0f;
+    float size_z = 1.0f;
+    float opacity = 1.0f;
+    bool enabled = true;
+};
+
 /// Editable view of the scene audio environment.
 ///
 /// The reverb zone is edited through `audio::ReverbZoneComponent` directly: it
@@ -144,6 +170,9 @@ CameraEdit read_camera(const ecs::World& world, ecs::Entity e, bool& out_has);
 LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has);
 SkyEdit read_sky(const ecs::World& world, ecs::Entity e, bool& out_has);
 TimeOfDayEdit read_time_of_day(const ecs::World& world, ecs::Entity e, bool& out_has);
+/// The entity's projected decal (Phase 36). Transform supplies placement and
+/// facing; this reader exposes only the values the decal panel edits.
+DecalEdit read_decal(const ecs::World& world, ecs::Entity e, bool& out_has);
 /// The entity's post-processing block (design §206).
 ///
 /// Deliberately NOT a parallel `PostProcessEdit` struct: every other edit type
@@ -168,6 +197,8 @@ std::unique_ptr<ICommand> make_sky_command(ecs::World& world, ecs::Entity e,
 std::unique_ptr<ICommand> make_time_of_day_command(ecs::World& world, ecs::Entity e,
                                                    const TimeOfDayEdit& edit,
                                                    std::string& out_err);
+std::unique_ptr<ICommand> make_decal_command(ecs::World& world, ecs::Entity e,
+                                             const DecalEdit& edit, std::string& out_err);
 std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Entity e,
                                                     const runtime::PostProcessComponent& edit,
                                                     std::string& out_err);

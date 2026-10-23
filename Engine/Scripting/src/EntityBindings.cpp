@@ -205,8 +205,36 @@ int l_camera_move(lua_State* L) {
     return 2;
 }
 
-int l_set_entity_scale(lua_State* L) {    ecs::World* w = bound_world(L);
-    ecs::Entity e;
+// nf.shake(amount) -> nothing.
+//
+// Trauma in [0, 1]: 0.2 is a footstep, 0.6 a landed hit, 1.0 an explosion.
+// The camera's own trim (shake_strength / shake_decay) decides what it looks
+// like, so the same number works for a handheld camera and a tank.
+int l_shake(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    if (input != nullptr && input->shake) {
+        const f32 amount = static_cast<f32>(luaL_checknumber(L, 1));
+        input->shake(amount);
+    }
+    return 0;
+}
+
+// nf.recoil(pitch, yaw) -> nothing.
+//
+// Degrees of kick: 1.2 pitch and 0.3 yaw is a rifle shot. The camera recovers
+// on its own and the view returns to where the player was aiming, so a weapon
+// script adds a kick per shot and never has to undo it.
+int l_recoil(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    if (input != nullptr && input->recoil) {
+        const f32 pitch = static_cast<f32>(luaL_checknumber(L, 1));
+        const f32 yaw = static_cast<f32>(luaL_optnumber(L, 2, 0.0));
+        input->recoil(pitch, yaw);
+    }
+    return 0;
+}
+
+int l_set_entity_scale(lua_State* L) {    ecs::World* w = bound_world(L);    ecs::Entity e;
     if (!check_entity(L, 1, e) || !w) {
         lua_pushboolean(L, 0);
         return 1;
@@ -287,6 +315,10 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "camera_yaw");
     lua_pushcfunction(L, l_camera_move);
     lua_setfield(L, -2, "camera_move");
+    lua_pushcfunction(L, l_shake);
+    lua_setfield(L, -2, "shake");
+    lua_pushcfunction(L, l_recoil);
+    lua_setfield(L, -2, "recoil");
     lua_pop(L, 1);
 }
 

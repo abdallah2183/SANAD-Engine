@@ -4,6 +4,7 @@
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/RHI/RHI.hpp>
+#include <NF/Rendering/DynamicResolution.hpp>
 #include <NF/Rendering/ImageDecode.hpp>
 #include <NF/Rendering/RenderGraph.hpp>
 #include <NF/Rendering/PipelineCache.hpp>
@@ -11,10 +12,13 @@
 #include <NF/Rendering/GpuPicker.hpp>
 #include <NF/Rendering/MeshLibrary.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
+#include <NF/Rendering/CameraShake.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/Runtime/CameraFollow.hpp>
+#include <NF/Runtime/PlayerLook.hpp>
+#include <NF/Runtime/PlayerSettings.hpp>
 #include <NF/Runtime/CharacterComponent.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Physics/FixedTimestep.hpp>
@@ -565,6 +569,57 @@ public:
     /// script sees has to be the one the player just produced.
     [[nodiscard]] f32 camera_yaw() const;
 
+    /// Adds camera shake, as trauma in [0, 1]. Scripts call it through
+    /// `nf.shake(amount)`; gameplay calls it on an impact.
+    ///
+    /// Trauma decays on its own and the visible offset scales with its
+    /// square, so two small hits do not add up to a big one (CameraShake.hpp
+    /// explains the curve). The scene's CameraComponent trims the result with
+    /// `shake_strength` and `shake_decay`, so a cutscene camera can opt out
+    /// without the scripts knowing.
+    void add_camera_shake(f32 amount);
+
+    /// The current trauma — for a test, or a HUD that wants to show it.
+    [[nodiscard]] f32 camera_trauma() const { return m_camera_shake.trauma(); }
+
+    /// Adds recoil, in degrees: positive pitch raises the view, positive yaw
+    /// turns it left. Scripts call it through `nf.recoil(pitch, yaw)`.
+    ///
+    /// It is an OFFSET on the view, not a change to the aim the player built:
+    /// the kick recovers on its own and the view returns to exactly that aim.
+    /// Clamped by the scene's `recoil_max`, so a burst cannot point the
+    /// camera at the sky.
+    void add_recoil(f32 pitch_deg, f32 yaw_deg);
+
+    /// The live recoil offset, in degrees — for a test or a HUD.
+    [[nodiscard]] f32 recoil_pitch() const { return m_recoil.pitch; }
+    [[nodiscard]] f32 recoil_yaw() const { return m_recoil.yaw; }
+
+    // --- Player settings --------------------------------------------------
+    //
+    // Sensitivity, inverted-Y, FOV and shake are authored per scene, but they
+    // are the player's taste, not the level's. This block is the override the
+    // player owns; the scene keeps its authored values untouched, and a scale
+    // of 1.0 / an FOV of 0 means "use the scene's".
+    //
+    // The file is optional. `load_scene` reads it from
+    // `content://Settings/player.nfsettings` when it exists, and a file that
+    // does not parse leaves the previous settings alone with a warning —
+    // half-applied settings are worse than none, because the player cannot
+    // tell which half took.
+    static constexpr const char* kDefaultPlayerSettingsPath =
+        "content://Settings/player.nfsettings";
+
+    [[nodiscard]] bool load_player_settings(const std::string& logical_path,
+                                            std::string& out_error);
+    [[nodiscard]] bool save_player_settings(const std::string& logical_path,
+                                            std::string& out_error) const;
+    [[nodiscard]] const PlayerSettings& player_settings() const { return m_player_settings; }
+    /// Replaces the settings and pushes the parts that are live engine state
+    /// (the audio bus volumes) immediately, so a slider takes effect on the
+    /// next mix block rather than on the next scene load.
+    void set_player_settings(const PlayerSettings& settings);
+
     // --- Deterministic input record + replay --------------------------------
     //
     // A save restores what the scene looked like; an input log restores how it
@@ -922,6 +977,11 @@ private:
 
     // Renderer3D integration (owns its own PipelineCache, RenderGraph, etc.)
     std::unique_ptr<rendering::Renderer3D> m_renderer;
+    // Frame-time governor for the internal render scale (Phase 38). The scene
+    // configures it; update(dt) advances it; extract_post_process() pushes its
+    // scale (or the static authored scale when it is off). It is deliberately
+    // owned here rather than by Renderer3D: the renderer has no frame clock.
+    rendering::DynamicResolution m_dynamic_resolution;
     // Built lazily on the first GPU pick, so a run that never picks never pays
     // for the id pass. Null when unavailable — callers fall back to CPU picking.
     std::unique_ptr<rendering::GpuPicker> m_picker;
@@ -933,6 +993,32 @@ private:
     /// following would keep its last position forever.
     runtime::FollowCameraState m_follow_camera;
     bool m_follow_active = false;
+
+    /// How far into the sights the camera is, 0..1. Stepped every frame from
+    /// the `aim` action (PlayerLook.hpp's aim_blend_step), so releasing the
+    /// button eases back out instead of snapping. Lives here rather than on
+    /// the component because it is a per-frame animation, not scene data —
+    /// a save must not record a half-raised sight.
+    f32 m_ads_blend = 0.0f;
+
+    /// Trauma-based camera shake. One instance for the whole runtime: the
+    /// scene's camera trims it, and two cameras cannot shake independently
+    /// because only one is active.
+    rendering::CameraShake m_camera_shake;
+
+    /// The live recoil offset, in degrees. Applied on top of the authored
+    /// yaw/pitch when the camera is placed, so recovery lands back on the
+    /// player's aim instead of on a number the kick overwrote.
+    runtime::RecoilState m_recoil;
+
+    /// The player's overrides on the scene's camera taste. Defaults are all
+    /// "no opinion", so a run that never loads a settings file behaves as the
+    /// scene was written.
+    runtime::PlayerSettings m_player_settings;
+    /// Pushes the five bus volumes and the master dynamics into the live
+    /// AudioScene. Separate from `set_player_settings` so the load path can
+    /// call it without recursing.
+    void apply_player_audio_settings();
 
     /// The skin palette of the character being stepped: one matrix per
     /// bone, recomputed every frame. It is scratch space, so it is a member

@@ -260,6 +260,14 @@ struct ColorAttachment {
     BlendOp color_blend_op = BlendOp::Add;
     BlendFactor src_color = BlendFactor::SrcAlpha;
     BlendFactor dst_color = BlendFactor::OneMinusSrcAlpha;
+    // Alpha channel blending is separate from colour blending, and defaults to
+    // "replace": source alpha wins, destination alpha is ignored. That is what
+    // every existing attachment wants. A pass that must PRESERVE a packed
+    // value in the destination alpha (the decal pass keeps GBuffer2's emission
+    // strength) sets Zero/One instead. Both factors are part of the render
+    // pass description, so the pipeline built against it reads them from here.
+    BlendFactor src_alpha = BlendFactor::One;
+    BlendFactor dst_alpha = BlendFactor::Zero;
 };
 
 struct RenderPassDesc {
@@ -829,6 +837,12 @@ public:
     virtual void wait_idle() = 0;
 
     virtual const char* backend_name() const = 0;
+
+    /// True when the backend enabled the Vulkan independentBlend feature and
+    /// can create a pipeline whose color attachments use different blend
+    /// states. The decal pass needs this: it blends GBuffer0 with straight
+    /// alpha while GBuffer2's alpha carries the untouched emission strength.
+    virtual bool supports_independent_blend() const { return false; }
 
     /// True when the backend's validation machinery is actually active (the
     /// KHRONOS validation layer was found and enabled). Tests use this to

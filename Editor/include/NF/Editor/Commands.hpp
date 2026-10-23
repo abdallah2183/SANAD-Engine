@@ -360,6 +360,29 @@ private:
     runtime::PostProcessComponent m_after{};
 };
 
+// Sets (or adds) the projected decal of an existing entity (Phase 36).
+//
+// Undo of the edit that FIRST created the decal removes the component, so a
+// scene that had no `Decal:` line round-trips to a file with no `Decal:` line.
+// Placement and facing are not command fields: they live on the Transform and
+// undo through SetTransformCommand like every other pose edit.
+class SetDecalCommand : public ICommand {
+public:
+    SetDecalCommand(ecs::Entity e, bool had_before,
+                    const runtime::DecalComponent& before,
+                    const runtime::DecalComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::DecalComponent m_before{};
+    runtime::DecalComponent m_after{};
+};
+
 // --- Scene audio environment (reverb zones, music, ambience) -----------------
 //
 // Three commands rather than one, because they are three independent

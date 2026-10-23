@@ -53,6 +53,20 @@ bool read_pad_button(const void* /*context*/, nf::u16 code) {
     return nf::InputSystem::instance().is_gamepad_down(static_cast<nf::GamepadButton>(code));
 }
 
+// Mouse buttons are read through the SAME platform query the pointer capture
+// already uses (VK_LBUTTON etc.), not through window messages: a message-based
+// state needs a pump that runs before the frame, and the capture code has
+// worked without one since 0.4.0. One query, one answer, whether the caller is
+// asking "did the player click to take the pointer back" or "is attack held".
+bool read_mouse_button(const void* /*context*/, nf::u16 code) {
+#ifdef _WIN32
+    return key_down(static_cast<int>(code));
+#else
+    (void)code;
+    return false;
+#endif
+}
+
 float read_pad_axis(const void* context, nf::u16 code) {
     if (context == nullptr) {
         return 0.0f;
@@ -77,6 +91,7 @@ DeviceState KeyboardInputSource::device_state() const {
     state.key_down = &read_key;
     state.pad_down = &read_pad_button;
     state.pad_axis = &read_pad_axis;
+    state.mouse_down = &read_mouse_button;
     return state;
 }
 

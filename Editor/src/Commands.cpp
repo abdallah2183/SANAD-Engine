@@ -555,6 +555,35 @@ std::string SetPostProcessCommand::label() const {
     return "Edit post-processing";
 }
 
+// --- SetDecalCommand --------------------------------------------------------
+
+SetDecalCommand::SetDecalCommand(ecs::Entity e, bool had_before,
+                                 const runtime::DecalComponent& before,
+                                 const runtime::DecalComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetDecalCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::DecalComponent>(m_entity, m_after);
+}
+
+void SetDecalCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::DecalComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::DecalComponent>(m_entity);
+    }
+}
+
+std::string SetDecalCommand::label() const {
+    return "Edit decal";
+}
+
 // --- Scene audio environment -------------------------------------------------
 
 SetReverbZoneCommand::SetReverbZoneCommand(ecs::Entity e, bool had_before,

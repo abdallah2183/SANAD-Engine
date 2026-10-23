@@ -6,7 +6,7 @@ entity_count: 40
 entity: 0:0
   Name: MainCamera
   Transform: local(-3.95182633,5.30283976,7.75486708) world(-3.95182633,5.30283976,7.75486708) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Camera: fov=60 aspect=1.77777779 near=0.100000001 far=220 active=true pivot=0,1.45000005,0 distance=5.19999981 yaw=180 pitch=-13 smoothing=9 radius=0.349999994 avoid=1 align=90 follow=Player
+  Camera: fov=60 aspect=1.77777779 near=0.100000001 far=220 active=true pivot=0,1.45000005,0 distance=5.19999981 yaw=180 pitch=-13 smoothing=9 radius=0.349999994 avoid=1 align=90 ads=1 ads_distance=2.4 ads_sens=0.6 ads_speed=10 follow=Player
 ---
 entity: 1:0
   Name: Sun
@@ -17,7 +17,7 @@ entity: 2:0
   Name: Sky
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Sky: zenith(0.300000012,0.460000008,0.639999986) horizon(0.720000029,0.779999971,0.800000012) ground(0.0799999982,0.0900000036,0.0799999982) clear(0.0399999991,0.0500000007,0.0700000003) sun_disk=1 sun_glow=1 enabled=true
-  PostProcess: bloom=true bloom_threshold=2.5999999 bloom_knee=0.5 bloom_intensity=0.400000006 bloom_radius=1.29999995 grade=true grade_contrast=1.04999995 grade_pivot=1 grade_temperature=0.0199999996 grade_tint=0 grade_gamma=1 sharpen=false sharpen_amount=0 sharpen_radius=1 saturation=1.01999998 vignette=0.119999997 lens=false lens_distortion=0 lens_chroma=0 dof=false dof_focus=10 dof_range=2 dof_radius=6 motion=false motion_intensity=1 motion_length=0.0500000007 exposure=1 tonemap=aces fog=true fog_color(0.720000029,0.779999971,0.800000012) fog_start=10 fog_end=45
+  PostProcess: bloom=true bloom_threshold=2.5999999 bloom_knee=0.5 bloom_intensity=0.400000006 bloom_radius=1.29999995 grade=true grade_contrast=1.04999995 grade_pivot=1 grade_temperature=0.0199999996 grade_tint=0 grade_gamma=1 sharpen=false sharpen_amount=0 sharpen_radius=1 saturation=1.01999998 vignette=0.119999997 lens=false lens_distortion=0 lens_chroma=0 dof=false dof_focus=10 dof_range=2 dof_radius=6 motion=false motion_intensity=1 motion_length=0.0500000007 exposure=1 tonemap=aces fog=true fog_color(0.720000029,0.779999971,0.800000012) fog_start=10 fog_end=45 fxaa=true fxaa_threshold=0.125 fxaa_threshold_min=0.0312
 ---
 entity: 3:0
   Name: Ground

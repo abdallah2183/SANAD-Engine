@@ -61,6 +61,10 @@ struct VulkanContext {
 
     // Enabled features
     bool enable_validation = false;
+    // Vulkan independentBlend. Enabled only when the physical device reports
+    // it; the decal pass needs per-attachment blend factors and is disabled
+    // otherwise rather than failing pipeline creation.
+    bool independent_blend = false;
 
     // Dynamic dispatch
     PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
@@ -105,6 +109,7 @@ public:
     const char* backend_name() const override { return "Vulkan"; }
 
     bool validation_enabled() const override { return m_ctx.enable_validation; }
+    bool supports_independent_blend() const override { return m_ctx.independent_blend; }
     u32 alive_objects() const override { return m_alive_objects.load(std::memory_order_relaxed); }
 
     /// Bookkeeping for the alive-object counter. Every backend object calls

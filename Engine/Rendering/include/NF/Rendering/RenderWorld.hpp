@@ -15,6 +15,7 @@
 
 #include <NF/Core/Types.hpp>
 #include <NF/Rendering/Camera.hpp>     // Mat4
+#include <NF/Rendering/Decals.hpp>
 #include <NF/Rendering/Handles.hpp>
 #include <NF/Rendering/StaticMesh.hpp> // AABB / BoundingSphere
 
@@ -89,8 +90,20 @@ inline u32 select_lod(float distance, u32 lod_count, std::span<const float> max_
 struct RenderWorld {
     std::vector<RenderObject> objects;
 
-    void clear() { objects.clear(); }
+    /// Screen-space decals (Phase 36). Kept beside the objects rather than in
+    /// the object list because a decal has no mesh: it is a fullscreen pass
+    /// bounded by an oriented box, and conflating the two would force the
+    /// culling and draw-submission paths to special-case an entry with no
+    /// vertex buffer. Cleared with the objects so a frame never inherits the
+    /// previous frame's decals.
+    std::vector<DecalInstance> decals;
+
+    void clear() {
+        objects.clear();
+        decals.clear();
+    }
     size_t size() const { return objects.size(); }
+    size_t decal_count() const { return decals.size(); }
 };
 
 // Double-buffered Render World so Game can write to back while Render reads front

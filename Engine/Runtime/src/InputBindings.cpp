@@ -120,6 +120,19 @@ constexpr std::array<NamedCode, 6> kPadAxes{{
     {"rt", 5},
 }};
 
+// The five mouse buttons a player can bind, by their Windows virtual-key
+// codes. Not invented here: the input source already asks the platform layer
+// for VK_LBUTTON to detect a click that takes the pointer back, so a binding
+// and that click are the same question asked twice — and one table is what
+// keeps them from disagreeing.
+constexpr std::array<NamedCode, 5> kMouseButtons{{
+    {"left", 0x01},   // VK_LBUTTON
+    {"right", 0x02},  // VK_RBUTTON
+    {"middle", 0x04}, // VK_MBUTTON
+    {"x1", 0x05},     // VK_XBUTTON1
+    {"x2", 0x06},     // VK_XBUTTON2
+}};
+
 [[nodiscard]] bool lookup(const NamedCode* table, size_t count, std::string_view name, u16& out) {
     for (size_t i = 0; i < count; ++i) {
         if (equals_ci(name, table[i].name)) {
@@ -163,6 +176,10 @@ bool pad_axis_from_name(std::string_view name, u16& out) {
     return lookup(kPadAxes.data(), kPadAxes.size(), trim(name), out);
 }
 
+bool mouse_button_from_name(std::string_view name, u16& out) {
+    return lookup(kMouseButtons.data(), kMouseButtons.size(), trim(name), out);
+}
+
 std::string_view key_name_from_code(u16 code) {
     if (code >= 'A' && code <= 'Z') {
         // The table is static and the letters are contiguous, so a stable
@@ -185,6 +202,33 @@ std::string_view key_name_from_code(u16 code) {
     return {};
 }
 
+std::string_view mouse_button_name_from_code(u16 code) {
+    for (const auto& n : kMouseButtons) {
+        if (n.code == code) {
+            return n.name;
+        }
+    }
+    return {};
+}
+
+std::string_view pad_button_name_from_code(u16 code) {
+    for (const auto& n : kPadButtons) {
+        if (n.code == code) {
+            return n.name;
+        }
+    }
+    return {};
+}
+
+std::string_view pad_axis_name_from_code(u16 code) {
+    for (const auto& n : kPadAxes) {
+        if (n.code == code) {
+            return n.name;
+        }
+    }
+    return {};
+}
+
 // --- the table ---------------------------------------------------------------
 
 void InputBindings::set(std::string_view action, std::vector<InputBinding> bindings) {
@@ -195,6 +239,15 @@ void InputBindings::set(std::string_view action, std::vector<InputBinding> bindi
         }
     }
     m_actions.push_back(Entry{std::string(action), std::move(bindings)});
+}
+
+std::vector<std::string> InputBindings::actions() const {
+    std::vector<std::string> names;
+    names.reserve(m_actions.size());
+    for (const auto& e : m_actions) {
+        names.push_back(e.action);
+    }
+    return names;
 }
 
 void InputBindings::merge(const InputBindings& other) {
@@ -244,6 +297,13 @@ InputBindings InputBindings::defaults() {
                      {BindingSource::PadAxis, 4, 1.0f}});                // LT
     b.set("interact", {{BindingSource::Key, 'E', 1.0f},
                        {BindingSource::PadButton, 2, 1.0f}});            // X
+
+    // Aiming down sights. NOT part of the old ladder — there was no aiming to
+    // bind — but it is additive: no existing action changes, and a scene that
+    // never enables ADS simply never reads it. Right mouse and the right
+    // trigger are where every third-person game puts it.
+    b.set("aim", {{BindingSource::MouseButton, 0x02, 1.0f},              // RMB
+                  {BindingSource::PadAxis, 5, 1.0f}});                   // RT
 
     // Legacy orbit axes, kept so a scene written for OrbitCameraModule still
     // reads something sensible.
@@ -364,6 +424,13 @@ InputBindings InputBindings::parse(std::string_view text, std::string* error) {
                     break;
                 }
                 bindings.push_back(make_binding(BindingSource::PadAxis, code, sign));
+            } else if (equals_ci(kind, "mouse")) {
+                if (!mouse_button_from_name(name, code)) {
+                    report("unknown mouse button '" + std::string(name) + "'");
+                    bad = true;
+                    break;
+                }
+                bindings.push_back(make_binding(BindingSource::MouseButton, code, sign));
             } else {
                 report("unknown binding kind '" + std::string(kind) + "'");
                 bad = true;
@@ -403,6 +470,11 @@ bool binding_pressed(const InputBindings& bindings, std::string_view action,
                 return true;
             }
             break;
+        case BindingSource::MouseButton:
+            if (device.mouse_down != nullptr && device.mouse_down(device.context, b.code)) {
+                return true;
+            }
+            break;
         }
     }
     return false;
@@ -431,11 +503,79 @@ f32 binding_axis(const InputBindings& bindings, std::string_view action, const D
                 sum += device.pad_axis(device.context, b.code) * b.value;
             }
             break;
+        case BindingSource::MouseButton:
+            if (device.mouse_down != nullptr && device.mouse_down(device.context, b.code)) {
+                sum += b.value;
+            }
+            break;
         }
     }
     // Two keys pressed against each other cancel to zero, and a key plus a
     // stick at full deflection must still read as one axis, not 1.6.
     return std::clamp(sum, -1.0f, 1.0f);
+}
+
+
+// --- writing the table back out ----------------------------------------------
+
+namespace {
+
+/// One token, e.g. `-key:A`. The sign is the only thing the format can carry
+/// beyond the code, so a binding whose value is not +/-1 is written as its
+/// sign: the file has no syntax for a scale, and inventing one here would
+/// make this writer produce files the parser cannot read.
+std::string token_for(const InputBinding& b) {
+    std::string out;
+    if (b.value < 0.0f) {
+        out.push_back('-');
+    }
+    switch (b.source) {
+    case BindingSource::Key:
+        out += "key:";
+        out += std::string(key_name_from_code(b.code));
+        break;
+    case BindingSource::PadButton:
+        out += "pad:";
+        out += std::string(pad_button_name_from_code(b.code));
+        break;
+    case BindingSource::PadAxis:
+        out += "axis:";
+        out += std::string(pad_axis_name_from_code(b.code));
+        break;
+    case BindingSource::MouseButton:
+        out += "mouse:";
+        out += std::string(mouse_button_name_from_code(b.code));
+        break;
+    }
+    return out;
+}
+
+} // namespace
+
+std::string serialize_bindings(const InputBindings& bindings) {
+    std::string out;
+    out += "# SANAD input bindings — written by the editor, safe to hand-edit.\n";
+    out += "# action = token, token, ...   tokens: key:NAME, pad:NAME, axis:NAME, mouse:NAME\n";
+    for (const auto& [action, list] : binding_rows(bindings)) {
+        out += action;
+        out += " =";
+        for (size_t i = 0; i < list.size(); ++i) {
+            out += (i == 0) ? " " : ", ";
+            out += token_for(list[i]);
+        }
+        out += "\n";
+    }
+    return out;
+}
+
+std::vector<std::pair<std::string, std::vector<InputBinding>>>
+binding_rows(const InputBindings& bindings) {
+    std::vector<std::pair<std::string, std::vector<InputBinding>>> rows;
+    rows.reserve(bindings.action_count());
+    for (const auto& action : bindings.actions()) {
+        rows.emplace_back(action, *bindings.find(action));
+    }
+    return rows;
 }
 
 } // namespace nf::runtime

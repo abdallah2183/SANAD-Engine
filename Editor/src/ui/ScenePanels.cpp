@@ -620,6 +620,176 @@ void camera_panel(EditorApp& app) {
         ImGui::SetNextItemWidth(150.0f);
         ImGui::DragFloat((AV("aim_align") + "##cam_align").c_str(), &c.edit.align_speed, 0.5f, 0.0f,
                          720.0f, "%.0f");
+
+        // Aiming down sights (0.5.0). Holding `aim` pulls the camera to
+        // `ads_distance` and scales the look by `ads_sensitivity`; the speed
+        // is how fast the blend gets there, and 0 snaps.
+        ImGui::Separator();
+        ImGui::Checkbox((AV("aim_ads") + "##cam_ads").c_str(), &c.edit.ads_enabled);
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_ads_distance") + "##cam_adsd").c_str(), &c.edit.ads_distance,
+                         0.05f, 0.1f, 50.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_ads_sensitivity") + "##cam_adss").c_str(),
+                         &c.edit.ads_sensitivity, 0.01f, 0.05f, 2.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_ads_speed") + "##cam_adsp").c_str(), &c.edit.ads_speed, 0.5f,
+                         0.0f, 60.0f, "%.1f");
+
+        // Camera shake trim. The trauma itself comes from scripts
+        // (nf.shake), so these two say how much of it this camera shows and
+        // how fast it forgets.
+        ImGui::Separator();
+        ImGui::TextUnformatted(AV("aim_shake").c_str());
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_shake_strength") + "##cam_shs").c_str(), &c.edit.shake_strength,
+                         0.01f, 0.0f, 4.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_shake_decay") + "##cam_shd").c_str(), &c.edit.shake_decay, 0.05f,
+                         0.0f, 20.0f, "%.2f");
+
+        // Recoil. The kick itself comes from scripts (nf.recoil), so these
+        // two say how fast the view settles and how far it may be kicked.
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_recoil") + "##cam_rec").c_str(), &c.edit.recoil_recover, 0.1f,
+                         0.0f, 60.0f, "%.1f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("aim_recoil_max") + "##cam_recm").c_str(), &c.edit.recoil_max, 0.5f,
+                         0.5f, 90.0f, "%.1f");
+    }
+
+    // Player settings (0.5.0). NOT scene data: these are the overrides the
+    // player owns, stored in a file outside the project and applied on top of
+    // whatever the camera above says. A scale of 1.0 and an FOV of 0 mean
+    // "the scene's", which is why an untouched panel changes nothing.
+    if (section(AV("player_settings").c_str())) {
+        // Load once, so the panel shows the FILE rather than the defaults.
+        if (!app.player_settings_loaded()) {
+            std::string ignored;
+            app.reload_player_settings(ignored); // a missing file is normal
+        }
+        runtime::PlayerSettings& ps = app.player_settings();
+        ImGui::TextDisabled("%s: %s%s", AV("settings_file").c_str(),
+                            runtime::Runtime::kDefaultPlayerSettingsPath,
+                            app.player_settings_file_exists() ? "" : " (none)");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("look_scale") + "##ps_look").c_str(), &ps.look_scale, 0.01f, 0.05f,
+                         10.0f, "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("stick_scale") + "##ps_stick").c_str(), &ps.stick_scale, 0.01f, 0.05f,
+                         10.0f, "%.2f");
+        {
+            // Three states, not a checkbox: "auto" keeps the scene's choice,
+            // and a bool cannot say "the player has no opinion".
+            const std::string auto_label = AV("invert_auto");
+            const std::string on_label = AV("invert_on");
+            const std::string off_label = AV("invert_off");
+            const char* items[] = {auto_label.c_str(), on_label.c_str(), off_label.c_str()};
+            int mode = static_cast<int>(ps.invert_y);
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::Combo((AV("invert_y") + "##ps_inv").c_str(), &mode, items, 3)) {
+                ps.invert_y = static_cast<runtime::InvertY>(mode);
+            }
+        }
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("fov") + "##ps_fov").c_str(), &ps.fov_y, 0.5f, 0.0f, 140.0f, "%.1f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("ads_scale") + "##ps_ads").c_str(), &ps.ads_scale, 0.01f, 0.05f, 10.0f,
+                         "%.2f");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat((AV("shake_scale") + "##ps_shake").c_str(), &ps.shake_scale, 0.01f, 0.0f,
+                         4.0f, "%.2f");
+
+        // Mixer volumes, one per bus. The mixer reads them every block, so
+        // moving a slider is audible on the next block — no reload, no scene
+        // rebuild. The five names are the mixer's own, so a settings file and
+        // an audio log call "master" the same thing.
+        ImGui::Separator();
+        auto volume_slider = [&](const char* label, const char* id, audio::BusId bus) {
+            f32 value = ps.volumes.volume(bus);
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::SliderFloat((AV(label) + "##ps_" + id).c_str(), &value, 0.0f, 1.0f, "%.2f")) {
+                ps.volumes.set_volume(bus, value);
+            }
+        };
+        volume_slider("master_volume", "vol_master", audio::BusId::Master);
+        volume_slider("music_volume", "vol_music", audio::BusId::Music);
+        volume_slider("sfx_volume", "vol_sfx", audio::BusId::Sfx);
+        volume_slider("ambience_volume", "vol_amb", audio::BusId::Ambience);
+        volume_slider("voice_volume", "vol_voice", audio::BusId::Voice);
+
+        // Master dynamics. OFF by default, and each stage is independent:
+        // a player may want the limiter's protection without a compressor
+        // changing the mix's punch. Keeping them here (not in the scene) is
+        // the whole point — the level's master stays exactly as authored.
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", AV("audio_dynamics").c_str());
+        ImGui::Checkbox((AV("compressor") + "##ps_comp").c_str(),
+                        &ps.dynamics.compressor.enabled);
+        {
+            const bool on = ps.dynamics.compressor.enabled;
+            ImGui::BeginDisabled(!on);
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_threshold") + "##ps_comp_th").c_str(),
+                             &ps.dynamics.compressor.threshold_db, 0.5f, -96.0f, 0.0f,
+                             "%.1f dB");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_ratio") + "##ps_comp_ratio").c_str(),
+                             &ps.dynamics.compressor.ratio, 0.05f, 1.0f, 20.0f, "%.2f:1");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_attack") + "##ps_comp_atk").c_str(),
+                             &ps.dynamics.compressor.attack_ms, 0.5f, 0.0f, 500.0f,
+                             "%.1f ms");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_release") + "##ps_comp_rel").c_str(),
+                             &ps.dynamics.compressor.release_ms, 1.0f, 0.0f, 5000.0f,
+                             "%.0f ms");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_knee") + "##ps_comp_knee").c_str(),
+                             &ps.dynamics.compressor.knee_db, 0.1f, 0.0f, 24.0f, "%.1f dB");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_makeup") + "##ps_comp_makeup").c_str(),
+                             &ps.dynamics.compressor.makeup_db, 0.1f, -24.0f, 24.0f,
+                             "%.1f dB");
+            ImGui::EndDisabled();
+        }
+        ImGui::Checkbox((AV("limiter") + "##ps_lim").c_str(), &ps.dynamics.limiter.enabled);
+        {
+            const bool on = ps.dynamics.limiter.enabled;
+            ImGui::BeginDisabled(!on);
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_ceiling") + "##ps_lim_ceil").c_str(),
+                             &ps.dynamics.limiter.ceiling_db, 0.05f, -24.0f, 0.0f,
+                             "%.2f dB");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_release") + "##ps_lim_rel").c_str(),
+                             &ps.dynamics.limiter.release_ms, 1.0f, 0.0f, 5000.0f,
+                             "%.0f ms");
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat((AV("dyn_lookahead") + "##ps_lim_la").c_str(),
+                             &ps.dynamics.limiter.lookahead_ms, 0.1f, 0.0f, 50.0f,
+                             "%.1f ms");
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::Button((AV("apply") + "##ps_apply").c_str())) {
+            app.apply_player_settings();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button((AV("save") + "##ps_save").c_str())) {
+            std::string err;
+            if (!app.save_player_settings(err)) {
+                push_error(app.console(), "Save player settings failed", err);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button((AV("reload") + "##ps_reload").c_str())) {
+            std::string err;
+            if (!app.reload_player_settings(err)) {
+                push_error(app.console(), "Reload player settings failed", err);
+            }
+        }
     }
 
     if (section(AV("transform").c_str())) {
@@ -643,6 +813,188 @@ void camera_panel(EditorApp& app) {
             push_error(app.console(), "Apply camera failed", err);
         } else if (xf_ok) {
             push_info(app.console(), "Camera updated");
+        }
+    }
+}
+
+
+// --- Input bindings ---------------------------------------------------------
+
+namespace {
+
+/// ImGui key -> Windows virtual-key code, for the keys a player actually
+/// binds. Deliberately not exhaustive: a key that is not here simply cannot
+/// be captured, which is better than guessing a code and writing a binding
+/// that never fires.
+bool imgui_key_to_vk(ImGuiKey key, nf::u16& out) {
+    if (key >= ImGuiKey_A && key <= ImGuiKey_Z) {
+        out = static_cast<nf::u16>('A' + (key - ImGuiKey_A));
+        return true;
+    }
+    if (key >= ImGuiKey_0 && key <= ImGuiKey_9) {
+        out = static_cast<nf::u16>('0' + (key - ImGuiKey_0));
+        return true;
+    }
+    if (key >= ImGuiKey_F1 && key <= ImGuiKey_F12) {
+        out = static_cast<nf::u16>(0x70 + (key - ImGuiKey_F1));
+        return true;
+    }
+    switch (key) {
+    case ImGuiKey_Space: out = 0x20; return true;
+    case ImGuiKey_Enter: out = 0x0D; return true;
+    case ImGuiKey_Tab: out = 0x09; return true;
+    case ImGuiKey_Backspace: out = 0x08; return true;
+    case ImGuiKey_Escape: out = 0x1B; return true;
+    case ImGuiKey_LeftShift:
+    case ImGuiKey_RightShift: out = 0x10; return true;
+    case ImGuiKey_LeftCtrl:
+    case ImGuiKey_RightCtrl: out = 0x11; return true;
+    case ImGuiKey_LeftAlt:
+    case ImGuiKey_RightAlt: out = 0x12; return true;
+    case ImGuiKey_UpArrow: out = 0x26; return true;
+    case ImGuiKey_DownArrow: out = 0x28; return true;
+    case ImGuiKey_LeftArrow: out = 0x25; return true;
+    case ImGuiKey_RightArrow: out = 0x27; return true;
+    case ImGuiKey_Delete: out = 0x2E; return true;
+    case ImGuiKey_Insert: out = 0x2D; return true;
+    case ImGuiKey_Home: out = 0x24; return true;
+    case ImGuiKey_End: out = 0x23; return true;
+    case ImGuiKey_PageUp: out = 0x21; return true;
+    case ImGuiKey_PageDown: out = 0x22; return true;
+    case ImGuiKey_Minus: out = 0xBD; return true;
+    case ImGuiKey_Equal: out = 0xBB; return true;
+    case ImGuiKey_Comma: out = 0xBC; return true;
+    case ImGuiKey_Period: out = 0xBE; return true;
+    case ImGuiKey_Slash: out = 0xBF; return true;
+    case ImGuiKey_Semicolon: out = 0xBA; return true;
+    case ImGuiKey_Apostrophe: out = 0xDE; return true;
+    case ImGuiKey_LeftBracket: out = 0xDB; return true;
+    case ImGuiKey_RightBracket: out = 0xDD; return true;
+    case ImGuiKey_Backslash: out = 0xDC; return true;
+    case ImGuiKey_GraveAccent: out = 0xC0; return true;
+    default: return false;
+    }
+}
+
+/// One binding, as the file spells it: `-key:A`, `pad:lb`, `mouse:right`.
+std::string binding_label(const nf::runtime::InputBinding& b) {
+    std::string out;
+    if (b.value < 0.0f) {
+        out.push_back('-');
+    }
+    using nf::runtime::BindingSource;
+    switch (b.source) {
+    case BindingSource::Key: out += "key:" + std::string(nf::runtime::key_name_from_code(b.code)); break;
+    case BindingSource::PadButton:
+        out += "pad:" + std::string(nf::runtime::pad_button_name_from_code(b.code));
+        break;
+    case BindingSource::PadAxis:
+        out += "axis:" + std::string(nf::runtime::pad_axis_name_from_code(b.code));
+        break;
+    case BindingSource::MouseButton:
+        out += "mouse:" + std::string(nf::runtime::mouse_button_name_from_code(b.code));
+        break;
+    }
+    return out;
+}
+
+} // namespace
+
+void input_panel(EditorApp& app) {
+    // Captured by reference below; one capture at a time, which is what a
+    // "press a key" affordance means.
+    static std::string s_capture_action;
+
+    if (!app.input_bindings_loaded()) {
+        std::string ignored;
+        app.load_input_bindings(ignored); // no file is the normal case
+    }
+
+    ImGui::TextDisabled("%s: %s%s", AV("settings_file").c_str(),
+                        EditorApp::kInputBindingsPath,
+                        app.input_bindings_file_exists() ? "" : " (none)");
+    hint(AV("bindings_hint"));
+
+    // While a capture is armed, the next key or mouse click becomes the
+    // binding. Escape cancels — the one key that must always be able to say
+    // "not this".
+    if (!s_capture_action.empty()) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            s_capture_action.clear();
+        } else {
+            nf::u16 code = 0;
+            nf::runtime::BindingSource source = nf::runtime::BindingSource::Key;
+            bool captured = false;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                code = 0x01;
+                source = nf::runtime::BindingSource::MouseButton;
+                captured = true;
+            } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                code = 0x02;
+                source = nf::runtime::BindingSource::MouseButton;
+                captured = true;
+            } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                code = 0x04;
+                source = nf::runtime::BindingSource::MouseButton;
+                captured = true;
+            } else {
+                for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END && !captured; ++k) {
+                    const auto key = static_cast<ImGuiKey>(k);
+                    if (ImGui::IsKeyPressed(key, false) && imgui_key_to_vk(key, code)) {
+                        captured = true;
+                    }
+                }
+            }
+            if (captured) {
+                app.input_bindings().set(s_capture_action,
+                                         {nf::runtime::InputBinding{source, code, 1.0f}});
+                s_capture_action.clear();
+            }
+        }
+    }
+
+    if (ImGui::BeginChild("##bindings", ImVec2(0.0f, 320.0f), ImGuiChildFlags_Borders)) {
+        for (const auto& [action, list] : nf::runtime::binding_rows(app.input_bindings())) {
+            ImGui::PushID(action.c_str());
+            std::string shown;
+            for (size_t i = 0; i < list.size(); ++i) {
+                shown += (i == 0) ? "" : ", ";
+                shown += binding_label(list[i]);
+            }
+            if (shown.empty()) {
+                shown = "—";
+            }
+            ImGui::TextUnformatted(action.c_str());
+            ImGui::SameLine(170.0f);
+            ImGui::TextDisabled("%s", shown.c_str());
+            ImGui::SameLine(330.0f);
+            if (s_capture_action == action) {
+                ImGui::TextColored(theme::accent(), "%s", AV("press_a_key").c_str());
+            } else if (ImGui::SmallButton((AV("rebind") + "##rb").c_str())) {
+                s_capture_action = action;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton((AV("reset") + "##rs").c_str())) {
+                app.reset_binding(action);
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+
+    if (ImGui::Button((AV("save") + "##bind_save").c_str())) {
+        std::string err;
+        if (!app.save_input_bindings(err)) {
+            push_error(app.console(), "Save input bindings failed", err);
+        } else {
+            push_info(app.console(), "Input bindings saved: " + std::string(EditorApp::kInputBindingsPath));
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button((AV("reload") + "##bind_reload").c_str())) {
+        std::string err;
+        if (!app.load_input_bindings(err)) {
+            push_error(app.console(), "Reload input bindings failed", err);
         }
     }
 }
@@ -841,6 +1193,13 @@ void scene_panels(EditorApp& app, const UiFrameStats& stats) {
         ImGui::SetNextWindowSize(ImVec2(360.0f, 420.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin((AV("tab_render") + "###NFRender").c_str(), &st.show_render)) {
             render_panel(app, stats);
+        }
+        ImGui::End();
+    }
+    if (st.show_input) {
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 460.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin((AV("input_bindings") + "###NFInput").c_str(), &st.show_input)) {
+            input_panel(app);
         }
         ImGui::End();
     }

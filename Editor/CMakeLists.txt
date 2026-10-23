@@ -164,7 +164,7 @@ if(NF_GLSLC_EXECUTABLE)
         NFBasic3DGBufferShaders
         NFBasic3DLightingShaders
         NFBasic3DForwardShaders
-        NFBasic3DTonemapShaders
+        NFBasic3DTonemapShaders NFBasic3DFXAAShaders
         NFBasic3DBloomShaders
         NFBasic3DSSAOShaders
         NFBasic3DSSAOBlurShaders

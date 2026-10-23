@@ -791,6 +791,10 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 ui_settings().show_profiler = profiler;
             }
             ImGui::MenuItem(AV("viewport_stats").c_str(), nullptr, &st.show_viewport_stats);
+            ImGui::Separator();
+            // The rebinding window lives here because it is a VIEW on the
+            // project's input table, not a scene object like the panels above.
+            ImGui::MenuItem(AV("input_bindings").c_str(), nullptr, &st.show_input);
             ImGui::EndMenu();
         }
 

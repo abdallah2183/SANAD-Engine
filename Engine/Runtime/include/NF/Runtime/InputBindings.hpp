@@ -14,6 +14,7 @@
 //     move_forward = key:W, key:Up
 //     jump         = key:Space, pad:A
 //     move_x       = -key:A, +key:D, axis:LeftX
+//     attack       = mouse:Left, pad:X
 //
 // The file is optional. With no file the built-in defaults are used, and the
 // defaults are exactly what the hardcoded ladder did — so a game that never
@@ -28,15 +29,17 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace nf::runtime {
 
 /// Where a binding reads from.
 enum class BindingSource : u8 {
-    Key = 0,   ///< A keyboard virtual-key code.
-    PadButton, ///< An XInput-style digital button.
-    PadAxis,   ///< An XInput-style analogue axis.
+    Key = 0,     ///< A keyboard virtual-key code.
+    PadButton,   ///< An XInput-style digital button.
+    PadAxis,     ///< An XInput-style analogue axis.
+    MouseButton, ///< A mouse button, by virtual-key code (VK_LBUTTON..VK_XBUTTON2).
 };
 
 /// One physical control bound to one action.
@@ -63,9 +66,9 @@ public:
     /// Parse a binding file.
     ///
     /// Blank lines and `#` comments are skipped. Every other line is
-    /// `action = token, token, ...`; a token is `key:NAME`, `pad:NAME` or
-    /// `axis:NAME`, each optionally prefixed with `+` or `-`. Names are
-    /// case-insensitive.
+    /// `action = token, token, ...`; a token is `key:NAME`, `pad:NAME`,
+    /// `axis:NAME` or `mouse:NAME`, each optionally prefixed with `+` or `-`.
+    /// Names are case-insensitive.
     ///
     /// A malformed file is not fatal: the bindings that parsed are kept and
     /// `error` describes the first line that did not. The caller decides
@@ -90,6 +93,9 @@ public:
 
     [[nodiscard]] bool empty() const { return m_actions.empty(); }
     [[nodiscard]] size_t action_count() const { return m_actions.size(); }
+    /// The action names, in insertion order. For a rebinding UI that has to
+    /// list them, and for the writer, which must emit them in a stable order.
+    [[nodiscard]] std::vector<std::string> actions() const;
 
 private:
     struct Entry {
@@ -109,6 +115,10 @@ struct DeviceState {
     bool (*key_down)(const void*, u16) = nullptr;
     bool (*pad_down)(const void*, u16) = nullptr;
     f32 (*pad_axis)(const void*, u16) = nullptr;
+    /// Mouse buttons, by virtual-key code. Null on a device with no mouse —
+    /// a `mouse:Left` binding then simply never reads as pressed, which is the
+    /// same contract the other three have.
+    bool (*mouse_down)(const void*, u16) = nullptr;
 };
 
 /// Is any of the action's bindings active?
@@ -134,8 +144,28 @@ struct DeviceState {
 [[nodiscard]] bool key_code_from_name(std::string_view name, u16& out);
 [[nodiscard]] bool pad_button_from_name(std::string_view name, u16& out);
 [[nodiscard]] bool pad_axis_from_name(std::string_view name, u16& out);
+/// `Left`, `Right`, `Middle`, `X1`, `X2` — the five buttons a player can bind.
+[[nodiscard]] bool mouse_button_from_name(std::string_view name, u16& out);
 
 /// The inverse, for UI. Returns an empty view when the code is unknown.
 [[nodiscard]] std::string_view key_name_from_code(u16 code);
+[[nodiscard]] std::string_view mouse_button_name_from_code(u16 code);
+[[nodiscard]] std::string_view pad_button_name_from_code(u16 code);
+[[nodiscard]] std::string_view pad_axis_name_from_code(u16 code);
+
+/// The binding table as a `bindings.nfinput` file.
+///
+/// The inverse of parse(), and the reason a rebinding screen can exist: the
+/// editor writes what the player chose back to the same file the runtime
+/// reads. Every action is emitted with its tokens in order, signs included
+/// (`-key:A`), so parse(serialize(t)) == t for every table this engine can
+/// build. An action with no bindings is emitted as `action =` — dropping it
+/// would silently resurrect the default the player just cleared.
+[[nodiscard]] std::string serialize_bindings(const InputBindings& bindings);
+
+/// Every action in the table, in the order the actions were added. For a
+/// rebinding UI that has to list them; the pair is (action, bindings).
+[[nodiscard]] std::vector<std::pair<std::string, std::vector<InputBinding>>>
+binding_rows(const InputBindings& bindings);
 
 } // namespace nf::runtime

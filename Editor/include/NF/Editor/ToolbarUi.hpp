@@ -98,6 +98,9 @@ struct EditorUiSettings {
     bool show_camera_panel = false;
     bool show_render = true;
     bool show_world = false; // diagnostics: opened from the Window menu
+    /// The rebinding window. Off by default like the others; opened from the
+    /// View menu.
+    bool show_input = false;
 };
 
 EditorUiSettings& ui_settings();

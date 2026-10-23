@@ -30,6 +30,7 @@
 
 #include <cmath>
 #include <NF/Platform/Platform.hpp>
+#include <NF/Platform/InputSystem.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/RHI/RHI.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
@@ -333,91 +334,57 @@ nf::Vec3 world_to_pointer_ndc(const nf::editor::ViewCamera& vc, const nf::Vec3& 
 // focus when Play is pressed, and movement must work either way.
 class EditorPlayInput final : public nf::gameplay::IInputSource {
 public:
+    /// The table the editor's play mode answers to. Points at EditorApp's
+    /// table, so a rebind in the panel is a rebind in play mode on the next
+    /// frame — and the file it saves is the one the shipped player reads.
+    void set_bindings(const nf::runtime::InputBindings* bindings) { m_bindings = bindings; }
+
     [[nodiscard]] bool action_pressed(std::string_view action) const override {
-#ifdef _WIN32
-        auto down = [](int vk) -> bool { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
-        if (action == "move_forward" || action == "forward" || action == "up") {
-            return down(VK_UP) || down('W');
+        if (m_bindings == nullptr) {
+            return false;
         }
-        if (action == "move_back" || action == "back" || action == "down") {
-            return down(VK_DOWN) || down('S');
-        }
-        if (action == "move_left" || action == "left") {
-            return down(VK_LEFT) || down('A');
-        }
-        if (action == "move_right" || action == "right") {
-            return down(VK_RIGHT) || down('D');
-        }
-        if (action == "jump") {
-            return down(VK_SPACE);
-        }
-        if (action == "sprint") {
-            return down(VK_SHIFT);
-        }
-        if (action == "interact") {
-            return down('E');
-        }
-        // OrbitCamera legacy axes (keyboard fallback).
-        if (action == "look") {
-            return down(VK_LEFT) || down(VK_RIGHT);
-        }
-        if (action == "zoom") {
-            return down(VK_UP) || down(VK_DOWN);
-        }
-#else
-        (void)action;
-#endif
-        return false;
+        return nf::runtime::binding_pressed(*m_bindings, action, device_state());
     }
 
     [[nodiscard]] float action_axis(std::string_view action) const override {
-#ifdef _WIN32
-        auto down = [](int vk) -> bool { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
-        if (action == "move_x") {
-            float v = 0.0f;
-            if (down(VK_LEFT) || down('A')) {
-                v -= 1.0f;
-            }
-            if (down(VK_RIGHT) || down('D')) {
-                v += 1.0f;
-            }
-            return v;
+        if (m_bindings == nullptr) {
+            return 0.0f;
         }
-        if (action == "move_z") {
-            float v = 0.0f;
-            if (down(VK_UP) || down('W')) {
-                v -= 1.0f;
-            }
-            if (down(VK_DOWN) || down('S')) {
-                v += 1.0f;
-            }
-            return v;
-        }
-        if (action == "look") {
-            float v = 0.0f;
-            if (down(VK_LEFT)) {
-                v -= 1.0f;
-            }
-            if (down(VK_RIGHT)) {
-                v += 1.0f;
-            }
-            return v;
-        }
-        if (action == "zoom") {
-            float v = 0.0f;
-            if (down(VK_UP)) {
-                v -= 1.0f;
-            }
-            if (down(VK_DOWN)) {
-                v += 1.0f;
-            }
-            return v;
-        }
-#else
-        (void)action;
-#endif
-        return 0.0f;
+        return nf::runtime::binding_axis(*m_bindings, action, device_state());
     }
+
+    /// The live device, as the binding evaluator sees it. Same shape the
+    /// shipped player uses: keys and mouse buttons through the platform query,
+    /// pad through InputSystem. A static function rather than a member so the
+    /// two evaluators above stay `const`.
+    [[nodiscard]] static nf::runtime::DeviceState device_state() {
+        nf::runtime::DeviceState state;
+        state.key_down = [](const void*, nf::u16 code) {
+#ifdef _WIN32
+            return (GetAsyncKeyState(static_cast<int>(code)) & 0x8000) != 0;
+#else
+            (void)code;
+            return false;
+#endif
+        };
+        // Mouse buttons are virtual-key codes too, so the same query answers
+        // both — which is why the two callbacks are the same function.
+        state.mouse_down = state.key_down;
+        state.pad_down = [](const void*, nf::u16 code) {
+            return nf::InputSystem::instance().is_gamepad_down(
+                static_cast<nf::GamepadButton>(code));
+        };
+        state.pad_axis = [](const void*, nf::u16 code) {
+            if (code >= static_cast<nf::u16>(nf::GamepadAxis::Count)) {
+                return 0.0f;
+            }
+            return nf::InputSystem::instance().gamepad_axis(
+                static_cast<nf::GamepadAxis>(code));
+        };
+        return state;
+    }
+
+    const nf::runtime::InputBindings* m_bindings = nullptr;
 
     // --- aiming, in the editor -------------------------------------------
     //
@@ -1453,6 +1420,9 @@ int main(int argc, char** argv) {
             // editing, camera-owning modules (OrbitCamera) must not overwrite
             // the viewport navigation's camera writes each step.
             static EditorPlayInput s_play_input;
+            // The table is EditorApp's, so the rebinding panel and play mode
+            // cannot disagree about what a key does.
+            s_play_input.set_bindings(&app.input_bindings());
             if (app.playing()) {
                 runtime.set_input_source(&s_play_input);
                 runtime.set_playing(true);

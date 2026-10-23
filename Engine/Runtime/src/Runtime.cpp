@@ -394,6 +394,20 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
     for (const auto& w : result.warnings) {
         NF_LOG_WARN(LogCategory::Core, "Runtime: scene '{}' warning: {}", logical_path, w);
     }
+    // The player's overrides, if this machine has any. Absence is the normal
+    // case (a fresh install) and a broken file must not stop a level from
+    // loading, so both are warnings at most — the scene's authored taste is
+    // still a complete answer on its own.
+    {
+        const auto settings_exist = m_vfs.exists(kDefaultPlayerSettingsPath);
+        if (settings_exist.ok && settings_exist.value) {
+            std::string settings_error;
+            if (!load_player_settings(kDefaultPlayerSettingsPath, settings_error)) {
+                NF_LOG_WARN(LogCategory::Core, "Runtime: player settings ignored — {}",
+                            settings_error);
+            }
+        }
+    }
     // A previous scene's modules get a chance to release what they hold while
     // the world they were pointing at is still alive.
     if (m_scene_data_ptr && m_scene_data_ptr->scene && !m_gameplay_modules.empty()) {
@@ -660,6 +674,13 @@ void Runtime::update(float dt) {
     // was. It is also after the scripts, so a script that moved the player
     // is followed in the same frame.
     update_follow_camera(dt);
+    // Dynamic resolution consumes the same dt the simulation did. It advances
+    // after the frame's work so the sample describes the frame that just ran,
+    // and the next render applies the new scale. Disabled by default; a scene
+    // has to opt in with `dynamic_resolution=true`.
+    if (m_dynamic_resolution.enabled()) {
+        m_dynamic_resolution.update(dt);
+    }
 }
 
 u32 Runtime::step_animation(float dt) {
@@ -1214,6 +1235,9 @@ u32 Runtime::step_script(float dt) {
             move_relative(source->action_axis("move_x"), source->action_axis("move_z"),
                           self->camera_yaw(), out_x, out_z);
         };
+        // Trauma is a number the script owns; the runtime owns the clock.
+        input.shake = [self](f32 amount) { self->add_camera_shake(amount); };
+        input.recoil = [self](f32 pitch, f32 yaw) { self->add_recoil(pitch, yaw); };
     }
     m_scripts->set_input_source(input);
     m_scripts->update(world, dt);
@@ -3250,7 +3274,11 @@ bool Runtime::extract_camera(uint32_t target_width, uint32_t target_height, rend
         if (c == nullptr || !c->is_active) {
             continue;
         }
-        out.fov_y_rad = c->fov_y * 3.14159265359f / 180.0f;
+        // The player's FOV, when they set one, replaces the scene's — a wider
+        // view is a comfort setting for some players and a competitive one for
+        // others, and neither is the level author's call. 0 means "the scene".
+        const f32 fov_deg = m_player_settings.fov_y > 0.0f ? m_player_settings.fov_y : c->fov_y;
+        out.fov_y_rad = fov_deg * 3.14159265359f / 180.0f;
         out.near_plane = c->near_plane;
         out.far_plane = c->far_plane;
         // Aspect follows the actual target so offscreen/windowed renders are correct
@@ -3269,8 +3297,24 @@ bool Runtime::extract_camera(uint32_t target_width, uint32_t target_height, rend
         // from the Transform would make the camera chase the position it was
         // placed in last frame.
         if (m_follow_active) {
-            out.position = m_follow_camera.position;
-            out.target = m_follow_camera.target;
+            // Camera shake is applied to the RESULT of the follow, never to
+            // its state: the follow keeps easing towards the unshaken pose,
+            // so a long shake cannot walk the camera away from the player.
+            // The positional part moves the eye; the rotational part turns
+            // the view direction, which is what makes a hit read as a hit
+            // rather than as the world sliding sideways.
+            const Vec3 offset =
+                m_camera_shake.position_offset() * (c->shake_strength * m_player_settings.shake_scale);
+            const Vec3 rotation = m_camera_shake.rotation_offset_deg() *
+                                  (c->shake_strength * m_player_settings.shake_scale);
+            out.position = m_follow_camera.position + offset;
+            Vec3 direction = m_follow_camera.target - m_follow_camera.position;
+            if (rotation.x != 0.0f || rotation.y != 0.0f || rotation.z != 0.0f) {
+                const Quat q =
+                    scene::quat_from_euler_xyz_degrees(rotation.x, rotation.y, rotation.z);
+                direction = q.rotate(direction);
+            }
+            out.target = out.position + direction;
         } else {
             out.target = {0.0f, 0.0f, 0.0f};
             out.up = {0.0f, 1.0f, 0.0f};
@@ -3417,6 +3461,80 @@ f32 Runtime::camera_yaw() const {
     return 0.0f;
 }
 
+void Runtime::add_camera_shake(f32 amount) {
+    // Clamped by CameraShake itself; the guard here is for the non-finite
+    // case, which a script can produce with a division and which would
+    // otherwise poison the noise clock for the rest of the run.
+    if (!std::isfinite(amount) || amount <= 0.0f) {
+        return;
+    }
+    m_camera_shake.add_trauma(amount);
+}
+
+void Runtime::add_recoil(f32 pitch_deg, f32 yaw_deg) {    // The clamp is the ACTIVE camera's: a scene can widen or narrow the kick
+    // without the script knowing, and a camera-less scene keeps the default.
+    f32 max_abs = 12.0f;
+    if (m_scene_data_ptr && m_scene_data_ptr->scene) {
+        auto& world = m_scene_data_ptr->scene->world();
+        for (auto e : world.query<CameraComponent>()) {
+            const auto* c = world.get<CameraComponent>(e);
+            if (c != nullptr && c->is_active) {
+                max_abs = c->recoil_max;
+                break;
+            }
+        }
+    }
+    runtime::recoil_add(m_recoil, pitch_deg, yaw_deg, max_abs);
+}
+
+bool Runtime::load_player_settings(const std::string& logical_path, std::string& out_error) {
+    const auto text = m_vfs.read_text(logical_path);
+    if (!text.ok) {
+        out_error = text.error;
+        return false;
+    }
+    runtime::PlayerSettings parsed;
+    std::string parse_error;
+    if (!runtime::parse_player_settings(text.value, parsed, parse_error)) {
+        out_error = logical_path + ": " + parse_error;
+        return false;
+    }
+    m_player_settings = parsed;
+    apply_player_audio_settings();
+    return true;
+}
+
+void Runtime::set_player_settings(const PlayerSettings& settings) {
+    m_player_settings = settings;
+    apply_player_audio_settings();
+}
+
+void Runtime::apply_player_audio_settings() {
+    // The mixer reads its volumes every block, so this is the whole of "the
+    // slider moved" — no reconfiguration, no reload. A scene that never wrote
+    // a settings file gets the shipped defaults, because PlayerSettings starts
+    // from AudioVolumeSettings' own defaults rather than a copy of them.
+    audio::AudioVolumeSettings& live = m_audio_scene.settings();
+    for (u32 i = 0; i < audio::kBusCount; ++i) {
+        const auto bus = static_cast<audio::BusId>(i);
+        live.set_volume(bus, m_player_settings.volumes.volume(bus));
+    }
+
+    // Dynamics are the same kind of binding: the processor reads its settings
+    // from the scene's member, and set_settings intentionally keeps the live
+    // envelopes so moving a threshold slider during play does not click.
+    m_audio_scene.set_dynamics(m_player_settings.dynamics);
+}
+
+bool Runtime::save_player_settings(const std::string& logical_path, std::string& out_error) const {    const auto written =
+        m_vfs.write_text(logical_path, runtime::serialize_player_settings(m_player_settings));
+    if (!written.ok) {
+        out_error = written.error;
+        return false;
+    }
+    return true;
+}
+
 void Runtime::update_follow_camera(float dt) {
     m_follow_active = false;
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
@@ -3460,13 +3578,53 @@ void Runtime::update_follow_camera(float dt) {
     // the scene, so a camera aimed during play is thrown away when play
     // stops, and an authored angle is never overwritten by a mouse that
     // happened to be moving in the editor.
+    // --- Aiming down sights ----------------------------------------------
+    //
+    // The blend is stepped EVERY frame, not only while aiming: releasing the
+    // button has to ease back out, and a paused frame (dt <= 0) must not
+    // advance it. `aim` is an ordinary action, so a scene can put it on a
+    // mouse button, a pad trigger or a key without the engine knowing which.
+    const bool wants_aim = m_playing && cam->ads_enabled && m_input_source != nullptr &&
+                           m_input_source->action_pressed("aim");
+    m_ads_blend = runtime::aim_blend_step(m_ads_blend, wants_aim, cam->ads_speed, dt);
+    // The player's ADS trim rides on top of the scene's scale, so a player can
+    // slow the sight picture further without the level knowing.
+    const f32 aim_scale = runtime::aim_sensitivity_scale(
+        cam->ads_sensitivity * m_player_settings.ads_scale, m_ads_blend);
+    const f32 aim_dist = runtime::aim_distance(cam->distance, cam->ads_distance, m_ads_blend);
+
+    // The shake clock advances with the frame, whether or not anything is
+    // being aimed: trauma has to decay even while the player stands still.
+    m_camera_shake.set_decay_per_second(cam->shake_decay);
+    m_camera_shake.update(dt);
+
+    // Recoil recovers every frame, whether or not the player is aiming: a
+    // burst fired from the hip has to settle too. The offset is applied to
+    // the VIEW below and never written into cam->yaw/pitch, which is what
+    // makes recovery land on the aim the player built.
+    m_recoil = runtime::recoil_recover(m_recoil, cam->recoil_recover, dt);
+    const f32 view_yaw = runtime::look_wrap_deg(cam->yaw + m_recoil.yaw);
+    const f32 view_pitch =
+        std::clamp(cam->pitch + m_recoil.pitch, cam->pitch_min, cam->pitch_max);
+
     if (aiming) {
         LookSettings look;
-        look.mouse_sensitivity = cam->look_sensitivity;
-        look.stick_sensitivity = cam->stick_sensitivity;
+        // While aiming, the same hand movement turns the camera less — that
+        // is the whole point of a sight picture, and the scene says by how
+        // much (1.0 = no change). The player's own scale multiplies the
+        // scene's, so "faster mouse" applies to both states at once.
+        look.mouse_sensitivity = cam->look_sensitivity * aim_scale * m_player_settings.look_scale;
+        look.stick_sensitivity = cam->stick_sensitivity * aim_scale * m_player_settings.stick_scale;
         look.pitch_min = cam->pitch_min;
         look.pitch_max = cam->pitch_max;
-        look.invert_y = cam->invert_look_y;
+        // Three-state on purpose: "the player has no opinion" must not read as
+        // "the player wants it off", so the scene's choice survives.
+        switch (m_player_settings.invert_y) {
+        case runtime::InvertY::On: look.invert_y = true; break;
+        case runtime::InvertY::Off: look.invert_y = false; break;
+        case runtime::InvertY::Scene:
+        default: look.invert_y = cam->invert_look_y; break;
+        }
 
         LookState state{cam->yaw, cam->pitch};
         bool aimed = false;
@@ -3531,8 +3689,11 @@ void Runtime::update_follow_camera(float dt) {
     const Vec3 rotated = t->world_rot.rotate(offset);
     const Vec3 pivot{t->world_x + rotated.x, t->world_y + rotated.y, t->world_z + rotated.z};
 
-    // Where the camera wants to be, and where it looks.
-    Vec3 desired = runtime::follow_camera_position(pivot, cam->yaw, cam->pitch, cam->distance);
+    // Where the camera wants to be, and where it looks. The distance is the
+    // ADS-blended one: aiming pulls the camera in without changing the
+    // authored `distance`, so releasing the button returns to exactly the
+    // framing the player had before.
+    Vec3 desired = runtime::follow_camera_position(pivot, view_yaw, view_pitch, aim_dist);
 
     // The collision pull-in: something solid between the pivot and the camera
     // moves the camera in front of it. Without this the camera ends up
@@ -3782,6 +3943,38 @@ void Runtime::extract_post_process() {
         params.motion.max_length = pp->motion_max_length;
         params.lut_strength = pp->lut_strength;
         m_renderer->set_postfx(params);
+        // Anti-aliasing is not part of `PostFxParams` either: it is a separate
+        // pass on the tonemapped image, not a stage inside the tonemap shader.
+        // Written unconditionally from the component so toggling the box off
+        // turns the pass off on the next frame, which is the behaviour an
+        // inspector checkbox promises.
+        m_renderer->set_fxaa_enabled(pp->fxaa_enabled);
+        m_renderer->set_fxaa_thresholds(pp->fxaa_threshold, pp->fxaa_threshold_min);
+        // Internal 3D resolution (Phase 37). Applied every frame because the
+        // editor can edit the component live; set_render_scale is a no-op when
+        // the value did not change, so this does not rebuild targets per frame.
+        //
+        // Phase 38: when the scene enables the governor, `render_scale` is the
+        // CEILING and the governor's current scale is what the renderer gets.
+        // Configuring here (rather than on load) means an inspector edit takes
+        // effect on the next frame, and a scene without a PostProcess component
+        // leaves the previous scale alone. The governor itself is advanced by
+        // Runtime::update(dt), which owns the frame clock.
+        rendering::DynamicResolutionConfig dynamic{};
+        dynamic.enabled = pp->dynamic_resolution;
+        dynamic.max_scale = pp->render_scale;
+        dynamic.min_scale = pp->min_render_scale;
+        dynamic.target_frame_ms =
+            pp->target_fps > 0.0f ? 1000.0f / pp->target_fps : 16.6667f;
+        m_dynamic_resolution.configure(dynamic);
+        const f32 requested_scale =
+            pp->dynamic_resolution ? m_dynamic_resolution.scale() : pp->render_scale;
+        if (requested_scale != m_renderer->render_scale()) {
+            NF_LOG_INFO(LogCategory::Render, "Render scale {:.2f} -> {:.2f}{}",
+                        m_renderer->render_scale(), requested_scale,
+                        pp->dynamic_resolution ? " (dynamic resolution)" : "");
+        }
+        m_renderer->set_render_scale(requested_scale);
         // Exposure and the tonemap operator are OPT-IN, and they are applied
         // AFTER the block because they are not part of `PostFxParams` — the
         // renderer holds them separately, and a scene that does not name them
@@ -3921,6 +4114,27 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
     }
     build_debris_render_world(out);
     build_vehicle_wheels_render_world(out);
+
+    // Projected decals (Phase 36). Placement and facing come from the entity
+    // Transform; the authored size is baked into the matrix here so the GPU's
+    // local-space test stays the unit cube. A disabled decal is not extracted
+    // at all: the renderer must not spend a draw on something the author
+    // explicitly turned off, and `decal_count()` then reports what will draw.
+    for (auto e : world.query<scene::Transform, DecalComponent>()) {
+        const auto* tr = world.get<scene::Transform>(e);
+        const auto* dc = world.get<DecalComponent>(e);
+        if (tr == nullptr || dc == nullptr || !dc->enabled) {
+            continue;
+        }
+        const Mat4 world_matrix =
+            rendering::decal_world_matrix(scene::world_matrix(*tr),
+                                          Vec3{dc->size_x, dc->size_y, dc->size_z});
+        rendering::MaterialHandle mat = material_for_path(dc->material);
+        if (!mat.valid()) {
+            mat = m_default_material;
+        }
+        out.decals.push_back(rendering::make_decal(e.id, world_matrix, mat, dc->opacity));
+    }
 
     NF_LOG_TRACE(LogCategory::Core, "Runtime: built render world with {} objects (meshes={})", out.objects.size(),
                  m_mesh_library->size());

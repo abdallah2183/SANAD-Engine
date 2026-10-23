@@ -787,6 +787,24 @@ bool EditorApp::set_post_process(ecs::Entity e, const runtime::PostProcessCompon
     return true;
 }
 
+bool EditorApp::set_decal(ecs::Entity e, const DecalEdit& edit, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_decal_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::set_mesh(ecs::Entity e, const std::string& asset_id_text, const std::string& material,
                          std::string& out_err) {
     if (!require_editable(out_err)) {
@@ -3528,8 +3546,177 @@ bool EditorApp::revert_prefab(ecs::Entity instance_root, std::string& out_err) {
     return true;
 }
 
-bool EditorApp::play(std::string& out_err) {
-    if (m_runtime == nullptr || m_runtime->edit_scene() == nullptr) {
+bool EditorApp::input_bindings_file_exists() const {
+    const auto exists = m_vfs.exists(kInputBindingsPath);
+    return exists.ok && exists.value;
+}
+
+bool EditorApp::load_input_bindings(std::string& out_err) {
+    m_input_bindings_loaded = true;
+    const auto text = m_vfs.read_text(kInputBindingsPath);
+    if (!text.ok) {
+        // No file is the normal case for a project that never rebound: the
+        // shipped defaults ARE the answer, and calling that an error would
+        // put a red line in the console for a working game.
+        m_input_bindings = runtime::InputBindings::defaults();
+        out_err.clear();
+        return true;
+    }
+    std::string parse_error;
+    const runtime::InputBindings parsed = runtime::InputBindings::parse(text.value, &parse_error);
+    if (!parse_error.empty()) {
+        // Half a control scheme is worse than the one that worked: keep the
+        // current table and say which line is wrong.
+        out_err = parse_error;
+        return false;
+    }
+    // Overlay, not replace — the same rule the shipped player follows.
+    runtime::InputBindings merged = runtime::InputBindings::defaults();
+    merged.merge(parsed);
+    m_input_bindings = std::move(merged);
+    return true;
+}
+
+bool EditorApp::save_input_bindings(std::string& out_err) {
+    m_input_bindings_loaded = true;
+    const auto written =
+        m_vfs.write_text(kInputBindingsPath, runtime::serialize_bindings(m_input_bindings));
+    if (!written.ok) {
+        out_err = written.error;
+        return false;
+    }
+    return true;
+}
+
+bool EditorApp::reset_binding(std::string_view action) {
+    const runtime::InputBindings defaults = runtime::InputBindings::defaults();
+    const auto* list = defaults.find(action);
+    if (list == nullptr) {
+        return false;
+    }
+    m_input_bindings.set(action, *list);
+    return true;
+}
+
+std::vector<std::string> EditorApp::player_profiles() const {
+    const auto text = m_vfs.read_text(kProfileIndexPath);
+    if (!text.ok) {
+        return {};
+    }
+    return runtime::parse_profile_index(text.value);
+}
+
+bool EditorApp::save_player_profile(const std::string& name, std::string& out_err) {
+    if (!runtime::valid_profile_name(name)) {
+        out_err = "Profile name must be 1-32 letters, digits, spaces, '_' or '-'";
+        return false;
+    }
+    const std::string path = runtime::profile_path(name);
+    if (path.empty()) {
+        out_err = "Invalid profile name";
+        return false;
+    }
+    const auto written =
+        m_vfs.write_text(path, runtime::serialize_player_settings(m_player_settings));
+    if (!written.ok) {
+        out_err = written.error;
+        return false;
+    }
+    // The index is what the picker reads. Rewritten whole rather than appended
+    // so a name saved twice cannot appear twice.
+    std::vector<std::string> names = player_profiles();
+    if (std::find(names.begin(), names.end(), name) == names.end()) {
+        names.push_back(name);
+    }
+    const auto index = m_vfs.write_text(kProfileIndexPath, runtime::serialize_profile_index(names));
+    if (!index.ok) {
+        out_err = index.error;
+        return false;
+    }
+    return true;
+}
+
+bool EditorApp::load_player_profile(const std::string& name, std::string& out_err) {
+    const std::string path = runtime::profile_path(name);
+    if (path.empty()) {
+        out_err = "Invalid profile name";
+        return false;
+    }
+    const auto text = m_vfs.read_text(path);
+    if (!text.ok) {
+        out_err = text.error;
+        return false;
+    }
+    runtime::PlayerSettings parsed;
+    std::string parse_error;
+    if (!runtime::parse_player_settings(text.value, parsed, parse_error)) {
+        out_err = name + ": " + parse_error;
+        return false;
+    }
+    m_player_settings = parsed;
+    m_player_settings_loaded = true;
+    apply_player_settings();
+    // Copy onto the active file too: a runtime started later (the shipped
+    // player, or a fresh editor session) reads ONE path, and that path has to
+    // hold the profile the player just picked.
+    const auto active = m_vfs.write_text(
+        runtime::Runtime::kDefaultPlayerSettingsPath,
+        runtime::serialize_player_settings(m_player_settings));
+    if (!active.ok) {
+        out_err = active.error;
+        return false;
+    }
+    return true;
+}
+
+bool EditorApp::player_settings_file_exists() const {    const auto exists = m_vfs.exists(runtime::Runtime::kDefaultPlayerSettingsPath);
+    return exists.ok && exists.value;
+}
+
+bool EditorApp::reload_player_settings(std::string& out_err) {
+    m_player_settings_loaded = true;
+    const auto text = m_vfs.read_text(runtime::Runtime::kDefaultPlayerSettingsPath);
+    if (!text.ok) {
+        out_err = text.error;
+        return false;
+    }
+    runtime::PlayerSettings parsed;
+    std::string parse_error;
+    if (!runtime::parse_player_settings(text.value, parsed, parse_error)) {
+        // The file is left alone and the current values survive: half-applied
+        // settings are worse than none, because the player cannot tell which
+        // half took.
+        out_err = parse_error;
+        return false;
+    }
+    m_player_settings = parsed;
+    apply_player_settings();
+    return true;
+}
+
+bool EditorApp::save_player_settings(std::string& out_err) {
+    m_player_settings_loaded = true;
+    const auto written = m_vfs.write_text(
+        runtime::Runtime::kDefaultPlayerSettingsPath,
+        runtime::serialize_player_settings(m_player_settings));
+    if (!written.ok) {
+        out_err = written.error;
+        return false;
+    }
+    apply_player_settings();
+    return true;
+}
+
+void EditorApp::apply_player_settings() {
+    // No runtime before the first scene is open, and none while the editor is
+    // in edit mode with no play session — the values are simply kept and
+    // pushed on the next play(). That is why play() applies them too.
+    if (m_runtime != nullptr) {
+        m_runtime->set_player_settings(m_player_settings);
+    }
+}
+
+bool EditorApp::play(std::string& out_err) {    if (m_runtime == nullptr || m_runtime->edit_scene() == nullptr) {
         out_err = "No scene open";
         return false;
     }
@@ -3551,6 +3738,9 @@ bool EditorApp::play(std::string& out_err) {
     // at its bind-time pose — without this, Play would teleport every car
     // back to where it was when its component was last touched.
     m_runtime->bind_scene_vehicles();
+    // The player's taste, pushed on entry: a saved settings file takes effect
+    // on the next play session even if the panel was never opened this run.
+    m_runtime->set_player_settings(m_player_settings);
     if (!m_play.play(*m_runtime->edit_scene(), out_err)) {
         return false;
     }

@@ -1,10 +1,14 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <NF/Editor/Inspector.hpp>
 #include <NF/Editor/Commands.hpp>
 #include <NF/Assets/AssetId.hpp>
+#include <NF/Rendering/DynamicResolution.hpp>
+#include <NF/Rendering/RenderScale.hpp>
 #include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Runtime/Runtime.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <string>
 
 namespace nf::editor {
@@ -95,6 +99,14 @@ CameraEdit read_camera(const ecs::World& world, ecs::Entity e, bool& out_has) {
     out.zoom_max = c->zoom_max;
     out.zoom_step = c->zoom_step;
     out.align_speed = c->align_speed;
+    out.ads_enabled = c->ads_enabled;
+    out.ads_distance = c->ads_distance;
+    out.ads_sensitivity = c->ads_sensitivity;
+    out.ads_speed = c->ads_speed;
+    out.shake_strength = c->shake_strength;
+    out.shake_decay = c->shake_decay;
+    out.recoil_recover = c->recoil_recover;
+    out.recoil_max = c->recoil_max;
     return out;
 }
 
@@ -225,6 +237,50 @@ std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
         out_err = "Align speed must not be negative";
         return nullptr;
     }
+    // ADS and shake. The distance must leave room for the camera to sit
+    // outside the character's head, and the two trims must be finite and
+    // non-negative — the loader and the runtime use the same bounds, so a
+    // value the editor accepts never gets silently re-clamped later.
+    if (!all_finite({edit.ads_distance, edit.ads_sensitivity, edit.ads_speed, edit.shake_strength,
+                     edit.shake_decay})) {
+        out_err = "Aiming and shake values must be finite numbers";
+        return nullptr;
+    }
+    if (edit.ads_distance < 0.1f || edit.ads_distance > 100.0f) {
+        out_err = "ADS distance must be within [0.1, 100]";
+        return nullptr;
+    }
+    if (edit.ads_sensitivity < 0.0f || edit.ads_sensitivity > 4.0f) {
+        out_err = "ADS sensitivity must be within [0, 4]";
+        return nullptr;
+    }
+    if (edit.ads_speed < 0.0f) {
+        out_err = "ADS speed must not be negative";
+        return nullptr;
+    }
+    if (edit.shake_strength < 0.0f) {
+        out_err = "Shake strength must not be negative";
+        return nullptr;
+    }
+    if (edit.shake_decay < 0.0f) {
+        out_err = "Shake decay must not be negative";
+        return nullptr;
+    }
+    // Recoil. The recovery rate may be 0 (hold the kick, a deliberate effect),
+    // but a negative one would grow the offset every frame, and a limit at or
+    // below zero would make every kick invisible.
+    if (!all_finite({edit.recoil_recover, edit.recoil_max})) {
+        out_err = "Recoil values must be finite numbers";
+        return nullptr;
+    }
+    if (edit.recoil_recover < 0.0f) {
+        out_err = "Recoil recovery must not be negative";
+        return nullptr;
+    }
+    if (edit.recoil_max <= 0.0f || edit.recoil_max > 180.0f) {
+        out_err = "Recoil limit must be within (0, 180]";
+        return nullptr;
+    }
     runtime::CameraComponent after = before;
     after.is_active = edit.active;
     after.fov_y = edit.fov_y;
@@ -250,6 +306,14 @@ std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
     after.zoom_max = edit.zoom_max;
     after.zoom_step = edit.zoom_step;
     after.align_speed = edit.align_speed;
+    after.ads_enabled = edit.ads_enabled;
+    after.ads_distance = edit.ads_distance;
+    after.ads_sensitivity = edit.ads_sensitivity;
+    after.ads_speed = edit.ads_speed;
+    after.shake_strength = edit.shake_strength;
+    after.shake_decay = edit.shake_decay;
+    after.recoil_recover = edit.recoil_recover;
+    after.recoil_max = edit.recoil_max;
     return std::make_unique<SetCameraCommand>(e, had, before, after);
 }
 
@@ -455,6 +519,23 @@ runtime::PostProcessComponent read_post_process(const ecs::World& world, ecs::En
     return pp != nullptr ? *pp : runtime::PostProcessComponent{};
 }
 
+DecalEdit read_decal(const ecs::World& world, ecs::Entity e, bool& out_has) {
+    DecalEdit out;
+    const auto* decal = world.get<runtime::DecalComponent>(e);
+    out_has = (decal != nullptr);
+    if (decal == nullptr) {
+        return out;
+    }
+    std::strncpy(out.material, decal->material.c_str(), sizeof(out.material) - 1);
+    out.material[sizeof(out.material) - 1] = '\0';
+    out.size_x = decal->size_x;
+    out.size_y = decal->size_y;
+    out.size_z = decal->size_z;
+    out.opacity = decal->opacity;
+    out.enabled = decal->enabled;
+    return out;
+}
+
 std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Entity e,
                                                     const runtime::PostProcessComponent& edit,
                                                     std::string& out_err) {
@@ -466,7 +547,8 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
                      edit.bloom_radius, edit.grade_contrast, edit.grade_pivot,
                      edit.grade_temperature, edit.grade_tint, edit.grade_gamma,
                      edit.sharpen_amount, edit.sharpen_radius, edit.saturation,
-                     edit.vignette})) {
+                     edit.vignette, edit.fxaa_threshold, edit.fxaa_threshold_min,
+                     edit.render_scale, edit.target_fps, edit.min_render_scale})) {
         out_err = "Post-processing values must be finite numbers";
         return nullptr;
     }
@@ -498,6 +580,33 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
     if (!in_range("sharpen radius", edit.sharpen_radius, 0.01f, 16.0f)) return nullptr;
     if (!in_range("saturation", edit.saturation, 0.0f, 8.0f)) return nullptr;
     if (!in_range("vignette", edit.vignette, 0.0f, 1.0f)) return nullptr;
+    // Anti-aliasing thresholds. Same bounds the scene loader and the renderer
+    // clamp to: a threshold at 0 would classify every pixel as an edge, so the
+    // floor is real rather than stylistic.
+    if (!in_range("fxaa threshold", edit.fxaa_threshold, 0.01f, 1.0f)) return nullptr;
+    if (!in_range("fxaa threshold min", edit.fxaa_threshold_min, 0.0f, 1.0f)) return nullptr;
+    // Internal render scale (Phase 37). The same two constants the renderer
+    // clamps to and the scene loader validates against, so the editor cannot
+    // author a value that one of the other two layers silently changes.
+    if (!in_range("render scale", edit.render_scale, rendering::kMinRenderScale,
+                  rendering::kMaxRenderScale)) {
+        return nullptr;
+    }
+    // Dynamic resolution (Phase 38). `render_scale` is the ceiling and the
+    // floor must sit at or below it; an inverted pair is refused by name, just
+    // as the scene loader refuses it, rather than silently swapped.
+    if (!in_range("target fps", edit.target_fps, rendering::kMinTargetFps,
+                  rendering::kMaxTargetFps)) {
+        return nullptr;
+    }
+    if (!in_range("minimum render scale", edit.min_render_scale, rendering::kMinRenderScale,
+                  rendering::kMaxRenderScale)) {
+        return nullptr;
+    }
+    if (edit.min_render_scale > edit.render_scale) {
+        out_err = "minimum render scale must not exceed the render scale ceiling";
+        return nullptr;
+    }
     // Lens effects. Symmetric on distortion because barrel and pincushion are
     // both legitimate, and bounded at +/-0.5 because past that the warp folds
     // the corners over themselves. The bounds match the scene loader's.
@@ -546,6 +655,48 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
     const runtime::PostProcessComponent before = had ? *cur : runtime::PostProcessComponent{};
     runtime::PostProcessComponent after = edit;
     return std::make_unique<SetPostProcessCommand>(e, had, before, after);
+}
+
+std::unique_ptr<ICommand> make_decal_command(ecs::World& world, ecs::Entity e,
+                                             const DecalEdit& edit, std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.size_x, edit.size_y, edit.size_z, edit.opacity})) {
+        out_err = "Decal values must be finite numbers";
+        return nullptr;
+    }
+    // The bounds mirror the scene loader's, deliberately: a size it would refuse
+    // is refused here, so an authored decal cannot load as "line ignored" after
+    // the editor reported success. A zero-depth decal has no volume and writes
+    // no pixels, which is indistinguishable from a broken feature.
+    const auto in_range = [&out_err](const char* name, float v, float lo, float hi) {
+        if (v < lo || v > hi) {
+            out_err = std::string(name) + " must be within [" + std::to_string(lo) + ", " +
+                      std::to_string(hi) + "]";
+            return false;
+        }
+        return true;
+    };
+    if (!in_range("size X", edit.size_x, 0.001f, 1000.0f)) return nullptr;
+    if (!in_range("size Y", edit.size_y, 0.001f, 1000.0f)) return nullptr;
+    if (!in_range("size Z", edit.size_z, 0.001f, 1000.0f)) return nullptr;
+    // Opacity is a blend weight, so 0 (invisible) and 1 (fully material) are both
+    // legitimate; only a value outside the weight's definition is refused.
+    if (!in_range("opacity", edit.opacity, 0.0f, 1.0f)) return nullptr;
+
+    const auto* cur = world.get<runtime::DecalComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::DecalComponent before = had ? *cur : runtime::DecalComponent{};
+    runtime::DecalComponent after = before;
+    after.material = edit.material;
+    after.size_x = edit.size_x;
+    after.size_y = edit.size_y;
+    after.size_z = edit.size_z;
+    after.opacity = edit.opacity;
+    after.enabled = edit.enabled;
+    return std::make_unique<SetDecalCommand>(e, had, before, after);
 }
 
 std::unique_ptr<ICommand> make_reverb_zone_command(ecs::World& world, ecs::Entity e,

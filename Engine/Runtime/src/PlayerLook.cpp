@@ -154,4 +154,63 @@ void stick_deadzone(f32& x, f32& y, f32 deadzone) {
     y *= scaled;
 }
 
+
+
+// --- aiming down sights ------------------------------------------------------
+
+f32 aim_blend_step(f32 blend, bool aiming, f32 speed, f32 dt) {
+    const f32 clamped = std::clamp(std::isfinite(blend) ? blend : 0.0f, 0.0f, 1.0f);
+    const f32 target = aiming ? 1.0f : 0.0f;
+    // A non-positive speed is the scene saying "snap": useful for a hitscan
+    // weapon whose sights must be up on the same frame the button went down.
+    if (!(speed > 0.0f)) {
+        return target;
+    }
+    if (!std::isfinite(dt) || dt <= 0.0f) {
+        return clamped;
+    }
+    // Exponential approach. Written as 1 - exp(-k*dt) rather than a fixed
+    // per-frame step so 30 fps and 144 fps produce the same curve — a
+    // per-frame step makes the camera snappier on a faster machine, which is
+    // exactly the kind of difference a player cannot name but can feel.
+    const f32 k = 1.0f - std::exp(-speed * dt);
+    return std::clamp(clamped + (target - clamped) * k, 0.0f, 1.0f);
+}
+
+f32 aim_distance(f32 base_distance, f32 ads_distance, f32 blend) {
+    const f32 b = std::clamp(std::isfinite(blend) ? blend : 0.0f, 0.0f, 1.0f);
+    return base_distance + (ads_distance - base_distance) * b;
+}
+
+f32 aim_sensitivity_scale(f32 scale, f32 blend) {
+    const f32 b = std::clamp(std::isfinite(blend) ? blend : 0.0f, 0.0f, 1.0f);
+    return 1.0f + (scale - 1.0f) * b;
+}
+
+
+// --- recoil ------------------------------------------------------------------
+
+void recoil_add(RecoilState& state, f32 pitch_deg, f32 yaw_deg, f32 max_abs) {
+    if (!std::isfinite(pitch_deg) || !std::isfinite(yaw_deg)) {
+        return;
+    }
+    const f32 limit = std::fabs(max_abs);
+    state.pitch = std::clamp(state.pitch + pitch_deg, -limit, limit);
+    state.yaw = std::clamp(state.yaw + yaw_deg, -limit, limit);
+}
+
+RecoilState recoil_recover(RecoilState state, f32 rate, f32 dt) {
+    if (!std::isfinite(state.pitch) || !std::isfinite(state.yaw)) {
+        return RecoilState{};
+    }
+    // A non-positive rate is "hold the kick" rather than "snap to zero":
+    // snapping would make a scene that never authored a rate lose its recoil
+    // on the very next frame.
+    if (!(rate > 0.0f) || !std::isfinite(dt) || dt <= 0.0f) {
+        return state;
+    }
+    const f32 keep = std::exp(-rate * dt);
+    return RecoilState{state.pitch * keep, state.yaw * keep};
+}
+
 } // namespace nf::runtime

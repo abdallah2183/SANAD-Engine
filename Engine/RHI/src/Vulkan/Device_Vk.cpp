@@ -692,8 +692,21 @@ bool VulkanDevice::create_logical_device() {
         extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
 
+    VkPhysicalDeviceFeatures supported_features{};
+    vkGetPhysicalDeviceFeatures(m_ctx.physical_device, &supported_features);
+
     VkPhysicalDeviceFeatures features{};
     features.fillModeNonSolid = VK_TRUE; // wireframe rendering in the editor
+    // Per-attachment blending for the decal pass (Phase 36). The feature is
+    // optional in core Vulkan, so only ask for it when the device reports it;
+    // Renderer3D leaves the decal stage disabled when it is absent.
+    if (supported_features.independentBlend == VK_TRUE) {
+        features.independentBlend = VK_TRUE;
+        m_ctx.independent_blend = true;
+    } else {
+        NF_LOG_WARN(LogCategory::RHI,
+                    "Device does not support independentBlend; projected decals are disabled");
+    }
 
     VkDeviceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

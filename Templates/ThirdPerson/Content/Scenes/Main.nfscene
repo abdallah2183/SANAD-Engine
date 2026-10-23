@@ -6,7 +6,7 @@ entity_count: 12
 entity: 1:0
   Name: MainCamera
   Transform: local(0,4,8) world(0,4,8) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
-  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true follow=Player pivot=0,0,0 distance=7 yaw=0 pitch=-20 smoothing=8 radius=0.35 avoid=1 align=60
+  Camera: fov=60 aspect=1.7777778 near=0.1 far=1000 active=true ads=1 ads_distance=2.2 ads_sens=0.55 ads_speed=10 follow=Player pivot=0,0,0 distance=7 yaw=0 pitch=-20 smoothing=8 radius=0.35 avoid=1 align=60
 ---
 entity: 2:0
   Name: Sun
@@ -17,7 +17,7 @@ entity: 3:0
   Name: Sky
   Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   Sky: zenith(0.16,0.34,0.68) horizon(0.68,0.78,0.88) ground(0.08,0.09,0.10) clear(0.04,0.05,0.08) sun_disk=1 sun_glow=1 enabled=true
-  PostProcess: bloom=true bloom_threshold=2.2 bloom_knee=0.5 bloom_intensity=0.6 bloom_radius=1.4 grade=true grade_contrast=1.04 grade_pivot=1.0 grade_temperature=0.05 grade_tint=0.0 grade_gamma=1.0 exposure=1.0 tonemap=aces saturation=1.05 vignette=0.08 fog=true fog_color(0.68,0.78,0.88) fog_start=30 fog_end=110
+  PostProcess: bloom=true bloom_threshold=2.2 bloom_knee=0.5 bloom_intensity=0.6 bloom_radius=1.4 grade=true grade_contrast=1.04 grade_pivot=1.0 grade_temperature=0.05 grade_tint=0.0 grade_gamma=1.0 exposure=1.0 tonemap=aces saturation=1.05 vignette=0.08 fog=true fog_color(0.68,0.78,0.88) fog_start=30 fog_end=110 fxaa=true fxaa_threshold=0.125 fxaa_threshold_min=0.0312
 ---
 entity: 4:0
   Name: Ground

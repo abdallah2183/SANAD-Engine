@@ -14,6 +14,8 @@
 #include <NF/Editor/UiRenderer.hpp>
 #include <NF/Core/Profiler.hpp>
 #include <NF/Core/FileSystem.hpp>
+#include <NF/Rendering/DynamicResolution.hpp>
+#include <NF/Rendering/RenderScale.hpp>
 #include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Scene/PrefabLink.hpp>
@@ -114,6 +116,27 @@ struct InspectorCache {
     bool pp_motion_enabled = false;
     float pp_motion_intensity = 1.0f;
     float pp_motion_length = 0.05f;
+    // Projected decal (Phase 36). Placement and facing are owned by the entity
+    // Transform, so the cache holds only the values this panel edits; the
+    // "has" flag keys the add affordance, exactly like the post block above.
+    bool decal_has = false;
+    char decal_material[256]{};
+    float decal_size[3]{1.0f, 1.0f, 1.0f};
+    float decal_opacity = 1.0f;
+    bool decal_enabled = true;
+    // Anti-aliasing. Its own pass on the tonemapped image, so it is cached
+    // beside the post block rather than inside it.
+    bool pp_fxaa_enabled = false;
+    float pp_fxaa_threshold = 0.125f;
+    float pp_fxaa_threshold_min = 0.0312f;
+    // Internal render scale (Phase 37): one value, not a stage toggle. 1.0 is
+    // the identity, above it supersamples, below it renders cheaper.
+    float pp_render_scale = 1.0f;
+    // Dynamic resolution (Phase 38). The static scale above is the ceiling;
+    // these control how the governor walks between it and the floor.
+    bool pp_dynamic_resolution = false;
+    float pp_target_fps = 60.0f;
+    float pp_min_render_scale = 0.5f;
     // Opt-in: 0 exposure and -1 operator mean "the renderer's own", so a scene
     // that never authored them keeps whatever the renderer already had.
     float pp_exposure = 0.0f;
@@ -1921,6 +1944,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.pp_motion_enabled = pp.motion_enabled;
                     ic.pp_motion_intensity = pp.motion_intensity;
                     ic.pp_motion_length = pp.motion_max_length;
+                    ic.pp_fxaa_enabled = pp.fxaa_enabled;
+                    ic.pp_fxaa_threshold = pp.fxaa_threshold;
+                    ic.pp_fxaa_threshold_min = pp.fxaa_threshold_min;
+                    ic.pp_render_scale = pp.render_scale;
+    ic.pp_dynamic_resolution = pp.dynamic_resolution;
+    ic.pp_target_fps = pp.target_fps;
+    ic.pp_min_render_scale = pp.min_render_scale;
                     ic.pp_exposure = pp.exposure;
                     ic.pp_tonemap = pp.tonemap;
                     std::strncpy(ic.pp_lut_path, pp.lut_path.c_str(), sizeof(ic.pp_lut_path) - 1);
@@ -1932,6 +1962,17 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.pp_fog_color[2] = pp.fog_b;
                     ic.pp_fog_start = pp.fog_start;
                     ic.pp_fog_end = pp.fog_end;
+                }
+                const DecalEdit decal = read_decal(*w, sel, ic.decal_has);
+                if (ic.decal_has) {
+                    std::strncpy(ic.decal_material, decal.material,
+                                 sizeof(ic.decal_material) - 1);
+                    ic.decal_material[sizeof(ic.decal_material) - 1] = '\0';
+                    ic.decal_size[0] = decal.size_x;
+                    ic.decal_size[1] = decal.size_y;
+                    ic.decal_size[2] = decal.size_z;
+                    ic.decal_opacity = decal.opacity;
+                    ic.decal_enabled = decal.enabled;
                 }
                 if (const auto* rz = w->get<audio::ReverbZoneComponent>(sel)) {
                     ic.rz_has = true;
@@ -2213,6 +2254,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     added = app.apply_sky_edit(SkyEdit{}, add_err);
                 } else if (!ic.pp_has && ImGui::MenuItem(AV("post_process").c_str())) {
                     added = app.set_post_process(sel, runtime::PostProcessComponent{}, add_err);
+                } else if (!w->has<runtime::DecalComponent>(sel) &&
+                           ImGui::MenuItem(AV("decal").c_str())) {
+                    added = app.set_decal(sel, DecalEdit{}, add_err);
                 } else if (!ic.rz_has && ImGui::MenuItem(AV("reverb_zone").c_str())) {
                     // Music and ambience are deliberately NOT in this menu: both
                     // need a buffer path, and a component naming no file is
@@ -2794,6 +2838,53 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                                        &ic.pp_motion_length, 0.001f, 0.3f, "%.3f");
 
                     ImGui::Separator();
+                    // Anti-aliasing. The two sliders are the FXAA 3.11 console
+                    // knobs: an edge must span `threshold` of the local luma to
+                    // be filtered, and `floor` keeps a dark gradient from being
+                    // read as one. Lower thresholds filter more and soften more.
+                    ImGui::Checkbox((AV("enabled") + "##pp_fxaa").c_str(), &ic.pp_fxaa_enabled);
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(AV("anti_aliasing").c_str());
+                    ImGui::SliderFloat((AV("edge_threshold") + "##pp_fxaa_threshold").c_str(),
+                                       &ic.pp_fxaa_threshold, 0.01f, 1.0f, "%.3f");
+                    ImGui::SliderFloat((AV("edge_floor") + "##pp_fxaa_floor").c_str(),
+                                       &ic.pp_fxaa_threshold_min, 0.0f, 0.5f, "%.4f");
+
+                    ImGui::Separator();
+                    // Internal resolution. The same bounds the loader and the
+                    // renderer use; the slider steps in hundredths because a
+                    // scale change rebuilds every resolution-dependent target.
+                    ImGui::TextUnformatted(AV("render_scale").c_str());
+                    ImGui::SliderFloat((AV("render_scale") + "##pp_render_scale").c_str(),
+                                       &ic.pp_render_scale, rendering::kMinRenderScale,
+                                       rendering::kMaxRenderScale, "%.2f");
+                    if (ic.pp_render_scale > 1.0f) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%s", AV("supersampling").c_str());
+                    }
+                    ImGui::TextDisabled("%s", AV("render_scale_hint").c_str());
+
+                    // Dynamic resolution. The static scale is the ceiling, so
+                    // the floor slider cannot exceed it; clamping here keeps
+                    // the UI from presenting a pair the command will reject.
+                    if (ic.pp_min_render_scale > ic.pp_render_scale) {
+                        ic.pp_min_render_scale = ic.pp_render_scale;
+                    }
+                    ImGui::Checkbox((AV("dynamic_resolution") + "##pp_dynamic").c_str(),
+                                    &ic.pp_dynamic_resolution);
+                    if (ic.pp_dynamic_resolution) {
+                        ImGui::SliderFloat((AV("target_fps") + "##pp_target_fps").c_str(),
+                                           &ic.pp_target_fps, rendering::kMinTargetFps,
+                                           rendering::kMaxTargetFps, "%.0f");
+                        const float floor_max =
+                            std::max(rendering::kMinRenderScale, ic.pp_render_scale);
+                        ImGui::SliderFloat((AV("min_scale") + "##pp_min_scale").c_str(),
+                                           &ic.pp_min_render_scale,
+                                           rendering::kMinRenderScale, floor_max, "%.2f");
+                    }
+                    ImGui::TextDisabled("%s", AV("dynamic_resolution_hint").c_str());
+
+                    ImGui::Separator();
                     // Exposure and the tonemap operator are OPT-IN, and their
                     // sentinels are the UI: a slider at 0 means "the renderer's
                     // own exposure", and the combo's first entry is "Not set".
@@ -2876,6 +2967,13 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         e.motion_enabled = ic.pp_motion_enabled;
                         e.motion_intensity = ic.pp_motion_intensity;
                         e.motion_max_length = ic.pp_motion_length;
+                        e.fxaa_enabled = ic.pp_fxaa_enabled;
+                        e.fxaa_threshold = ic.pp_fxaa_threshold;
+                        e.fxaa_threshold_min = ic.pp_fxaa_threshold_min;
+                        e.render_scale = ic.pp_render_scale;
+                        e.dynamic_resolution = ic.pp_dynamic_resolution;
+                        e.target_fps = ic.pp_target_fps;
+                        e.min_render_scale = ic.pp_min_render_scale;
                         e.exposure = ic.pp_exposure;
                         e.tonemap = ic.pp_tonemap;
                         e.lut_path = ic.pp_lut_path;
@@ -2890,6 +2988,53 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.set_post_process(sel, e, err)) {
                             ic.error = err;
                             push_error(app.console(), "Post-processing edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                }
+            }
+            // --- Projected decal (Phase 36) ---
+            // A decal has no mesh and no light: it projects the entity's local
+            // +/-Z box onto whatever the GBuffer already drew. Placement and
+            // facing therefore stay in the Transform section above; this panel
+            // owns the projection extent and the blend trim.
+            if (ImGui::CollapsingHeader((AV("decal") + "###Decal").c_str())) {
+                if (!ic.decal_has) {
+                    ImGui::TextDisabled("%s", AV("no_decal").c_str());
+                    if (ImGui::Button((AV("add_decal") + "##adddecal").c_str())) {
+                        DecalEdit e; // defaults: 1x1x1, fully opaque, enabled
+                        std::string err;
+                        if (!app.set_decal(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Add decal failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##decal_enabled").c_str(),
+                                    &ic.decal_enabled);
+                    ImGui::InputText((AV("material") + "##decal_material").c_str(),
+                                     ic.decal_material, sizeof(ic.decal_material));
+                    ImGui::DragFloat3((AV("decal_size") + "##decal_size").c_str(),
+                                      ic.decal_size, 0.05f, 0.001f, 1000.0f, "%.3f");
+                    ImGui::SliderFloat((AV("decal_opacity") + "##decal_opacity").c_str(),
+                                       &ic.decal_opacity, 0.0f, 1.0f);
+                    ImGui::TextDisabled("%s", AV("decal_hint").c_str());
+                    if (ImGui::Button((AV("apply") + "##decal").c_str())) {
+                        DecalEdit e;
+                        std::strncpy(e.material, ic.decal_material, sizeof(e.material) - 1);
+                        e.material[sizeof(e.material) - 1] = '\0';
+                        e.size_x = ic.decal_size[0];
+                        e.size_y = ic.decal_size[1];
+                        e.size_z = ic.decal_size[2];
+                        e.opacity = ic.decal_opacity;
+                        e.enabled = ic.decal_enabled;
+                        std::string err;
+                        if (!app.set_decal(sel, e, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Decal edit failed", err);
                         } else {
                             ic.error.clear();
                         }

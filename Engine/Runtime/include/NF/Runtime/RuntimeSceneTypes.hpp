@@ -29,6 +29,26 @@ struct MaterialComponent {
     // For v0.1, just a name; later this will be an AssetId for Material asset
 };
 
+/// A projected screen-space decal (Phase 36) as scene data.
+///
+/// The entity's Transform supplies position AND orientation: local +Z is the
+/// direction the decal faces (the surface normal it was placed on), local XY
+/// are the albedo's U/V plane, and the authored `size` becomes the full extent
+/// of the unit box before rendering. `opacity` multiplies the material's base
+/// alpha, so a material shared with an opaque surface still reads as a decal.
+///
+/// This header deliberately carries no rendering::DecalInstance: the loader and
+/// the editor include it, and pulling NF/Rendering into both for four floats
+/// would be the wrong trade (the same reason SkyComponent is flat).
+struct DecalComponent {
+    std::string material;                 // logical .nfmat path; empty = default
+    float size_x = 1.0f;                  // full width  (local X)
+    float size_y = 1.0f;                  // full height (local Y)
+    float size_z = 1.0f;                  // projection depth (local Z)
+    float opacity = 1.0f;                 // 0..1, multiplied with material alpha
+    bool enabled = true;
+};
+
 struct DirectionalLight {
     float dir_x = -0.5f, dir_y = -1.0f, dir_z = -0.3f;
     float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
@@ -176,6 +196,37 @@ struct PostProcessComponent {
     float motion_intensity = 1.0f;
     /// Cap on the smear, in uv units.
     float motion_max_length = 0.05f;
+
+    // Anti-aliasing (FXAA). Off by default, like every other optional stage:
+    // the pass is an addition, and a scene that never names it renders the
+    // frame it did before FXAA existed. When on, tonemap renders into an
+    // intermediate image and a second pass resolves that image into the
+    // output target (see Renderer3D::set_fxaa_enabled).
+    bool fxaa_enabled = false;
+    /// Relative luma range that counts as an edge. 1/8 is the classic FXAA
+    /// value: lower filters more (and softens more), higher filters less.
+    float fxaa_threshold = 0.125f;
+    /// Absolute floor for that range, so a dark low-contrast area is not read
+    /// as an edge and made to shimmer.
+    float fxaa_threshold_min = 0.0312f;
+
+    // Internal render scale (Phase 37). 1.0 renders one 3D texel per output
+    // pixel; above 1 is supersampling (2.0 = exact 2x2 box average per output
+    // pixel in the tonemap read), below 1 is a cheaper render that read
+    // upscales. This is a property of the image, which is why it lives on the
+    // post-process block: the tonemap pass is what consumes the extra texels.
+    // It is NOT MSAA (that resolves coverage per sample, and is a separate
+    // RHI item). The bounds match rendering::kMinRenderScale/kMaxRenderScale.
+    float render_scale = 1.0f;
+    /// Let the governor lower the scale when frames run long. `render_scale`
+    /// is the ceiling it may return to; `min_render_scale` is the floor. Off by
+    /// default, so nothing moves unless the scene asks for it.
+    bool dynamic_resolution = false;
+    /// Frame budget for the governor, in frames per second. 60 means it tries
+    /// to hold 16.67 ms per frame.
+    float target_fps = 60.0f;
+    /// Lowest scale the governor may choose. Must be <= render_scale.
+    float min_render_scale = 0.5f;
 
     // Exposure and the tonemap operator (§206).
     //
@@ -397,6 +448,56 @@ struct CameraComponent {
     /// it runs without the mouse. 0 disables it, which is what every scene
     /// authored before this existed gets.
     float align_speed = 0.0f;
+
+    // --- Aiming down sights (ADS) ----------------------------------------
+    //
+    // Holding the `aim` action pulls the camera in and slows the look. Off by
+    // default: a scene that never authors it behaves exactly as it did, and
+    // a scene that turns it on needs no new bindings — `aim` is already an
+    // action a binding file can point at any key, pad button or mouse button.
+    //
+    // The maths is in NF/Runtime/PlayerLook.hpp (aim_blend_step and friends).
+
+    /// Whether holding `aim` does anything.
+    bool ads_enabled = false;
+
+    /// The distance the camera settles at while aiming, in metres. Closer
+    /// than `distance` is the whole point: it is what makes a target bigger.
+    float ads_distance = 2.2f;
+
+    /// Look sensitivity while aiming, as a MULTIPLIER on the authored
+    /// sensitivity. 1.0 is "no change"; 0.55 is the usual scope feel.
+    float ads_sensitivity = 0.55f;
+
+    /// How fast the blend reaches its target, per second. 0 snaps.
+    float ads_speed = 12.0f;
+
+    // --- Recoil -----------------------------------------------------------
+    //
+    // A kick is an offset on the VIEW, not on the aim the player built with
+    // the mouse. Scripts add one with nf.recoil(pitch, yaw); it recovers on
+    // its own, and the view returns to exactly where the player was aiming.
+    // The maths is in NF/Runtime/PlayerLook.hpp (recoil_add / recoil_recover).
+
+    /// Fraction of the remaining kick recovered per second. 0 holds it.
+    float recoil_recover = 8.0f;
+
+    /// The largest kick this camera will show, in degrees per axis. A burst
+    /// that adds more than this is clamped rather than pointing at the sky.
+    float recoil_max = 12.0f;
+
+    // --- Camera shake -----------------------------------------------------
+    //
+    // Trauma-based shake (NF/Rendering/CameraShake.hpp): scripts add trauma
+    // with nf.shake(amount), it decays, and the visible offset scales with
+    // trauma^2. These two fields are the scene's trim on that.
+
+    /// Multiplier on the shake offset. 0 disables shake for this camera
+    /// without touching the scripts that ask for it.
+    float shake_strength = 1.0f;
+
+    /// Trauma lost per second. Higher is a shorter, snappier hit.
+    float shake_decay = 1.4f;
 };
 
 /// The navigation volume: where the walkable mesh is baked, and how (design doc

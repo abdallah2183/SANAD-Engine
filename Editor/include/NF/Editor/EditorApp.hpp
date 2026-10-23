@@ -32,6 +32,7 @@
 #include <NF/Scripting/ScriptEngine.hpp>
 #include <NF/Vfx/Components.hpp>
 #include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/InputBindings.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -144,6 +145,10 @@ public:
     /// unable to store a value the scene loader would then refuse to read back.
     bool set_post_process(ecs::Entity e, const runtime::PostProcessComponent& edit,
                           std::string& out_err);
+    /// Attach or edit the entity's projected decal (Phase 36). Transform owns
+    /// placement and facing; this edit owns the material, box extent, blend trim
+    /// and enable flag, all through the same undoable validated path.
+    bool set_decal(ecs::Entity e, const DecalEdit& edit, std::string& out_err);
     /// Find the scene's sky entity (the renderer takes the first) and apply
     /// `edit` to it, creating one first when the scene has none. BOTH paths end
     /// in the same edit — a caller must never have to know whether a sky already
@@ -549,6 +554,66 @@ public:
     assets::AssetManager& asset_manager() { return m_manager; }
     runtime::Runtime* runtime() { return m_runtime; }
 
+    // --- Player settings (the overrides the PLAYER owns) -------------------
+    //
+    // Sensitivity, inverted-Y, FOV, the ADS trim and the shake trim are the
+    // player's taste, not the level's. They live in a file outside the scene
+    // (`content://Settings/player.nfsettings`), and this is the editor's view
+    // of it: the panel edits `player_settings()`, `apply` pushes it into the
+    // live runtime, `save` writes the file. A value of 1.0 (or FOV 0) means
+    // "the scene's", so an untouched panel changes nothing.
+    runtime::PlayerSettings& player_settings() { return m_player_settings; }
+    const runtime::PlayerSettings& player_settings() const { return m_player_settings; }
+    /// Reads the file into `player_settings()`. False (with a reason) when the
+    /// file is missing or does not parse; the current values then survive.
+    bool reload_player_settings(std::string& out_err);
+    /// Writes `player_settings()` to the file and applies it to the runtime.
+    bool save_player_settings(std::string& out_err);
+    /// Pushes the current values into the live runtime, if one exists. Play
+    /// mode also does this on entry, so a saved file takes effect on the next
+    /// session even when the panel was never opened.
+    void apply_player_settings();
+    bool player_settings_file_exists() const;
+    /// True once the file has been read (or attempted) this session, so the
+    /// panel can load it lazily instead of doing file I/O in the constructor.
+    bool player_settings_loaded() const { return m_player_settings_loaded; }
+
+    // --- Player profiles --------------------------------------------------
+    //
+    // One machine, more than one player. A profile is a settings file under a
+    // name; switching COPIES it over the active file the runtime reads, so the
+    // runtime never has to know profiles exist. The index is a small text file
+    // because the VFS has no directory listing.
+    static constexpr const char* kProfileIndexPath = "content://Settings/players/index.nfindex";
+
+    [[nodiscard]] std::vector<std::string> player_profiles() const;
+    /// Writes the current settings as `name`, adding it to the index.
+    bool save_player_profile(const std::string& name, std::string& out_err);
+    /// Makes `name` the active profile: loads it, applies it, and writes it to
+    /// the active file so a runtime started later reads the same thing.
+    bool load_player_profile(const std::string& name, std::string& out_err);
+
+    // --- Input bindings ---------------------------------------------------
+    //
+    // The table the player's controls come from. It is data (`InputBindings`),
+    // the editor is where it gets EDITED, and the file it round-trips through
+    // is the one the shipped player reads — so a rebind done here is a rebind
+    // in the game, not a setting that only exists while the editor is open.
+    static constexpr const char* kInputBindingsPath = "content://Input/bindings.nfinput";
+
+    runtime::InputBindings& input_bindings() { return m_input_bindings; }
+    const runtime::InputBindings& input_bindings() const { return m_input_bindings; }
+    /// Reads the file over the shipped defaults. A missing file is NOT an
+    /// error (the defaults are the answer); a file that does not parse leaves
+    /// the current table alone and reports why.
+    bool load_input_bindings(std::string& out_err);
+    bool save_input_bindings(std::string& out_err);
+    bool input_bindings_loaded() const { return m_input_bindings_loaded; }
+    bool input_bindings_file_exists() const;
+    /// Puts one action's binding back to what the engine ships. `false` when
+    /// the action is not in the defaults at all.
+    bool reset_binding(std::string_view action);
+
 private:
     bool require_editable(std::string& out_err) const;
     bool require_materials(std::string& out_err) const;
@@ -571,6 +636,12 @@ private:
     assets::AssetManager& m_manager;
     ConsoleBuffer& m_console;
     runtime::Runtime* m_runtime = nullptr;
+    /// The player overrides the panel edits. Mirrored into the runtime on
+    /// `apply` and on play, never written into the scene.
+    runtime::PlayerSettings m_player_settings;
+    bool m_player_settings_loaded = false;
+    runtime::InputBindings m_input_bindings = runtime::InputBindings::defaults();
+    bool m_input_bindings_loaded = false;
     // Created on first use: most editor sessions never touch a save slot, and a
     // SaveSystem needs a mounted `saves://` to be useful.
     std::unique_ptr<runtime::SaveSystem> m_save_system;

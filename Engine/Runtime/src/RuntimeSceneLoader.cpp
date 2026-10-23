@@ -1,5 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Rendering/DynamicResolution.hpp>
+#include <NF/Rendering/RenderScale.hpp>
 #include <NF/Runtime/CharacterComponent.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Assets/AssetId.hpp>
@@ -33,10 +35,21 @@ static std::string trim(const std::string& s) {
 
 // Value of a `key=value` token on a component line, up to the next space.
 // Returns "" when the key is absent. `key` must include the '='.
+//
+// The key must start a token: `render_scale=` must not match the tail of
+// `min_render_scale=`. A plain substring search did exactly that once Phase 38
+// put both keys on the same line, and the renderer received the floor as its
+// ceiling. Requiring the preceding byte to be start-of-line or whitespace is
+// the format's actual token rule.
 static std::string field_value(const std::string& line, const char* key) {
-    const size_t p = line.find(key);
+    const size_t key_len = std::strlen(key);
+    size_t p = line.find(key);
+    while (p != std::string::npos && p != 0 &&
+           !std::isspace(static_cast<unsigned char>(line[p - 1]))) {
+        p = line.find(key, p + 1);
+    }
     if (p == std::string::npos) return {};
-    const size_t start = p + std::strlen(key);
+    const size_t start = p + key_len;
     const size_t end = line.find(' ', start);
     return trim(line.substr(start, end == std::string::npos ? std::string::npos : end - start));
 }
@@ -235,6 +248,42 @@ static bool parse_post_process(const std::string& line, PostProcessComponent& ou
     // A zero cap would mean "never smear", which is what a zero intensity
     // already says; the floor keeps the two from meaning the same thing.
     if (!optional_float_in_range(line, "motion_length=", 0.001f, 1.0f, out.motion_max_length, out_bad)) return false;
+
+    // Anti-aliasing. `fxaa=true` is the switch; the thresholds keep their
+    // defaults when absent, so a one-key line is a complete line. The bounds
+    // are the ones the renderer clamps to, so a value the runtime would have
+    // had to silently re-clamp is refused here instead.
+    out.fxaa_enabled = line.find("fxaa=true") != std::string::npos;
+    if (!optional_float_in_range(line, "fxaa_threshold=", 0.01f, 1.0f, out.fxaa_threshold, out_bad)) return false;
+    if (!optional_float_in_range(line, "fxaa_threshold_min=", 0.0f, 1.0f, out.fxaa_threshold_min, out_bad)) return false;
+
+    // Internal render scale (Phase 37). The bounds are the renderer's own, so
+    // a value accepted here is never silently re-clamped by the renderer, and
+    // an out-of-range value is refused by name instead of producing a frame at
+    // a resolution the author did not ask for.
+    if (!optional_float_in_range(line, "render_scale=", rendering::kMinRenderScale,
+                                 rendering::kMaxRenderScale, out.render_scale, out_bad)) {
+        return false;
+    }
+
+    // Dynamic resolution (Phase 38). `render_scale` is the ceiling, so the
+    // floor must not sit above it; an inverted pair is refused by name rather
+    // than silently swapped, because the file would then mean something other
+    // than what its author wrote. The target frame rate uses the same bounds
+    // the editor slider uses.
+    out.dynamic_resolution = line.find("dynamic_resolution=true") != std::string::npos;
+    if (!optional_float_in_range(line, "target_fps=", rendering::kMinTargetFps,
+                                 rendering::kMaxTargetFps, out.target_fps, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "min_render_scale=", rendering::kMinRenderScale,
+                                 rendering::kMaxRenderScale, out.min_render_scale, out_bad)) {
+        return false;
+    }
+    if (out.min_render_scale > out.render_scale) {
+        out_bad = "min_render_scale=";
+        return false;
+    }
 
     // Exposure and the tonemap operator, both OPT-IN. The sentinels (0 and -1)
     // mean "the scene says nothing", so an absent key leaves the renderer's own
@@ -596,6 +645,44 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                         scene->world().add<MeshComponent>(e, comp);
                     }
                 }
+            } else if (line.rfind("  Decal:",0)==0) {
+                // Projected decal (Phase 36). Placement and orientation come
+                // from the entity Transform, so the line carries only the
+                // projection extents, the material and the blend trim. Every
+                // key is optional; a present-but-impossible value rejects the
+                // line so the author sees a warning instead of an invisible or
+                // NaN-sized decal.
+                DecalComponent decal;
+                decal.material = field_value(line, "material=");
+                bool ok = true;
+                std::string decal_bad;
+                f32 sx = decal.size_x, sy = decal.size_y, sz = decal.size_z;
+                if (field_vec3(line, "size", sx, sy, sz)) {
+                    ok = finite3(sx, sy, sz) &&
+                         sx >= 0.001f && sx <= 1000.0f &&
+                         sy >= 0.001f && sy <= 1000.0f &&
+                         sz >= 0.001f && sz <= 1000.0f;
+                    // Name the key. The warning quotes `decal_bad`, and an
+                    // empty name reads as "invalid ''" - the author would have
+                    // to guess which value was refused.
+                    if (!ok) {
+                        decal_bad = "size";
+                    }
+                    decal.size_x = sx;
+                    decal.size_y = sy;
+                    decal.size_z = sz;
+                }
+                if (ok) {
+                    ok = optional_float_in_range(line, "opacity=", 0.0f, 1.0f, decal.opacity,
+                                                 decal_bad);
+                }
+                decal.enabled = line.find("enabled=false") == std::string::npos;
+                if (!ok) {
+                    result.warnings.push_back("Decal line with invalid '" + decal_bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<DecalComponent>(e, std::move(decal));
+                }
             } else if (line.rfind("  Light:",0)==0) {
                 // `type=` decides which light the numbers describe. Three shapes
                 // share one line prefix because the format's readers are humans,
@@ -747,7 +834,25 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     sscanf(line.c_str() + pos, "%*[^=]=%f,%f,%f", &x, &y, &z);
                 };
                 scan_vec3("pivot=", cam.pivot_x, cam.pivot_y, cam.pivot_z);
-                size_t dist_pos = line.find("distance=");
+                // A key is only found when it stands on its own: `distance=`
+                // must not match inside `ads_distance=`, which would silently
+                // read the sights distance as the base one. The old plain
+                // find() worked while every key was unique as a PREFIX; the
+                // ADS keys broke that assumption, so the lookup states it.
+                auto find_key = [&line](const char* key) -> size_t {
+                    size_t pos = line.find(key);
+                    while (pos != std::string::npos) {
+                        const bool attached =
+                            pos > 0 && (std::isalnum(static_cast<unsigned char>(line[pos - 1])) != 0 ||
+                                        line[pos - 1] == '_');
+                        if (!attached) {
+                            return pos;
+                        }
+                        pos = line.find(key, pos + 1);
+                    }
+                    return std::string::npos;
+                };
+                size_t dist_pos = find_key("distance=");
                 if (dist_pos != std::string::npos) sscanf(line.c_str()+dist_pos, "distance=%f", &cam.distance);
                 size_t yaw_pos = line.find("yaw=");
                 if (yaw_pos != std::string::npos) sscanf(line.c_str()+yaw_pos, "yaw=%f", &cam.yaw);
@@ -779,6 +884,24 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 if (zoom_step_pos != std::string::npos) sscanf(line.c_str()+zoom_step_pos, "zoomstep=%f", &cam.zoom_step);
                 size_t align_pos = line.find("align=");
                 if (align_pos != std::string::npos) sscanf(line.c_str()+align_pos, "align=%f", &cam.align_speed);
+                // Aiming down sights and shake trim. Same contract as every
+                // other key on this line: absent means the default, so a
+                // scene authored before they existed loads unchanged.
+                if (line.find("ads=1") != std::string::npos) cam.ads_enabled = true;
+                size_t ads_dist_pos = find_key("ads_distance=");
+                if (ads_dist_pos != std::string::npos) sscanf(line.c_str()+ads_dist_pos, "ads_distance=%f", &cam.ads_distance);
+                size_t ads_sens_pos = find_key("ads_sens=");
+                if (ads_sens_pos != std::string::npos) sscanf(line.c_str()+ads_sens_pos, "ads_sens=%f", &cam.ads_sensitivity);
+                size_t ads_speed_pos = find_key("ads_speed=");
+                if (ads_speed_pos != std::string::npos) sscanf(line.c_str()+ads_speed_pos, "ads_speed=%f", &cam.ads_speed);
+                size_t shake_pos = find_key("shake=");
+                if (shake_pos != std::string::npos) sscanf(line.c_str()+shake_pos, "shake=%f", &cam.shake_strength);
+                size_t shake_decay_pos = find_key("shake_decay=");
+                if (shake_decay_pos != std::string::npos) sscanf(line.c_str()+shake_decay_pos, "shake_decay=%f", &cam.shake_decay);
+                size_t recoil_pos = find_key("recoil=");
+                if (recoil_pos != std::string::npos) sscanf(line.c_str()+recoil_pos, "recoil=%f", &cam.recoil_recover);
+                size_t recoil_max_pos = find_key("recoil_max=");
+                if (recoil_max_pos != std::string::npos) sscanf(line.c_str()+recoil_max_pos, "recoil_max=%f", &cam.recoil_max);
                 scene->world().add<CameraComponent>(e, cam);
             } else if (line.rfind("  RigidBody:",0)==0) {
                 physics::RigidBodyComponent rb;
@@ -1449,6 +1572,23 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
         if (m) {
             out << "  Mesh: asset_id=" << m->mesh_id.to_string() << " material=" << m->material << "\n";
         }
+        // Projected decal (Phase 36). Written after Mesh, where a reader
+        // already expects per-entity surface data. The material key is omitted
+        // when empty so an untinted decal does not claim a path it never named,
+        // and `enabled=false` is the only non-default boolean form.
+        const auto* dc = scene_obj.world().get<DecalComponent>(e);
+        if (dc) {
+            out << "  Decal:";
+            if (!dc->material.empty()) {
+                out << " material=" << dc->material;
+            }
+            out << " size(" << dc->size_x << "," << dc->size_y << "," << dc->size_z << ")"
+                << " opacity=" << dc->opacity;
+            if (!dc->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
         const auto* l = scene_obj.world().get<DirectionalLight>(e);
         if (l) {
             out << "  Light: type=Directional dir(" << l->dir_x << "," << l->dir_y << "," << l->dir_z << ") color(" << l->color_r << "," << l->color_g << "," << l->color_b << ") intensity=" << l->intensity;
@@ -1539,7 +1679,24 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " dof_radius=" << pp->dof_max_radius
                 << " motion=" << (pp->motion_enabled ? "true" : "false")
                 << " motion_intensity=" << pp->motion_intensity
-                << " motion_length=" << pp->motion_max_length;
+                << " motion_length=" << pp->motion_max_length
+                << " fxaa=" << (pp->fxaa_enabled ? "true" : "false")
+                << " fxaa_threshold=" << pp->fxaa_threshold
+                << " fxaa_threshold_min=" << pp->fxaa_threshold_min;
+            // 1.0 is the identity, so only a scene that actually supersamples
+            // (or renders below native) writes the key. A round trip of an
+            // old scene stays byte-identical.
+            if (pp->render_scale != 1.0f) {
+                out << " render_scale=" << pp->render_scale;
+            }
+            // The governor's tuning is authored state only while the governor
+            // is on. Writing target_fps/min_render_scale for a scene that never
+            // enables it would add two keys to every existing level on save.
+            if (pp->dynamic_resolution) {
+                out << " dynamic_resolution=true"
+                    << " target_fps=" << pp->target_fps
+                    << " min_render_scale=" << pp->min_render_scale;
+            }
             // Written ONLY when authored. These two have sentinels, so an
             // unconditional write would turn every scene into one that names an
             // exposure and an operator it never chose — and the acceptance
@@ -1613,6 +1770,25 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             if (c->align_speed != 0.0f) {
                 out << " align=" << c->align_speed;
+            }
+            // Aiming down sights and shake trim, written only when authored —
+            // the same rule as the aiming keys above, so an untouched scene
+            // round-trips byte for byte.
+            if (c->ads_enabled) {
+                out << " ads=1 ads_distance=" << c->ads_distance
+                    << " ads_sens=" << c->ads_sensitivity << " ads_speed=" << c->ads_speed;
+            }
+            if (c->shake_strength != 1.0f) {
+                out << " shake=" << c->shake_strength;
+            }
+            if (c->shake_decay != 1.4f) {
+                out << " shake_decay=" << c->shake_decay;
+            }
+            if (c->recoil_recover != 8.0f) {
+                out << " recoil=" << c->recoil_recover;
+            }
+            if (c->recoil_max != 12.0f) {
+                out << " recoil_max=" << c->recoil_max;
             }
             if (!c->follow_target.empty()) {
                 out << " follow=" << c->follow_target;
@@ -1907,6 +2083,9 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* m = src.get<MeshComponent>(se)) {
         dst.add<MeshComponent>(de, *m);
+    }
+    if (const auto* dc = src.get<DecalComponent>(se)) {
+        dst.add<DecalComponent>(de, *dc);
     }
     if (const auto* l = src.get<DirectionalLight>(se)) {
         dst.add<DirectionalLight>(de, *l);

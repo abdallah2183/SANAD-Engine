@@ -15,6 +15,9 @@ set(NFRENDERING_SOURCES
     src/Shader.cpp
     src/ShaderManager.cpp
     src/RenderWorld.cpp
+    src/RenderScale.cpp
+    src/DynamicResolution.cpp
+    src/Decals.cpp
     src/Extraction.cpp
     src/StaticMesh.cpp
     src/MeshUpload.cpp

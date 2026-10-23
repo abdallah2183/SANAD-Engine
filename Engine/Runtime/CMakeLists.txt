@@ -16,6 +16,7 @@ set(NFRUNTIME_SOURCES
     src/InputBindings.cpp
     src/CameraFollow.cpp
     src/PlayerLook.cpp
+    src/PlayerSettings.cpp
     src/CharacterRuntime.cpp
 )
 

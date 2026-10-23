@@ -140,6 +140,13 @@ if(NF_GLSLC_EXECUTABLE)
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "depth")
     nf_compile_shaders(NFBasic3DGBufferShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "gbuffer")
+    # Projected decals (Phase 36). Optional at runtime: Renderer3D disables the
+    # stage when decal_*.spv is absent. It is attached to the gbuffer target
+    # because every consumer of the 3D shader set already depends on that one,
+    # and a decal is meaningless without the gbuffer it blends into.
+    nf_compile_shaders(NFBasic3DDecalShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "decal")
+    add_dependencies(NFBasic3DGBufferShaders NFBasic3DDecalShaders)
     nf_compile_shaders(NFBasic3DLightingShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "lighting")
     # The transparency pass. brdf.glsl is not compiled on its own — it is
@@ -150,6 +157,12 @@ if(NF_GLSLC_EXECUTABLE)
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "forward")
     nf_compile_shaders(NFBasic3DTonemapShaders
         "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "tonemap")
+    # FXAA: the anti-aliasing pass that runs on the tonemapped image, between
+    # tonemap and the output target. Optional on the same terms as bloom and
+    # SSAO — without fxaa_*.spv the stage stays off (fxaa_active() is false)
+    # and every other pass renders exactly as before.
+    nf_compile_shaders(NFBasic3DFXAAShaders
+        "${NF_BASIC3D_SHADER_SRC_DIR}" "${NF_BASIC3D_SHADER_OUT_DIR}" "fxaa")
     # The bloom chain (§206). One shader pair serves both the prefilter and the
     # downsample; the kernel rides a push-constant mode flag (see bloom.frag).
     nf_compile_shaders(NFBasic3DBloomShaders

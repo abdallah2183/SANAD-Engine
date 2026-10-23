@@ -1,4 +1,5 @@
 #include <NF/Rendering/Renderer3D.hpp>
+#include <NF/Rendering/RenderScale.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Time.hpp>
 
@@ -103,6 +104,11 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     auto ffs = load_spirv_file(sdir / "forward_frag.spv");
     auto tvs = load_spirv_file(sdir / "tonemap_vert.spv");
     auto tfs = load_spirv_file(sdir / "tonemap_frag.spv");
+    // FXAA, optional on the same terms as the bloom chain: without fxaa_*.spv
+    // the stage stays off (fxaa_active() reports false) and every other pass
+    // renders unchanged.
+    auto xvs = load_spirv_file(sdir / "fxaa_vert.spv");
+    auto xfs = load_spirv_file(sdir / "fxaa_frag.spv");
     // Present passthrough is optional: an older shader directory only loses
     // present_texture(), never the scene path.
     auto prvs = load_spirv_file(sdir / "present_vert.spv");
@@ -116,6 +122,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     auto svs = load_spirv_file(sdir / "ssao_vert.spv");
     auto sfs = load_spirv_file(sdir / "ssao_frag.spv");
     auto sbfs = load_spirv_file(sdir / "ssao_blur_frag.spv");
+    // Decal pass, optional on the same terms: without decal_*.spv the stage is
+    // disabled (decals_supported() is false) and no decal draw is recorded.
+    auto dvs2 = load_spirv_file(sdir / "decal_vert.spv");
+    auto dfs2 = load_spirv_file(sdir / "decal_frag.spv");
     if (dvs.empty() || gvs.empty() || lvs.empty() || tvs.empty()) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to load shaders from '{}'", sdir.string());
         return false;
@@ -135,6 +145,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         m_present_vs = device.create_shader_module({prvs, rhi::ShaderStage::Vertex});
         m_present_fs = device.create_shader_module({prfs, rhi::ShaderStage::Fragment});
     }
+    if (!xvs.empty() && !xfs.empty()) {
+        m_fxaa_vs = device.create_shader_module({xvs, rhi::ShaderStage::Vertex});
+        m_fxaa_fs = device.create_shader_module({xfs, rhi::ShaderStage::Fragment});
+    }
     if (!bvs.empty() && !bfs.empty()) {
         m_bloom_vs = device.create_shader_module({bvs, rhi::ShaderStage::Vertex});
         m_bloom_fs = device.create_shader_module({bfs, rhi::ShaderStage::Fragment});
@@ -143,6 +157,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         m_ssao_vs = device.create_shader_module({svs, rhi::ShaderStage::Vertex});
         m_ssao_fs = device.create_shader_module({sfs, rhi::ShaderStage::Fragment});
         m_ssao_blur_fs = device.create_shader_module({sbfs, rhi::ShaderStage::Fragment});
+    }
+    if (!dvs2.empty() && !dfs2.empty()) {
+        m_decal_vs = device.create_shader_module({dvs2, rhi::ShaderStage::Vertex});
+        m_decal_fs = device.create_shader_module({dfs2, rhi::ShaderStage::Fragment});
     }
     if (!m_depth_vs || !m_gbuffer_vs || !m_lighting_vs || !m_forward_vs || !m_tonemap_vs) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create shader modules");
@@ -226,6 +244,17 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         bld.bindings = std::span<const rhi::DescriptorBinding>(bloom_binds);
         m_bloom_layout = device.create_descriptor_set_layout(bld);
 
+        // FXAA's set: one sampled image — the LDR intermediate tonemap wrote.
+        // Its own layout, not the bloom one, for the reason stated in the
+        // header: the two stages describe different things even though both
+        // happen to read a single image today.
+        const std::array<rhi::DescriptorBinding, 1> fxaa_binds{{
+            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1},
+        }};
+        rhi::DescriptorSetLayoutDesc xld{};
+        xld.bindings = std::span<const rhi::DescriptorBinding>(fxaa_binds);
+        m_fxaa_layout = device.create_descriptor_set_layout(xld);
+
         // The union of the lighting and material layouts in one set. Bindings
         // 4-6 are the frame UBO and the two shadow atlases, at the same indices
         // brdf.glsl declares them, so the shared include compiles unchanged in
@@ -282,9 +311,25 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         rhi::DescriptorSetLayoutDesc sbld{};
         sbld.bindings = std::span<const rhi::DescriptorBinding>(ssao_blur_binds);
         m_ssao_blur_layout = device.create_descriptor_set_layout(sbld);
+
+        // Decal set (Phase 36): the two gbuffer inputs the fragment reads
+        // (depth for reconstruction, normal for backface rejection), the frame
+        // block prefix, the material block and albedo. One set reflects that
+        // the shader reads all five or none; a material-only layout would still
+        // need the depth and normal slots, so it could not be shared.
+        const std::array<rhi::DescriptorBinding, 5> decal_binds{{
+            {0, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // depth
+            {1, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // GBuffer1 normal
+            {2, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},// frame prefix (144 B)
+            {3, rhi::DescriptorType::UniformBuffer, rhi::ShaderStage::Fragment, 1},// material (64 B)
+            {4, rhi::DescriptorType::SampledImage, rhi::ShaderStage::Fragment, 1}, // albedo
+        }};
+        rhi::DescriptorSetLayoutDesc dld{};
+        dld.bindings = std::span<const rhi::DescriptorBinding>(decal_binds);
+        m_decal_layout = device.create_descriptor_set_layout(dld);
     }
-    if (!m_ssao_layout || !m_ssao_blur_layout) {
-        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create SSAO layouts");
+    if (!m_ssao_layout || !m_ssao_blur_layout || !m_decal_layout) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create SSAO/decal layouts");
         return false;
     }
 
@@ -338,6 +383,31 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         transparency_rpd.present_source = false;
         m_transparency_rp = device.create_render_pass(transparency_rpd);
 
+        // Decal pass (Phase 36). Two colour attachments — GBuffer0 and
+        // GBuffer2 — both LOADed and blended. The alpha factors are why the RHI
+        // carries them per attachment now: the base-colour attachment may
+        // replace its unused alpha, but the surface attachment MUST preserve the
+        // emission strength packed in GBuffer2.a, so it blends alpha with
+        // Zero/One while blending rgb with SrcAlpha/OneMinusSrcAlpha.
+        //
+        // No depth attachment: depth is sampled (transitioned to ShaderRead by
+        // the graph from the pass's read set). Declaring it as an attachment too
+        // would ask the driver to read and write the same image in one pass.
+        rhi::ColorAttachment decal_base{};
+        decal_base.format = rhi::Format::R8G8B8A8_UNorm;
+        decal_base.blend_enabled = true;
+        rhi::ColorAttachment decal_surface{};
+        decal_surface.format = rhi::Format::R8G8B8A8_UNorm;
+        decal_surface.blend_enabled = true;
+        decal_surface.src_alpha = rhi::BlendFactor::Zero;
+        decal_surface.dst_alpha = rhi::BlendFactor::One;
+        const std::array<rhi::ColorAttachment, 2> decal_atts{decal_base, decal_surface};
+        rhi::RenderPassDesc decal_rpd{};
+        decal_rpd.color_attachments = std::span<const rhi::ColorAttachment>(decal_atts);
+        decal_rpd.color_load = rhi::RenderPassDesc::ColorLoad::Load;
+        decal_rpd.present_source = false;
+        m_decal_rp = device.create_render_pass(decal_rpd);
+
         rhi::ColorAttachment back_off{};
         back_off.format = rhi::Format::R8G8B8A8_UNorm;
         const std::array<rhi::ColorAttachment, 1> off_atts{back_off};
@@ -375,6 +445,11 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     if (!m_depth_rp || !m_gbuffer_rp || !m_lighting_rp || !m_transparency_rp || !m_tonemap_rp_off) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create render passes");
         return false;
+    }
+    if (!m_decal_rp) {
+        // Optional, like the bloom/SSAO passes: a backend that refuses this
+        // pass disables decals but must not take the whole renderer down.
+        NF_LOG_WARN(LogCategory::RHI, "Renderer3D: decal render pass unavailable; decals disabled");
     }
 
     // --- pipelines ---
@@ -481,6 +556,30 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         fpd.push_constant_stages = rhi::ShaderStage::Vertex;
         m_forward_pipeline = m_pipeline_cache->get_or_create(fpd);
 
+        // Decal (Phase 36): a fullscreen triangle per decal, scissored on the
+        // CPU to its projected rect. No vertex input, no depth attachment, no
+        // cull — the fragment's box/normal tests decide coverage. Push block is
+        // invWorld + basis + params (96 bytes), fragment stage only: the vertex
+        // shader writes a fixed triangle.
+        if (m_decal_vs && m_decal_fs && m_decal_layout && m_decal_rp &&
+            device.supports_independent_blend()) {
+            rhi::PipelineDesc dpd2{};
+            dpd2.vs = m_decal_vs.get();
+            dpd2.fs = m_decal_fs.get();
+            dpd2.render_pass = m_decal_rp.get();
+            dpd2.descriptor_set_layout = m_decal_layout.get();
+            dpd2.rasterizer.cull_mode = rhi::CullMode::None;
+            dpd2.depth.test_enabled = false;
+            dpd2.depth.write_enabled = false;
+            dpd2.push_constant_size = 96; // mat4 invWorld + vec4 basis + vec4 params
+            dpd2.push_constant_stages = rhi::ShaderStage::Fragment;
+            m_decal_pipeline = m_pipeline_cache->get_or_create(dpd2);
+            if (!m_decal_pipeline) {
+                NF_LOG_WARN(LogCategory::RHI, "Renderer3D: decal pipeline creation failed; "
+                                              "the decal stage is disabled");
+            }
+        }
+
         // Tonemap: one pipeline per render pass flavour
         rhi::PipelineDesc tpd{};
         tpd.vs = m_tonemap_vs.get();
@@ -533,6 +632,30 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
             ppd.push_constant_size = 16; // kept for layout parity with tonemap
             ppd.push_constant_stages = rhi::ShaderStage::Fragment;
             m_present_pipeline_off = m_pipeline_cache->get_or_create(ppd);
+        }
+
+        // FXAA (optional). Same fullscreen shape and the same LDR render pass
+        // as tonemap — its output format is identical (one R8G8B8A8 colour
+        // attachment), so it needs no render pass of its own. Push block is
+        // FxaaPush: texel size + the two thresholds (4 floats, 16 bytes).
+        if (m_fxaa_vs && m_fxaa_fs && m_fxaa_layout) {
+            rhi::PipelineDesc xpd{};
+            xpd.vs = m_fxaa_vs.get();
+            xpd.fs = m_fxaa_fs.get();
+            xpd.render_pass = m_tonemap_rp_off.get();
+            xpd.descriptor_set_layout = m_fxaa_layout.get();
+            xpd.rasterizer.cull_mode = rhi::CullMode::None;
+            xpd.depth.test_enabled = false;
+            xpd.depth.write_enabled = false;
+            xpd.push_constant_size = 16;
+            xpd.push_constant_stages = rhi::ShaderStage::Fragment;
+            m_fxaa_pipeline_off = m_pipeline_cache->get_or_create(xpd);
+            if (!m_fxaa_pipeline_off) {
+                // Not fatal, exactly like bloom: the stage reports inactive and
+                // the frame renders without anti-aliasing.
+                NF_LOG_WARN(LogCategory::RHI, "Renderer3D: FXAA pipeline creation failed; "
+                                              "the anti-aliasing stage is disabled");
+            }
         }
 
         // SSAO pair (optional, like bloom): the raw pass and the blur share
@@ -683,10 +806,29 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     }
 
     // --- graph-owned targets ---
-    m_graph = std::make_unique<RenderGraph>(device);
+    m_width = width;
+    m_height = height;
+    if (!create_graph_targets()) return false;
+
+    NF_LOG_INFO(LogCategory::RHI, "Renderer3D initialized ({}x{}, render {}x{} scale {:.2f})",
+                m_width, m_height, m_render_width, m_render_height, m_render_scale);
+    return true;
+}
+
+bool Renderer3D::create_graph_targets() {
+    const RenderTargetSize size = scaled_render_size(m_width, m_height, m_render_scale);
+    if (size.width == 0 || size.height == 0) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: output size {}x{} produced no render target",
+                     m_width, m_height);
+        return false;
+    }
+    m_render_width = size.width;
+    m_render_height = size.height;
+
+    m_graph = std::make_unique<RenderGraph>(*m_device);
     rhi::TextureDesc color_desc{};
-    color_desc.width = width;
-    color_desc.height = height;
+    color_desc.width = size.width;
+    color_desc.height = size.height;
     color_desc.format = rhi::Format::R8G8B8A8_UNorm;
     color_desc.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferSrc;
     m_gbuffer0_handle = m_graph->create_texture("GBuffer0_BaseColor", color_desc);
@@ -701,12 +843,12 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     rhi::TextureDesc hdr_desc = color_desc;
     hdr_desc.format = rhi::Format::R16G16B16A16_SFloat;
     m_hdr_handle = m_graph->create_texture("HDR", hdr_desc);
-    create_bloom_textures(width, height);
-    create_ssao_textures(width, height);
+    create_bloom_textures(size.width, size.height);
+    create_ssao_textures(size.width, size.height);
 
     rhi::TextureDesc depth_desc{};
-    depth_desc.width = width;
-    depth_desc.height = height;
+    depth_desc.width = size.width;
+    depth_desc.height = size.height;
     depth_desc.format = rhi::Format::D32_SFloat;
     // TransferSrc so tests can copy the depth aspect back to the CPU.
     depth_desc.usage = rhi::ImageUsage::DepthAtt | rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferSrc;
@@ -714,12 +856,14 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
 
     if (!m_graph->compile()) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to materialize graph targets");
+        m_graph.reset();
         return false;
     }
 
-    if (!create_resolution_dependent(width, height)) return false;
-
-    NF_LOG_INFO(LogCategory::RHI, "Renderer3D initialized ({}x{})", width, height);
+    if (!create_resolution_dependent(size.width, size.height)) {
+        m_graph.reset();
+        return false;
+    }
     return true;
 }
 
@@ -759,8 +903,8 @@ void Renderer3D::create_bloom_textures(u32 width, u32 height) {
 }
 
 bool Renderer3D::create_resolution_dependent(u32 width, u32 height) {
-    m_width = width;
-    m_height = height;
+    m_render_width = width;
+    m_render_height = height;
 
     rhi::Texture* depth = m_graph->get_texture(m_depth_handle);
     rhi::Texture* gb0 = m_graph->get_texture(m_gbuffer0_handle);
@@ -873,6 +1017,18 @@ bool Renderer3D::create_resolution_dependent(u32 width, u32 height) {
     // one.
     m_transparency_fb = m_device->create_framebuffer(*m_transparency_rp,
                                                      std::span<rhi::Texture* const>(hdr_colors), depth);
+    // Decal pass framebuffer: the SAME gbuffer images, but only 0 and 2 are
+    // attachments (normal and emissive are read/preserved, not written).
+    if (m_decal_rp) {
+        const std::array<rhi::Texture*, 2> decal_colors{gb0, gb2};
+        m_decal_fb = m_device->create_framebuffer(
+            *m_decal_rp, std::span<rhi::Texture* const>(decal_colors), nullptr);
+        if (!m_decal_fb) {
+            NF_LOG_WARN(LogCategory::RHI, "Renderer3D: decal framebuffer creation failed; "
+                                          "decals disabled");
+            m_decal_pipeline = nullptr;
+        }
+    }
     if (!m_depth_fb || !m_gbuffer_fb || !m_lighting_fb || !m_transparency_fb) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create framebuffers");
         return false;
@@ -886,6 +1042,7 @@ void Renderer3D::destroy_resolution_dependent() {
     m_gbuffer_fb.reset();
     m_lighting_fb.reset();
     m_transparency_fb.reset();
+    m_decal_fb.reset();
     m_tonemap_fbs.clear();
     m_gbuffer0_view.reset();
     m_gbuffer1_view.reset();
@@ -904,40 +1061,41 @@ void Renderer3D::destroy_resolution_dependent() {
 }
 
 void Renderer3D::resize(u32 width, u32 height) {
-    if (!m_graph || !m_device) return;
-    if (width == m_width && height == m_height) return;
+    if (!m_device) return;
+    // A missing graph means a previous rebuild failed; the same size must be
+    // allowed to try again rather than being treated as a no-op forever.
+    if (m_graph && width == m_width && height == m_height) return;
+    m_width = width;
+    m_height = height;
     destroy_resolution_dependent();
     m_graph->reset(false);
     m_graph.reset();
+    if (!create_graph_targets()) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: resize to {}x{} failed", width, height);
+    }
+}
 
-    m_graph = std::make_unique<RenderGraph>(*m_device);
-    rhi::TextureDesc color_desc{};
-    color_desc.width = width;
-    color_desc.height = height;
-    color_desc.format = rhi::Format::R8G8B8A8_UNorm;
-    color_desc.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferSrc;
-    m_gbuffer0_handle = m_graph->create_texture("GBuffer0_BaseColor", color_desc);
-    m_gbuffer1_handle = m_graph->create_texture("GBuffer1_Normal", color_desc);
-    m_gbuffer2_handle = m_graph->create_texture("GBuffer2_Surface", color_desc);
-    // Emissive radiance. Its own attachment rather than a channel stolen from
-    // another: base colour, normal and surface are all full, and the lighting
-    // pass has no per-object data to fall back on — which is why the emission
-    // colour was unreachable before this existed.
-    m_gbuffer3_handle = m_graph->create_texture("GBuffer3_Emissive", color_desc);
-    rhi::TextureDesc hdr_desc = color_desc;
-    hdr_desc.format = rhi::Format::R16G16B16A16_SFloat;
-    m_hdr_handle = m_graph->create_texture("HDR", hdr_desc);
-    create_bloom_textures(width, height);
-    create_ssao_textures(width, height);
-    rhi::TextureDesc depth_desc{};
-    depth_desc.width = width;
-    depth_desc.height = height;
-    depth_desc.format = rhi::Format::D32_SFloat;
-    depth_desc.usage = rhi::ImageUsage::DepthAtt | rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferSrc;
-    m_depth_handle = m_graph->create_texture("Depth", depth_desc);
-    if (!m_graph->compile()) return;
-
-    create_resolution_dependent(width, height);
+void Renderer3D::set_render_scale(f32 scale) {
+    const f32 clean = sanitize_render_scale(scale);
+    if (clean == m_render_scale) return;
+    m_render_scale = clean;
+    if (!m_device || !m_graph || m_width == 0 || m_height == 0) {
+        // No targets yet: init()/the next resize() will build at this scale.
+        return;
+    }
+    // The targets being destroyed may still be referenced by frames already
+    // submitted. A scale change is rare (scene load, editor slider), so paying
+    // one idle wait here is cheaper than a use-after-free or a validation
+    // error. The per-frame path is a no-op above and never reaches this.
+    m_device->wait_idle();
+    destroy_resolution_dependent();
+    m_graph->reset(false);
+    m_graph.reset();
+    if (!create_graph_targets()) {
+        NF_LOG_ERROR(LogCategory::RHI,
+                     "Renderer3D: rebuild at render scale {:.2f} failed; render is unavailable "
+                     "until the next resize", m_render_scale);
+    }
 }
 
 void Renderer3D::shutdown() {
@@ -952,6 +1110,9 @@ void Renderer3D::shutdown() {
     m_prepared.clear();
     m_transparent.clear();
     m_forward_sets.clear();
+    m_prepared_decals.clear();
+    m_decal_sets.clear();
+    m_sorted_decals.clear();
     m_splat_palette.reset();
     m_material_library.reset();
     m_gbuffer_material.reset();
@@ -962,6 +1123,7 @@ void Renderer3D::shutdown() {
     m_depth_pipeline = nullptr;
     m_lighting_pipeline = nullptr;
     m_forward_pipeline = nullptr;
+    m_decal_pipeline = nullptr;
     m_tonemap_pipeline_off = nullptr;
     m_tonemap_pipeline_present = nullptr;
     m_bloom_pipeline = nullptr;
@@ -969,26 +1131,34 @@ void Renderer3D::shutdown() {
     m_ssao_blur_pipeline = nullptr;
     m_present_pipeline_off = nullptr;
     m_present_pipeline_present = nullptr;
+    m_fxaa_pipeline_off = nullptr;
+    m_fxaa_pipeline_present = nullptr;
+    m_fxaa_targets.clear();
     m_graph.reset();
     m_depth_vs.reset(); m_depth_fs.reset();
     m_gbuffer_vs.reset(); m_gbuffer_fs.reset();
     m_lighting_vs.reset(); m_lighting_fs.reset();
     m_forward_vs.reset(); m_forward_fs.reset();
     m_tonemap_vs.reset(); m_tonemap_fs.reset();
+    m_fxaa_vs.reset(); m_fxaa_fs.reset();
     m_present_vs.reset(); m_present_fs.reset();
     m_bloom_vs.reset(); m_bloom_fs.reset();
     m_ssao_vs.reset(); m_ssao_fs.reset(); m_ssao_blur_fs.reset();
+    m_decal_vs.reset(); m_decal_fs.reset();
     m_material_layout.reset();
     m_lighting_layout.reset();
     m_forward_layout.reset();
     m_tonemap_layout.reset();
+    m_fxaa_layout.reset();
     m_bloom_layout.reset();
     m_ssao_layout.reset();
     m_ssao_blur_layout.reset();
+    m_decal_layout.reset();
     m_depth_rp.reset();
     m_gbuffer_rp.reset();
     m_lighting_rp.reset();
     m_transparency_rp.reset();
+    m_decal_rp.reset();
     m_tonemap_rp_off.reset();
     m_tonemap_rp_present.reset();
     m_bloom_rp.reset();
@@ -1299,6 +1469,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     m_stats.draw_calls = 0;
     m_stats.material_sets_built = 0;
     m_stats.transparent_objects = 0;
+    m_stats.decals_submitted = 0;
+    m_stats.decals_recorded = 0;
     m_stats.bloom_levels_recorded = 0;
 
     // --- Frame uniforms (camera + lights) ---
@@ -1831,6 +2003,65 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
               [](const TransparentDraw& a, const TransparentDraw& b) {
                   return a.distance > b.distance;
               });
+
+    // --- Projected decals (Phase 36) ---
+    // The decal pass records one fullscreen triangle per visible decal, scissored
+    // on the CPU. Per-frame preparation is: filter enabled, sort far-to-near so
+    // alpha-over is correct, project the screen rect (cull + scissor), and build
+    // one descriptor set per decal (depth, normal, frame, material, albedo).
+    // It runs only when the stage is actually available; with the shader pair
+    // missing the stats stay at submitted>0/recorded=0 and the frame is
+    // otherwise untouched.
+    m_stats.decals_submitted = 0;
+    if (m_decal_pipeline && m_decal_fb && m_decal_layout && m_decal_rp) {
+        m_sorted_decals.clear();
+        m_sorted_decals.reserve(render_world.decals.size());
+        for (const DecalInstance& d : render_world.decals) {
+            if (d.enabled) {
+                m_sorted_decals.push_back(d);
+            }
+        }
+        m_stats.decals_submitted = static_cast<u32>(m_sorted_decals.size());
+        sort_decals_far_to_near(std::span<DecalInstance>(m_sorted_decals), camera.position);
+
+        const rhi::Sampler* clamp_sampler =
+            m_env_sampler ? m_env_sampler.get() : m_sampler.get();
+        m_prepared_decals.reserve(m_sorted_decals.size());
+        m_decal_sets.reserve(m_sorted_decals.size());
+        for (const DecalInstance& d : m_sorted_decals) {
+            const DecalScreenRect rect =
+                decal_screen_rect(d, camera.view_projection, m_render_width, m_render_height);
+            if (!rect.visible) {
+                continue;
+            }
+            MaterialEntry* entry = m_material_library->get(d.material);
+            if (entry == nullptr || !entry->params_ubo) {
+                continue; // no material block: nothing valid to bind
+            }
+            auto set = m_descriptor_allocators[frame_slot]->allocate(*m_decal_layout);
+            if (!set) {
+                NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: decal descriptor allocation failed");
+                break;
+            }
+            const std::array<rhi::DescriptorWrite, 5> writes{{
+                {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                 m_gbuffer_depth_view.get(), clamp_sampler},
+                {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                 m_gbuffer1_view.get(), clamp_sampler},
+                {2, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0, 144,
+                 nullptr, nullptr},
+                {3, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
+                 16 * sizeof(float), nullptr, nullptr},
+                {4, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
+                 entry->albedo_view ? entry->albedo_view : m_white_view.get(),
+                 m_sampler.get()},
+            }};
+            m_device->update_descriptor_set(*set, std::span<const rhi::DescriptorWrite>(writes));
+            m_prepared_decals.push_back(PreparedDecal{&d, set.get(), rect});
+            m_decal_sets.push_back(std::move(set));
+        }
+    }
+
     // Opaque draw order: state sort by (mesh, lod, material set). Kit scenes —
     // the whole reason this renderer exists — draw the same mesh hundreds of
     // times and share a handful of material instances, so grouping by state
@@ -1855,6 +2086,37 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // --- Build the frame graph ---
     m_graph->reset(true);
     auto rg_out = m_graph->import_texture("Output", &out_target);
+
+    // FXAA (optional). When the stage is live, tonemap renders into a
+    // renderer-owned LDR image and a second pass resolves that image into the
+    // caller's target; when it is off, tonemap writes straight to the target
+    // and the recorded command stream is the one this renderer produced before
+    // the stage existed.
+    //
+    // Three things can take the stage away, and each falls back to the direct
+    // path rather than failing the frame: the pipeline missing for this pass
+    // flavour, the swapchain variants not coming up, or the device refusing
+    // the intermediate image.
+    FxaaTarget* fxaa_src = nullptr;
+    bool fxaa_pass = false;
+    if (fxaa_active()) {
+        if (out_is_present_source && !ensure_present_variants()) {
+            NF_LOG_WARN(LogCategory::RHI, "Renderer3D: FXAA skipped, present variants unavailable");
+        } else {
+            rhi::Pipeline* pipe = out_is_present_source ? m_fxaa_pipeline_present
+                                                        : m_fxaa_pipeline_off;
+            if (pipe == nullptr) {
+                NF_LOG_WARN(LogCategory::RHI, "Renderer3D: FXAA skipped, no pipeline for this pass");
+            } else {
+                fxaa_src = fxaa_target(out_target.width(), out_target.height());
+                fxaa_pass = fxaa_src != nullptr;
+            }
+        }
+    }
+    RGTextureHandle rg_fxaa = kInvalidRGHandle;
+    if (fxaa_pass) {
+        rg_fxaa = m_graph->import_texture("FxaaSource", fxaa_src->texture.get());
+    }
     // The shadow map is a standalone fixed-size texture; importing it lets
     // the graph transition it (depth write in the shadow pass, fragment read
     // in lighting) with the same barriers as owned targets.
@@ -2000,8 +2262,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
-        gcmd.set_viewport(0, 0, m_width, m_height);
-        gcmd.set_scissor(0, 0, m_width, m_height);
+        gcmd.set_viewport(0, 0, m_render_width, m_render_height);
+        gcmd.set_scissor(0, 0, m_render_width, m_render_height);
         const StaticMesh* bound_mesh = nullptr;
         u32 bound_lod = u32_max;
         for (auto& pd : prepared) {
@@ -2049,8 +2311,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
-        gcmd.set_viewport(0, 0, m_width, m_height);
-        gcmd.set_scissor(0, 0, m_width, m_height);
+        gcmd.set_viewport(0, 0, m_render_width, m_render_height);
+        gcmd.set_scissor(0, 0, m_render_width, m_render_height);
         const StaticMesh* bound_mesh = nullptr;
         u32 bound_lod = u32_max;
         const rhi::DescriptorSet* bound_set = nullptr;
@@ -2086,6 +2348,76 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     };
     m_graph->add_pass(gbuffer_pass);
 
+    // Decals (Phase 36): blend projected material onto the gbuffer BEFORE
+    // lighting reads it. Added unconditionally so a scene growing or losing a
+    // decal does not change the set of barriers recorded — with zero visible
+    // decals the pass is a LOAD/LOAD begin-end that leaves both attachments
+    // bit-identical.
+    //
+    // Depth and GBuffer1 are READS only; depth is NOT an attachment here. The
+    // shader reconstructs world position from depth and rejects fragments
+    // outside the decal's oriented box and behind its facing plane, which is
+    // the decal's own occlusion test — no depth test is involved.
+    if (m_decal_pipeline && m_decal_fb && m_decal_rp) {
+    RGPassDesc decal_pass{};
+    decal_pass.name = "Decals";
+    decal_pass.reads = {m_depth_handle, m_gbuffer1_handle};
+    decal_pass.color_attachments = {m_gbuffer0_handle, m_gbuffer2_handle};
+    decal_pass.execute = [&](rhi::CommandBuffer& gcmd) {
+        const std::array<rhi::ClearValue, 0> no_clears{};
+        gcmd.begin_render_pass(*m_decal_rp, *m_decal_fb,
+                               std::span<const rhi::ClearValue>(no_clears), 1.0f, 0);
+        if (!m_prepared_decals.empty()) {
+            gcmd.bind_pipeline(*m_decal_pipeline);
+            struct DecalPush {
+                float inv_world[16];
+                float basis[4]; // xyz world-facing, w opacity
+                float params[4]; // x = use albedo texture
+            };
+            static_assert(sizeof(DecalPush) == 96, "must match decal.frag's push block");
+            DecalPush push{};
+            gcmd.set_viewport(0, 0, m_render_width, m_render_height);
+            for (const PreparedDecal& pd : m_prepared_decals) {
+                std::memcpy(push.inv_world, pd.decal->inverse_world.m,
+                            sizeof(push.inv_world));
+                // Local +Z is the decal's outward axis. In the row-vector
+                // world matrix that direction is row 2; normalising here keeps
+                // the shader's dot(N, forward) a true cosine even when the
+                // entity carries non-uniform scale.
+                Vec3 forward{pd.decal->world.m[2][0], pd.decal->world.m[2][1],
+                             pd.decal->world.m[2][2]};
+                const float len = std::sqrt(forward.x * forward.x + forward.y * forward.y +
+                                            forward.z * forward.z);
+                if (len > 1e-8f) {
+                    forward.x /= len;
+                    forward.y /= len;
+                    forward.z /= len;
+                }
+                push.basis[0] = forward.x;
+                push.basis[1] = forward.y;
+                push.basis[2] = forward.z;
+                push.basis[3] = pd.decal->opacity;
+                const MaterialEntry* entry = m_material_library->get(pd.decal->material);
+                push.params[0] = (entry != nullptr) ? entry->params.use_base_color_texture : 0.0f;
+                push.params[1] = 0.0f;
+                push.params[2] = 0.0f;
+                push.params[3] = 0.0f;
+                gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(push), &push);
+                const std::array<const rhi::DescriptorSet*, 1> sets{pd.set};
+                gcmd.bind_descriptor_sets(*m_decal_layout,
+                                          std::span<const rhi::DescriptorSet* const>(sets), 0);
+                gcmd.set_scissor(pd.rect.x, pd.rect.y, static_cast<u32>(pd.rect.width),
+                                 static_cast<u32>(pd.rect.height));
+                gcmd.draw(3);
+                ++m_stats.draw_calls;
+                ++m_stats.decals_recorded;
+            }
+        }
+        gcmd.end_render_pass();
+    };
+    m_graph->add_pass(decal_pass);
+    }
+
     // Lighting: GBuffer + Depth + ShadowMap → HDR
     RGPassDesc lighting_pass{};
     lighting_pass.name = "Lighting";
@@ -2106,8 +2438,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         gcmd.bind_pipeline(*m_lighting_pipeline);
         const std::array<const rhi::DescriptorSet*, 1> sets{lighting_set.get()};
         gcmd.bind_descriptor_sets(*m_lighting_layout, std::span<const rhi::DescriptorSet* const>(sets), 0);
-        gcmd.set_viewport(0, 0, m_width, m_height);
-        gcmd.set_scissor(0, 0, m_width, m_height);
+        gcmd.set_viewport(0, 0, m_render_width, m_render_height);
+        gcmd.set_scissor(0, 0, m_render_width, m_render_height);
         gcmd.draw(3);
         gcmd.end_render_pass();
     };
@@ -2133,8 +2465,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         push.bias = m_ssao_bias;
         push.intensity = m_ssao_intensity;
         push.unused = 0.0f;
-        const u32 ssao_w = std::max(1u, m_width >> 1);
-        const u32 ssao_h = std::max(1u, m_height >> 1);
+        const u32 ssao_w = std::max(1u, m_render_width >> 1);
+        const u32 ssao_h = std::max(1u, m_render_height >> 1);
 
         RGPassDesc ssao_pass{};
         ssao_pass.name = "SSAORaw";
@@ -2230,8 +2562,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
-        gcmd.set_viewport(0, 0, m_width, m_height);
-        gcmd.set_scissor(0, 0, m_width, m_height);
+        gcmd.set_viewport(0, 0, m_render_width, m_render_height);
+        gcmd.set_scissor(0, 0, m_render_width, m_render_height);
         for (auto& td : transparent) {
             std::memcpy(push.model, td.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
@@ -2347,11 +2679,24 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             tonemap_pass.reads.push_back(m_bloom_handles[level]);
         }
     }
-    tonemap_pass.color_attachments = {rg_out};
+    // Where tonemap lands: the FXAA intermediate when the stage is live, the
+    // caller's target otherwise. One reference so the pass body below does not
+    // have to branch in two places (framebuffer key, viewport, attachment).
+    rhi::Texture& tonemap_target = fxaa_pass ? *fxaa_src->texture : out_target;
+    tonemap_pass.color_attachments = {fxaa_pass ? rg_fxaa : rg_out};
 
+    // The present variant is only for writing STRAIGHT to a swapchain image,
+    // whose format is the swapchain's (typically B8G8R8A8). With FXAA on, this
+    // pass writes the renderer-owned R8G8B8A8 intermediate instead, so it has
+    // to use the offscreen pass even when the caller asked for a present
+    // source — the two formats do not match, and a framebuffer whose attachment
+    // disagrees with its render pass is a validation error, not a soft failure.
+    // The FXAA pass below is the one that writes the swapchain image, and it
+    // picks the present pass for exactly that reason.
+    const bool tonemap_presents = out_is_present_source && !fxaa_pass;
     rhi::RenderPass* tonemap_rp = m_tonemap_rp_off.get();
     rhi::Pipeline* tonemap_pipe = m_tonemap_pipeline_off;
-    if (out_is_present_source) {
+    if (tonemap_presents) {
         // The present variant needs the swapchain extension, which a
         // headless/CI device does not have — created lazily on first use.
         if (!ensure_present_variants()) {
@@ -2365,7 +2710,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     tonemap_pass.execute = [&](rhi::CommandBuffer& gcmd) {
         rhi::RenderPass& rp = *tonemap_rp;
         rhi::Pipeline& pipe = *tonemap_pipe;
-        const TonemapFBKey key{out_target.creation_serial(), &out_target, out_is_present_source};
+        const TonemapFBKey key{tonemap_target.creation_serial(), &tonemap_target, tonemap_presents};
         auto it = m_tonemap_fbs.find(key);
         if (it == m_tonemap_fbs.end()) {
             if (m_tonemap_fbs.size() >= kMaxTonemapFramebuffers) {
@@ -2373,7 +2718,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 // bound the cache rather than growing it without limit.
                 m_tonemap_fbs.clear();
             }
-            const std::array<rhi::Texture*, 1> colors{&out_target};
+            const std::array<rhi::Texture*, 1> colors{&tonemap_target};
             auto fb = m_device->create_framebuffer(rp, std::span<rhi::Texture* const>(colors), nullptr);
             if (!fb) {
                 // Never cache or dereference a failed framebuffer: the caller
@@ -2412,8 +2757,8 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             // The sharpen taps are expressed in the OUTPUT target's texels,
             // because the unsharp mask runs on the tonemapped image's own
             // resolution, not on any bloom level's.
-            1.0f / static_cast<float>(std::max(1u, m_width)),
-            1.0f / static_cast<float>(std::max(1u, m_height)),
+            1.0f / static_cast<float>(std::max(1u, m_render_width)),
+            1.0f / static_cast<float>(std::max(1u, m_render_height)),
             m_postfx.sharpen.radius,
             // Lens effects. The shader has no enabled flag for this stage, so
             // `enabled` is folded into the two coefficients here — the same
@@ -2448,12 +2793,86 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         // it was given, which is not necessarily the size the renderer
         // itself runs at (the editor renders the viewport panel at its own
         // resolution into a target of another one).
-        gcmd.set_viewport(0, 0, out_target.width(), out_target.height());
-        gcmd.set_scissor(0, 0, out_target.width(), out_target.height());
+        gcmd.set_viewport(0, 0, tonemap_target.width(), tonemap_target.height());
+        gcmd.set_scissor(0, 0, tonemap_target.width(), tonemap_target.height());
         gcmd.draw(3);
         gcmd.end_render_pass();
     };
     m_graph->add_pass(tonemap_pass);
+
+    // FXAA: resolve the LDR intermediate into the caller's target. Same render
+    // pass and framebuffer cache as tonemap (identical attachment format), so
+    // the only per-pass objects are the pipeline and a one-image descriptor
+    // set — which is allocated from this frame slot's allocator, like the
+    // tonemap set above.
+    //
+    // The set MUST own its lifetime here, in the function scope, not inside the
+    // `if`: the pass lambda only captures its raw pointer, and the graph runs
+    // after this block. An `auto` local died at the closing brace and left the
+    // recorded pass binding a freed descriptor set — a use-after-free that a
+    // single frame happened not to notice and a second frame on the same heap
+    // crashed on.
+    std::unique_ptr<rhi::DescriptorSet> fxaa_set;
+    if (fxaa_pass) {
+        fxaa_set = m_descriptor_allocators[frame_slot]->allocate(*m_fxaa_layout);
+        if (!fxaa_set) {
+            NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: FXAA descriptor allocation failed");
+            return false;
+        }
+        const rhi::DescriptorWrite fxaa_write{0, rhi::DescriptorType::SampledImage,
+                                              nullptr, 0, 0, fxaa_src->view.get(),
+                                              m_sampler.get()};
+        m_device->update_descriptor_set(*fxaa_set,
+                                        std::span<const rhi::DescriptorWrite>(&fxaa_write, 1));
+
+        RGPassDesc fxaa_desc{};
+        fxaa_desc.name = "FXAA";
+        fxaa_desc.reads = {rg_fxaa};
+        fxaa_desc.color_attachments = {rg_out};
+        fxaa_desc.execute = [&, set = fxaa_set.get()](rhi::CommandBuffer& gcmd) {
+            rhi::RenderPass* rp = out_is_present_source ? m_tonemap_rp_present.get()
+                                                        : m_tonemap_rp_off.get();
+            rhi::Pipeline* pipe = out_is_present_source ? m_fxaa_pipeline_present
+                                                        : m_fxaa_pipeline_off;
+            if (!rp || !pipe) return;
+            const TonemapFBKey key{out_target.creation_serial(), &out_target, out_is_present_source};
+            auto it = m_tonemap_fbs.find(key);
+            if (it == m_tonemap_fbs.end()) {
+                if (m_tonemap_fbs.size() >= kMaxTonemapFramebuffers) {
+                    m_tonemap_fbs.clear();
+                }
+                const std::array<rhi::Texture*, 1> colors{&out_target};
+                auto fb = m_device->create_framebuffer(*rp, std::span<rhi::Texture* const>(colors),
+                                                       nullptr);
+                if (!fb) {
+                    NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: FXAA framebuffer creation failed");
+                    return;
+                }
+                it = m_tonemap_fbs.emplace(key, std::move(fb)).first;
+            }
+            const std::array<rhi::ClearValue, 1> clears{rhi::ClearValue{0.0f, 0.0f, 0.0f, 1.0f}};
+            gcmd.begin_render_pass(*rp, *it->second, std::span<const rhi::ClearValue>(clears));
+            gcmd.bind_pipeline(*pipe);
+            const std::array<const rhi::DescriptorSet*, 1> sets{set};
+            gcmd.bind_descriptor_sets(*m_fxaa_layout,
+                                      std::span<const rhi::DescriptorSet* const>(sets), 0);
+            // Texel size of the SOURCE (the intermediate), not of the output:
+            // the two are the same size today, but the shader's step is a
+            // property of the image it samples.
+            const float push[4] = {
+                1.0f / static_cast<float>(std::max(1u, fxaa_src->texture->width())),
+                1.0f / static_cast<float>(std::max(1u, fxaa_src->texture->height())),
+                m_fxaa_threshold,
+                m_fxaa_threshold_min,
+            };
+            gcmd.push_constants(rhi::ShaderStage::Fragment, 0, sizeof(push), &push);
+            gcmd.set_viewport(0, 0, out_target.width(), out_target.height());
+            gcmd.set_scissor(0, 0, out_target.width(), out_target.height());
+            gcmd.draw(3);
+            gcmd.end_render_pass();
+        };
+        m_graph->add_pass(fxaa_desc);
+    }
 
     if (!m_graph->compile()) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: graph compile failed");
@@ -2520,8 +2939,80 @@ bool Renderer3D::ensure_present_variants() {
             return false;
         }
     }
+    // FXAA's present-source twin. Same shader and push block as the offscreen
+    // pipeline; only the render pass (and therefore the attachment format)
+    // differs. Failure here is not fatal for the same reason it is not fatal
+    // above: the frame can still be tonemapped straight to the swapchain.
+    if (m_fxaa_vs && m_fxaa_fs && m_fxaa_layout) {
+        rhi::PipelineDesc xppd{};
+        xppd.vs = m_fxaa_vs.get();
+        xppd.fs = m_fxaa_fs.get();
+        xppd.render_pass = m_tonemap_rp_present.get();
+        xppd.descriptor_set_layout = m_fxaa_layout.get();
+        xppd.rasterizer.cull_mode = rhi::CullMode::None;
+        xppd.depth.test_enabled = false;
+        xppd.depth.write_enabled = false;
+        xppd.push_constant_size = 16;
+        xppd.push_constant_stages = rhi::ShaderStage::Fragment;
+        m_fxaa_pipeline_present = m_pipeline_cache->get_or_create(xppd);
+        if (!m_fxaa_pipeline_present) {
+            NF_LOG_WARN(LogCategory::RHI, "Renderer3D: FXAA present pipeline creation failed; "
+                                          "anti-aliasing stays off for the present path");
+        }
+    }
     m_tonemap_present_ready = true;
     return true;
+}
+
+Renderer3D::FxaaTarget* Renderer3D::fxaa_target(u32 width, u32 height) {
+    if (width == 0 || height == 0) return nullptr;
+    const u64 key = (static_cast<u64>(width) << 32) | static_cast<u64>(height);
+    auto it = m_fxaa_targets.find(key);
+    if (it != m_fxaa_targets.end()) return &it->second;
+
+    if (m_fxaa_targets.size() >= kMaxFxaaTargets) {
+        // Same bounded-cache rule as m_tonemap_fbs: drop and rebuild rather
+        // than grow without limit. A renderer realistically keeps one or two
+        // output sizes live.
+        m_fxaa_targets.clear();
+    }
+
+    rhi::TextureDesc desc{};
+    desc.width = width;
+    desc.height = height;
+    desc.format = rhi::Format::R8G8B8A8_UNorm;
+    // ColorAtt: tonemap renders into it. Sampled: the FXAA pass reads it.
+    desc.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::Sampled;
+    FxaaTarget target;
+    target.texture = m_device->create_texture(desc);
+    if (!target.texture) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: FXAA target creation failed ({}x{})",
+                     width, height);
+        return nullptr;
+    }
+    rhi::TextureViewDesc vd{};
+    vd.dimension = rhi::ViewDimension::View2D;
+    vd.aspect = rhi::ImageAspect::Color;
+    vd.base_mip = 0;
+    vd.mip_count = 1;
+    vd.base_layer = 0;
+    vd.layer_count = 1;
+    vd.texture = target.texture.get();
+    target.view = m_device->create_texture_view(vd);
+    if (!target.view) {
+        NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: FXAA target view creation failed");
+        return nullptr;
+    }
+    return &m_fxaa_targets.emplace(key, std::move(target)).first->second;
+}
+
+void Renderer3D::set_fxaa_thresholds(float threshold, float threshold_min) {
+    // Clamped, not rejected: these are tuning knobs on a live renderer, and a
+    // zero threshold would classify every pixel as an edge (the shader's
+    // early-out compares against `max(min, luma_max * threshold)`, so 0/0
+    // filters the entire frame).
+    m_fxaa_threshold = std::clamp(threshold, 0.01f, 1.0f);
+    m_fxaa_threshold_min = std::clamp(threshold_min, 0.0f, 1.0f);
 }
 
 bool Renderer3D::present_texture(rhi::CommandBuffer& cmd, rhi::Texture& src,

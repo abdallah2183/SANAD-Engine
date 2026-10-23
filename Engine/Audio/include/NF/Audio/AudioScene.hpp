@@ -2,6 +2,7 @@
 
 #include <NF/Audio/AudioEngine.hpp>
 #include <NF/Audio/Buses.hpp>
+#include <NF/Audio/Dynamics.hpp>
 #include <NF/Audio/MusicSystem.hpp>
 #include <NF/Audio/Occlusion.hpp>
 #include <NF/Audio/Reverb.hpp>
@@ -82,6 +83,18 @@ public:
     AudioVolumeSettings& settings() { return m_settings; }
     const AudioVolumeSettings& settings() const { return m_settings; }
 
+    /// Master-bus dynamics. The settings belong to the player (see
+    /// Dynamics.hpp), so this is where a settings window pushes them; the
+    /// processor itself lives here because the limiter must be the LAST stage
+    /// after the buses and their volumes.
+    void set_dynamics(const MasterDynamicsSettings& settings) {
+        m_dynamics.set_settings(settings);
+    }
+    const MasterDynamicsSettings& dynamics_settings() const {
+        return m_dynamics.settings();
+    }
+    const MasterDynamics& dynamics() const { return m_dynamics; }
+
     /// Menu music and the ambience bed. Envelopes advance inside
     /// begin_block(), so a fade is measured in the block clock.
     MusicSystem& music() { return m_music; }
@@ -125,6 +138,7 @@ private:
 
     AudioVolumeSettings m_settings;
     BusMixer m_mixer;
+    MasterDynamics m_dynamics;
     MusicSystem m_music;
     AudioListener m_listener;
     std::vector<ReverbZone> m_zones;
