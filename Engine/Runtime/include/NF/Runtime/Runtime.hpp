@@ -22,9 +22,11 @@
 #include <NF/Runtime/PlayerSettings.hpp>
 #include <NF/Runtime/CharacterComponent.hpp>
 #include <NF/Runtime/Hitscan.hpp>
+#include <NF/Runtime/DamageLedger.hpp>
 #include <NF/Runtime/Impact.hpp>
 #include <NF/Runtime/Shot.hpp>
 #include <NF/Runtime/StatusEffect.hpp>
+#include <NF/Runtime/Suppression.hpp>
 #include <NF/Runtime/Projectile.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Physics/FixedTimestep.hpp>
@@ -751,6 +753,13 @@ public:
     /// Removes one kind. Returns true when it was present.
     bool clear_status(ecs::Entity entity, std::string_view kind);
 
+    /// Persistent damage memory for an entity, or null when it has never been
+    /// hit (Phase 55).
+    [[nodiscard]] const DamageLedgerComponent* damage_ledger_of(ecs::Entity entity) const;
+
+    /// Current suppression level of an entity, or 0 when it is not an agent.
+    [[nodiscard]] f32 suppression_of(ecs::Entity entity) const;
+
     // --- Player settings --------------------------------------------------
     //
     // Sensitivity, inverted-Y, FOV and shake are authored per scene, but they
@@ -1137,10 +1146,22 @@ private:
     /// hits an ally is removed without damage.
     void step_projectiles(float dt);
 
-    /// Advances every status set and applies its ticks (Phase 54). Runs after
-    /// projectiles so a hit that starts a burn this frame does not also tick it
-    /// in the same frame.
+    /// Advances every status set and applies its ticks (Phase 54). Runs before
+    /// the frame's new hits so a burn applied this frame starts next frame.
     void step_status_effects(float dt);
+
+    /// Advances the quiet clock of every damage ledger (Phase 55).
+    void step_damage_ledgers(float dt);
+
+    /// Decays suppression and adds it for shots that passed near an agent
+    /// (Phase 55). Runs after weapons/projectiles, when this frame's shots are
+    /// in the shot buffer.
+    void step_suppression(float dt);
+
+    /// Records one accepted hit in the victim's ledger, creating the component
+    /// lazily.
+    void record_damage(ecs::Entity victim, ecs::Entity attacker, f32 health_damage,
+                       f32 armor_damage, bool killed);
 
     /// Applies one already-traced hit: faction check, falloff, hit points and
     /// destruction. Shared by the hitscan and projectile paths so both agree

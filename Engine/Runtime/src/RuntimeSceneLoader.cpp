@@ -787,6 +787,7 @@ static bool parse_combat_agent(const std::string& line, CombatAgentComponent& ou
     }
     out.target = field_value(line, "target=");
     out.auto_target = line.find("auto_target=true") != std::string::npos;
+    out.retaliate = line.find("retaliate=true") != std::string::npos;
     out.enabled = line.find("enabled=false") == std::string::npos;
     // An agent with no target is legal (it stands there), but an agent whose
     // cone is empty can never fire, which is a scene bug worth naming.
@@ -2357,6 +2358,9 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             if (ca->auto_target) {
                 out << " auto_target=true";
             }
+            if (ca->retaliate) {
+                out << " retaliate=true";
+            }
             if (!ca->target.empty()) {
                 out << " target=" << ca->target;
             }
@@ -2717,6 +2721,7 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         fresh.last_target_position = Vec3{0.0f, 0.0f, 0.0f};
         fresh.target_velocity = Vec3{0.0f, 0.0f, 0.0f};
         fresh.has_target_history = false;
+        fresh.suppression = SuppressionState{};
         dst.add<CombatAgentComponent>(de, fresh);
     }
     if (const auto* fc = src.get<FactionComponent>(se)) {

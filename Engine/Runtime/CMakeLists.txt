@@ -29,6 +29,8 @@ set(NFRUNTIME_SOURCES
     src/Impact.cpp
     src/Shot.cpp
     src/StatusEffect.cpp
+    src/DamageLedger.cpp
+    src/Suppression.cpp
     src/WeaponRuntime.cpp
     src/CombatAI.cpp
 )

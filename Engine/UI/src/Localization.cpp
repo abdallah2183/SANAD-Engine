@@ -1081,6 +1081,9 @@ constexpr Entry kEntries[] = {
     {"status_dps", "Status damage/s", "ضرر الحالة/ث"},
     {"status_time", "Status duration", "مدة الحالة"},
     {"status_tick", "Status tick", "نبضة الحالة"},
+    // --- Combat awareness (Phase 55) ----------------------------------------
+    {"retaliate", "Retaliate against last attacker", "الرد على آخر مهاجم"},
+    {"suppression", "Suppression", "الكبت"},
     // --- Ballistics, factions and agent authoring (Phase 46) ----------------
     {"delivery", "Delivery", "طريقة الإطلاق"},
     {"delivery_hitscan", "Hitscan", "لحظي"},

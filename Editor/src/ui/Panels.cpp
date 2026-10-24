@@ -2862,6 +2862,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                         ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Checkbox((AV("auto_target") + "##agent").c_str(),
                                 &ic.agent_auto_target);
+                ImGui::Checkbox((AV("retaliate") + "##agent").c_str(),
+                                &ic.agent.retaliate);
+                ImGui::Text("%s: %.2f", AV("suppression").c_str(),
+                            ic.agent.suppression.level);
                 ImGui::BeginDisabled(ic.agent_auto_target);
                 ImGui::InputText(AV("target").c_str(), ic.agent_target,
                                  sizeof(ic.agent_target));

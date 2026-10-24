@@ -56,7 +56,7 @@ entity: 8:0
   Faction: team=Red
   Collider: shape=Box half(0.5,1,0.5)
   Weapon: mode=burst rpm=360 magazine=12 reserve=48 reload=2 burst=3 burst_gap=0.08 damage=9 range=80 spread=1 bloom=0.3 spread_max=4 recover=4 recoil=0.4 recoil_yaw=0.1 recoil_growth=0.1 falloff_start=20 falloff_end=70 falloff_min=0.4 shake=0.06 seed=2026418351 delivery=projectile speed=180 gravity=9.81
-  CombatAgent: eye=1.4 aim=1 auto_target=true reaction=0.6 turn=140 cone=5 range=45 burst=0.45 rest=1.1
+  CombatAgent: eye=1.4 aim=1 auto_target=true retaliate=true reaction=0.6 turn=140 cone=5 range=45 burst=0.45 rest=1.1
 ---
 entity: 9:0
   Name: AllyCrate

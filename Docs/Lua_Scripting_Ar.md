@@ -167,6 +167,10 @@ print(string.format("النقاط: %d", score))
 | `nf.apply_status` | `id, gen, kind, dps, seconds, tick` | `bool` | أضف أو جدّد حالة `burn`/`bleed`/`corrode` |
 | `nf.status_remaining` | `id, gen, kind` | رقم | الثواني المتبقية للحالة (`0` إن غابت) |
 | `nf.clear_status` | `id, gen, kind` | `bool` | أزل حالة واحدة |
+| `nf.last_attacker` | `id, gen` | `id, gen` أو `nil` | آخر من أصاب الكيان |
+| `nf.killer` | `id, gen` | `id, gen` أو `nil` | من وجّه الضربة القاتلة |
+| `nf.damage_taken` | `id, gen` | `health, armor, hits, seconds` | ذاكرة الضرر التراكمية |
+| `nf.suppression` | `id, gen` | رقم `0..1` | كبت الوكيل من الرصاص القريب |
 | `nf.clamp` | `v, lo, hi` | رقم | حصر قيمة |
 | `nf.lerp` | `a, b, t` | رقم | تنقّل ناعم |
 | `nf.log_info/warn/error` | رسالة | — | اكتب للسجل بمستوى |
@@ -227,6 +231,17 @@ end
 
 الحالة تُطبَّق على الصحة عبر مقاومة نوعها والدرع، وتُنتج إصابة بـ`status=true`
 عند كل نبضة. `burn` نار، و`bleed` رصاص، و`corrode` انفجار.
+
+ذاكرة القتال والكبت:
+
+```lua
+local attacker_id, attacker_gen = nf.last_attacker(target_id, target_gen)
+local health, armor, hits, seconds = nf.damage_taken(target_id, target_gen)
+local pressure = nf.suppression(attacker_id, attacker_gen)
+```
+
+`nf.last_attacker` يفضّل من أصاب أخيرًا حتى لو اختفى من الإطار؛ `nf.killer` لا
+يعود إلا بعد ضربة قاتلة مسجّلة. `nf.suppression` تقرأ مستوى الكبت الحالي للوكيل.
 
 ### متوفّر من Lua القياسية
 `math.*` (sin, cos, abs, floor, ceil, sqrt, random, pi…)، `string.*`

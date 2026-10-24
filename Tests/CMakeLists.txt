@@ -197,6 +197,10 @@ add_executable(RuntimeTests
     # Damage over time (Phase 54): refresh, tick cadence, partial final tick,
     # removal and the `Status:` scene line. Pure arithmetic, no device.
     RuntimeTests/test_status_effects.cpp
+    # Combat memory and suppression (Phase 55): who hit me, and what a near
+    # miss does to aim and trigger discipline. Pure arithmetic.
+    RuntimeTests/test_damage_ledger.cpp
+    RuntimeTests/test_suppression.cpp
     RuntimeTests/test_input_bindings.cpp
     RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp

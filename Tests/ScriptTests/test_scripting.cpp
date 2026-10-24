@@ -240,6 +240,70 @@ NF_TEST(script_applies_queries_and_clears_status_effects) {
     NF_CHECK_NEAR(value, 0.0, 1e-9);
 }
 
+NF_TEST(script_reads_combat_memory_and_suppression) {
+    ScriptInput input;
+    input.last_attacker = [](u32 id, u32, u32& attacker, u32& gen) {
+        if (id != 1u) {
+            return false;
+        }
+        attacker = 7u;
+        gen = 2u;
+        return true;
+    };
+    input.killer = [](u32 id, u32, u32& killer, u32& gen) {
+        if (id != 1u) {
+            return false;
+        }
+        killer = 7u;
+        gen = 2u;
+        return true;
+    };
+    input.damage_taken = [](u32 id, u32, f32& health, f32& armor, u32& hits, f32& seconds) {
+        if (id != 1u) {
+            return;
+        }
+        health = 12.0f;
+        armor = 3.0f;
+        hits = 4u;
+        seconds = 1.5f;
+    };
+    input.suppression = [](u32 id, u32) { return id == 1u ? 0.5f : 0.0f; };
+
+    LuaVM vm;
+    install_input_bindings(vm, &input);
+    std::string err;
+    NF_CHECK(vm.run_string(
+        "attacker, attacker_gen = nf.last_attacker(1, 0); "
+        "killer, killer_gen = nf.killer(1, 0); "
+        "damage_health, damage_armor, damage_hits, damage_seconds = "
+        "    nf.damage_taken(1, 0); "
+        "supp = nf.suppression(1, 0); "
+        "missing = (nf.last_attacker(2, 0) == nil) and 1 or 0",
+        "memory", &err));
+
+    double value = 0.0;
+    NF_CHECK(vm.get_global_number("attacker", value));
+    NF_CHECK_NEAR(value, 7.0, 1e-9);
+    NF_CHECK(vm.get_global_number("attacker_gen", value));
+    NF_CHECK_NEAR(value, 2.0, 1e-9);
+    NF_CHECK(vm.get_global_number("killer", value));
+    NF_CHECK_NEAR(value, 7.0, 1e-9);
+    NF_CHECK(vm.get_global_number("killer_gen", value));
+    NF_CHECK_NEAR(value, 2.0, 1e-9);
+    NF_CHECK(vm.get_global_number("damage_health", value));
+    NF_CHECK_NEAR(value, 12.0, 1e-9);
+    NF_CHECK(vm.get_global_number("damage_armor", value));
+    NF_CHECK_NEAR(value, 3.0, 1e-9);
+    NF_CHECK(vm.get_global_number("damage_hits", value));
+    NF_CHECK_NEAR(value, 4.0, 1e-9);
+    NF_CHECK(vm.get_global_number("damage_seconds", value));
+    NF_CHECK_NEAR(value, 1.5, 1e-9);
+    NF_CHECK(vm.get_global_number("supp", value));
+    NF_CHECK_NEAR(value, 0.5, 1e-9);
+    NF_CHECK(vm.get_global_number("missing", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+}
+
 NF_TEST(script_sandbox_blocks_file_and_os_access) {    LuaVM vm;
     double out = 0;
     // dofile/loadfile/io/os/package are all nil in the sandbox.

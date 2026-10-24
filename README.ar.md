@@ -206,7 +206,7 @@ build\Release\bin\NFPlayer.exe --project Games\TreeWorld\TreeWorld.nfproj --gpu-
 build\Release\bin\NFPlayer.exe --project Games\TreeWorld\TreeWorld.nfproj --frame-stats --gpu-timing
 ```
 
-### الضرر الطبقي والانفجارات وأحداث الإطلاق والحالات المستمرة (المراحل 50–54)
+### الضرر الطبقي والانفجارات وأحداث الإطلاق والحالات المستمرة وذاكرة القتال (المراحل 50–55)
 
 شجرة التطوير تحوّل رقم الضرر الواحد إلى إصابة متعددة الطبقات. مناطق الإصابة
 اختيارية لكل هدف (`Health: ... zones=true head=2 limb=0.75`)، والدرع مخزون ثانٍ
@@ -228,7 +228,12 @@ tracer حتى عندما تخطئ الطلقة.
 status_tick=0.5`). الحرق والنزيف والتآكل ينبضون بإيقاع ثابت عبر نفس مسار
 المقاومة والدرع، والنبضة الأخيرة الجزئية تدفع ما تبقّى بالضبط.
 `nf.apply_status()` و`nf.status_remaining()` و`nf.clear_status()` متاحة من Lua.
-التفاصيل في [Combat_Damage.md](Docs/Combat_Damage.md).
+
+وذاكرة القتال تبقى بعد الإطار: سجل ضرر يحفظ آخر مهاجم والمجاميع والقاتل،
+و`retaliate=true` يجعل الوكيل يفضّل مهاجمه الأخير إن بقي هدفًا صالحًا. الرصاص
+القريب يبني كبتًا يبطئ الاستدارة ويضيّق مخروط الإطلاق ويحبس الزناد فوق `0.75`.
+Lua يقرأ ذلك عبر `nf.last_attacker()` و`nf.killer()` و`nf.damage_taken()`
+و`nf.suppression()`. التفاصيل في [Combat_Damage.md](Docs/Combat_Damage.md).
 
 ```text
 Health: max=100 health=100 armor=40 armor_max=40 absorb=0.6 zones=true head=2 limb=0.75 resist_explosive=0.2

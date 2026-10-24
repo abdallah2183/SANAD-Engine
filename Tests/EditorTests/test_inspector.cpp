@@ -906,6 +906,7 @@ NF_TEST(editor_inspector_authors_a_combat_agent_and_undoes_it) {
     agent.config.max_range = 80.0f;
     agent.config.burst_on_seconds = 0.4f;
     agent.config.burst_off_seconds = 0.6f;
+    agent.retaliate = true;
     auto cmd = editor::make_combat_agent_command(scene.world(), e, agent, err);
     NF_CHECK(cmd != nullptr);
     editor::CommandStack stack;
@@ -915,6 +916,7 @@ NF_TEST(editor_inspector_authors_a_combat_agent_and_undoes_it) {
     NF_CHECK(stored != nullptr);
     if (stored != nullptr) {
         NF_CHECK(stored->target == "Player");
+        NF_CHECK(stored->retaliate);
         NF_CHECK_NEAR(stored->eye_height, 1.7f, 1e-5f);
         NF_CHECK_NEAR(stored->config.max_range, 80.0f, 1e-5f);
     }

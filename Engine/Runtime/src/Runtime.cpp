@@ -665,6 +665,8 @@ void Runtime::update(float dt) {
         scene::propagate_transforms(world);
         return;
     }
+    // Quiet clocks advance once per frame, before new damage can reset them.
+    step_damage_ledgers(dt);
     // Physics runs on its own fixed clock, so the scene's motion is the same
     // whether the frame took 5 ms or 50. The render path then only reads the
     // transforms physics produced.
@@ -738,6 +740,9 @@ void Runtime::update(float dt) {
     // them, so a projectile fired this frame already travels this frame. Its
     // swept segment is traced against the same colliders a hitscan shot uses.
     step_projectiles(dt);
+    // This frame's shots are now in the buffer; near misses can suppress the
+    // agents they passed before the camera is placed.
+    step_suppression(dt);
     // The camera is placed AFTER the transforms are final, so it follows the
     // character where the character actually IS this frame and not where it
     // was. It is also after the scripts, so a script that moved the player
@@ -1437,6 +1442,43 @@ u32 Runtime::step_script(float dt) {
         };
         input.clear_status = [self](u32 id, u32 gen, std::string_view kind) {
             return self->clear_status(ecs::Entity{id, gen}, kind);
+        };
+        input.last_attacker = [self](u32 id, u32 gen, u32& attacker_id, u32& attacker_gen) {
+            const DamageLedgerComponent* ledger =
+                self->damage_ledger_of(ecs::Entity{id, gen});
+            if (ledger == nullptr || !ledger->ledger.has_damage ||
+                !ledger->ledger.last_attacker.valid()) {
+                return false;
+            }
+            attacker_id = ledger->ledger.last_attacker.id;
+            attacker_gen = ledger->ledger.last_attacker.generation;
+            return true;
+        };
+        input.killer = [self](u32 id, u32 gen, u32& killer_id, u32& killer_gen) {
+            const DamageLedgerComponent* ledger =
+                self->damage_ledger_of(ecs::Entity{id, gen});
+            if (ledger == nullptr || !ledger->ledger.killed ||
+                !ledger->ledger.killer.valid()) {
+                return false;
+            }
+            killer_id = ledger->ledger.killer.id;
+            killer_gen = ledger->ledger.killer.generation;
+            return true;
+        };
+        input.damage_taken = [self](u32 id, u32 gen, f32& health, f32& armor, u32& hits,
+                                    f32& seconds) {
+            const DamageLedgerComponent* ledger =
+                self->damage_ledger_of(ecs::Entity{id, gen});
+            if (ledger == nullptr) {
+                return;
+            }
+            health = ledger->ledger.health_damage;
+            armor = ledger->ledger.armor_damage;
+            hits = ledger->ledger.hits;
+            seconds = ledger->ledger.seconds_since_damage;
+        };
+        input.suppression = [self](u32 id, u32 gen) {
+            return self->suppression_of(ecs::Entity{id, gen});
         };
     }
     m_scripts->set_input_source(input);

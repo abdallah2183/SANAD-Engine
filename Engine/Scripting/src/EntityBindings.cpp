@@ -456,6 +456,86 @@ int l_clear_status(lua_State* L) {
     return 1;
 }
 
+// nf.last_attacker(id, gen) -> id, gen, or nil when the ledger has no hit.
+int l_last_attacker(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    u32 id = 0u;
+    u32 generation = 0u;
+    if (input == nullptr || !input->last_attacker ||
+        !input->last_attacker(e.id, e.generation, id, generation)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    lua_pushinteger(L, static_cast<lua_Integer>(generation));
+    return 2;
+}
+
+// nf.killer(id, gen) -> id, gen, or nil until a recorded hit killed it.
+int l_killer(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    u32 id = 0u;
+    u32 generation = 0u;
+    if (input == nullptr || !input->killer ||
+        !input->killer(e.id, e.generation, id, generation)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    lua_pushinteger(L, static_cast<lua_Integer>(generation));
+    return 2;
+}
+
+// nf.damage_taken(id, gen) -> health, armor, hits, seconds_since_damage.
+int l_damage_taken(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        lua_pushinteger(L, 0);
+        lua_pushnumber(L, 0.0);
+        return 4;
+    }
+    const ScriptInput* input = bound_input(L);
+    f32 health = 0.0f;
+    f32 armor = 0.0f;
+    u32 hits = 0u;
+    f32 seconds = 0.0f;
+    if (input != nullptr && input->damage_taken) {
+        input->damage_taken(e.id, e.generation, health, armor, hits, seconds);
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(health));
+    lua_pushnumber(L, static_cast<lua_Number>(armor));
+    lua_pushinteger(L, static_cast<lua_Integer>(hits));
+    lua_pushnumber(L, static_cast<lua_Number>(seconds));
+    return 4;
+}
+
+// nf.suppression(id, gen) -> level in [0, 1].
+int l_suppression(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    const f32 level = (input != nullptr && input->suppression)
+                          ? input->suppression(e.id, e.generation)
+                          : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(level));
+    return 1;
+}
+
 // nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.
 int l_health(lua_State* L) {
     ecs::Entity e;
@@ -604,6 +684,14 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "status_remaining");
     lua_pushcfunction(L, l_clear_status);
     lua_setfield(L, -2, "clear_status");
+    lua_pushcfunction(L, l_last_attacker);
+    lua_setfield(L, -2, "last_attacker");
+    lua_pushcfunction(L, l_killer);
+    lua_setfield(L, -2, "killer");
+    lua_pushcfunction(L, l_damage_taken);
+    lua_setfield(L, -2, "damage_taken");
+    lua_pushcfunction(L, l_suppression);
+    lua_setfield(L, -2, "suppression");
     lua_pop(L, 1);
 }
 

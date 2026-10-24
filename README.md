@@ -225,7 +225,7 @@ only and is separate from DynamicResolution. See
 build\Release\bin\NFPlayer.exe --project Games\TreeWorld\TreeWorld.nfproj --frame-stats --gpu-timing
 ```
 
-### Layered damage, blasts, shot events and status effects (Phases 50-54)
+### Layered damage, blasts, shot events, statuses and combat memory (Phases 50-55)
 
 The development tree turns one damage number into a layered hit. Hit zones are
 opt-in per target (`Health: ... zones=true head=2 limb=0.75`), armor is a real
@@ -250,7 +250,14 @@ A hit can start a damage-over-time status (`status=burn status_dps=4
 status_time=3 status_tick=0.5`). Burning, bleeding and corrosion tick at a fixed
 cadence through the same resistance and armor path; a partial final tick pays
 exactly what is left. `nf.apply_status()` / `nf.status_remaining()` /
-`nf.clear_status()` expose it to Lua. See [Combat_Damage.md](Docs/Combat_Damage.md).
+`nf.clear_status()` expose it to Lua.
+
+Combat memory survives the frame: a damage ledger records the last attacker,
+totals and killer, and `retaliate=true` lets an agent prefer that attacker when
+it is still a valid target. Near-miss shots build suppression, slowing the turn,
+narrowing the fire cone and holding the trigger above 0.75. Lua reads it through
+`nf.last_attacker()` / `nf.killer()` / `nf.damage_taken()` / `nf.suppression()`.
+See [Combat_Damage.md](Docs/Combat_Damage.md).
 
 ```text
 Health: max=100 health=100 armor=40 armor_max=40 absorb=0.6 zones=true head=2 limb=0.75 resist_explosive=0.2

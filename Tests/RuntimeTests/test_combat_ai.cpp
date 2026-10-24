@@ -259,10 +259,13 @@ NF_TEST(a_combat_agent_line_round_trips) {
     agent.config.max_range = 35.0f;
     agent.config.burst_on_seconds = 0.3f;
     agent.config.burst_off_seconds = 1.1f;
+    agent.retaliate = true;
+    agent.suppression.level = 0.5f; // session state, must not survive load
     source.world().add<CombatAgentComponent>(enemy, agent);
 
     const std::string text = serialize_scene_to_text(source);
     NF_CHECK(text.find("  CombatAgent:") != std::string::npos);
+    NF_CHECK(text.find("retaliate=true") != std::string::npos);
     NF_CHECK(text.find("target=Player") != std::string::npos);
 
     const SceneLoadResult loaded = load_scene_from_text(text);
@@ -289,10 +292,12 @@ NF_TEST(a_combat_agent_line_round_trips) {
         NF_CHECK_NEAR(back->config.max_range, 35.0f, 1e-4f);
         NF_CHECK_NEAR(back->config.burst_on_seconds, 0.3f, 1e-4f);
         NF_CHECK_NEAR(back->config.burst_off_seconds, 1.1f, 1e-4f);
-        // The aim is session state: a loaded scene starts with an agent that
-        // is not mid-turn and not mid-burst.
+        NF_CHECK(back->retaliate);
+        // The aim and suppression are session state: a loaded scene starts
+        // with an agent that is not mid-turn, mid-burst or pinned.
         NF_CHECK(!back->state.engaged);
         NF_CHECK(!back->state.trigger);
+        NF_CHECK_NEAR(back->suppression.level, 0.0f, 1e-5f);
     }
 }
 

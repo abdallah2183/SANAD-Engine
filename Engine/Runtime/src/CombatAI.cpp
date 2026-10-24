@@ -1,4 +1,5 @@
 #include <NF/Runtime/CombatAI.hpp>
+#include <NF/Runtime/Suppression.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -87,7 +88,11 @@ CombatAimOutput combat_aim_step(CombatAimState& state, const CombatAimConfig& co
     const f32 hi = std::max(config.pitch_min, config.pitch_max);
     want_pitch = std::clamp(want_pitch, lo, hi);
 
-    const f32 speed = std::max(0.0f, config.aim_speed_deg_per_s);
+    const f32 suppression = std::clamp(std::isfinite(input.suppression) ? input.suppression
+                                                                        : 0.0f,
+                                       0.0f, 1.0f);
+    const f32 speed =
+        std::max(0.0f, config.aim_speed_deg_per_s) * suppression_aim_scale(suppression);
     const f32 max_step = speed * input.dt;
     const f32 yaw_step = std::clamp(angle_delta_deg(state.yaw_deg, want_yaw), -max_step, max_step);
     const f32 pitch_step = std::clamp(want_pitch - state.pitch_deg, -max_step, max_step);
@@ -101,10 +106,11 @@ CombatAimOutput combat_aim_step(CombatAimState& state, const CombatAimConfig& co
     const f32 error = std::sqrt(rem_yaw * rem_yaw + rem_pitch * rem_pitch);
 
     // --- 3. Decide ------------------------------------------------------
-    const f32 cone = std::max(0.0f, config.fire_cone_deg);
+    const f32 cone = std::max(0.0f, config.fire_cone_deg) * suppression_cone_scale(suppression);
     const bool aimed = error <= cone;
     const bool ready = state.reaction_timer >= std::max(0.0f, config.reaction_seconds);
-    const bool may_fire = aimed && ready && input.visible;
+    const bool may_fire =
+        aimed && ready && input.visible && !suppression_blocks_fire(suppression);
 
     // --- 4. Discipline --------------------------------------------------
     if (!may_fire) {

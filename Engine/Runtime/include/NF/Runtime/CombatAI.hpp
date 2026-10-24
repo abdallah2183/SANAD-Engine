@@ -109,6 +109,10 @@ struct CombatAimInput {
     /// Whether the target can actually be seen. A ray is cast by the runtime
     /// (Hitscan.hpp); this is the answer, not the question.
     bool visible = false;
+    /// Suppression from near misses, in [0, 1] (Phase 55). Slows the turn,
+    /// narrows the effective fire cone and holds the trigger above the block
+    /// threshold. Zero preserves the pre-Phase-55 aim exactly.
+    f32 suppression = 0.0f;
     /// Frame time. `dt <= 0` advances nothing.
     f32 dt = 0.0f;
 };

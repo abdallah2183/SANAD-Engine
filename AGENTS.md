@@ -146,7 +146,10 @@ Games/MyGame/
   visible enemy team instead of naming one; the current target is held until it
   dies, leaves range or becomes hidden. A projectile weapon on an agent leads a
   moving target automatically — the solver is in `Projectile.hpp` and falls back
-  to the current position when no intercept exists.
+  to the current position when no intercept exists. Add `retaliate=true` to let
+  the agent prefer whoever last damaged it (the damage ledger) when that target
+  is still valid. Near-miss shots suppress an agent: aim slows, the fire cone
+  narrows, and above 0.75 suppression the trigger is held until it decays.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -192,6 +195,10 @@ nf.damage(id, gen, amount)        -- raw health damage; bypasses armor/zones
 nf.apply_status(id, gen, kind, dps, seconds, tick) -- burn/bleed/corrode
 nf.status_remaining(id, gen, kind) -- seconds left, 0 when absent
 nf.clear_status(id, gen, kind)    -- remove one kind
+nf.last_attacker(id, gen)         -- id, gen, or nil
+nf.killer(id, gen)                -- id, gen, or nil
+nf.damage_taken(id, gen)          -- health, armor, hits, seconds_since_damage
+nf.suppression(id, gen)           -- 0..1 from near misses
 print(...)                        -- engine log
 ```
 

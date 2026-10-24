@@ -6,6 +6,7 @@
 #include <NF/ECS/Entity.hpp>
 #include <NF/Runtime/CombatAI.hpp>
 #include <NF/Runtime/Health.hpp>
+#include <NF/Runtime/Suppression.hpp>
 #include <NF/Runtime/Weapon.hpp>
 
 #include <string>
@@ -747,6 +748,16 @@ struct CombatAgentComponent {
     Vec3 last_target_position{0.0f, 0.0f, 0.0f};
     Vec3 target_velocity{0.0f, 0.0f, 0.0f};
     bool has_target_history = false;
+
+    /// Fight back against whoever last damaged this entity (Phase 55). The
+    /// ledger supplies the attacker; the agent still requires it to be alive,
+    /// in range, visible and allowed by the faction rules. Off by default so a
+    /// scene that named a target keeps that target until it opts in.
+    bool retaliate = false;
+
+    /// Runtime suppression from near misses (Phase 55). Never saved; a loaded
+    /// or copied agent starts calm.
+    SuppressionState suppression{};
 
     bool enabled = true;
 };

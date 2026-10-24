@@ -176,6 +176,12 @@ struct ScriptInput {
     std::function<bool(u32, u32, std::string_view, f32, f32, f32)> apply_status;
     std::function<f32(u32, u32, std::string_view)> status_remaining;
     std::function<bool(u32, u32, std::string_view)> clear_status;
+
+    /// Combat memory and awareness (Phase 55).
+    std::function<bool(u32, u32, u32&, u32&)> last_attacker;
+    std::function<bool(u32, u32, u32&, u32&)> killer;
+    std::function<void(u32, u32, f32&, f32&, u32&, f32&)> damage_taken;
+    std::function<f32(u32, u32)> suppression;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

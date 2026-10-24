@@ -346,6 +346,8 @@ Runtime::WeaponHitInfo Runtime::resolve_weapon_hit(ecs::Entity shooter,
     const bool killed = damage.killed;
     if (damage.accepted) {
         apply_weapon_status(world, shooter, hit.entity, profile);
+        record_damage(hit.entity, shooter, damage.health_damage, damage.armor_absorbed,
+                      killed);
     }
 
     // A destructible takes the same shot as fracture damage: a small, sharp
@@ -548,6 +550,8 @@ void Runtime::step_status_effects(f32 dt) {
             m_status_damage_total += result.health_damage;
             m_damage_dealt_total += result.health_damage;
             m_armor_damage_total += result.armor_absorbed;
+            record_damage(e, tick.source, result.health_damage, result.armor_absorbed,
+                          result.killed);
 
             ImpactEvent event;
             event.shooter = tick.source;
@@ -635,6 +639,103 @@ bool Runtime::clear_status(ecs::Entity entity, std::string_view kind) {
     ecs::World& world = m_scene_data_ptr->scene->world();
     StatusEffectComponent* status = world.get<StatusEffectComponent>(entity);
     return status != nullptr && status_remove(status->effects, status_kind);
+}
+
+void Runtime::record_damage(ecs::Entity victim, ecs::Entity attacker, f32 health_damage,
+                            f32 armor_damage, bool killed) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+    if (!world.is_alive(victim)) {
+        return;
+    }
+    DamageLedgerComponent* ledger = world.get<DamageLedgerComponent>(victim);
+    if (ledger == nullptr) {
+        ledger = &world.add<DamageLedgerComponent>(victim, DamageLedgerComponent{});
+    }
+    if (ledger != nullptr) {
+        damage_ledger_record(ledger->ledger, attacker, health_damage, armor_damage, killed);
+    }
+}
+
+void Runtime::step_damage_ledgers(f32 dt) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene || !(dt > 0.0f) ||
+        !std::isfinite(dt)) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+    for (ecs::Entity e : world.query<DamageLedgerComponent>()) {
+        DamageLedgerComponent* ledger = world.get<DamageLedgerComponent>(e);
+        if (ledger != nullptr) {
+            damage_ledger_step(ledger->ledger, dt);
+        }
+    }
+}
+
+void Runtime::step_suppression(f32 dt) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene || !(dt > 0.0f) ||
+        !std::isfinite(dt)) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+
+    std::vector<ecs::Entity> agents;
+    for (ecs::Entity e : world.query<CombatAgentComponent>()) {
+        CombatAgentComponent* agent = world.get<CombatAgentComponent>(e);
+        if (agent == nullptr || !agent->enabled) {
+            continue;
+        }
+        suppression_step(agent->suppression, dt);
+        agents.push_back(e);
+    }
+    if (agents.empty() || m_shots.current().empty()) {
+        return;
+    }
+
+    for (const ShotEvent& shot : m_shots.current()) {
+        if (!shot.shooter.valid()) {
+            continue;
+        }
+        for (ecs::Entity e : agents) {
+            if (e.id == shot.shooter.id && e.generation == shot.shooter.generation) {
+                continue;
+            }
+            CombatAgentComponent* agent = world.get<CombatAgentComponent>(e);
+            const scene::Transform* transform = world.get<scene::Transform>(e);
+            if (agent == nullptr || transform == nullptr) {
+                continue;
+            }
+            // A teammate's near miss is not suppressive fire.
+            if (!team_allows_damage(world, shot.shooter, e)) {
+                continue;
+            }
+            const Vec3 point{transform->world_x, transform->world_y + agent->target_height,
+                             transform->world_z};
+            const f32 distance =
+                distance_point_to_ray(point, shot.origin, shot.direction, 200.0f);
+            if (distance <= kSuppressionRadius) {
+                suppression_add(agent->suppression, kSuppressionPerShot);
+            }
+        }
+    }
+}
+
+const DamageLedgerComponent* Runtime::damage_ledger_of(ecs::Entity entity) const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return nullptr;
+    }
+    ecs::World& world = const_cast<ecs::World&>(m_scene_data_ptr->scene->world());
+    return world.get<DamageLedgerComponent>(entity);
+}
+
+f32 Runtime::suppression_of(ecs::Entity entity) const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return 0.0f;
+    }
+    ecs::World& world = const_cast<ecs::World&>(m_scene_data_ptr->scene->world());
+    const CombatAgentComponent* agent = world.get<CombatAgentComponent>(entity);
+    return agent != nullptr ? agent->suppression.level : 0.0f;
 }
 
 u32 Runtime::apply_explosion(ecs::Entity shooter, const WeaponProfile& profile,
@@ -726,6 +827,8 @@ u32 Runtime::apply_explosion(ecs::Entity shooter, const WeaponProfile& profile,
                 killed = result.killed;
                 if (result.accepted) {
                     apply_weapon_status(world, shooter, victim, profile);
+                    record_damage(victim, shooter, result.health_damage,
+                                  result.armor_absorbed, killed);
                 }
             }
             if (m_destruction && m_destruction_enabled && destructible) {
@@ -812,6 +915,7 @@ void Runtime::step_combat_ai(f32 dt) {
         CombatAimInput in;
         in.eye = eye;
         in.dt = dt;
+        in.suppression = agent->suppression.level;
 
         // Every candidate is checked against the same world boxes. Rebuilding
         // once per agent (rather than once per candidate) keeps auto-targeting
@@ -862,38 +966,59 @@ void Runtime::step_combat_ai(f32 dt) {
 
         ecs::Entity target = ecs::kInvalidEntity;
         Vec3 target_aim{0.0f, 0.0f, 0.0f};
-        if (agent->auto_target) {
-            f32 held_distance = 0.0f;
-            // Keep the current target while it remains valid. Without the
-            // lock, two enemies at almost the same distance make the agent
-            // twitch between them every frame and never finish a burst.
-            if (evaluate_target(agent->locked_target, true, target_aim, held_distance)) {
-                target = agent->locked_target;
-            } else {
-                f32 best_distance = std::numeric_limits<f32>::infinity();
-                Vec3 best_aim{0.0f, 0.0f, 0.0f};
-                for (ecs::Entity candidate : world.all_entities()) {
-                    Vec3 aim{0.0f, 0.0f, 0.0f};
-                    f32 distance = 0.0f;
-                    if (!evaluate_target(candidate, true, aim, distance)) {
-                        continue;
-                    }
-                    const bool closer = distance < best_distance;
-                    const bool tie = distance == best_distance &&
-                                     (!target.valid() || candidate.id < target.id);
-                    if (closer || tie) {
-                        best_distance = distance;
-                        best_aim = aim;
-                        target = candidate;
-                    }
+
+        // Retaliation (Phase 55): if this agent opted in and its ledger names a
+        // still-valid attacker, that attacker is the first candidate. The
+        // normal authored/auto target remains the fallback when the attacker
+        // is dead, hidden or out of range.
+        if (agent->retaliate) {
+            const DamageLedgerComponent* ledger = world.get<DamageLedgerComponent>(e);
+            if (ledger != nullptr && ledger->ledger.has_damage &&
+                ledger->ledger.last_attacker.valid()) {
+                f32 distance = 0.0f;
+                Vec3 aim{0.0f, 0.0f, 0.0f};
+                if (evaluate_target(ledger->ledger.last_attacker, agent->auto_target, aim,
+                                    distance)) {
+                    target = ledger->ledger.last_attacker;
+                    target_aim = aim;
                 }
-                target_aim = best_aim;
             }
-        } else {
-            f32 distance = 0.0f;
-            const ecs::Entity named = entity_by_name(world, agent->target);
-            if (evaluate_target(named, false, target_aim, distance)) {
-                target = named;
+        }
+
+        if (!target.valid()) {
+            if (agent->auto_target) {
+                f32 held_distance = 0.0f;
+                // Keep the current target while it remains valid. Without the
+                // lock, two enemies at almost the same distance make the agent
+                // twitch between them every frame and never finish a burst.
+                if (evaluate_target(agent->locked_target, true, target_aim, held_distance)) {
+                    target = agent->locked_target;
+                } else {
+                    f32 best_distance = std::numeric_limits<f32>::infinity();
+                    Vec3 best_aim{0.0f, 0.0f, 0.0f};
+                    for (ecs::Entity candidate : world.all_entities()) {
+                        Vec3 aim{0.0f, 0.0f, 0.0f};
+                        f32 distance = 0.0f;
+                        if (!evaluate_target(candidate, true, aim, distance)) {
+                            continue;
+                        }
+                        const bool closer = distance < best_distance;
+                        const bool tie = distance == best_distance &&
+                                         (!target.valid() || candidate.id < target.id);
+                        if (closer || tie) {
+                            best_distance = distance;
+                            best_aim = aim;
+                            target = candidate;
+                        }
+                    }
+                    target_aim = best_aim;
+                }
+            } else {
+                f32 distance = 0.0f;
+                const ecs::Entity named = entity_by_name(world, agent->target);
+                if (evaluate_target(named, false, target_aim, distance)) {
+                    target = named;
+                }
             }
         }
 

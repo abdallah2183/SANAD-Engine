@@ -1,4 +1,4 @@
-# المراحل 50–54 — الضرر الطبقي، الانفجارات، الأنواع، أحداث الإطلاق، والحالات المستمرة
+# المراحل 50–55 — الضرر الطبقي، الانفجارات، الأنواع، أحداث الإطلاق، الحالات المستمرة، وذاكرة القتال
 
 المرحلة 44 جعلت للسلاح آلة حالة كاملة، والمرحلة 46 أعطت الرصاصة وقت طيران،
 والمرحلة 49 جعلت كل إصابة حدثًا. بقي الضرر نفسه رقمًا واحدًا: كل طلقة تخصم
@@ -6,7 +6,8 @@
 لا. المرحلة 50 تضيف طبقتين فوق الرقم، والمرحلة 51 تغيّر **شكل** الإصابة من نقطة
 إلى كرة. المرحلة 52 تفصل **نوع** الضرر عن رقمه، والمرحلة 53 تعطي اللعبة حدث
 الطلقة نفسها — لا الإصابة فقط — كي تستطيع رسم الوميض والـtracer. المرحلة 54
-تجعل الضرر يستمر بعد الإصابة الأولى: حرق ونزيف وتآكل بنبضات ثابتة.
+تجعل الضرر يستمر بعد الإصابة الأولى: حرق ونزيف وتآكل بنبضات ثابتة. المرحلة 55
+تعطي الوكيل ذاكرة لما حدث، وكبتًا من الرصاص الذي يمر قربه.
 
 ## 1. المرحلة 50 — الإصابة متعددة الطبقات
 
@@ -227,7 +228,58 @@ Status: burn=4,3,0.5 bleed=2,5,1
 - الحالة تُحفظ في `Status:` مع الوقت المتبقي، مثل الصحة المجروحة؛ المصدر
   (الرامي) حالة جلسة ولا يُحفظ.
 
-## 6. الملفات
+## 6. المرحلة 55 — ذاكرة القتال والكبت
+
+### ذاكرة الضرر
+
+كل كيان تلقّى إصابة مقبولة يحصل على `DamageLedgerComponent` مُنشأ عند الحاجة:
+
+- `last_attacker`: آخر من أصابه، ويبقى بعد انتهاء الإطار.
+- `killer`: من وجّه الضربة القاتلة.
+- `health_damage` و`armor_damage`: مجموعان منفصلان.
+- `hits`: عدد الإصابات المقبولة، حتى لو امتص الدرع كل الضرر.
+- `seconds_since_damage`: ساعة هدوء تتقدم كل إطار، وتُصفَّر عند الإصابة.
+
+الذاكرة حالة جلسة، لا تُحفظ ولا تُنسخ مع الـprefab. `ImpactEvent` يبقى حدث
+الإطار، والـledger يبقى الذاكرة المستمرة.
+
+### الرد على المهاجم
+
+`CombatAgent: ... retaliate=true` يجعل آخر مهاجم مرشحًا أولًا، لكنه لا يخترق
+قواعد الهدف: يجب أن يكون حيًّا، داخل المدى، مرئيًا، ومسموحًا بالفصائل. إن فشل
+أحد الشروط يعود الوكيل إلى `target=` أو الاختيار التلقائي. القيمة الافتراضية
+`false`، فلا يتغير سلوك مشهد قديم.
+
+### الكبت من الرصاص القريب
+
+- كل `ShotEvent` يمرّ ضمن `3m` من نقطة صدر الوكيل يضيف `0.22` كبتًا.
+- الكبت يتلاشى `0.35/ثانية`، وسقفه `1.0`.
+- عند الكبت الكامل: سرعة الاستدارة نصف، ومخروط الإطلاق نصف.
+- عند `0.75` أو أكثر يُحبس الزناد كليًا حتى يهبط المستوى.
+- رصاص الفريق نفسه لا يكبت؛ يُستخدم `team_allows_damage` نفسه.
+- الكبت حالة جلسة، لا تُحفظ، ويُصفَّر عند نسخ الوكيل أو تحميل المشهد.
+
+```text
+CombatAgent: eye=1.5 aim=1 reaction=0.35 turn=220 cone=3
+             range=60 burst=0.55 rest=0.85 retaliate=true target=Player
+```
+
+### Lua
+
+- `nf.last_attacker(id, gen)` → `id, gen` أو `nil`.
+- `nf.killer(id, gen)` → `id, gen` أو `nil`.
+- `nf.damage_taken(id, gen)` → `health, armor, hits, seconds`.
+- `nf.suppression(id, gen)` → `0..1`.
+
+### حدود
+
+- لا تقييم تهديد أو تنسيق جماعي؛ الرد على آخر مهاجم فقط.
+- الكبت لا يغيّر دقة السلاح نفسها، بل يبطئ التصويب ويضيّق المخروط ويحبس
+  الزناد. تشتت السلاح يبقى مسؤولية `WeaponProfile`.
+- لا يوجد غطاء/اختباء أو انحناء؛ الوكيل يبقى واقفًا.
+- لا ذاكرة زمنية متعددة المهاجمين؛ آخر مهاجم فقط.
+
+## 7. الملفات
 
 | الملف | المسؤولية |
 |:---|:---|
@@ -235,15 +287,19 @@ Status: burn=4,3,0.5 bleed=2,5,1
 | `Engine/Runtime/include/NF/Runtime/Explosion.hpp` | تلاشي الانفجار، المسافة إلى صندوق |
 | `Engine/Runtime/include/NF/Runtime/Shot.hpp` | حدث الطلقة ومخزنه بإطارين |
 | `Engine/Runtime/include/NF/Runtime/StatusEffect.hpp` | حالات الحرق/النزيف/التآكل ونبضاتها |
-| `Engine/Runtime/src/WeaponRuntime.cpp` | ربط الإصابة والانفجار والطلقة والحالة بالمشهد |
+| `Engine/Runtime/include/NF/Runtime/DamageLedger.hpp` | ذاكرة آخر مهاجم والضرر التراكمي |
+| `Engine/Runtime/include/NF/Runtime/Suppression.hpp` | كبت الوكيل والمسافة إلى شعاع الطلقة |
+| `Engine/Runtime/src/WeaponRuntime.cpp` | ربط الإصابة والانفجار والطلقة والحالة والذاكرة والكبت بالمشهد |
 | `Engine/Runtime/src/RuntimeSceneLoader.cpp` | `Health:` و`Weapon:` حفظًا وتحميلًا |
 | `Editor/src/Inspector.cpp` + `Editor/src/ui/Panels.cpp` | تحرير الحقول والتحقق منها |
 | `Tests/RuntimeTests/test_damage.cpp` | 17 حالة (16 نقية + تكامل اختياري) |
 | `Tests/RuntimeTests/test_explosion.cpp` | 8 حالات (7 نقية + تكامل اختياري) |
 | `Tests/RuntimeTests/test_shot_events.cpp` | 4 حالات نقية للمخزن والحدث |
 | `Tests/RuntimeTests/test_status_effects.cpp` | 8 حالات نقية للحالات ودورة الحفظ |
+| `Tests/RuntimeTests/test_damage_ledger.cpp` | 4 حالات نقية للذاكرة والقاتل والساعة |
+| `Tests/RuntimeTests/test_suppression.cpp` | 4 حالات نقية للكبت والتصويب والزناد |
 
-## 7. التحقق
+## 8. التحقق
 
 ```bat
 Scripts\build.bat Release
@@ -252,17 +308,22 @@ build\Release\bin\RuntimeTests.exe blast_
 build\Release\bin\RuntimeTests.exe damage_type
 build\Release\bin\RuntimeTests.exe shot_buffer
 build\Release\bin\RuntimeTests.exe status_
+build\Release\bin\RuntimeTests.exe suppression
+build\Release\bin\RuntimeTests.exe ledger
 build\Release\bin\ScriptTests.exe script_reads_previous_frame_shots
 build\Release\bin\ScriptTests.exe script_applies_queries_and_clears_status_effects
+build\Release\bin\ScriptTests.exe script_reads_combat_memory_and_suppression
 ```
 
 اختبارات التكامل تحتاج جهاز Vulkan. على جهاز بلا loader تُسجَّل `SKIPPED` صراحةً،
 لا `OK`؛ المنطق النقي يظل مختبَرًا.
 
-## 8. حدود معلنة
+## 9. حدود معلنة
 
 - لا حالات تأثير غير الثلاث (حرق/نزيف/تآكل)، ولا تراكم لنفس النوع؛ التجديد
   يختار الأقوى. لا مقاومة للحالة نفسها بمعزل عن نوع ضررها.
+- لا ذاكرة لأكثر من مهاجم واحد، ولا تقييم تهديد أو تنسيق جماعي.
+- الكبت لا يملك غطاءً أو انحناءً؛ يبطئ التصويب ويحبس الزناد فقط.
 - لا تجدد للدرع ولا التقاط دروع؛ اللعبة تستطيع تعديل `armor` عبر واجهة C++
   أو حفظ المشهد.
 - لا ارتداد أو دفع فيزيائي من الانفجار؛ الضرر والتدمير فقط.
