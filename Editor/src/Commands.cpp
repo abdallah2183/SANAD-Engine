@@ -436,6 +436,122 @@ std::string SetCameraCommand::label() const {
     return "Edit camera";
 }
 
+// --- SetWeaponCommand -------------------------------------------------------
+
+SetWeaponCommand::SetWeaponCommand(ecs::Entity e, bool had_before,
+                                   const runtime::WeaponComponent& before,
+                                   const runtime::WeaponComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetWeaponCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::WeaponComponent>(m_entity, m_after);
+}
+
+void SetWeaponCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::WeaponComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::WeaponComponent>(m_entity);
+    }
+}
+
+std::string SetWeaponCommand::label() const {
+    return "Edit weapon";
+}
+
+// --- SetHealthCommand -------------------------------------------------------
+
+SetHealthCommand::SetHealthCommand(ecs::Entity e, bool had_before,
+                                   const runtime::HealthComponent& before,
+                                   const runtime::HealthComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetHealthCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::HealthComponent>(m_entity, m_after);
+}
+
+void SetHealthCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::HealthComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::HealthComponent>(m_entity);
+    }
+}
+
+std::string SetHealthCommand::label() const {
+    return "Edit hit points";
+}
+
+// --- SetCombatAgentCommand --------------------------------------------------
+
+SetCombatAgentCommand::SetCombatAgentCommand(ecs::Entity e, bool had_before,
+                                             const runtime::CombatAgentComponent& before,
+                                             const runtime::CombatAgentComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetCombatAgentCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::CombatAgentComponent>(m_entity, m_after);
+}
+
+void SetCombatAgentCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::CombatAgentComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::CombatAgentComponent>(m_entity);
+    }
+}
+
+std::string SetCombatAgentCommand::label() const {
+    return "Edit combat agent";
+}
+
+// --- SetFactionCommand ------------------------------------------------------
+
+SetFactionCommand::SetFactionCommand(ecs::Entity e, bool had_before,
+                                     const runtime::FactionComponent& before,
+                                     const runtime::FactionComponent& after)
+    : m_entity(e), m_had_before(had_before), m_before(before), m_after(after) {}
+
+void SetFactionCommand::apply(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    world.add<runtime::FactionComponent>(m_entity, m_after);
+}
+
+void SetFactionCommand::undo(ecs::World& world) {
+    if (!m_entity.valid() || !world.is_alive(m_entity)) {
+        return;
+    }
+    if (m_had_before) {
+        world.add<runtime::FactionComponent>(m_entity, m_before);
+    } else {
+        world.remove<runtime::FactionComponent>(m_entity);
+    }
+}
+
+std::string SetFactionCommand::label() const {
+    return "Edit faction";
+}
+
 // --- SetLightCommand --------------------------------------------------------
 
 SetLightCommand::SetLightCommand(ecs::Entity e, bool had_before,

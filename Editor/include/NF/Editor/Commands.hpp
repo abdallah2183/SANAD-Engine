@@ -285,9 +285,88 @@ private:
     runtime::CameraComponent m_after{};
 };
 
-// Sets (or replaces) the directional light of an existing entity.
-class SetLightCommand : public ICommand {
+// Sets (or replaces) the weapon of an existing entity (Phase 44).
+//
+// The command carries the whole WeaponComponent, not just the profile, because
+// the undo stack restores components: a weapon that had 4 rounds in the
+// magazine before the edit must come back with 4, not with a fresh magazine
+// built from the restored profile. The FACTORY is what rebuilds the state when
+// the profile changes; undo restores exactly what was there.
+class SetWeaponCommand : public ICommand {
 public:
+    SetWeaponCommand(ecs::Entity e, bool had_before, const runtime::WeaponComponent& before,
+                     const runtime::WeaponComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::WeaponComponent m_before{};
+    runtime::WeaponComponent m_after{};
+};
+
+// Sets (or replaces) an entity's hit points (Phase 44). Same contract as the
+// weapon above.
+class SetHealthCommand : public ICommand {
+public:
+    SetHealthCommand(ecs::Entity e, bool had_before, const runtime::HealthComponent& before,
+                     const runtime::HealthComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::HealthComponent m_before{};
+    runtime::HealthComponent m_after{};
+};
+
+// Sets (or replaces) a combat agent (Phase 46 authoring). The aim state is
+// session data, so the factory builds a fresh one and undo restores the whole
+// component exactly as it was.
+class SetCombatAgentCommand : public ICommand {
+public:
+    SetCombatAgentCommand(ecs::Entity e, bool had_before,
+                          const runtime::CombatAgentComponent& before,
+                          const runtime::CombatAgentComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::CombatAgentComponent m_before{};
+    runtime::CombatAgentComponent m_after{};
+};
+
+// Sets (or replaces) an entity's affiliation (Phase 46). A neutral faction is
+// still a component the author can inspect; the loader simply writes no line
+// for an empty team.
+class SetFactionCommand : public ICommand {
+public:
+    SetFactionCommand(ecs::Entity e, bool had_before, const runtime::FactionComponent& before,
+                      const runtime::FactionComponent& after);
+    void apply(ecs::World& world) override;
+    void undo(ecs::World& world) override;
+    std::string label() const override;
+    ecs::Entity target() const override { return m_entity; }
+
+private:
+    ecs::Entity m_entity;
+    bool m_had_before = false;
+    runtime::FactionComponent m_before{};
+    runtime::FactionComponent m_after{};
+};
+
+// Sets (or replaces) the directional light of an existing entity.
+class SetLightCommand : public ICommand {public:
     SetLightCommand(ecs::Entity e, bool had_before, const runtime::DirectionalLight& before,
                     const runtime::DirectionalLight& after);
     void apply(ecs::World& world) override;

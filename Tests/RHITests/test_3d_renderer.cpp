@@ -80,11 +80,16 @@ Camera make_camera(float z = 3.0f, float aspect = 1.0f) {
 bool render_full_chain(rhi::IGraphicsDevice& dev, u32 width, u32 height,
                        const std::function<void(ecs::World&, MeshLibrary&, Renderer3D&)>& setup,
                        std::vector<Pixel>& out_pixels, Renderer3D::Stats* out_stats = nullptr,
-                       const Camera* camera_override = nullptr) {
+                       const Camera* camera_override = nullptr,
+                       u32 frame_count = 1, bool enable_gpu_timing = false) {
     if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
 
     Renderer3D renderer;
     if (!renderer.init(dev, basic3d_shader_dir(), width, height)) return false;
+    if (enable_gpu_timing) {
+        renderer.set_gpu_timing_enabled(true);
+        renderer.set_gpu_pass_timing_enabled(true);
+    }
     MeshLibrary meshes;
     renderer.set_mesh_library(&meshes);
     ecs::World world;
@@ -108,18 +113,29 @@ bool render_full_chain(rhi::IGraphicsDevice& dev, u32 width, u32 height,
     auto fence = dev.create_fence(false);
     if (!cmd || !fence) return false;
 
-    cmd->begin();
-    if (!renderer.render(*cmd, render_world, camera, *target)) return false;
     rhi::BufferDesc rb_desc{};
     rb_desc.size = usize(width) * height * 4;
     rb_desc.usage = rhi::BufferUsage::TransferDst;
     rb_desc.memory = rhi::MemoryUsage::GPUToCPU;
     auto rb = dev.create_buffer(rb_desc);
     if (!rb) return false;
-    cmd->copy_texture_to_buffer(*target, *rb, 0, 0, width, height, 0);
-    cmd->end();
-    dev.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
-    if (!fence->wait(kGpuTimeoutNs)) return false;
+
+    frame_count = std::max(1u, frame_count);
+    for (u32 frame = 0; frame < frame_count; ++frame) {
+        // Same slot every frame, with a fence wait between frames: that is the
+        // renderer's contract for reusing a slot, and it also proves the GPU
+        // timing results can be consumed without a device-wide idle.
+        if (frame > 0) cmd->reset();
+        cmd->begin();
+        if (!renderer.render(*cmd, render_world, camera, *target)) return false;
+        if (frame + 1 == frame_count) {
+            cmd->copy_texture_to_buffer(*target, *rb, 0, 0, width, height, 0);
+        }
+        cmd->end();
+        dev.submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+        if (!fence->wait(kGpuTimeoutNs)) return false;
+        if (frame + 1 < frame_count) fence->reset();
+    }
     dev.wait_idle();
 
     auto* px = static_cast<Pixel*>(rb->map());
@@ -3515,4 +3531,69 @@ NF_TEST(ssao_darkens_an_inside_corner) {
     NF_CHECK(off_sum > 0u); // sanity: the scene is actually lit
     NF_CHECK(on_sum * 50 < off_sum * 49); // broad contact darkening (~4% here)
     NF_CHECK(count_different_pixels(off, on) > 400); // ...across the frame
+}
+
+NF_TEST(renderer_reports_real_gpu_frame_and_pass_timings) {
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+    if (!dev.supports_timestamp_queries()) {
+        NF_SKIP("timestamp queries unsupported by this device/queue");
+    }
+
+    const SceneSpec s = base_spec();
+    std::vector<Pixel> pixels;
+    Renderer3D::Stats stats;
+    // Three frames through the SAME slot with a fence wait each frame: frame 2
+    // consumes frame 1's timestamps and frame 3 consumes frame 2's, so the
+    // stats after the call describe a completed GPU frame rather than zeroes.
+    const bool ok = render_full_chain(*f.device, 64, 64,
+        [&](ecs::World& world, MeshLibrary& meshes, Renderer3D& renderer) {
+            StaticMeshHandle h = meshes.add(StaticMesh::create_cube(1.5f));
+            NF_CHECK(meshes.upload_all(dev));
+            MaterialHandle m = renderer.materials().create_instance(
+                *renderer.gbuffer_material(), s.material, "gpu-timing");
+            Entity e = world.create_entity();
+            world.add<scene::Transform>(e, scene::Transform{});
+            world.add<MeshComponent>(e, MeshComponent{h, m, true});
+            renderer.set_directional_light(s.directional);
+        },
+        pixels, &stats, nullptr, 3, true);
+
+    NF_CHECK(ok);
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+    NF_CHECK(stats.gpu_timing_valid);
+    // A published sample must be distinguishable from "the same old numbers":
+    // the dynamic-resolution governor uses this id to avoid counting one GPU
+    // frame once per update.
+    NF_CHECK(stats.gpu_sample_serial > 0);
+    NF_CHECK(std::isfinite(stats.gpu_frame_ms));
+    NF_CHECK(stats.gpu_frame_ms >= 0.0);
+    // A single frame at 64x64 is far below this; the bound catches a broken
+    // clock conversion (ticks interpreted as milliseconds, for example).
+    NF_CHECK(stats.gpu_frame_ms < 1000.0);
+    NF_CHECK(!stats.gpu_passes.empty());
+    NF_CHECK(stats.gpu_passes.size() <= 32); // kMaxTimedPasses clamp
+
+    bool saw_gbuffer = false;
+    bool saw_tonemap = false;
+    double pass_sum_ms = 0.0;
+    for (const Renderer3D::GpuPassTiming& pass : stats.gpu_passes) {
+        NF_CHECK(!pass.name.empty());
+        NF_CHECK(std::isfinite(pass.milliseconds));
+        NF_CHECK(pass.milliseconds >= 0.0);
+        NF_CHECK(pass.milliseconds < 1000.0);
+        pass_sum_ms += pass.milliseconds;
+        saw_gbuffer = saw_gbuffer || pass.name == "GBuffer";
+        saw_tonemap = saw_tonemap || pass.name == "Tonemap";
+    }
+    NF_CHECK(saw_gbuffer);
+    NF_CHECK(saw_tonemap);
+    // Pass intervals are inside the frame interval, so with no cross-frame
+    // wrapping their sum cannot exceed it. The tolerance covers timestamp
+    // quantisation on devices whose clock is coarser than 1 ns.
+    NF_CHECK(pass_sum_ms <= stats.gpu_frame_ms + 2.0);
+    NF_LOG_WARN(nf::LogCategory::Core,
+                "GPU timing: frame {:.4f} ms across {} passes (sum {:.4f} ms)",
+                stats.gpu_frame_ms, stats.gpu_passes.size(), pass_sum_ms);
 }

@@ -7,6 +7,8 @@
 #include <NF/Rendering/ShadowCascades.hpp>
 #include <NF/Runtime/Runtime.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -607,6 +609,13 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
         out_err = "minimum render scale must not exceed the render scale ceiling";
         return nullptr;
     }
+    // Phase 40: the timing source is a closed set. The command refuses an
+    // unknown value rather than letting the runtime silently treat it as CPU.
+    if (edit.dynamic_resolution_timing != runtime::kDynamicResolutionTimingCpu &&
+        edit.dynamic_resolution_timing != runtime::kDynamicResolutionTimingGpu) {
+        out_err = "dynamic resolution timing must be CPU or GPU";
+        return nullptr;
+    }
     // Lens effects. Symmetric on distortion because barrel and pincushion are
     // both legitimate, and bounded at +/-0.5 because past that the warp folds
     // the corners over themselves. The bounds match the scene loader's.
@@ -655,6 +664,280 @@ std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Enti
     const runtime::PostProcessComponent before = had ? *cur : runtime::PostProcessComponent{};
     runtime::PostProcessComponent after = edit;
     return std::make_unique<SetPostProcessCommand>(e, had, before, after);
+}
+
+// --- weapons and hit points (Phase 44) ---------------------------------------
+
+runtime::WeaponProfile read_weapon(const ecs::World& world, ecs::Entity e, bool& out_has) {
+    out_has = false;
+    const auto* w = world.get<runtime::WeaponComponent>(e);
+    if (w == nullptr) {
+        return runtime::WeaponProfile{};
+    }
+    out_has = true;
+    return w->profile;
+}
+
+std::unique_ptr<ICommand> make_weapon_command(ecs::World& world, ecs::Entity e,
+                                              const runtime::WeaponProfile& edit,
+                                              std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.rounds_per_minute, edit.reload_seconds, edit.burst_gap_seconds,
+                     edit.damage, edit.range, edit.spread_deg, edit.spread_bloom_deg,
+                     edit.spread_max_deg, edit.spread_recover_deg_per_s, edit.recoil_pitch,
+                     edit.recoil_yaw, edit.recoil_growth, edit.falloff_start, edit.falloff_end,
+                     edit.falloff_min_scale, edit.armor_penetration, edit.blast_radius,
+                     edit.blast_damage, edit.blast_min_scale, edit.status_damage_per_second,
+                     edit.status_seconds, edit.status_tick_seconds, edit.shake,
+                     edit.projectile_speed, edit.projectile_gravity})) {
+        out_err = "Weapon values must be finite numbers";
+        return nullptr;
+    }
+    // The same gate the loader and the runtime use, so a weapon the editor
+    // accepts is a weapon that can fire. The message names the fields rather
+    // than the rule, because "magazine is 0" is what the author has to change.
+    if (edit.magazine == 0u) {
+        out_err = "Magazine must hold at least one round";
+        return nullptr;
+    }
+    if (edit.pellets == 0u) {
+        out_err = "Pellets must be at least one";
+        return nullptr;
+    }
+    if (!(edit.rounds_per_minute > 0.0f) || edit.rounds_per_minute > runtime::kMaxRoundsPerMinute) {
+        out_err = "Rate of fire must be within (0, " +
+                  std::to_string(static_cast<int>(runtime::kMaxRoundsPerMinute)) + "] rpm";
+        return nullptr;
+    }
+    if (!(edit.range > 0.0f)) {
+        out_err = "Range must be positive";
+        return nullptr;
+    }
+    if (edit.spread_max_deg < edit.spread_deg) {
+        out_err = "The spread ceiling must be at least the base spread";
+        return nullptr;
+    }
+    if (edit.reload_seconds < 0.0f || edit.burst_gap_seconds < 0.0f) {
+        out_err = "Reload and burst gap must not be negative";
+        return nullptr;
+    }
+    if (edit.armor_penetration < 0.0f || edit.armor_penetration > 1.0f) {
+        out_err = "Armor penetration must be within 0..1";
+        return nullptr;
+    }
+    if (edit.blast_radius < 0.0f || edit.blast_radius > 1000.0f) {
+        out_err = "Blast radius must be within 0..1000 m";
+        return nullptr;
+    }
+    if (edit.blast_damage < 0.0f || edit.blast_damage > 1000000.0f) {
+        out_err = "Blast damage must be within 0..1000000";
+        return nullptr;
+    }
+    if (edit.blast_min_scale < 0.0f || edit.blast_min_scale > 1.0f) {
+        out_err = "Blast edge scale must be within 0..1";
+        return nullptr;
+    }
+    if (edit.status != runtime::StatusKind::None) {
+        if (!(edit.status_damage_per_second > 0.0f) || !(edit.status_seconds > 0.0f) ||
+            !(edit.status_tick_seconds > 0.0f)) {
+            out_err = "A status needs a positive dose, duration and tick";
+            return nullptr;
+        }
+    }
+    if (edit.mode == runtime::FireMode::Burst && edit.burst_count == 0u) {
+        out_err = "A burst must fire at least one round";
+        return nullptr;
+    }
+    if (edit.delivery == runtime::WeaponDelivery::Projectile) {
+        if (!(edit.projectile_speed > 0.0f) || edit.projectile_speed > 100000.0f) {
+            out_err = "Projectile speed must be within (0, 100000] m/s";
+            return nullptr;
+        }
+        if (edit.projectile_gravity < 0.0f || edit.projectile_gravity > 1000.0f) {
+            out_err = "Projectile gravity must be within 0..1000 m/s2";
+            return nullptr;
+        }
+    }
+
+    const auto* cur = world.get<runtime::WeaponComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::WeaponComponent before = had ? *cur : runtime::WeaponComponent{};
+    // A fresh state from the edited profile: the magazine an author just
+    // widened must start full, and a weapon being authored is not a weapon
+    // mid-firefight.
+    runtime::WeaponComponent after{edit};
+    return std::make_unique<SetWeaponCommand>(e, had, before, after);
+}
+
+runtime::HealthComponent read_health(const ecs::World& world, ecs::Entity e, bool& out_has) {
+    out_has = false;
+    const auto* h = world.get<runtime::HealthComponent>(e);
+    if (h == nullptr) {
+        return runtime::HealthComponent{};
+    }
+    out_has = true;
+    return *h;
+}
+
+std::unique_ptr<ICommand> make_health_command(ecs::World& world, ecs::Entity e,
+                                              const runtime::HealthComponent& edit,
+                                              std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (!all_finite({edit.max_health, edit.health, edit.max_armor, edit.armor,
+                     edit.armor_absorb, edit.headshot_multiplier, edit.limb_multiplier,
+                     edit.ballistic_resistance, edit.explosive_resistance,
+                     edit.fire_resistance, edit.regen_per_second, edit.regen_delay})) {
+        out_err = "Hit point values must be finite numbers";
+        return nullptr;
+    }
+    if (!(edit.max_health > 0.0f)) {
+        out_err = "Maximum health must be positive";
+        return nullptr;
+    }
+    if (edit.regen_per_second < 0.0f || edit.regen_delay < 0.0f) {
+        out_err = "Regeneration and its delay must not be negative";
+        return nullptr;
+    }
+    if (edit.max_armor < 0.0f || edit.armor < 0.0f) {
+        out_err = "Armor must not be negative";
+        return nullptr;
+    }
+    if (edit.armor_absorb < 0.0f || edit.armor_absorb > 1.0f) {
+        out_err = "Armor absorption must be within 0..1";
+        return nullptr;
+    }
+    if (!(edit.headshot_multiplier > 0.0f) || edit.limb_multiplier < 0.0f) {
+        out_err = "Hit-zone multipliers must be positive (limb may be zero)";
+        return nullptr;
+    }
+    if (edit.ballistic_resistance < 0.0f || edit.ballistic_resistance > 1.0f ||
+        edit.explosive_resistance < 0.0f || edit.explosive_resistance > 1.0f ||
+        edit.fire_resistance < 0.0f || edit.fire_resistance > 1.0f) {
+        out_err = "Damage resistances must be within 0..1";
+        return nullptr;
+    }
+    const auto* cur = world.get<runtime::HealthComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::HealthComponent before = had ? *cur : runtime::HealthComponent{};
+    runtime::HealthComponent after = edit;
+    // Clamped, not refused: dragging the slider past the ceiling means "full".
+    after.health = std::clamp(after.health, 0.0f, after.max_health);
+    if (after.max_armor <= 0.0f) {
+        after.max_armor = 0.0f;
+        after.armor = 0.0f;
+    } else {
+        after.armor = std::clamp(after.armor, 0.0f, after.max_armor);
+    }
+    return std::make_unique<SetHealthCommand>(e, had, before, after);
+}
+
+// --- combat agent and faction (Phase 46) ------------------------------------
+
+runtime::CombatAgentComponent read_combat_agent(const ecs::World& world, ecs::Entity e,
+                                                bool& out_has) {
+    out_has = false;
+    const auto* agent = world.get<runtime::CombatAgentComponent>(e);
+    if (agent == nullptr) {
+        return runtime::CombatAgentComponent{};
+    }
+    out_has = true;
+    return *agent;
+}
+
+std::unique_ptr<ICommand> make_combat_agent_command(ecs::World& world, ecs::Entity e,
+                                                    const runtime::CombatAgentComponent& edit,
+                                                    std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    const runtime::CombatAimConfig& c = edit.config;
+    if (!all_finite({edit.eye_height, edit.target_height, c.reaction_seconds,
+                     c.aim_speed_deg_per_s, c.fire_cone_deg, c.max_range,
+                     c.burst_on_seconds, c.burst_off_seconds})) {
+        out_err = "Combat agent values must be finite numbers";
+        return nullptr;
+    }
+    if (edit.target.size() > 128u) {
+        out_err = "Target name is too long";
+        return nullptr;
+    }
+    if (edit.eye_height < 0.0f || edit.eye_height > 10.0f ||
+        edit.target_height < 0.0f || edit.target_height > 10.0f) {
+        out_err = "Eye and aim heights must be within 0..10 m";
+        return nullptr;
+    }
+    if (c.reaction_seconds < 0.0f || c.reaction_seconds > 10.0f) {
+        out_err = "Reaction time must be within 0..10 s";
+        return nullptr;
+    }
+    if (c.aim_speed_deg_per_s < 0.0f || c.aim_speed_deg_per_s > 3600.0f) {
+        out_err = "Turn speed must be within 0..3600 deg/s";
+        return nullptr;
+    }
+    if (!(c.fire_cone_deg > 0.0f) || c.fire_cone_deg > 90.0f) {
+        out_err = "Fire cone must be within (0, 90] degrees";
+        return nullptr;
+    }
+    if (!(c.max_range > 0.0f) || c.max_range > 10000.0f) {
+        out_err = "Engagement range must be within (0, 10000] m";
+        return nullptr;
+    }
+    if (c.burst_on_seconds < 0.0f || c.burst_on_seconds > 60.0f ||
+        c.burst_off_seconds < 0.0f || c.burst_off_seconds > 60.0f) {
+        out_err = "Burst and rest times must be within 0..60 s";
+        return nullptr;
+    }
+
+    const auto* cur = world.get<runtime::CombatAgentComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::CombatAgentComponent before =
+        had ? *cur : runtime::CombatAgentComponent{};
+    runtime::CombatAgentComponent after = edit;
+    // Aim is live state, not authored data: a fresh agent starts facing its
+    // Transform, and a freshly authored target has not been noticed yet.
+    after.state = runtime::CombatAimState{};
+    return std::make_unique<SetCombatAgentCommand>(e, had, before, after);
+}
+
+runtime::FactionComponent read_faction(const ecs::World& world, ecs::Entity e, bool& out_has) {
+    out_has = false;
+    const auto* faction = world.get<runtime::FactionComponent>(e);
+    if (faction == nullptr) {
+        return runtime::FactionComponent{};
+    }
+    out_has = true;
+    return *faction;
+}
+
+std::unique_ptr<ICommand> make_faction_command(ecs::World& world, ecs::Entity e,
+                                               const runtime::FactionComponent& edit,
+                                               std::string& out_err) {
+    if (!e.valid() || !world.is_alive(e)) {
+        out_err = "Entity is not alive";
+        return nullptr;
+    }
+    if (edit.team.size() > 64u) {
+        out_err = "Team name must be at most 64 characters";
+        return nullptr;
+    }
+    for (const char ch : edit.team) {
+        if (std::isspace(static_cast<unsigned char>(ch)) ||
+            std::iscntrl(static_cast<unsigned char>(ch))) {
+            out_err = "Team name cannot contain spaces or control characters";
+            return nullptr;
+        }
+    }
+    const auto* cur = world.get<runtime::FactionComponent>(e);
+    const bool had = (cur != nullptr);
+    const runtime::FactionComponent before = had ? *cur : runtime::FactionComponent{};
+    return std::make_unique<SetFactionCommand>(e, had, before, edit);
 }
 
 std::unique_ptr<ICommand> make_decal_command(ecs::World& world, ecs::Entity e,

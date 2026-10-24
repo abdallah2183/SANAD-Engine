@@ -17,6 +17,8 @@ set(NFRENDERING_SOURCES
     src/RenderWorld.cpp
     src/RenderScale.cpp
     src/DynamicResolution.cpp
+    src/FramePacing.cpp
+    src/FramePacingPolicy.cpp
     src/Decals.cpp
     src/Extraction.cpp
     src/StaticMesh.cpp

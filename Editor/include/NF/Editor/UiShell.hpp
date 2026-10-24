@@ -13,9 +13,11 @@
 // already-rendered scene image and draws over it, then presents.
 
 #include <NF/Editor/EditorApp.hpp>
+#include <NF/Rendering/FramePacing.hpp>
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nf::editor {
 
@@ -126,6 +128,12 @@ struct UiIntents {
     bool build_project = false;
 };
 
+/// One row of the real per-pass GPU breakdown.
+struct UiGpuPassTiming {
+    std::string name;
+    double milliseconds = 0.0;
+};
+
 struct UiFrameStats {
     bool validation_on = false;
     uint32_t validation_errors = 0;
@@ -134,16 +142,32 @@ struct UiFrameStats {
     // Frame delta in seconds. Carried here rather than read from ImGui so the
     // headless path drives the same autosave clock as the windowed one.
     float dt_seconds = 0.0f;
-    // Profiler panel (P4). The RHI has no timestamp queries in v0.1, so the
-    // GPU figure is the wall clock from submit of the viewport command buffer
-    // to its fence signalling — a real measurement of GPU work, coarse but
-    // honest, and it is the number a stalled frame inflates. cull_us and
-    // draw_prep_us are the renderer's own CPU timings; draw_calls/visible are
-    // its counts. scene_open_us is the most recent scene-or-asset load the
-    // editor timed (the dominant load cost in v0.1), assets_cached how many
-    // mesh handles the manager currently holds.
+    // Profiler panel. `gpu_us`/`gpu_avg_us` are the submit-to-fence estimate
+    // the editor has always shown; they remain the fallback when the device
+    // cannot timestamp. When `gpu_timing_valid` is true the panel uses the
+    // renderer's real vkCmdWriteTimestamp results instead: gpu_frame_ms is the
+    // last completed timed frame (one slot old) and gpu_passes is its execution
+    // order. cull_us and draw_prep_us are the renderer's own CPU timings;
+    // draw_calls/visible are its counts. scene_open_us is the most recent
+    // scene-or-asset load the editor timed, assets_cached how many mesh handles
+    // the manager currently holds.
     uint64_t gpu_us = 0;
     uint64_t gpu_avg_us = 0;
+    bool gpu_timing_supported = false;
+    bool gpu_timing_valid = false;
+    double gpu_frame_ms = 0.0;
+    double gpu_frame_ms_avg = 0.0;
+    std::vector<UiGpuPassTiming> gpu_passes;
+    // Phase 41: the editor host loop's rolling window. Average FPS and 1% low
+    // come from raw wall time, not ImGui's clamped delta; frame_stddev_ms is
+    // the population standard deviation of the same window. frame_bound is
+    // Unknown until the window contains enough paired GPU timestamps.
+    uint32_t frame_samples = 0;
+    uint32_t gpu_frame_samples = 0;
+    double fps_average = 0.0;
+    double fps_1pct_low = 0.0;
+    double frame_stddev_ms = 0.0;
+    rendering::FramePacingBound frame_bound = rendering::FramePacingBound::Unknown;
     double cull_us = 0.0;
     double draw_prep_us = 0.0;
     uint32_t draw_calls = 0;

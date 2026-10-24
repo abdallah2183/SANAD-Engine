@@ -282,6 +282,8 @@ NF_TEST(editor_save_load_after_mods) {
     app.attach_runtime(&runtime);
     NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
     NF_CHECK(!app.dirty());
+    const uint64_t serial_after_open = app.scene_serial();
+    NF_CHECK(serial_after_open > 0);
 
     // Modify through the app (rename + transform), then save a copy.
     auto cube_e = editor::find_by_name(*runtime.scene(), "Cube");
@@ -300,6 +302,14 @@ NF_TEST(editor_save_load_after_mods) {
     auto edited = editor::find_by_name(*reloaded.scene, "EditedCube");
     NF_CHECK(edited.has_value());
     NF_CHECK_NEAR(reloaded.scene->world().get<scene::Transform>(*edited)->local_x, 1.5f, 1e-5f);
+    // Edits and Save Copy are not scene switches: the host must not throw away
+    // its frame-pacing window for ordinary authoring.
+    NF_CHECK(app.scene_serial() == serial_after_open);
+
+    // New Scene is a real switch even though it starts from an untitled path;
+    // this is the toolbar/menu path, not just Ctrl+N.
+    NF_CHECK(app.new_scene(err));
+    NF_CHECK(app.scene_serial() > serial_after_open);
 
     NF_CHECK(rhi::validation_error_count() == 0);
     device.wait_idle();

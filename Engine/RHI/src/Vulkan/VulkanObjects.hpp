@@ -383,6 +383,8 @@ public:
                                  u32 tex_x, u32 tex_y, u32 tex_w, u32 tex_h) override;
     void transition_texture_for_sampling(Texture& texture) override;
     void barrier_texture(Texture& texture, ImageUsage before, ImageUsage after) override;
+    void reset_query_pool(QueryPool& pool, u32 first, u32 count) override;
+    void write_timestamp(QueryPool& pool, u32 query, PipelineStage stage) override;
     void copy_texture_to_buffer(const Texture& src, Buffer& dst,
                                 u32 tex_x, u32 tex_y, u32 tex_w, u32 tex_h,
                                 usize buffer_offset = 0) override;
@@ -471,6 +473,30 @@ private:
     VulkanDevice* m_device = nullptr;
     VkAliveGuard m_alive;
     VkFence m_fence = VK_NULL_HANDLE;
+};
+
+// ---------------------------------------------------------------------------
+// Timestamp query pool
+// ---------------------------------------------------------------------------
+class VulkanQueryPool final : public QueryPool {
+public:
+    VulkanQueryPool(VulkanDevice* device, u32 count);
+    ~VulkanQueryPool() override;
+
+    VulkanQueryPool(const VulkanQueryPool&) = delete;
+    VulkanQueryPool& operator=(const VulkanQueryPool&) = delete;
+
+    bool valid() const { return m_pool != VK_NULL_HANDLE; }
+    VkQueryPool handle() const { return m_pool; }
+
+    u32 count() const override { return m_count; }
+    bool get_results(std::span<u64> out, u32 first = 0) override;
+
+private:
+    VulkanDevice* m_device = nullptr;
+    VkAliveGuard m_alive;
+    VkQueryPool m_pool = VK_NULL_HANDLE;
+    u32 m_count = 0;
 };
 
 // ---------------------------------------------------------------------------

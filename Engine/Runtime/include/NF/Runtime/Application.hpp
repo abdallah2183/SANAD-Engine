@@ -13,6 +13,14 @@ struct ApplicationConfig {
     bool vsync = true;
     bool validation = false;
     bool headless = false;
+    // Developer profiling switch. Enables real GPU timestamp queries for the
+    // frame and its passes; per-pass timing inserts pipeline drains, so this is
+    // deliberately off for normal gameplay and opt-in on the command line.
+    bool gpu_timing = false;
+    // Report rolling frame-pacing telemetry at exit: raw wall-clock average,
+    // 1% low and jitter. This is independent of gpu_timing; add both flags to
+    // also classify the bottleneck from real GPU frame durations.
+    bool frame_stats = false;
     // A windowed run is a played run: gameplay drives the scene and reads the
     // keyboard (KeyboardInputSource) unless the embedder opts out. Headless
     // runs ignore this and keep the editor-safe defaults, so test harnesses

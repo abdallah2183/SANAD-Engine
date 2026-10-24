@@ -36,6 +36,16 @@ struct RGTextureDesc {
     rhi::TextureDesc desc;
 };
 
+/// One pass that was bracketed with GPU timestamps during execute().
+/// `begin_query` and `end_query` index the query pool supplied to
+/// set_pass_timing(); the caller reads them after the submission completes.
+struct RGPassTiming {
+    std::string name;
+    u32 pass_index = 0;
+    u32 begin_query = 0;
+    u32 end_query = 0;
+};
+
 struct RGPassDesc {
     std::string name;
     std::vector<RGTextureHandle> reads;   // sampled / input attachments
@@ -98,6 +108,25 @@ public:
     // until explicitly released. For a per-frame graph, call reset() each frame.
     void reset(bool keep_resources = true);
 
+    /// Enables per-pass GPU timestamps for the next execute().
+    ///
+    /// `first_query` is the first query index to use; each pass consumes two
+    /// consecutive queries (begin, end). The request is clamped to the pool's
+    /// capacity, so a short pool times the first passes and leaves the rest
+    /// alone. Timestamps bracket pass.execute() and therefore exclude the
+    /// graph's layout barriers. Recording these queries is opt-in because the
+    /// ending BottomOfPipe timestamp drains the pipeline between passes.
+    void set_pass_timing(rhi::QueryPool* pool, u32 first_query, u32 max_passes);
+
+    /// Disables pass timing and drops samples from the previous execute().
+    /// reset() calls this so a rebuilt graph never keeps a pointer to a pool
+    /// that may have been destroyed with its renderer.
+    void clear_pass_timing();
+
+    /// Passes bracketed by the most recent execute(), in execution order.
+    /// Empty when pass timing is disabled or a pool was too small.
+    const std::vector<RGPassTiming>& pass_timings() const { return m_pass_timings; }
+
     // Accessors for passes that need the underlying RHI texture
     rhi::Texture* get_texture(RGTextureHandle handle);
     const rhi::Texture* get_texture(RGTextureHandle handle) const;
@@ -139,6 +168,13 @@ private:
     std::vector<Pass> m_passes;
     std::vector<u32> m_execution_order;
     bool m_compiled = false;
+
+    // Opt-in timestamp instrumentation. Non-owning: the caller (Renderer3D)
+    // owns the pool and guarantees it outlives execute().
+    rhi::QueryPool* m_pass_timing_pool = nullptr;
+    u32 m_pass_timing_first = 0;
+    u32 m_pass_timing_max = 0;
+    std::vector<RGPassTiming> m_pass_timings;
 
     // Dependency graph built from read/write sets
     bool build_execution_order();

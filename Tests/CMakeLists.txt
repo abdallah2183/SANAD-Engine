@@ -87,6 +87,13 @@ add_executable(RHITests
     # step direction, clamps, reset, illegal config and hitch handling, with no
     # GPU required — the renderer integration is covered by RuntimeTests.
     RHITests/test_dynamic_resolution.cpp
+    # Frame pacing (Phase 41): the rolling window, average/1% low/jitter, ring
+    # wrap, GPU-sample ageing and the bound verdict. Pure arithmetic, no GPU.
+    RHITests/test_frame_pacing.cpp
+    # Frame-pacing POLICY (Phase 42): render scale decided from a finished
+    # window. The asymmetry (1% low lowers, average + 1% low raise), the
+    # cooldown, the band and the clamps — all arithmetic, no GPU.
+    RHITests/test_frame_pacing_policy.cpp
     # Pure arithmetic (splits, fit, tiling, bias) over NFRendering's cascade
     # math, so it runs without a GPU — the one suite that proves the committed
     # CSM work, which had been sitting unregistered and unrun.
@@ -101,6 +108,10 @@ add_executable(RHITests
     # the normal/emissive attachments and the emission-strength alpha, and that
     # disabled/offscreen/backfacing decals are bit-exact no-ops.
     RHITests/test_decals.cpp
+    # GPU timestamps (Phase 39): the raw query path, non-blocking availability
+    # polling and RenderGraph's per-pass brackets. The Renderer3D integration
+    # lives in test_3d_renderer.cpp with the rest of the scene pipeline.
+    RHITests/test_gpu_timing.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -156,6 +167,36 @@ add_executable(RuntimeTests
     RuntimeTests/test_camera_follow.cpp
     RuntimeTests/test_player_look.cpp
     RuntimeTests/test_player_settings.cpp
+    # Scene validation (Phase 43): the rules that only exist BETWEEN entities —
+    # duplicate names, a camera following nothing, a scale the renderer would
+    # reject. Pure: a scene built in memory, no device.
+    RuntimeTests/test_scene_validator.cpp
+    # The gun and hit points (Phase 44): the trigger machine, the magazine, the
+    # deterministic cone, the ray and the scene line. Pure — no device, no
+    # window — because every one of those is arithmetic before it is a game.
+    RuntimeTests/test_weapon.cpp
+    # The NPC half of the same fight (Phase 45): notice, turn, decide, hold
+    # fire between bursts — and one integration case where an agent actually
+    # takes hit points off a player it can see.
+    RuntimeTests/test_combat_ai.cpp
+    # Time of flight and sides (Phase 46): a projectile is a body integrated
+    # frame by frame, and a faction decides whether a hit is allowed at all.
+    RuntimeTests/test_ballistics.cpp
+    # Frame-local impact events (Phase 49): current/previous slots, deterministic
+    # order, and a hard cap. Pure: no world, no device.
+    RuntimeTests/test_impact_events.cpp
+    # Layered damage (Phase 50): hit-zone geometry, the armor pool, penetration,
+    # the scene line, and a head hit through the real runtime.
+    RuntimeTests/test_damage.cpp
+    # Radial blasts (Phase 51): linear falloff, nearest-point distance, the
+    # scene keys, and one runtime blast that hits a second target.
+    RuntimeTests/test_explosion.cpp
+    # The shot itself (Phase 53): the frame-local buffer a game reads to draw a
+    # muzzle flash and a tracer, separate from the impact it may produce.
+    RuntimeTests/test_shot_events.cpp
+    # Damage over time (Phase 54): refresh, tick cadence, partial final tick,
+    # removal and the `Status:` scene line. Pure arithmetic, no device.
+    RuntimeTests/test_status_effects.cpp
     RuntimeTests/test_input_bindings.cpp
     RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp
@@ -229,7 +270,13 @@ target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFE
 # The character the engine ships, so the character tests exercise the real
 # asset rather than a fixture that could drift away from it.
 target_compile_definitions(RuntimeTests PRIVATE
-    "NF_CHARACTER_PATH=\"${CMAKE_SOURCE_DIR}/Games/TreeWorld/Content/Characters/Explorer.gltf\"")
+    "NF_CHARACTER_PATH=\"${CMAKE_SOURCE_DIR}/Games/TreeWorld/Content/Characters/Explorer.gltf\""
+    # Phase 46's shipped sample: parsed and validated from source so a broken
+    # example cannot sit in Content/ without a test noticing.
+    "NF_BALLISTICS_SCENE_PATH=\"${CMAKE_SOURCE_DIR}/Content/Scenes/Ballistics.nfscene\""
+    # Phase 51's sample: the scene that shows armor, hit zones and a blast in
+    # one place. It is loaded from source, so the example cannot drift.
+    "NF_COMBAT_DAMAGE_SCENE_PATH=\"${CMAKE_SOURCE_DIR}/Content/Scenes/CombatDamage.nfscene\"")
 nf_target_set_warnings(RuntimeTests)
 
 # --- Physics tests (shapes, broadphase, narrowphase, solver, determinism) ---

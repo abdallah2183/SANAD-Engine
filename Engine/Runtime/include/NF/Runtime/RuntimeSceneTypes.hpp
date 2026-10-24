@@ -4,6 +4,9 @@
 #include <NF/Core/Math.hpp>
 #include <NF/Core/Types.hpp>
 #include <NF/ECS/Entity.hpp>
+#include <NF/Runtime/CombatAI.hpp>
+#include <NF/Runtime/Health.hpp>
+#include <NF/Runtime/Weapon.hpp>
 
 #include <string>
 #include <vector>
@@ -117,6 +120,13 @@ struct TimeOfDayComponent {
     bool drive_light = true;
 };
 
+/// Values for PostProcessComponent::dynamic_resolution_timing. The component
+/// stores an int rather than the rendering enum, following `tonemap`, so this
+/// header stays free of renderer types. The loader maps names, and Runtime maps
+/// these values to rendering::DynamicResolutionTiming at extraction.
+inline constexpr int kDynamicResolutionTimingCpu = 0;
+inline constexpr int kDynamicResolutionTimingGpu = 1;
+
 /// The post-processing stack (design §206) as scene data.
 ///
 /// The renderer has owned a post block since the tonemap pass existed, but a
@@ -227,6 +237,19 @@ struct PostProcessComponent {
     float target_fps = 60.0f;
     /// Lowest scale the governor may choose. Must be <= render_scale.
     float min_render_scale = 0.5f;
+    /// Which clock drives the governor's load decision: CPU frame time
+    /// (`kDynamicResolutionTimingCpu`) or real GPU timestamps when a fresh
+    /// sample exists (`kDynamicResolutionTimingGpu`). GPU timing is a
+    /// preference and falls back to CPU; the cooldown is CPU wall time in both
+    /// modes.
+    int dynamic_resolution_timing = kDynamicResolutionTimingCpu;
+
+    /// Decide the render scale from the FRAME WINDOW instead of the per-frame
+    /// governor (Phase 42): the 1% low lowers it, the average plus the 1% low
+    /// raise it. Requires a host that feeds `Runtime::set_frame_window`; the
+    /// player does that from its own `FramePacing` window. Off by default, and
+    /// when off the governor above is exactly as it was.
+    bool frame_policy = false;
 
     // Exposure and the tonemap operator (§206).
     //
@@ -646,6 +669,109 @@ struct DestructibleComponent {
     f32 blast_radius = 2.0f;
     /// Off: the object renders and collides but never breaks. Lets a level
     /// author place the prop without opting the scene into the debris budget.
+    bool enabled = true;
+};
+
+/// A gun, as scene data (Phase 44).
+///
+/// The profile is the authored half — rate of fire, magazine, damage, spread,
+/// recoil — and it round-trips through the file. The state is the session half:
+/// rounds left, the cooldown clock, the burst queue, the spread bloom. It is
+/// never written, because "seven rounds left" is not a property of a level.
+///
+/// The entity that carries this and is followed by the active camera is the
+/// player's weapon: the runtime feeds it the `fire` and `reload` actions and
+/// traces its shots from the camera. Every other weapon still ticks its clocks
+/// (a reload finishes whether or not anyone is holding the gun) but fires only
+/// when a script asks it to, which is what keeps an NPC's gun from shooting on
+/// the player's trigger.
+struct WeaponComponent {
+    WeaponProfile profile{};
+    /// Filled by the constructor from the profile, then stepped by the runtime.
+    WeaponState state{};
+
+    WeaponComponent() : state(weapon_state(profile)) {}
+    explicit WeaponComponent(const WeaponProfile& p) : profile(p), state(weapon_state(p)) {}
+};
+
+/// An NPC that fights (Phase 45).
+///
+/// The agent names its target rather than carrying a team: a scene says
+/// `CombatAgent: target=Player`, and that is the whole social model. It is
+/// deliberately smaller than a team/faction system, because "who is hostile"
+/// is a game's decision and a scene format that guesses it would be wrong for
+/// every game that disagrees.
+///
+/// The entity needs a `WeaponComponent` (what it shoots with), a Transform
+/// (where it stands) and the target needs a `HealthComponent` and a collider —
+/// the collider is what the visibility ray hits, so a target without one is a
+/// target nobody can see.
+struct CombatAgentComponent {
+    /// The name of the entity to shoot at. Empty = nothing to shoot.
+    ///
+    /// Ignored when `auto_target` is true: the agent then chooses its own
+    /// hostile from the factions in the scene.
+    std::string target;
+
+    /// Choose the nearest visible entity on a hostile team instead of reading
+    /// `target` (Phase 47). Requires a non-empty `Faction: team=` on the agent;
+    /// without a side there is no "hostile" to look for.
+    ///
+    /// The chosen entity is held while it stays alive, in range and visible.
+    /// Switching targets resets the reaction clock, so an agent cannot snap
+    /// from one enemy to another and fire in the same frame.
+    bool auto_target = false;
+
+    /// Eye height above the entity's origin, in metres. The muzzle is here:
+    /// an agent whose origin is at its feet shoots from its head.
+    f32 eye_height = 1.5f;
+
+    /// Where the target is aimed at, above ITS origin. 1.0 is roughly a chest;
+    /// aiming at the feet makes every agent shoot the floor.
+    f32 target_height = 1.0f;
+
+    CombatAimConfig config{};
+
+    /// Runtime state: the aim between frames. Never saved — a loaded scene
+    /// starts with the agent facing wherever its Transform faces.
+    CombatAimState state{};
+
+    /// Runtime state for auto-targeting: the entity currently held, so the
+    /// agent does not flicker between two equidistant enemies every frame.
+    /// Never saved; a copied agent starts with no lock.
+    ecs::Entity locked_target{};
+
+    /// Runtime target motion for projectile lead (Phase 48). The position is
+    /// the aim point from the previous frame, and the velocity is derived from
+    /// its change. Session data: never saved, reset when the target changes.
+    Vec3 last_target_position{0.0f, 0.0f, 0.0f};
+    Vec3 target_velocity{0.0f, 0.0f, 0.0f};
+    bool has_target_history = false;
+
+    bool enabled = true;
+};
+
+/// An entity's affiliation (Phase 46).
+///
+/// Deliberately a separate component rather than a field on Health or Weapon:
+/// a team belongs to the actor, not to its hit points, and a crate with no gun
+/// may still be owned by a side. The rules live in Factions.hpp; this struct is
+/// only what the scene stores.
+///
+/// No component, or an empty `team`, is neutral. That is the pre-Phase-46
+/// behaviour and the reason adding this component does not silently change
+/// damage in every existing scene.
+struct FactionComponent {
+    /// Team name. Free text, case-sensitive, and empty means "no affiliation".
+    /// It is not an entity name: two unrelated scenes can both call a side
+    /// "Blue" without sharing anything at runtime.
+    std::string team;
+
+    /// The attacker's licence to hurt its own team. It is read from the
+    /// SHOOTER, never the victim: a target cannot make itself shootable.
+    bool friendly_fire = false;
+
+    /// Off is the same as having no faction at all: neutral to everyone.
     bool enabled = true;
 };
 

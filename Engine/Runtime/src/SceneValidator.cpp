@@ -1,0 +1,413 @@
+#include <NF/Runtime/SceneValidator.hpp>
+
+#include <NF/Rendering/DynamicResolution.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Rendering/RenderScale.hpp>
+#include <NF/Runtime/Factions.hpp>
+#include <NF/Runtime/RuntimeSceneTypes.hpp>
+#include <NF/Scene/NameComponent.hpp>
+#include <NF/Scene/Transform.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <sstream>
+
+namespace nf::runtime {
+
+const char* validation_severity_name(ValidationSeverity severity) {
+    switch (severity) {
+    case ValidationSeverity::Info: return "info";
+    case ValidationSeverity::Warning: return "warning";
+    case ValidationSeverity::Error: return "error";
+    }
+    return "info";
+}
+
+void ValidationReport::add(ValidationSeverity severity, std::string entity, std::string message) {
+    issues.push_back(ValidationIssue{severity, std::move(entity), std::move(message)});
+    switch (severity) {
+    case ValidationSeverity::Error: ++errors; break;
+    case ValidationSeverity::Warning: ++warnings; break;
+    case ValidationSeverity::Info: ++infos; break;
+    }
+}
+
+/// A stable label for a report line: the entity's name, or its id when it has
+/// none. An unnamed entity still has to be findable in the scene.
+std::string entity_label(const ecs::World& world, ecs::Entity e) {
+    if (const auto* n = world.get<scene::NameComponent>(e); n != nullptr && !n->name.empty()) {
+        return n->name;
+    }
+    return "entity #" + std::to_string(e.id);
+}
+
+namespace {
+
+/// A finite, in-range number. `false` means the value is unusable, and every
+/// rule below turns that into a message naming the field rather than silently
+/// skipping the entity — a validator that skips is a validator that lies.
+bool sane(f32 v, f32 lo, f32 hi) {
+    return std::isfinite(v) && v >= lo && v <= hi;
+}
+
+} // namespace
+
+ValidationReport validate_scene(const scene::Scene& scene, std::string_view scene_path,
+                                const AssetExists& asset_exists) {
+    ValidationReport report;
+    report.scene_path = std::string(scene_path);
+
+    const ecs::World& world = scene.world();
+    const std::vector<ecs::Entity> entities = world.all_entities();
+
+    // --- names ---------------------------------------------------------
+    // One name, one entity. Everything that refers to an entity by name —
+    // `follow=`, `nf.find_entity`, a save slot — resolves to the FIRST match,
+    // so a duplicate silently makes the other one unreachable.
+    std::map<std::string, u32> name_counts;
+    std::map<std::string, ecs::Entity> name_entities;
+    for (const ecs::Entity e : entities) {
+        if (const auto* n = world.get<scene::NameComponent>(e); n != nullptr && !n->name.empty()) {
+            ++name_counts[n->name];
+            // First wins, exactly like every name lookup in the engine.
+            name_entities.emplace(n->name, e);
+        }
+    }
+    for (const auto& [name, count] : name_counts) {
+        if (count > 1) {
+            report.add(ValidationSeverity::Error, name,
+                       "name is used by " + std::to_string(count) +
+                           " entities; a reference to it resolves to only one of them");
+        }
+    }
+
+    // --- cameras -------------------------------------------------------
+    bool has_active_camera = false;
+    std::string followed_name;
+    for (const ecs::Entity e : entities) {
+        const auto* cam = world.get<CameraComponent>(e);
+        if (cam == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (cam->is_active) {
+            has_active_camera = true;
+            followed_name = cam->follow_target;
+        }
+        if (cam->is_active && !cam->follow_target.empty() &&
+            name_counts.find(cam->follow_target) == name_counts.end()) {
+            report.add(ValidationSeverity::Error, label,
+                       "follows '" + cam->follow_target +
+                           "', which is not the name of any entity — the camera will not move");
+        }
+        if (!sane(cam->fov_y, 10.0f, 170.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "fov " + std::to_string(cam->fov_y) + " is outside [10, 170]");
+        }
+        if (!sane(cam->distance, 0.05f, 1000.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "distance " + std::to_string(cam->distance) +
+                           " is not positive; the camera would sit inside the pivot");
+        }
+        if (cam->pitch_min > cam->pitch_max) {
+            report.add(ValidationSeverity::Warning, label,
+                       "pitch_min is greater than pitch_max; the orbit clamp is inverted");
+        }
+        if (cam->ads_enabled && !sane(cam->ads_distance, 0.05f, 1000.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "ads_distance " + std::to_string(cam->ads_distance) + " is not positive");
+        }
+    }
+    if (!has_active_camera) {
+        report.add(ValidationSeverity::Warning, {},
+                   "the scene has no active camera; the player will see the default view");
+    }
+
+    // --- physics -------------------------------------------------------
+    // A dynamic body with no mass is a body Jolt will refuse or simulate as
+    // something else; either way the scene does not do what it says.
+    for (const ecs::Entity e : entities) {
+        const auto* body = world.get<physics::RigidBodyComponent>(e);
+        if (body == nullptr || body->type != physics::BodyType::Dynamic) {
+            continue;
+        }
+        if (!std::isfinite(body->mass) || body->mass <= 0.0f) {
+            report.add(ValidationSeverity::Error, entity_label(world, e),
+                       "dynamic rigid body has mass " + std::to_string(body->mass) +
+                           "; it must be positive");
+        }
+    }
+
+    // --- post-process --------------------------------------------------
+    for (const ecs::Entity e : entities) {
+        const auto* pp = world.get<PostProcessComponent>(e);
+        if (pp == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (!sane(pp->render_scale, rendering::kMinRenderScale, rendering::kMaxRenderScale)) {
+            report.add(ValidationSeverity::Error, label,
+                       "render_scale " + std::to_string(pp->render_scale) + " is outside [" +
+                           std::to_string(rendering::kMinRenderScale) + ", " +
+                           std::to_string(rendering::kMaxRenderScale) + "]");
+        }
+        if (pp->min_render_scale > pp->render_scale) {
+            report.add(ValidationSeverity::Error, label,
+                       "min_render_scale is above render_scale; the governor could never hold "
+                       "its ceiling");
+        }
+        if (!sane(pp->target_fps, rendering::kMinTargetFps, rendering::kMaxTargetFps)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "target_fps " + std::to_string(pp->target_fps) + " is outside [" +
+                           std::to_string(rendering::kMinTargetFps) + ", " +
+                           std::to_string(rendering::kMaxTargetFps) + "]");
+        }
+        // A frame policy with no dynamic resolution is not an error: the
+        // policy owns the scale on its own. It IS worth saying, because the
+        // author probably meant to enable both.
+        if (pp->frame_policy && !pp->dynamic_resolution) {
+            report.add(ValidationSeverity::Info, label,
+                       "frame_policy is on while dynamic_resolution is off; the policy will "
+                       "still move the scale, which is probably not what the scene meant");
+        }
+    }
+
+    // --- combat (Phase 44) ---------------------------------------------
+    //
+    // A `Weapon:` line the loader refused never reaches here, so these rules
+    // are for the other two paths into a scene: a component built in C++ or
+    // through the API, and the CROSS-FIELD mistakes a key-by-key check cannot
+    // see (a falloff curve that runs backwards, hit points above the ceiling).
+    //
+    // The "no camera follows this" note is an INFO and not a warning on
+    // purpose: an NPC's rifle is a legitimate weapon on an entity no camera
+    // follows. It is worth saying because the common cause is a typo in
+    // `follow=`, which makes the player's gun silently never fire.
+    for (const ecs::Entity e : entities) {
+        const std::string label = entity_label(world, e);
+        if (const auto* w = world.get<WeaponComponent>(e); w != nullptr) {
+            if (!weapon_valid(w->profile)) {
+                report.add(ValidationSeverity::Error, label,
+                           "weapon profile cannot fire (magazine, pellets, cadence or range is "
+                           "zero, or the spread ceiling is below its floor)");
+            }
+            if (w->profile.falloff_end > 0.0f &&
+                w->profile.falloff_end <= w->profile.falloff_start) {
+                report.add(ValidationSeverity::Warning, label,
+                           "falloff_end is not past falloff_start; the damage curve is flat");
+            }
+            if (w->state.in_magazine > w->profile.magazine) {
+                report.add(ValidationSeverity::Warning, label,
+                           "the magazine holds more rounds than its capacity; it will be "
+                           "clamped on the next reload");
+            }
+            if (w->profile.blast_radius > 0.0f && w->profile.blast_damage <= 0.0f) {
+                report.add(ValidationSeverity::Warning, label,
+                           "blast_radius is set but blast_damage is zero; the blast is inert");
+            }
+            if (w->profile.blast_damage > 0.0f && w->profile.blast_radius <= 0.0f) {
+                report.add(ValidationSeverity::Warning, label,
+                           "blast_damage is set but blast_radius is zero; the blast is inert");
+            }
+            if (w->profile.enabled && (followed_name.empty() || followed_name != label)) {
+                report.add(ValidationSeverity::Info, label,
+                           "no active camera follows this entity, so the trigger will never "
+                           "reach this weapon (a script can still fire it)");
+            }
+        }
+        if (const auto* h = world.get<HealthComponent>(e); h != nullptr) {
+            if (!health_valid(*h)) {
+                report.add(ValidationSeverity::Error, label,
+                           "max_health is not a positive number, or health/armor has an "
+                           "invalid pool, fraction or zone multiplier; the entity cannot "
+                           "take a finite hit");
+            }
+            if (h->max_health > 0.0f && h->health > h->max_health) {
+                report.add(ValidationSeverity::Warning, label,
+                           "health is above max_health; it is clamped when the scene loads");
+            }
+            if (h->max_armor > 0.0f && h->armor > h->max_armor) {
+                report.add(ValidationSeverity::Warning, label,
+                           "armor is above armor_max; it is clamped when the scene loads");
+            }
+            if (h->hit_zones && world.get<physics::ColliderComponent>(e) == nullptr) {
+                report.add(ValidationSeverity::Info, label,
+                           "hit zones are enabled but the entity has no collider; every hit "
+                           "will be a body hit");
+            }
+        }
+        if (const auto* agent = world.get<CombatAgentComponent>(e); agent != nullptr) {
+            // The same rule the camera's `follow=` keeps: a name nothing has is
+            // an error, because the feature silently does nothing.
+            if (!agent->auto_target && !agent->target.empty() &&
+                name_counts.find(agent->target) == name_counts.end()) {
+                report.add(ValidationSeverity::Error, label,
+                           "targets '" + agent->target +
+                               "', which is not the name of any entity — the agent will never "
+                               "fire");
+            }
+            if (agent->auto_target) {
+                if (!agent->target.empty()) {
+                    report.add(ValidationSeverity::Info, label,
+                               "auto_target is on, so target='" + agent->target +
+                                   "' is ignored");
+                }
+                const FactionComponent* own = world.get<FactionComponent>(e);
+                if (own == nullptr || !own->enabled || own->team.empty()) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "auto_target is on but the agent has no team; it will never "
+                               "acquire an enemy");
+                }
+            }
+            // A target on the same team is a legal scene but a silent one:
+            // faction rules stop the damage, and the author usually meant to
+            // flip one of the two sides.
+            if (!agent->auto_target) {
+                if (const auto it = name_entities.find(agent->target); it != name_entities.end()) {
+                    const FactionComponent* self_side = world.get<FactionComponent>(e);
+                    const FactionComponent* target_side = world.get<FactionComponent>(it->second);
+                    const std::string_view self_team =
+                        (self_side != nullptr && self_side->enabled) ? self_side->team
+                                                                     : std::string_view{};
+                    const std::string_view target_team =
+                        (target_side != nullptr && target_side->enabled) ? target_side->team
+                                                                         : std::string_view{};
+                    if (team_relation(self_team, target_team) == TeamRelation::Friendly &&
+                        !(self_side != nullptr && self_side->friendly_fire)) {
+                        report.add(ValidationSeverity::Warning, label,
+                                   "targets '" + agent->target +
+                                       "' on its own team; faction rules block the damage");
+                    }
+                }
+            }
+            if (agent->enabled && world.get<WeaponComponent>(e) == nullptr) {
+                report.add(ValidationSeverity::Warning, label,
+                           "combat agent has no weapon; it will aim but never shoot");
+            }
+            if (agent->enabled && world.get<HealthComponent>(e) == nullptr) {
+                report.add(ValidationSeverity::Info, label,
+                           "combat agent has no hit points, so nothing can stop it");
+            }
+        }
+    }
+
+    // --- asset references ----------------------------------------------
+    // Only when the caller can answer. A path that looks like a path is
+    // checked; a bare name is not, because a name is resolved by the asset
+    // system and a file lookup would report a false error on every scene that
+    // uses one.
+    if (asset_exists) {
+        const auto check_path = [&](const std::string& label, const std::string& what,
+                                    const std::string& path) {
+            if (path.empty() || path.rfind("content://", 0) != 0) {
+                return;
+            }
+            if (!asset_exists(path)) {
+                report.add(ValidationSeverity::Error, label,
+                           what + " '" + path + "' does not exist in the project");
+            }
+        };
+        for (const ecs::Entity e : entities) {
+            const std::string label = entity_label(world, e);
+            if (const auto* mesh = world.get<MeshComponent>(e); mesh != nullptr) {
+                check_path(label, "material", mesh->material);
+            }
+            if (const auto* decal = world.get<DecalComponent>(e); decal != nullptr) {
+                check_path(label, "decal material", decal->material);
+            }
+            if (const auto* pp = world.get<PostProcessComponent>(e); pp != nullptr) {
+                check_path(label, "LUT", pp->lut_path);
+            }
+            if (const auto* script = world.get<scripting::ScriptComponent>(e); script != nullptr) {
+                if (!script->path.empty()) {
+                    check_path(label, "script", script->path);
+                } else if (script->enabled && script->source.empty()) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "script component is enabled but has neither a path nor source");
+                }
+            }
+        }
+    }
+
+    // Errors first, then warnings, then infos; stable inside a severity so two
+    // runs over the same scene print the same report.
+    std::stable_sort(report.issues.begin(), report.issues.end(),
+                     [](const ValidationIssue& a, const ValidationIssue& b) {
+                         return static_cast<u8>(a.severity) > static_cast<u8>(b.severity);
+                     });
+    return report;
+}
+
+std::string format_validation_report(const ValidationReport& report) {
+    std::ostringstream out;
+    out << report.scene_path << "\n";
+    if (report.issues.empty()) {
+        out << "  ok — no issues\n";
+        return out.str();
+    }
+    for (const auto& issue : report.issues) {
+        out << "  [" << validation_severity_name(issue.severity) << "] ";
+        if (!issue.entity.empty()) {
+            out << issue.entity << ": ";
+        }
+        out << issue.message << "\n";
+    }
+    out << "  " << report.errors << " error(s), " << report.warnings << " warning(s), "
+        << report.infos << " info\n";
+    return out.str();
+}
+
+
+namespace {
+
+/// JSON string escaping. A hand-rolled escaper is enough here because the
+/// output is flat: no nesting, no numbers formatted by hand, and the one thing
+/// that must be right is that a quote in a name does not end the string.
+std::string json_escape(std::string_view text) {
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (const char c : text) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                // Control characters have no literal form in JSON.
+                char buf[7];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c) & 0xFFu);
+                out += buf;
+            } else {
+                out += c;
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+std::string format_validation_json(const ValidationReport& report) {
+    std::ostringstream out;
+    out << "{\"scene\":\"" << json_escape(report.scene_path) << "\""
+        << ",\"errors\":" << report.errors << ",\"warnings\":" << report.warnings
+        << ",\"infos\":" << report.infos << ",\"issues\":[";
+    for (size_t i = 0; i < report.issues.size(); ++i) {
+        const auto& issue = report.issues[i];
+        if (i != 0) {
+            out << ",";
+        }
+        out << "{\"severity\":\"" << validation_severity_name(issue.severity) << "\""
+            << ",\"entity\":\"" << json_escape(issue.entity) << "\""
+            << ",\"message\":\"" << json_escape(issue.message) << "\"}";
+    }
+    out << "]}\n";
+    return out.str();
+}
+
+} // namespace nf::runtime

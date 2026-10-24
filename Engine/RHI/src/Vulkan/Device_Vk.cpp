@@ -646,6 +646,15 @@ bool VulkanDevice::create_logical_device() {
     m_ctx.graphics_family = graphics_family;
     m_ctx.present_family = present_family;
 
+    // Timestamp support belongs to the queue family, not to the device as a
+    // whole. A graphics queue with timestampValidBits == 0 cannot execute
+    // vkCmdWriteTimestamp, so report no support rather than recording an
+    // invalid command. timestampPeriod is the physical-device tick length.
+    if (graphics_family < queue_families.size()) {
+        m_ctx.timestamp_valid_bits = queue_families[graphics_family].timestampValidBits;
+    }
+    m_ctx.timestamp_period_ns = static_cast<f64>(m_ctx.device_properties.limits.timestampPeriod);
+
     std::set<u32> unique_families = {graphics_family, present_family};
     std::vector<VkDeviceQueueCreateInfo> queue_create_infos;
 
@@ -994,6 +1003,26 @@ std::unique_ptr<Fence> VulkanDevice::create_fence(bool signaled) {
     auto fence = std::make_unique<VulkanFence>(this, signaled);
     if (!fence->valid()) return nullptr;
     return fence;
+}
+
+bool VulkanDevice::supports_timestamp_queries() const {
+    return m_ctx.device != VK_NULL_HANDLE &&
+           m_ctx.timestamp_valid_bits > 0 &&
+           m_ctx.timestamp_period_ns > 0.0 &&
+           vkCreateQueryPool != nullptr &&
+           vkDestroyQueryPool != nullptr &&
+           vkGetQueryPoolResults != nullptr &&
+           vkCmdResetQueryPool != nullptr &&
+           vkCmdWriteTimestamp != nullptr;
+}
+
+std::unique_ptr<QueryPool> VulkanDevice::create_timestamp_query_pool(u32 count) {
+    if (count == 0 || !supports_timestamp_queries()) {
+        return nullptr;
+    }
+    auto pool = std::make_unique<VulkanQueryPool>(this, count);
+    if (!pool->valid()) return nullptr;
+    return pool;
 }
 
 std::unique_ptr<Sampler> VulkanDevice::create_sampler(const SamplerDesc& desc) {

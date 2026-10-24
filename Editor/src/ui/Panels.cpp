@@ -62,6 +62,25 @@ struct InspectorCache {
     float scl[3]{};
     bool cam_active = false;
     float cam[3]{}; // fov, near, far
+    // Weapon and hit points (Phase 44). The PROFILE is cached, not the
+    // component: the live state is rebuilt by the command, so the panel never
+    // edits a magazine that is half empty.
+    bool weapon_has = false;
+    runtime::WeaponProfile weapon{};
+    bool health_has = false;
+    runtime::HealthComponent health{};
+    // Combat agent and affiliation (Phase 46). The agent's aim state is live,
+    // so only the authored configuration is cached; the target is a text field
+    // because it names another entity.
+    bool agent_has = false;
+    runtime::CombatAgentComponent agent{};
+    char agent_target[129]{};
+    bool agent_auto_target = false;
+    bool faction_has = false;
+    runtime::FactionComponent faction{};
+    char faction_team[65]{};
+    bool faction_friendly_fire = false;
+    bool faction_enabled = true;
     float light_dir[3]{};
     float light_color[3]{};
     float light_intensity = 1.0f;
@@ -137,6 +156,11 @@ struct InspectorCache {
     bool pp_dynamic_resolution = false;
     float pp_target_fps = 60.0f;
     float pp_min_render_scale = 0.5f;
+    // Phase 40: 0 = CPU frame time, 1 = real GPU timestamps with CPU fallback.
+    int pp_dynamic_resolution_timing = runtime::kDynamicResolutionTimingCpu;
+    // Phase 42: decide the scale from the frame WINDOW instead of the
+    // per-frame governor. Only meaningful while dynamic resolution is on.
+    bool pp_frame_policy = false;
     // Opt-in: 0 exposure and -1 operator mean "the renderer's own", so a scene
     // that never authored them keeps whatever the renderer already had.
     float pp_exposure = 0.0f;
@@ -1879,6 +1903,19 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ic.cam[0] = c.fov_y;
                 ic.cam[1] = c.near_plane;
                 ic.cam[2] = c.far_plane;
+                ic.weapon = read_weapon(*w, sel, ic.weapon_has);
+                ic.health = read_health(*w, sel, ic.health_has);
+                ic.agent = read_combat_agent(*w, sel, ic.agent_has);
+                std::strncpy(ic.agent_target, ic.agent.target.c_str(),
+                             sizeof(ic.agent_target) - 1);
+                ic.agent_target[sizeof(ic.agent_target) - 1] = '\0';
+                ic.agent_auto_target = ic.agent.auto_target;
+                ic.faction = read_faction(*w, sel, ic.faction_has);
+                std::strncpy(ic.faction_team, ic.faction.team.c_str(),
+                             sizeof(ic.faction_team) - 1);
+                ic.faction_team[sizeof(ic.faction_team) - 1] = '\0';
+                ic.faction_friendly_fire = ic.faction.friendly_fire;
+                ic.faction_enabled = ic.faction.enabled;
                 bool has_light = false;
                 const LightEdit l = read_light(*w, sel, has_light);
                 ic.light_dir[0] = l.dir_x;
@@ -1948,9 +1985,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.pp_fxaa_threshold = pp.fxaa_threshold;
                     ic.pp_fxaa_threshold_min = pp.fxaa_threshold_min;
                     ic.pp_render_scale = pp.render_scale;
-    ic.pp_dynamic_resolution = pp.dynamic_resolution;
-    ic.pp_target_fps = pp.target_fps;
-    ic.pp_min_render_scale = pp.min_render_scale;
+                    ic.pp_dynamic_resolution = pp.dynamic_resolution;
+                    ic.pp_target_fps = pp.target_fps;
+                    ic.pp_min_render_scale = pp.min_render_scale;
+                    ic.pp_dynamic_resolution_timing = pp.dynamic_resolution_timing;
+                    ic.pp_frame_policy = pp.frame_policy;
                     ic.pp_exposure = pp.exposure;
                     ic.pp_tonemap = pp.tonemap;
                     std::strncpy(ic.pp_lut_path, pp.lut_path.c_str(), sizeof(ic.pp_lut_path) - 1);
@@ -2608,6 +2647,298 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
             }
+            // --- Weapon (Phase 44) -------------------------------------
+            //
+            // Two states, like every optional component: present = edit it,
+            // absent = one button that adds a default rifle. The button goes
+            // through the same validated command, so "add" and "edit" cannot
+            // disagree about what a valid weapon is.
+            if (!ic.weapon_has) {
+                if (ImGui::Button((AV("add_weapon") + "##addweapon").c_str())) {
+                    std::string err;
+                    if (!app.set_weapon(sel, runtime::WeaponProfile{}, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Weapon add failed", err);
+                    } else {
+                        ic.valid = false; // re-read the cache from the new component
+                    }
+                }
+            }
+            if (ic.weapon_has &&
+                ImGui::CollapsingHeader((AV("weapon") + "###Weapon").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                const std::string semi = AV("fire_semi");
+                const std::string auto_fire = AV("fire_auto");
+                const std::string burst = AV("fire_burst");
+                const char* modes[] = {semi.c_str(), auto_fire.c_str(), burst.c_str()};
+                int mode = static_cast<int>(ic.weapon.mode);
+                if (ImGui::Combo(AV("fire_mode").c_str(), &mode, modes, 3)) {
+                    ic.weapon.mode = static_cast<runtime::FireMode>(mode);
+                }
+                // Damage type (Phase 52): the same closed set the scene format
+                // stores, so the editor cannot author a value the loader refuses.
+                const std::string ballistic = AV("damage_ballistic");
+                const std::string explosive = AV("damage_explosive");
+                const std::string fire = AV("damage_fire");
+                const char* damage_types[] = {ballistic.c_str(), explosive.c_str(),
+                                              fire.c_str()};
+                int damage_type = static_cast<int>(ic.weapon.damage_type);
+                if (ImGui::Combo(AV("damage_type").c_str(), &damage_type, damage_types, 3)) {
+                    ic.weapon.damage_type = static_cast<runtime::DamageType>(damage_type);
+                }
+                ImGui::DragFloat(AV("rpm").c_str(), &ic.weapon.rounds_per_minute, 5.0f, 1.0f,
+                                 runtime::kMaxRoundsPerMinute);
+                int magazine = static_cast<int>(ic.weapon.magazine);
+                if (ImGui::DragInt(AV("magazine").c_str(), &magazine, 1.0f, 1, 9999)) {
+                    ic.weapon.magazine = static_cast<u32>(magazine);
+                }
+                int reserve = static_cast<int>(ic.weapon.reserve);
+                if (ImGui::DragInt(AV("reserve").c_str(), &reserve, 1.0f, 0, 99999)) {
+                    ic.weapon.reserve = static_cast<u32>(reserve);
+                }
+                ImGui::DragFloat(AV("reload_time").c_str(), &ic.weapon.reload_seconds, 0.02f,
+                                 0.0f, 30.0f, "%.2f s");
+                ImGui::DragFloat(AV("damage").c_str(), &ic.weapon.damage, 0.5f, 0.0f, 100000.0f);
+                ImGui::DragFloat(AV("range").c_str(), &ic.weapon.range, 1.0f, 0.1f, 5000.0f);
+                // Armor penetration (Phase 50): a fraction, so the slider is
+                // the whole valid range and the loader refuses anything else.
+                ImGui::DragFloat(AV("armor_penetration").c_str(), &ic.weapon.armor_penetration,
+                                 0.01f, 0.0f, 1.0f, "%.2f");
+                // Radial blast (Phase 51). Zero radius is the disabled state;
+                // the damage and edge fields stay visible so an author can see
+                // the whole blast while tuning it.
+                ImGui::DragFloat(AV("blast_radius").c_str(), &ic.weapon.blast_radius, 0.1f,
+                                 0.0f, 1000.0f, "%.1f m");
+                ImGui::DragFloat(AV("blast_damage").c_str(), &ic.weapon.blast_damage, 1.0f,
+                                 0.0f, 1000000.0f);
+                ImGui::DragFloat(AV("blast_min").c_str(), &ic.weapon.blast_min_scale, 0.01f,
+                                 0.0f, 1.0f, "%.2f");
+                // Status on hit (Phase 54): none by default, so a weapon that
+                // never authored it keeps the pre-Phase-54 behaviour.
+                const std::string no_status = AV("status_none");
+                const std::string burn = AV("status_burn");
+                const std::string bleed = AV("status_bleed");
+                const std::string corrode = AV("status_corrode");
+                const char* statuses[] = {no_status.c_str(), burn.c_str(), bleed.c_str(),
+                                          corrode.c_str()};
+                int status = static_cast<int>(ic.weapon.status);
+                if (ImGui::Combo(AV("status_effect").c_str(), &status, statuses, 4)) {
+                    ic.weapon.status = static_cast<runtime::StatusKind>(status);
+                }
+                if (ic.weapon.status != runtime::StatusKind::None) {
+                    ImGui::DragFloat(AV("status_dps").c_str(),
+                                     &ic.weapon.status_damage_per_second, 0.1f, 0.01f,
+                                     1000000.0f, "%.2f /s");
+                    ImGui::DragFloat(AV("status_time").c_str(), &ic.weapon.status_seconds,
+                                     0.1f, 0.01f, 3600.0f, "%.2f s");
+                    ImGui::DragFloat(AV("status_tick").c_str(), &ic.weapon.status_tick_seconds,
+                                     0.05f, 0.01f, 60.0f, "%.2f s");
+                }
+                // Delivery (Phase 46): the same trigger and magazine, two ways
+                // for the round to reach the target. The flight keys are shown
+                // only for a projectile because a hitscan line ignores them.
+                const std::string hitscan = AV("delivery_hitscan");
+                const std::string projectile = AV("delivery_projectile");
+                const char* deliveries[] = {hitscan.c_str(), projectile.c_str()};
+                int delivery = static_cast<int>(ic.weapon.delivery);
+                if (ImGui::Combo(AV("delivery").c_str(), &delivery, deliveries, 2)) {
+                    ic.weapon.delivery = static_cast<runtime::WeaponDelivery>(delivery);
+                }
+                if (ic.weapon.delivery == runtime::WeaponDelivery::Projectile) {
+                    ImGui::DragFloat(AV("projectile_speed").c_str(),
+                                     &ic.weapon.projectile_speed, 1.0f, 1.0f, 5000.0f,
+                                     "%.1f m/s");
+                    ImGui::DragFloat(AV("projectile_gravity").c_str(),
+                                     &ic.weapon.projectile_gravity, 0.05f, 0.0f, 100.0f,
+                                     "%.2f m/s2");
+                }
+                int pellets = static_cast<int>(ic.weapon.pellets);
+                if (ImGui::DragInt(AV("pellets").c_str(), &pellets, 1.0f, 1, 64)) {
+                    ic.weapon.pellets = static_cast<u32>(pellets);
+                }
+                ImGui::DragFloat(AV("spread").c_str(), &ic.weapon.spread_deg, 0.02f, 0.0f, 45.0f,
+                                 "%.2f deg");
+                ImGui::DragFloat(AV("spread_max").c_str(), &ic.weapon.spread_max_deg, 0.02f, 0.0f,
+                                 45.0f, "%.2f deg");
+                ImGui::DragFloat(AV("recoil_pitch").c_str(), &ic.weapon.recoil_pitch, 0.02f, 0.0f,
+                                 20.0f, "%.2f deg");
+                ImGui::DragFloat(AV("recoil_yaw").c_str(), &ic.weapon.recoil_yaw, 0.02f, 0.0f,
+                                 20.0f, "%.2f deg");
+                ImGui::Checkbox((AV("auto_reload") + "##weapon").c_str(), &ic.weapon.auto_reload);
+                ImGui::Checkbox((AV("enabled") + "##weapon").c_str(), &ic.weapon.enabled);
+                if (ImGui::Button((AV("apply") + "##weapon").c_str())) {
+                    std::string err;
+                    if (!app.set_weapon(sel, ic.weapon, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Weapon edit failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false; // the command rebuilt the live state
+                    }
+                }
+            }
+            // --- Hit points (Phase 44) ---------------------------------
+            if (!ic.health_has) {
+                if (ImGui::Button((AV("add_health") + "##addhealth").c_str())) {
+                    std::string err;
+                    if (!app.set_health(sel, runtime::HealthComponent{}, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Health add failed", err);
+                    } else {
+                        ic.valid = false;
+                    }
+                }
+            }
+            if (ic.health_has &&
+                ImGui::CollapsingHeader((AV("health") + "###Health").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::DragFloat(AV("max_health").c_str(), &ic.health.max_health, 1.0f, 0.001f,
+                                 1000000.0f);
+                ImGui::DragFloat(AV("health_now").c_str(), &ic.health.health, 1.0f, 0.0f,
+                                 ic.health.max_health);
+                // Armor (Phase 50). A maximum of zero means "no armor", which is
+                // exactly the pre-Phase-50 component, so the dependent fields
+                // stay hidden until an author creates a pool.
+                ImGui::DragFloat(AV("armor_max").c_str(), &ic.health.max_armor, 1.0f, 0.0f,
+                                 1000000.0f);
+                if (ic.health.max_armor > 0.0f) {
+                    ImGui::DragFloat(AV("armor_now").c_str(), &ic.health.armor, 1.0f, 0.0f,
+                                     ic.health.max_armor);
+                    ImGui::DragFloat(AV("armor_absorb").c_str(), &ic.health.armor_absorb, 0.01f,
+                                     0.0f, 1.0f, "%.2f");
+                }
+                ImGui::Checkbox((AV("hit_zones") + "##health").c_str(), &ic.health.hit_zones);
+                if (ic.health.hit_zones) {
+                    ImGui::DragFloat(AV("headshot_multiplier").c_str(),
+                                     &ic.health.headshot_multiplier, 0.05f, 0.001f, 100.0f,
+                                     "x%.2f");
+                    ImGui::DragFloat(AV("limb_multiplier").c_str(), &ic.health.limb_multiplier,
+                                     0.01f, 0.0f, 100.0f, "x%.2f");
+                }
+                // Per-type resistance (Phase 52). A fraction, not a percentage:
+                // the same 0..1 contract as armor absorption.
+                ImGui::DragFloat(AV("resist_ballistic").c_str(),
+                                 &ic.health.ballistic_resistance, 0.01f, 0.0f, 1.0f, "%.2f");
+                ImGui::DragFloat(AV("resist_explosive").c_str(),
+                                 &ic.health.explosive_resistance, 0.01f, 0.0f, 1.0f, "%.2f");
+                ImGui::DragFloat(AV("resist_fire").c_str(), &ic.health.fire_resistance, 0.01f,
+                                 0.0f, 1.0f, "%.2f");
+                ImGui::DragFloat(AV("regen").c_str(), &ic.health.regen_per_second, 0.1f, 0.0f,
+                                 1000.0f, "%.2f /s");
+                ImGui::DragFloat(AV("regen_delay").c_str(), &ic.health.regen_delay, 0.1f, 0.0f,
+                                 600.0f, "%.1f s");
+                ImGui::Checkbox((AV("invulnerable") + "##health").c_str(), &ic.health.invulnerable);
+                ImGui::Checkbox((AV("enabled") + "##health").c_str(), &ic.health.enabled);
+                if (ImGui::Button((AV("apply") + "##health").c_str())) {
+                    std::string err;
+                    if (!app.set_health(sel, ic.health, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Health edit failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+            }
+            // --- Combat agent (Phase 46) -------------------------------
+            //
+            // Phase 45 made an NPC fight; this is the first place an author
+            // can configure one without typing a scene line. The target is a
+            // name field rather than an entity picker because the scene format
+            // stores names, and a name survives save/load.
+            if (!ic.agent_has) {
+                if (ImGui::Button((AV("add_combat_agent") + "##addagent").c_str())) {
+                    std::string err;
+                    if (!app.set_combat_agent(sel, runtime::CombatAgentComponent{}, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Combat agent add failed", err);
+                    } else {
+                        ic.valid = false;
+                    }
+                }
+            }
+            if (ic.agent_has &&
+                ImGui::CollapsingHeader((AV("combat_agent") + "###CombatAgent").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("auto_target") + "##agent").c_str(),
+                                &ic.agent_auto_target);
+                ImGui::BeginDisabled(ic.agent_auto_target);
+                ImGui::InputText(AV("target").c_str(), ic.agent_target,
+                                 sizeof(ic.agent_target));
+                ImGui::EndDisabled();
+                ImGui::DragFloat(AV("agent_eye").c_str(), &ic.agent.eye_height, 0.05f, 0.0f,
+                                 10.0f, "%.2f m");
+                ImGui::DragFloat(AV("agent_aim_height").c_str(), &ic.agent.target_height,
+                                 0.05f, 0.0f, 10.0f, "%.2f m");
+                ImGui::DragFloat(AV("agent_reaction").c_str(),
+                                 &ic.agent.config.reaction_seconds, 0.02f, 0.0f, 10.0f,
+                                 "%.2f s");
+                ImGui::DragFloat(AV("agent_turn").c_str(),
+                                 &ic.agent.config.aim_speed_deg_per_s, 5.0f, 0.0f, 3600.0f,
+                                 "%.0f deg/s");
+                ImGui::DragFloat(AV("agent_cone").c_str(), &ic.agent.config.fire_cone_deg,
+                                 0.1f, 0.1f, 90.0f, "%.1f deg");
+                ImGui::DragFloat(AV("agent_range").c_str(), &ic.agent.config.max_range, 1.0f,
+                                 0.1f, 10000.0f, "%.1f m");
+                ImGui::DragFloat(AV("agent_burst").c_str(),
+                                 &ic.agent.config.burst_on_seconds, 0.05f, 0.0f, 60.0f,
+                                 "%.2f s");
+                ImGui::DragFloat(AV("agent_rest").c_str(),
+                                 &ic.agent.config.burst_off_seconds, 0.05f, 0.0f, 60.0f,
+                                 "%.2f s");
+                ImGui::Checkbox((AV("enabled") + "##agent").c_str(), &ic.agent.enabled);
+                if (ImGui::Button((AV("apply") + "##agent").c_str())) {
+                    ic.agent.target = ic.agent_target;
+                    ic.agent.auto_target = ic.agent_auto_target;
+                    std::string err;
+                    if (!app.set_combat_agent(sel, ic.agent, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Combat agent edit failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+            }
+            // --- Faction (Phase 46) ------------------------------------
+            //
+            // A team is a short token, not an entity reference. Empty means
+            // neutral, and the loader writes no line for it, so adding the
+            // component is harmless until the author names a side.
+            if (!ic.faction_has) {
+                if (ImGui::Button((AV("add_faction") + "##addfaction").c_str())) {
+                    std::string err;
+                    if (!app.set_faction(sel, runtime::FactionComponent{}, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Faction add failed", err);
+                    } else {
+                        ic.valid = false;
+                    }
+                }
+            }
+            if (ic.faction_has &&
+                ImGui::CollapsingHeader((AV("faction") + "###Faction").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::InputText(AV("team").c_str(), ic.faction_team,
+                                 sizeof(ic.faction_team));
+                ImGui::Checkbox((AV("friendly_fire") + "##faction").c_str(),
+                                &ic.faction_friendly_fire);
+                ImGui::Checkbox((AV("enabled") + "##faction").c_str(),
+                                &ic.faction_enabled);
+                if (ImGui::Button((AV("apply") + "##faction").c_str())) {
+                    ic.faction.team = ic.faction_team;
+                    ic.faction.friendly_fire = ic.faction_friendly_fire;
+                    ic.faction.enabled = ic.faction_enabled;
+                    std::string err;
+                    if (!app.set_faction(sel, ic.faction, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Faction edit failed", err);
+                    } else {
+                        ic.error.clear();
+                        ic.valid = false;
+                    }
+                }
+            }
             if (w->has<runtime::DirectionalLight>(sel) &&
                 ImGui::CollapsingHeader((AV("directional_light") + "###DirectionalLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::DragFloat3(AV("direction").c_str(), ic.light_dir, 0.02f);
@@ -2881,6 +3212,22 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         ImGui::SliderFloat((AV("min_scale") + "##pp_min_scale").c_str(),
                                            &ic.pp_min_render_scale,
                                            rendering::kMinRenderScale, floor_max, "%.2f");
+                        // The load clock is scene data: GPU is a preference
+                        // with a CPU fallback, not a requirement that could
+                        // leave a scene unscaled on a device without timestamps.
+                        const std::string timing_cpu = AV("timing_cpu");
+                        const std::string timing_gpu = AV("timing_gpu");
+                        const char* timing_items[] = {timing_cpu.c_str(),
+                                                      timing_gpu.c_str()};
+                        ImGui::Combo((AV("timing_source") + "##pp_dynamic_timing").c_str(),
+                                     &ic.pp_dynamic_resolution_timing, timing_items, 2);
+                        ImGui::TextDisabled("%s",
+                                            AV("dynamic_resolution_timing_hint").c_str());
+                        // The window policy replaces the per-frame governor as
+                        // the decision source; it is not a third clock.
+                        ImGui::Checkbox((AV("frame_policy") + "##pp_frame_policy").c_str(),
+                                        &ic.pp_frame_policy);
+                        ImGui::TextDisabled("%s", AV("frame_policy_hint").c_str());
                     }
                     ImGui::TextDisabled("%s", AV("dynamic_resolution_hint").c_str());
 
@@ -2974,6 +3321,8 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         e.dynamic_resolution = ic.pp_dynamic_resolution;
                         e.target_fps = ic.pp_target_fps;
                         e.min_render_scale = ic.pp_min_render_scale;
+                        e.dynamic_resolution_timing = ic.pp_dynamic_resolution_timing;
+                        e.frame_policy = ic.pp_frame_policy;
                         e.exposure = ic.pp_exposure;
                         e.tonemap = ic.pp_tonemap;
                         e.lut_path = ic.pp_lut_path;

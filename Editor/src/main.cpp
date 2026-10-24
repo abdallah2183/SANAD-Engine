@@ -33,6 +33,7 @@
 #include <NF/Platform/InputSystem.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/RHI/RHI.hpp>
+#include <NF/Rendering/FramePacing.hpp>
 #include <NF/Rendering/MaterialAsset.hpp>
 #include <NF/Rendering/StaticMesh.hpp>
 #include <NF/Rendering/MeshUpload.hpp>
@@ -827,6 +828,14 @@ int main(int argc, char** argv) {
     {
         nf::assets::AssetManager manager(vfs, registry);
         nf::runtime::Runtime runtime(vfs, registry, manager, *device, swapchain.get());
+        // The editor is a development tool, so real GPU timestamps are on by
+        // default here - unlike a game. The request is stored by Runtime and
+        // applied to the lazy Renderer3D once the scene creates it (and again
+        // after every shutdown/re-init). Per-pass timing drains between passes,
+        // which the panel says out loud; normal gameplay leaves it off.
+        runtime.set_gpu_profiling_enabled(true);
+        NF_LOG_INFO(nf::LogCategory::Editor,
+                    "GPU profiling enabled (frame timestamps + per-pass breakdown)");
         nf::editor::EditorApp app(vfs, registry, manager, console);
         app.attach_runtime(&runtime);
         app.set_project(active_project_path, active_project_name);
@@ -849,11 +858,23 @@ int main(int argc, char** argv) {
         // load cost in v0.1.
         uint64_t gpu_us = 0;
         double gpu_avg_us = 0.0;
+        bool gpu_timing_supported = false;
+        bool gpu_timing_valid = false;
+        double gpu_frame_ms = 0.0;
+        double gpu_frame_ms_avg = 0.0;
+        std::vector<nf::editor::UiGpuPassTiming> gpu_passes;
         double cull_us = 0.0;
         double draw_prep_us = 0.0;
         uint32_t draw_calls = 0;
         uint32_t visible_objects = 0;
         uint64_t scene_open_us = 0;
+        // Phase 41: host-loop telemetry over raw wall time. GPU samples are
+        // consumed once per new timestamp serial, and the window resets when
+        // the scene or the play/edit mode changes.
+        nf::rendering::FramePacing frame_pacing;
+        uint64_t frame_pacing_gpu_serial = 0;
+        uint64_t frame_pacing_scene_serial = 0;
+        bool frame_pacing_playing = false;
 
         std::string err;
         // Timed for the Profiler panel's "last load" row: scene open is the
@@ -1259,6 +1280,20 @@ int main(int argc, char** argv) {
 
             const float dt = static_cast<float>(clock.elapsed_seconds());
             clock.reset();
+            // A play/edit switch or a scene switch is a different workload.
+            // Drop the old window instead of letting authored-idle frames
+            // describe gameplay (or the reverse) for the next two seconds. The
+            // scene serial catches every door into a new scene, including the
+            // toolbar/menu paths that call EditorApp directly during ui_frame.
+            const bool pacing_playing = app.playing();
+            const uint64_t pacing_scene = app.scene_serial();
+            if (pacing_playing != frame_pacing_playing ||
+                pacing_scene != frame_pacing_scene_serial) {
+                frame_pacing.reset();
+                frame_pacing_gpu_serial = 0;
+                frame_pacing_playing = pacing_playing;
+                frame_pacing_scene_serial = pacing_scene;
+            }
             app.tick(dt);
 
             // Hot reload: poll watched asset files every frame (a handful of
@@ -1517,6 +1552,8 @@ int main(int argc, char** argv) {
             // on the readback cadence) so the end-of-run check answers "did this
             // session ever draw geometry" rather than "what did the last
             // measured frame happen to draw".
+            double pacing_gpu_ms = 0.0;
+            bool pacing_gpu_valid = false;
             if (const auto* rend = runtime.renderer()) {
                 const auto& st = rend->last_stats();
                 if (st.draw_calls > max_draw_calls) max_draw_calls = st.draw_calls;
@@ -1526,7 +1563,39 @@ int main(int argc, char** argv) {
                 draw_prep_us = st.draw_prep_us;
                 draw_calls = st.draw_calls;
                 visible_objects = st.visible;
+                // Real timestamp results, sampled one in-flight slot late. The
+                // fence estimate (gpu_us/gpu_avg_us) stays populated as the
+                // fallback for devices without timestamp support.
+                gpu_timing_supported = rend->gpu_timing_supported();
+                gpu_timing_valid = st.gpu_timing_valid;
+                if (gpu_timing_valid) {
+                    gpu_frame_ms = st.gpu_frame_ms;
+                    gpu_frame_ms_avg =
+                        gpu_frame_ms_avg == 0.0
+                            ? gpu_frame_ms
+                            : gpu_frame_ms_avg * 0.9 + gpu_frame_ms * 0.1;
+                    gpu_passes.clear();
+                    gpu_passes.reserve(st.gpu_passes.size());
+                    for (const auto& pass : st.gpu_passes) {
+                        gpu_passes.push_back({pass.name, pass.milliseconds});
+                    }
+                    // The pacing window consumes each timestamp once. The
+                    // decaying average above can re-read one sample while the
+                    // panel is open; the window must not count it twice.
+                    if (st.gpu_sample_serial != 0 &&
+                        st.gpu_sample_serial != frame_pacing_gpu_serial) {
+                        frame_pacing_gpu_serial = st.gpu_sample_serial;
+                        pacing_gpu_ms = st.gpu_frame_ms;
+                        pacing_gpu_valid = true;
+                    }
+                } else {
+                    gpu_passes.clear();
+                }
             }
+            // The sample is the frame that just completed. `dt` is raw wall
+            // time, so it includes present/vsync waiting.
+            frame_pacing.push_frame(static_cast<double>(dt), pacing_gpu_ms / 1000.0,
+                                    pacing_gpu_valid);
             {
                 nf::rhi::SubmitInfo si{};
                 si.signal_fence = viewport_fence.get();
@@ -1591,6 +1660,18 @@ int main(int argc, char** argv) {
                 fst.dt_seconds = (dt > 0.0f) ? dt : (1.0f / 60.0f);
                 fst.gpu_us = gpu_us;
                 fst.gpu_avg_us = static_cast<uint64_t>(gpu_avg_us);
+                fst.gpu_timing_supported = gpu_timing_supported;
+                fst.gpu_timing_valid = gpu_timing_valid;
+                fst.gpu_frame_ms = gpu_frame_ms;
+                fst.gpu_frame_ms_avg = gpu_frame_ms_avg;
+                fst.gpu_passes = gpu_passes;
+                const nf::rendering::FramePacingStats pacing = frame_pacing.stats();
+                fst.frame_samples = pacing.samples;
+                fst.gpu_frame_samples = pacing.gpu_samples;
+                fst.fps_average = pacing.average_fps;
+                fst.fps_1pct_low = pacing.low_1pct_fps;
+                fst.frame_stddev_ms = pacing.stddev_ms;
+                fst.frame_bound = pacing.bound;
                 fst.cull_us = cull_us;
                 fst.draw_prep_us = draw_prep_us;
                 fst.draw_calls = draw_calls;
@@ -1695,9 +1776,13 @@ int main(int argc, char** argv) {
                     bool ui_ok = true;
                     if (target != nullptr && ui_pass && image_index < ui_fbs.size() && ui_fbs[image_index] &&
                         ui_draw != nullptr) {
-                        // Make the scene writes visible to the Load that follows.
-                        cmd_main->barrier_texture(*target, nf::rhi::ImageUsage::ColorAtt,
-                                                  nf::rhi::ImageUsage::ColorAtt);
+                        // No barrier here: the present pass already ended with an
+                        // implicit transition to PRESENT_SRC, which is exactly
+                        // the layout ui_pass declares for its Load. Requesting a
+                        // ColorAtt->ColorAtt barrier would move the image out of
+                        // PRESENT_SRC and make the next render pass's initial
+                        // layout a validation error. Both passes are in this
+                        // command buffer, so ordering is guaranteed.
                         cmd_main->begin_render_pass(*ui_pass, *ui_fbs[image_index],
                                                     std::span<const nf::rhi::ClearValue>{});
                         ui_ok = ui_renderer.render(*cmd_main, *ui_pass, ui_draw, swapchain->width(),
@@ -2887,6 +2972,15 @@ static nf::ecs::Entity automation_drag_entity{};
         NF_LOG_INFO(nf::LogCategory::Editor,
                     "Editor frame cost (last frame): cull={}us draw_prep={}us gpu={}us draws={} visible={}",
                     cull_us, draw_prep_us, gpu_us, draw_calls, visible_objects);
+        if (gpu_timing_valid) {
+            NF_LOG_INFO(nf::LogCategory::Editor,
+                        "GPU timestamps: frame {:.4f} ms across {} passes",
+                        gpu_frame_ms, gpu_passes.size());
+        } else if (!gpu_timing_supported) {
+            NF_LOG_WARN(nf::LogCategory::Editor,
+                        "GPU timestamps unavailable on this device/queue; profiler uses "
+                        "the submit-to-fence estimate");
+        }
         NF_LOG_INFO(nf::LogCategory::RHI, "Validation errors: {}", nf::rhi::validation_error_count());
         if (automation && auto_failed) {
             NF_LOG_ERROR(nf::LogCategory::Editor, "Automation proof failed");

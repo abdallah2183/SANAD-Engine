@@ -55,7 +55,14 @@ namespace nf::rhi {
     X(vkSetDebugUtilsObjectNameEXT)     \
     X(vkCmdBeginDebugUtilsLabelEXT)     \
     X(vkCmdEndDebugUtilsLabelEXT)       \
-    X(vkCmdInsertDebugUtilsLabelEXT)
+    X(vkCmdInsertDebugUtilsLabelEXT)    \
+    /* Timestamp queries are core 1.0, but keep them optional so a backend */ \
+    /* built against a loader without them degrades instead of failing. */   \
+    X(vkCreateQueryPool)                \
+    X(vkDestroyQueryPool)               \
+    X(vkGetQueryPoolResults)            \
+    X(vkCmdResetQueryPool)              \
+    X(vkCmdWriteTimestamp)
 
 // ---------------------------------------------------------------------------
 // Loader-level: resolved straight off the module (vkGetInstanceProcAddr is the

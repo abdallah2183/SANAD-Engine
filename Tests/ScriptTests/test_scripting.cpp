@@ -83,8 +83,164 @@ NF_TEST(script_instruction_limit_aborts_loops) {
     NF_CHECK_NEAR(back, 5000050000.0, 1.0);
 }
 
-NF_TEST(script_sandbox_blocks_file_and_os_access) {
+NF_TEST(script_reads_previous_frame_impacts) {
+    ScriptInput input;
+    input.impact_count = []() { return 1u; };
+    input.impact_at = [](u32 index, ScriptImpact& out) {
+        if (index != 0u) {
+            return false;
+        }
+        out.shooter_id = 7u;
+        out.target_id = 9u;
+        out.target_name = "Crate";
+        out.x = 1.0f;
+        out.y = 2.0f;
+        out.z = 3.0f;
+        out.damage = 12.5f;
+        out.applied = 10.0f;
+        out.hit_zone = "head";
+        out.armor_absorbed = 2.5f;
+        out.damage_type = "fire";
+        out.blocked_by_faction = true;
+        out.killed = false;
+        out.splash = true;
+        return true;
+    };
+
     LuaVM vm;
+    install_input_bindings(vm, &input);
+    std::string err;
+    NF_CHECK(vm.run_string(
+        "count = nf.impact_count(); "
+        "local i = nf.impact(1); "
+        "name_ok = (i.name == 'Crate') and 1 or 0; "
+        "target = i.target; "
+        "damage = i.damage; "
+        "zone_ok = (i.zone == 'head') and 1 or 0; "
+        "armor_absorbed = i.armor_absorbed; "
+        "type_ok = (i.damage_type == 'fire') and 1 or 0; "
+        "splash = i.splash and 1 or 0; "
+        "blocked = i.blocked and 1 or 0; "
+        "missing = (nf.impact(2) == nil) and 1 or 0",
+        "impacts", &err));
+
+    double value = 0.0;
+    NF_CHECK(vm.get_global_number("count", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("name_ok", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("target", value));
+    NF_CHECK_NEAR(value, 9.0, 1e-9);
+    NF_CHECK(vm.get_global_number("damage", value));
+    NF_CHECK_NEAR(value, 12.5, 1e-9);
+    NF_CHECK(vm.get_global_number("zone_ok", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("armor_absorbed", value));
+    NF_CHECK_NEAR(value, 2.5, 1e-9);
+    NF_CHECK(vm.get_global_number("type_ok", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("splash", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("blocked", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("missing", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+}
+
+NF_TEST(script_reads_previous_frame_shots) {
+    ScriptInput input;
+    input.shot_count = []() { return 1u; };
+    input.shot_at = [](u32 index, ScriptShot& out) {
+        if (index != 0u) {
+            return false;
+        }
+        out.shooter_id = 4u;
+        out.x = 1.0f;
+        out.y = 2.0f;
+        out.z = 3.0f;
+        out.dx = 0.0f;
+        out.dy = 0.0f;
+        out.dz = -1.0f;
+        out.damage = 9.5f;
+        out.pellet = 2u;
+        out.pellets = 4u;
+        out.seed = 77u;
+        out.projectile = true;
+        return true;
+    };
+
+    LuaVM vm;
+    install_input_bindings(vm, &input);
+    std::string err;
+    NF_CHECK(vm.run_string(
+        "count = nf.shot_count(); "
+        "local s = nf.shot(1); "
+        "shooter = s.shooter; "
+        "pellet = s.pellet; "
+        "pellets = s.pellets; "
+        "projectile = s.projectile and 1 or 0; "
+        "dir_z = s.dz; "
+        "missing = (nf.shot(2) == nil) and 1 or 0",
+        "shots", &err));
+
+    double value = 0.0;
+    NF_CHECK(vm.get_global_number("count", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("shooter", value));
+    NF_CHECK_NEAR(value, 4.0, 1e-9);
+    NF_CHECK(vm.get_global_number("pellet", value));
+    NF_CHECK_NEAR(value, 2.0, 1e-9);
+    NF_CHECK(vm.get_global_number("pellets", value));
+    NF_CHECK_NEAR(value, 4.0, 1e-9);
+    NF_CHECK(vm.get_global_number("projectile", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("dir_z", value));
+    NF_CHECK_NEAR(value, -1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("missing", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+}
+
+NF_TEST(script_applies_queries_and_clears_status_effects) {
+    ScriptInput input;
+    bool applied = false;
+    bool cleared = false;
+    f32 captured_dps = 0.0f;
+    input.apply_status = [&](u32, u32, std::string_view kind, f32 dps, f32 seconds, f32 tick) {
+        applied = kind == "burn" && seconds == 3.0f && tick == 0.5f;
+        captured_dps = dps;
+        return applied;
+    };
+    input.status_remaining = [](u32, u32, std::string_view kind) {
+        return kind == "burn" ? 2.5f : 0.0f;
+    };
+    input.clear_status = [&](u32, u32, std::string_view kind) {
+        cleared = kind == "burn";
+        return cleared;
+    };
+
+    LuaVM vm;
+    install_input_bindings(vm, &input);
+    std::string err;
+    NF_CHECK(vm.run_string(
+        "applied = nf.apply_status(1, 0, 'burn', 4, 3, 0.5) and 1 or 0; "
+        "remaining = nf.status_remaining(1, 0, 'burn'); "
+        "cleared = nf.clear_status(1, 0, 'burn') and 1 or 0; "
+        "unknown = nf.apply_status(1, 0, 'poison', 4, 3, 0.5) and 1 or 0",
+        "status", &err));
+
+    double value = 0.0;
+    NF_CHECK(vm.get_global_number("applied", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK_NEAR(captured_dps, 4.0f, 1e-5f);
+    NF_CHECK(vm.get_global_number("remaining", value));
+    NF_CHECK_NEAR(value, 2.5, 1e-9);
+    NF_CHECK(vm.get_global_number("cleared", value));
+    NF_CHECK_NEAR(value, 1.0, 1e-9);
+    NF_CHECK(vm.get_global_number("unknown", value));
+    NF_CHECK_NEAR(value, 0.0, 1e-9);
+}
+
+NF_TEST(script_sandbox_blocks_file_and_os_access) {    LuaVM vm;
     double out = 0;
     // dofile/loadfile/io/os/package are all nil in the sandbox.
     NF_CHECK(vm.eval_number("dofile == nil and 1 or 0", out, nullptr));

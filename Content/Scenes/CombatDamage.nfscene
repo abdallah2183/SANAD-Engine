@@ -1,0 +1,58 @@
+# SANAD Scene v1
+version: 1
+name: CombatDamage
+entity_count: 8
+---
+entity: 1:0
+  Name: Player
+  Transform: local(0,1,6) world(0,1,6) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Health: max=100 health=100 armor=50 armor_max=50 absorb=0.6 zones=true head=2 limb=0.75
+  Faction: team=Blue
+  Weapon: mode=semi rpm=60 magazine=1 reserve=6 reload=2.5 damage=20 range=120 pellets=1 spread=0.2 bloom=0 spread_max=1 recover=0 recoil=0.4 recoil_yaw=0.1 recoil_growth=0.1 falloff_start=80 falloff_end=120 falloff_min=0.8 shake=0.2 seed=424242 delivery=projectile speed=35 gravity=9.81 damage_type=explosive pierce=0.25 blast_radius=4 blast_damage=45 blast_min=0.2
+---
+entity: 2:0
+  Name: MainCamera
+  Transform: local(0,1.5,9) world(0,1.5,9) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=70 aspect=1.7777778 near=0.1 far=1000 active=true follow=Player pivot=0,1.2,0 distance=3.5 yaw=180 pitch=-10 align=90 mouse=1
+---
+entity: 3:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.35,-1,-0.4) color(1,1,1) intensity=1.1
+---
+entity: 4:0
+  Name: Sky
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Sky: zenith(0.16,0.3,0.6) horizon(0.55,0.6,0.7) ground(0.08,0.08,0.1) clear(0.02,0.02,0.05) sun_disk=0.6 sun_glow=0.8 enabled=true
+---
+entity: 5:0
+  Name: Ground
+  Transform: local(0,-0.1,0) world(0,-0.1,0) rot(0,0,0) scale(20,0.1,20) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.8 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(20,0.1,20)
+---
+entity: 6:0
+  Name: BackWall
+  Transform: local(0,2,-18) world(0,2,-18) rot(0,0,0) scale(8,2,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.8 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(8,2,0.5)
+---
+entity: 7:0
+  Name: DirectTarget
+  Transform: local(0,1,-10) world(0,1,-10) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Health: max=100 health=100 armor=20 armor_max=20 absorb=0.5 zones=true head=2 limb=0.75 resist_explosive=0.2 resist_fire=0.3
+  Faction: team=Red
+  Collider: shape=Box half(0.5,1,0.5)
+---
+entity: 8:0
+  Name: SplashTarget
+  Transform: local(2,1,-10) world(2,1,-10) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Health: max=80 health=80 zones=true head=2 limb=0.75
+  Status: burn=2,4,0.5
+  Faction: team=Red
+  Collider: shape=Box half(0.5,1,0.5)

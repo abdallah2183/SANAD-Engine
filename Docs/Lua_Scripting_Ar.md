@@ -152,11 +152,81 @@ print(string.format("النقاط: %d", score))
 | `nf.camera_yaw` | — | رقم | دوران الكاميرا الفعّالة بالدرجات (`0` إن لا كاميرا) |
 | `nf.shake` | `amount` | — | اهتزاز كاميرا بصدمة `0..1` (0.2 خطوة، 0.6 ضربة، 1.0 انفجار) |
 | `nf.recoil` | `pitch, yaw` | — | ارتداد بالدرجات يُزاح على النظر ثم يتعافى إلى تصويب اللاعب |
+| `nf.weapon_ammo` | — | رقم | الطلقات في المخزن (`0` إن لا سلاح) |
+| `nf.weapon_reserve` | — | رقم | الطلقات في الاحتياط |
+| `nf.weapon_reloading` | — | `bool` | هل التعبئة جارية؟ |
+| `nf.weapon_reload` | — | `bool` | ابدأ تعبئة (يفشل إن كان المخزن ممتلئًا) |
+| `nf.weapon_fire` | — | رقم | أطلق إن سمح الإيقاع؛ يرجع عدد الحبيبات المتتبَّعة |
+| `nf.last_hit` | — | `hit, x, y, z, distance` | نتيجة آخر طلقة |
+| `nf.impact_count` | — | عدد | عدد الإصابات في الإطار المكتمل السابق |
+| `nf.impact` | `i` | جدول أو `nil` | إصابة واحدة: الهدف، الاسم، الموضع، الطبيعي، الضرر، `zone`، `armor_absorbed`، `damage_type`، `blocked`، `killed`، `splash` |
+| `nf.shot_count` | — | عدد | عدد الطلقات في الإطار المكتمل السابق |
+| `nf.shot` | `i` | جدول أو `nil` | طلقة واحدة: الرامي، نقطة الخروج، الاتجاه، الضرر، رقم الحبيبة وعددها، `projectile`، `seed` |
+| `nf.health` | `id, gen` | `current, max` | نقاط صحة الكائن (`0, 0` إن لا صحة له) |
+| `nf.damage` | `id, gen, amount` | رقم | ضرر صحة خام؛ يتجاوز الدرع ومناطق الإصابة |
+| `nf.apply_status` | `id, gen, kind, dps, seconds, tick` | `bool` | أضف أو جدّد حالة `burn`/`bleed`/`corrode` |
+| `nf.status_remaining` | `id, gen, kind` | رقم | الثواني المتبقية للحالة (`0` إن غابت) |
+| `nf.clear_status` | `id, gen, kind` | `bool` | أزل حالة واحدة |
 | `nf.clamp` | `v, lo, hi` | رقم | حصر قيمة |
 | `nf.lerp` | `a, b, t` | رقم | تنقّل ناعم |
 | `nf.log_info/warn/error` | رسالة | — | اكتب للسجل بمستوى |
 | `print` | أي قيم | — | اطبع للسجل |
 | `nf.version` | — | نص | إصدار الواجهة |
+
+مثال استهلاك إصابات الإطار السابق:
+
+```lua
+function update(dt)
+    for i = 1, nf.impact_count() do
+        local hit = nf.impact(i)
+        if hit and not hit.blocked then
+            -- hit.x, hit.y, hit.z: نقطة الإصابة
+            -- hit.nx, hit.ny, hit.nz: الطبيعي
+            -- hit.damage / hit.applied / hit.killed
+            -- hit.zone: "body" أو "head" أو "limbs"
+            -- hit.armor_absorbed: ما امتصه الدرع
+            -- hit.damage_type: "ballistic" أو "explosive" أو "fire"
+            -- hit.splash: true لإصابة انفجار شعاعي
+            -- hit.status: true لنبضة حالة مستمرة (حرق/نزيف/تآكل)
+            nf.log_info("impact on " .. hit.name .. " (" .. hit.zone .. ")")
+        end
+    end
+end
+```
+
+الإصابات تُقرأ من **الإطار المكتمل السابق**، لا من الإطار الجاري؛ هذا يضمن أن
+طلقة أطلقها السكربت نفسه تظهر في الإطار التالي بدل أن تُمسح قبل قراءتها.
+
+مثال لرسم وميض فوهة أو tracer من الطلقات، بلا حاجة إلى معرفة هل أصابت:
+
+```lua
+function update(dt)
+    for i = 1, nf.shot_count() do
+        local s = nf.shot(i)
+        if s then
+            -- s.x/s.y/s.z نقطة الخروج، وs.dx/s.dy/s.dz اتجاه الوحدة
+            -- s.pellet/s.pellets للشوزن، وs.projectile للمقذوف
+            -- استخدمها لوميض أو خط tracer أو صوت
+        end
+    end
+end
+```
+
+`nf.shot` يعمل حتى عندما تُخطئ الطلقة؛ `nf.impact` لا يُنشأ إلا عند الإصابة.
+
+مثال حالة مستمرة:
+
+```lua
+local target_id, target_gen = nf.find_entity("Enemy")
+if target_id then
+    nf.apply_status(target_id, target_gen, "burn", 4, 3, 0.5)
+    -- لاحقًا: nf.status_remaining(target_id, target_gen, "burn")
+    -- nf.clear_status(target_id, target_gen, "burn")
+end
+```
+
+الحالة تُطبَّق على الصحة عبر مقاومة نوعها والدرع، وتُنتج إصابة بـ`status=true`
+عند كل نبضة. `burn` نار، و`bleed` رصاص، و`corrode` انفجار.
 
 ### متوفّر من Lua القياسية
 `math.*` (sin, cos, abs, floor, ceil, sqrt, random, pi…)، `string.*`

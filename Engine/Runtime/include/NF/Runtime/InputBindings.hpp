@@ -168,4 +168,37 @@ struct DeviceState {
 [[nodiscard]] std::vector<std::pair<std::string, std::vector<InputBinding>>>
 binding_rows(const InputBindings& bindings);
 
+/// One physical control bound to two different actions.
+struct BindingConflict {
+    std::string action_a;
+    std::string action_b;
+    BindingSource source = BindingSource::Key;
+    u16 code = 0;
+};
+
+/// Every control that two actions both answer to.
+///
+/// A rebinding screen that lets a player put `jump` on the same key as
+/// `interact` has produced a control scheme where one of them can never fire,
+/// and nothing in the runtime can tell the player why. This is the check that
+/// makes the screen honest.
+///
+/// ALIASES ARE NOT CONFLICTS. The engine ships `move_forward`, `forward` and
+/// `up` as three names for one action; they intentionally share a key, and a
+/// warning on every default table would train the player to ignore warnings.
+/// Two actions are treated as aliases when their binding lists are IDENTICAL —
+/// which is exactly how the defaults are built, and the only definition that
+/// does not need a second table to maintain.
+///
+/// THE SHIPPED DEFAULTS DO CONTAIN ONE REAL OVERLAP, and this check reports it:
+/// the arrow keys serve both movement (`move_left`) and the legacy orbit axes
+/// (`look`). That is inherited from the pre-0.4.0 ladder, it is deliberate
+/// there, and hiding it would make the check lie about the one table everybody
+/// starts from. A caller that wants only "new" conflicts filters by action.
+///
+/// A sign difference still conflicts: `-key:A` on one action and `key:A` on
+/// another both read the A key, so the two actions fire together whatever the
+/// axis contribution says.
+[[nodiscard]] std::vector<BindingConflict> find_binding_conflicts(const InputBindings& bindings);
+
 } // namespace nf::runtime

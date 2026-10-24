@@ -367,7 +367,8 @@ NF_TEST(localization_render_scale_keys_resolve) {
     // differ so an English copy cannot pass as a translation.
     const char* keys[] = {"render_scale", "supersampling", "render_scale_hint",
                           "dynamic_resolution", "target_fps", "min_scale",
-                          "dynamic_resolution_hint"};
+                          "dynamic_resolution_hint", "timing_source", "timing_cpu",
+                          "timing_gpu", "dynamic_resolution_timing_hint"};
     set_language(Language::English);
     std::string english_scale;
     for (const char* key : keys) {
@@ -381,6 +382,33 @@ NF_TEST(localization_render_scale_keys_resolve) {
         NF_CHECK(!tr(key).empty());
     }
     NF_CHECK(tr("render_scale") != english_scale);
+    set_language(Language::English); // restore for other tests
+}
+
+NF_TEST(localization_frame_pacing_keys_resolve) {
+    // Phase 41 adds the rolling-window rows to Performance. A missing key would
+    // render as "fps_1pct_low" inside the panel, so every new label must exist
+    // in both languages and the Arabic column must be a real translation.
+    const char* keys[] = {"fps_avg",       "fps_1pct_low",  "frame_jitter",
+                          "frame_bound",   "bound_cpu",     "bound_gpu",
+                          "bound_balanced", "bound_unknown", "frame_pacing_hint"};
+
+    set_language(Language::English);
+    std::string english_low;
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+        if (std::string(key) == "fps_1pct_low") {
+            english_low = tr(key);
+        }
+    }
+
+    set_language(Language::Arabic);
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+    }
+    NF_CHECK(tr("fps_1pct_low") != english_low);
     set_language(Language::English); // restore for other tests
 }
 
@@ -406,5 +434,33 @@ NF_TEST(localization_decal_inspector_keys_resolve) {
     // column passes "non-empty" while shipping an untranslated panel.
     NF_CHECK(tr("decal") != english_decal);
     NF_CHECK(tr("decal_size") != english_size);
+    set_language(Language::English); // restore for other tests
+}
+
+NF_TEST(localization_weapon_inspector_keys_resolve) {
+    // Phase 44: the weapon and hit-point sections are new UI. Every string they
+    // ask for must exist in both languages, and the Arabic column must be
+    // Arabic — an English copy there ships an untranslated panel that passes a
+    // "non-empty" check.
+    const char* keys[] = {"weapon",      "add_weapon", "fire_mode",  "fire_semi",
+                          "fire_auto",   "fire_burst", "rpm",        "magazine",
+                          "reserve",     "reload_time", "damage",    "range",
+                          "pellets",     "spread_max", "recoil_pitch", "recoil_yaw",
+                          "auto_reload", "add_health", "max_health", "health_now",
+                          "regen",       "regen_delay", "invulnerable"};
+    set_language(Language::English);
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+    }
+    const std::string english_weapon = tr("weapon");
+    const std::string english_magazine = tr("magazine");
+    set_language(Language::Arabic);
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+    }
+    NF_CHECK(tr("weapon") != english_weapon);
+    NF_CHECK(tr("magazine") != english_magazine);
     set_language(Language::English); // restore for other tests
 }

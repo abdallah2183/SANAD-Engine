@@ -329,3 +329,50 @@ NF_TEST(the_runtime_pushes_volumes_into_the_live_mixer) {
     }
     std::filesystem::remove_all(tmp);
 }
+
+// --- profiles ----------------------------------------------------------------
+
+NF_TEST(profile_names_are_validated_not_sanitized) {
+    NF_CHECK(valid_profile_name("Abdullah"));
+    NF_CHECK(valid_profile_name("player 2"));
+    NF_CHECK(valid_profile_name("guest_1"));
+    NF_CHECK(valid_profile_name("couch-coop"));
+
+    NF_CHECK(!valid_profile_name(""));
+    NF_CHECK(!valid_profile_name(" leading"));
+    NF_CHECK(!valid_profile_name("trailing "));
+    NF_CHECK(!valid_profile_name("a/b"));       // would escape the directory
+    NF_CHECK(!valid_profile_name("..\\x"));     // same, on Windows
+    NF_CHECK(!valid_profile_name("new\nline")); // would forge an index entry
+    NF_CHECK(!valid_profile_name(std::string(33, 'a'))); // over the 32 limit
+
+    // A path is only built for a name that passed; an invalid one returns
+    // empty rather than a path that points somewhere else.
+    NF_CHECK(profile_path("guest_1") == "content://Settings/players/guest_1.nfsettings");
+    NF_CHECK(profile_path("a/b").empty());
+}
+
+NF_TEST(the_profile_index_round_trips_and_drops_nonsense) {
+    const std::vector<std::string> names{"Abdullah", "player 2", "guest_1"};
+    const std::string text = serialize_profile_index(names);
+    const std::vector<std::string> back = parse_profile_index(text);
+    NF_CHECK(back.size() == names.size());
+    for (size_t i = 0; i < names.size() && i < back.size(); ++i) {
+        NF_CHECK(back[i] == names[i]);
+    }
+
+    // A hand-edited index: comments, blanks, a duplicate and an invalid line.
+    const std::vector<std::string> parsed = parse_profile_index(
+        "# players\nAbdullah\n\nAbdullah\n../evil\nguest_1\n");
+    NF_CHECK(parsed.size() == 2);
+    NF_CHECK(parsed[0] == "Abdullah");
+    NF_CHECK(parsed[1] == "guest_1");
+
+    // The writer refuses to emit a name the reader would refuse to accept:
+    // an index that cannot be read back is worse than no index.
+    const std::string written = serialize_profile_index({"ok", "../evil", "also ok"});
+    const std::vector<std::string> reread = parse_profile_index(written);
+    NF_CHECK(reread.size() == 2);
+    NF_CHECK(reread[0] == "ok");
+    NF_CHECK(reread[1] == "also ok");
+}

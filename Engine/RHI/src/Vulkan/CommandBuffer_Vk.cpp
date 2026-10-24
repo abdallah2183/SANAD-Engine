@@ -37,6 +37,25 @@ u32 bytes_per_texel(Format format) {
     }
 }
 
+/// The RHI stage enum is shared with submission waits; timestamp writes accept
+/// the same set of graphics/compute stages. Keeping the mapping beside the
+/// recorder (rather than reaching into Device_Vk.cpp's private helper) makes
+/// the timestamp call self-contained.
+VkPipelineStageFlagBits timestamp_stage(PipelineStage stage) {
+    switch (stage) {
+        case PipelineStage::TopOfPipe:            return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        case PipelineStage::VertexInput:          return VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+        case PipelineStage::VertexShader:         return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+        case PipelineStage::FragmentShader:       return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        case PipelineStage::ColorAttachmentOutput:return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        case PipelineStage::ComputeShader:        return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        case PipelineStage::Transfer:             return VK_PIPELINE_STAGE_TRANSFER_BIT;
+        case PipelineStage::BottomOfPipe:         return VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        case PipelineStage::AllCommands:          return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        default:                                  return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -727,6 +746,29 @@ void VulkanCommandBuffer::barrier_texture(Texture& texture, ImageUsage before, I
     transition_image_layout(vk_tex.image(), old_layout, new_layout, aspect,
                             vk_tex.mip_levels(), src_access, src_stage);
     vk_tex.set_layout(new_layout);
+}
+
+void VulkanCommandBuffer::reset_query_pool(QueryPool& pool, u32 first, u32 count) {
+    const auto& vk_pool = static_cast<const VulkanQueryPool&>(pool);
+    if (!m_recording || !vk_pool.valid() || count == 0 ||
+        first >= vk_pool.count() || count > vk_pool.count() - first) {
+        NF_LOG_ERROR(LogCategory::RHI,
+                     "reset_query_pool: invalid pool range (first={}, count={}, pool_size={})",
+                     first, count, vk_pool.count());
+        return;
+    }
+    vkCmdResetQueryPool(m_cmd, vk_pool.handle(), first, count);
+}
+
+void VulkanCommandBuffer::write_timestamp(QueryPool& pool, u32 query, PipelineStage stage) {
+    const auto& vk_pool = static_cast<const VulkanQueryPool&>(pool);
+    if (!m_recording || !vk_pool.valid() || query >= vk_pool.count()) {
+        NF_LOG_ERROR(LogCategory::RHI,
+                     "write_timestamp: invalid query index (query={}, pool_size={})",
+                     query, vk_pool.count());
+        return;
+    }
+    vkCmdWriteTimestamp(m_cmd, timestamp_stage(stage), vk_pool.handle(), query);
 }
 
 void VulkanCommandBuffer::copy_texture_to_buffer(const Texture& src, Buffer& dst,

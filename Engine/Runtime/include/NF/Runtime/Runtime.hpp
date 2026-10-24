@@ -13,6 +13,7 @@
 #include <NF/Rendering/MeshLibrary.hpp>
 #include <NF/Rendering/MaterialLibrary.hpp>
 #include <NF/Rendering/CameraShake.hpp>
+#include <NF/Rendering/FramePacingPolicy.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -20,6 +21,11 @@
 #include <NF/Runtime/PlayerLook.hpp>
 #include <NF/Runtime/PlayerSettings.hpp>
 #include <NF/Runtime/CharacterComponent.hpp>
+#include <NF/Runtime/Hitscan.hpp>
+#include <NF/Runtime/Impact.hpp>
+#include <NF/Runtime/Shot.hpp>
+#include <NF/Runtime/StatusEffect.hpp>
+#include <NF/Runtime/Projectile.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/Physics/FixedTimestep.hpp>
 #include <NF/Physics/PhysicsWorld.hpp>
@@ -49,6 +55,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <string_view>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -591,9 +598,158 @@ public:
     /// camera at the sky.
     void add_recoil(f32 pitch_deg, f32 yaw_deg);
 
+    // --- Frame-window policy (Phase 42) -----------------------------------
+    //
+    // The governor above reacts to one smoothed frame; this reacts to the
+    // WINDOW the host already measures. A scene opts in with
+    // `frame_policy=true` on the post-process line, and the host feeds the
+    // window each frame. Without a fed window the policy holds — it never
+    // guesses from an empty statistic.
+    void set_frame_window(const rendering::FramePacingStats& stats) { m_frame_window = stats; }
+    [[nodiscard]] f32 frame_policy_scale() const { return m_frame_policy_state.scale; }
+    [[nodiscard]] rendering::FramePolicyReason frame_policy_reason() const {
+        return m_frame_policy_reason;
+    }
+
     /// The live recoil offset, in degrees — for a test or a HUD.
     [[nodiscard]] f32 recoil_pitch() const { return m_recoil.pitch; }
     [[nodiscard]] f32 recoil_yaw() const { return m_recoil.yaw; }
+
+    // --- Combat (Phase 44) -------------------------------------------------
+    //
+    // The gun is scene data (a `Weapon:` line on an entity) and the maths is
+    // NF/Runtime/Weapon.hpp; this block is the third piece — the part that
+    // needs a world, a camera and an input source.
+    //
+    // The rule that ties the three together: the entity the ACTIVE camera
+    // follows is the player, and the player's weapon is the one the trigger
+    // drives. Every other weapon in the scene still ticks (a reload finishes,
+    // a cooldown expires) but fires only when a script asks it to, so an NPC's
+    // rifle does not empty itself on the player's trigger.
+    //
+    // A shot is traced from the CAMERA through the crosshair, not from the
+    // muzzle: a third-person camera that fired from the character's hip would
+    // miss what the crosshair covers by the parallax between the two. The
+    // direction includes this frame's recoil, so the crosshair and the bullet
+    // agree about where the gun is pointing.
+
+    /// What the player's weapon is doing right now.
+    struct WeaponSnapshot {
+        bool has_weapon = false;
+        bool enabled = false;
+        FireMode mode = FireMode::Semi;
+        u32 ammo = 0u;
+        u32 magazine = 0u;
+        u32 reserve = 0u;
+        bool reloading = false;
+        /// 0 at the start of a reload, 1 when it completes. 0 when not reloading.
+        f32 reload_progress = 0.0f;
+        /// The cone the next shot would use, in degrees, bloom included.
+        f32 spread_deg = 0.0f;
+        /// Shots this runtime has fired, and how many of them hit something.
+        u32 shots_fired = 0u;
+        u32 hits_landed = 0u;
+        /// Projectiles still in flight (Phase 46). Hitscan weapons always
+        /// report zero, because their shot is resolved in the firing frame.
+        u32 active_projectiles = 0u;
+        /// Sum of the damage actually applied to hit points.
+        f32 damage_dealt = 0.0f;
+        /// Sum of the damage absorbed by armor (Phase 50). Kept separate from
+        /// `damage_dealt` so existing HUDs that mean "health removed" keep
+        /// their number, while a combat log can still show the full hit.
+        f32 armor_damage_dealt = 0.0f;
+        /// Radial blasts detonated and the extra entities they hit (Phase 51).
+        u32 explosions = 0u;
+        u32 splash_hits = 0u;
+        /// Damage-over-time ticks and the health damage they applied (Phase 54).
+        u32 status_ticks = 0u;
+        f32 status_damage_dealt = 0.0f;
+    };
+
+    /// A copy of the player's weapon state. `has_weapon` is false when the
+    /// scene has no active camera, or the camera follows an entity with no
+    /// `WeaponComponent` — both are ordinary states, not errors.
+    [[nodiscard]] WeaponSnapshot weapon_snapshot() const;
+
+    /// Starts a reload on the player's weapon. Returns false when there is no
+    /// weapon, the magazine is already full, or the reserve is empty.
+    bool weapon_reload();
+
+    /// Fires one volley now, bypassing the trigger: for a script that shoots
+    /// on a timer, and for a test that cannot press a key. The fire-rate clock
+    /// still applies, so this cannot be used to cheat the cadence. Returns the
+    /// number of projectiles traced (0 when the weapon was not ready).
+    u32 fire_weapon();
+
+    /// The last projectile's result, for a HUD hit marker or a Lua script.
+    struct WeaponHitInfo {
+        bool hit = false;
+        ecs::Entity entity{};
+        /// Empty when the hit entity has no name, or when nothing was hit.
+        std::string name;
+        Vec3 position{0.0f, 0.0f, 0.0f};
+        Vec3 normal{0.0f, 0.0f, 0.0f};
+        f32 distance = 0.0f;
+        /// Damage after distance falloff, before the target's own rules
+        /// (invulnerable, disabled) reduced it. `applied` is what landed.
+        f32 damage = 0.0f;
+        f32 applied = 0.0f;
+        /// Points removed from armor in this hit (Phase 50).
+        f32 armor_absorbed = 0.0f;
+        /// Where on the collider the round landed, for a hit marker or a test.
+        HitZone hit_zone = HitZone::Body;
+        /// The type of damage the weapon carried (Phase 52).
+        DamageType damage_type = DamageType::Ballistic;
+        /// True when the shot struck an entity on the shooter's own team and
+        /// was stopped without damage (Phase 46). The geometry hit; the social
+        /// rules refused it.
+        bool blocked_by_faction = false;
+    };
+    [[nodiscard]] const WeaponHitInfo& last_weapon_hit() const { return m_last_weapon_hit; }
+
+    /// Every resolved impact from the frame that just ran (Phase 49). A host
+    /// draws sparks/decals from this; a script reads the previous frame's list
+    /// through `nf.impact_count()` / `nf.impact(i)`.
+    [[nodiscard]] const std::vector<ImpactEvent>& impact_events() const {
+        return m_impacts.current();
+    }
+    [[nodiscard]] const std::vector<ImpactEvent>& previous_impact_events() const {
+        return m_impacts.previous();
+    }
+    /// Drops both frame slots. Used when a scene is adopted.
+    void clear_impact_events() { m_impacts.clear(); }
+
+    /// Every shot fired in the frame that just ran (Phase 53), and the
+    /// completed frame a script reads. One event per pellet, with the spread
+    /// direction that was actually traced.
+    [[nodiscard]] const std::vector<ShotEvent>& shot_events() const {
+        return m_shots.current();
+    }
+    [[nodiscard]] const std::vector<ShotEvent>& previous_shot_events() const {
+        return m_shots.previous();
+    }
+    /// Drops both shot slots. Used when a scene is adopted.
+    void clear_shot_events() { m_shots.clear(); }
+
+    /// Applies damage to an entity's hit points. Returns what was actually
+    /// taken (0 for an entity with no HealthComponent, an invulnerable one, or
+    /// a dead one). Scripts call it through `nf.damage`.
+    f32 apply_health_damage(ecs::Entity entity, f32 amount);
+
+    /// The entity's hit points, or null when it has none.
+    [[nodiscard]] const HealthComponent* health_of(ecs::Entity entity) const;
+
+    /// Applies or refreshes a status effect by scene-format kind name
+    /// ("burn", "bleed", "corrode"). Returns false for an unknown kind, an
+    /// invalid dose/duration/tick, a dead entity or a disabled status set.
+    bool apply_status(ecs::Entity entity, std::string_view kind, f32 damage_per_second,
+                      f32 seconds, f32 tick_seconds = 0.5f);
+
+    /// Seconds left for one kind, or 0 when absent.
+    [[nodiscard]] f32 status_remaining(ecs::Entity entity, std::string_view kind) const;
+
+    /// Removes one kind. Returns true when it was present.
+    bool clear_status(ecs::Entity entity, std::string_view kind);
 
     // --- Player settings --------------------------------------------------
     //
@@ -748,7 +904,26 @@ public:
     size_t failed_mesh_reports() const { return m_failed_mesh_reports; }
     const rendering::Renderer3D* renderer() const { return m_renderer.get(); }
 
-    /// The renderer's exposure — the one renderer setting the editor is allowed
+    // --- GPU profiling (Phase 39) ---
+    //
+    // One high-level switch for the two renderer toggles: frame timestamps and
+    // the per-pass breakdown. It is a DEVELOPER setting, not scene data: with
+    // it on, every frame records timestamp queries and the ping-pong result is
+    // read one slot later. Per-pass timing also puts a BottomOfPipe between
+    // passes, which serialises the GPU; that is acceptable for an editor or an
+    // explicit diagnostic run, not for gameplay.
+    //
+    // The request is remembered even when it is made before the lazy renderer
+    // exists (or across shutdown/re-init), so a scene that loads later still
+    // gets the profiling state the caller asked for. `gpu_profiling_supported`
+    // reports whether the device/queue can actually timestamp.
+    void set_gpu_profiling_enabled(bool enabled);
+    bool gpu_profiling_enabled() const { return m_gpu_profiling_enabled; }
+    bool gpu_profiling_supported() const {
+        return m_renderer != nullptr && m_renderer->gpu_timing_supported();
+    }
+
+    /// The renderer's exposure - the one renderer setting the editor is allowed
     /// to write, and the reason this exists.
     ///
     /// `renderer()` is const on purpose: a caller must not be able to reach into
@@ -950,6 +1125,61 @@ private:
     /// behind the thing it follows.
     void update_follow_camera(float dt);
 
+    /// Advances every weapon's clocks, fires the player's, and traces the
+    /// shots. Runs BEFORE update_follow_camera so a shot's recoil is part of
+    /// the frame the player sees, and after the characters have moved so the
+    /// pivot the shot leaves from is this frame's.
+    void step_weapons(float dt);
+
+    /// Advances every projectile in flight and resolves its swept segment
+    /// against the scene (Phase 46). Runs immediately after step_weapons, so a
+    /// round spawned this frame already travels this frame. A projectile that
+    /// hits an ally is removed without damage.
+    void step_projectiles(float dt);
+
+    /// Advances every status set and applies its ticks (Phase 54). Runs after
+    /// projectiles so a hit that starts a burn this frame does not also tick it
+    /// in the same frame.
+    void step_status_effects(float dt);
+
+    /// Applies one already-traced hit: faction check, falloff, hit points and
+    /// destruction. Shared by the hitscan and projectile paths so both agree
+    /// about what a hit costs and when it is blocked.
+    WeaponHitInfo resolve_weapon_hit(ecs::Entity shooter, const WeaponProfile& profile,
+                                     const HitscanHit& hit, f32 distance_travelled);
+
+    /// Applies a weapon's radial blast at `center` (Phase 51). Every entity in
+    /// radius except `direct_victim` is considered; walls block the blast, the
+    /// faction rules still apply, and each victim gets its own impact event.
+    /// Returns the number of entities the blast reached.
+    u32 apply_explosion(ecs::Entity shooter, const WeaponProfile& profile, const Vec3& center,
+                        ecs::Entity direct_victim);
+
+    /// Advances every combat agent's aim and trigger (Phase 45). Runs BEFORE
+    /// step_weapons, which is what turns the agent's trigger into shots — one
+    /// step per weapon per frame, so a cooldown cannot be charged twice.
+    void step_combat_ai(float dt);
+
+    /// The entity the active camera follows, or kInvalidEntity. The same
+    /// lookup update_follow_camera does, so "the player" means one thing.
+    ecs::Entity player_entity(ecs::World& world) const;
+
+    /// Fires one volley from `weapon` (owned by `shooter`) along the camera's
+    /// view, tracing every pellet in `step` and applying the hit. Returns the
+    /// projectiles traced. Shared by the trigger path and by fire_weapon(), so
+    /// a script and a key press cannot disagree about where a shot goes.
+    u32 fire_volley(ecs::Entity shooter, WeaponComponent& weapon, const CameraComponent& cam,
+                    const Vec3& pivot, const WeaponStep& step);
+
+    /// The same trace, from an arbitrary origin and aim: the path an NPC's gun
+    /// uses. Split from the camera version so "where the player looks" and
+    /// "where an agent points" cannot drift apart in the hit code.
+    u32 fire_volley_along(ecs::Entity shooter, WeaponComponent& weapon, const Vec3& origin,
+                          f32 base_yaw, f32 base_pitch, const WeaponStep& step);
+
+    /// Rebuilds m_hitscan_targets from the scene's colliders.
+    void collect_hitscan_targets(ecs::World& world, ecs::Entity ignore);
+
     /// The scene's static box colliders, as world-space boxes. The camera's
     /// collision test uses the same list the navigation volume does, so the
     /// camera and the AI agree about what a wall is.
@@ -982,6 +1212,16 @@ private:
     // scale (or the static authored scale when it is off). It is deliberately
     // owned here rather than by Renderer3D: the renderer has no frame clock.
     rendering::DynamicResolution m_dynamic_resolution;
+
+    /// The window policy's state and config. Active only when a scene sets
+    /// `frame_policy=true`; the governor is skipped then, so the two can never
+    /// fight over the same scale.
+    rendering::FramePolicyState m_frame_policy_state;
+    rendering::FramePolicyConfig m_frame_policy_config;
+    rendering::FramePacingStats m_frame_window;
+    rendering::FramePolicyReason m_frame_policy_reason =
+        rendering::FramePolicyReason::HoldNoSamples;
+    bool m_frame_policy_active = false;
     // Built lazily on the first GPU pick, so a run that never picks never pays
     // for the id pass. Null when unavailable — callers fall back to CPU picking.
     std::unique_ptr<rendering::GpuPicker> m_picker;
@@ -1010,6 +1250,55 @@ private:
     /// yaw/pitch when the camera is placed, so recovery lands back on the
     /// player's aim instead of on a number the kick overwrote.
     runtime::RecoilState m_recoil;
+
+    // --- Combat (Phase 44) -------------------------------------------------
+    //
+    // Counters, not state: the weapon's own state lives in its component, and
+    // these are the observables that let a test tell "the trigger was read"
+    // from "a shot was traced and a target lost hit points". A single boolean
+    // would let a broken hit path pass as a working trigger.
+    u32 m_shots_fired_total = 0u;
+    u32 m_hits_landed_total = 0u;
+    f32 m_damage_dealt_total = 0.0f;
+    f32 m_armor_damage_total = 0.0f;
+    u32 m_explosions_total = 0u;
+    u32 m_splash_hits_total = 0u;
+    u32 m_status_ticks_total = 0u;
+    f32 m_status_damage_total = 0.0f;
+    WeaponHitInfo m_last_weapon_hit;
+
+    /// Frame-local impact events (Phase 49): current and previous slots.
+    ImpactBuffer m_impacts;
+
+    /// Frame-local shot events (Phase 53): current and previous slots.
+    ShotBuffer m_shots;
+
+    /// Whether the reload action was down last frame. Edge detection for a
+    /// button that must not restart a reload sixty times a second.
+    bool m_reload_was_down = false;
+
+    /// The scene's target boxes for this frame, rebuilt per volley rather than
+    /// per pellet: a shotgun's eight pellets should not walk the scene eight
+    /// times, and a box computed once is the same box for every pellet.
+    std::vector<runtime::HitscanTarget> m_hitscan_targets;
+
+    /// One round in flight (Phase 46). The profile is a snapshot taken at the
+    /// muzzle: editing the weapon after firing must not change the bullet that
+    /// is already in the air.
+    struct ActiveProjectile {
+        ProjectileBody body{};
+        ecs::Entity owner{};
+        WeaponProfile profile{};
+    };
+
+    /// Rounds in flight. A projectile is removed on impact, on expiry, or when
+    /// the cap is exceeded (oldest first, deterministically).
+    std::vector<ActiveProjectile> m_projectiles;
+
+    /// Hard ceiling on simultaneous rounds. At 3600 rpm a three-second burst
+    /// is 180 rounds, so 2048 is generous for gameplay and still a finite
+    /// bound on a scene that spawns projectiles from a script every frame.
+    static constexpr usize kMaxActiveProjectiles = 2048u;
 
     /// The player's overrides on the scene's camera taste. Defaults are all
     /// "no opinion", so a run that never loads a settings file behaves as the
@@ -1325,6 +1614,23 @@ private:
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;
     bool m_renderer_initialized = false;
+    // Requested developer profiling state. Kept here, not only in Renderer3D,
+    // because scene loads call shutdown() and init() again; applying this after
+    // every successful init is what keeps the user's request from silently
+    // disappearing with the old renderer resources.
+    bool m_gpu_profiling_enabled = false;
+    // Phase 40: a scene that asks for GPU-aware dynamic resolution needs frame
+    // timestamps even when the developer did not request profiling. This is a
+    // second reason to keep frame timing on; it never enables the per-pass
+    // breakdown, which is the toggle that serialises the GPU.
+    bool m_gpu_frame_timing_required = false;
+    // Last Renderer3D::Stats::gpu_sample_serial consumed by the governor. A
+    // repeated stats read must fall back to CPU rather than count the same GPU
+    // frame twice when update() runs more often than render().
+    u64 m_last_gpu_sample_serial = 0;
+    // One warning per renderer lifetime for "asked for timestamps, device has
+    // none"; neither path should spam the log every frame.
+    bool m_gpu_timing_warning_shown = false;
     std::unordered_map<assets::AssetId, rendering::StaticMeshHandle> m_mesh_handles;
     // Mesh ids whose load already failed and was reported. A Failed handle is
     // terminal in AssetManager, so without this the sync loop re-queried and
@@ -1408,6 +1714,11 @@ private:
 
     bool ensure_renderer_initialized();
     bool ensure_renderer_initialized_for(uint32_t width, uint32_t height);
+    /// Applies the two renderer toggles from the stored developer request and
+    /// the scene's dynamic-resolution timing request. Frame timestamps are on
+    /// when EITHER asks for them; the per-pass breakdown needs the developer
+    /// switch, so GPU-aware dynamic resolution never pays the per-pass drains.
+    void apply_gpu_timing_state();
     /// Locates the compiled renderer shaders (also used by the GPU picker).
     std::filesystem::path resolve_shader_dir() const;
     void sync_meshes_from_assets();

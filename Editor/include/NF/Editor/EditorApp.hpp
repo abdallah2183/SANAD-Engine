@@ -92,6 +92,10 @@ public:
     bool dirty() const { return m_dirty || materials_dirty(); }
     bool scene_dirty() const { return m_dirty; }
     const std::string& scene_path() const { return m_scene_path; }
+    /// Monotonic identity of the open scene. Host loops keep per-scene state
+    /// (frame pacing, for example) and must reset it when this changes. Ordinary
+    /// edits do not advance it; a successful new/open/recovery does.
+    uint64_t scene_serial() const { return m_scene_serial; }
 
     // --- Project ---
     //
@@ -149,6 +153,20 @@ public:
     /// placement and facing; this edit owns the material, box extent, blend trim
     /// and enable flag, all through the same undoable validated path.
     bool set_decal(ecs::Entity e, const DecalEdit& edit, std::string& out_err);
+    /// Attach or edit the entity's weapon (Phase 44). The profile is the scene
+    /// data; the live state is rebuilt from it, so an authored magazine starts
+    /// full. Undo restores the component the entity had, state included.
+    bool set_weapon(ecs::Entity e, const runtime::WeaponProfile& edit, std::string& out_err);
+    /// Attach or edit the entity's hit points (Phase 44). Same validated,
+    /// undoable path; `health` is clamped into [0, max] rather than refused.
+    bool set_health(ecs::Entity e, const runtime::HealthComponent& edit, std::string& out_err);
+    /// Attach or edit a combat agent (Phase 46 authoring). The live aim state is
+    /// rebuilt by the factory; undo restores the component the entity had.
+    bool set_combat_agent(ecs::Entity e, const runtime::CombatAgentComponent& edit,
+                          std::string& out_err);
+    /// Attach or edit an entity's affiliation (Phase 46).
+    bool set_faction(ecs::Entity e, const runtime::FactionComponent& edit,
+                     std::string& out_err);
     /// Find the scene's sky entity (the renderer takes the first) and apply
     /// `edit` to it, creating one first when the scene has none. BOTH paths end
     /// in the same edit — a caller must never have to know whether a sky already
@@ -647,6 +665,7 @@ private:
     std::unique_ptr<runtime::SaveSystem> m_save_system;
 
     std::string m_scene_path;
+    uint64_t m_scene_serial = 0;
     std::string m_project_path;
     std::string m_project_name;
     bool m_dirty = false;

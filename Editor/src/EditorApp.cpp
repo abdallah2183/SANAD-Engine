@@ -427,6 +427,7 @@ bool EditorApp::new_scene(std::string& out_err) {
     m_selection.clear();
     m_outliner = OutlinerState{};
     m_dirty = false;
+    ++m_scene_serial;
     return true;
 }
 
@@ -459,6 +460,7 @@ bool EditorApp::open_scene(const std::string& logical_path, std::string& out_err
     m_outliner = OutlinerState{};
     m_dirty = false;
     rebuild_hot_watch();
+    ++m_scene_serial;
     return true;
 }
 
@@ -544,6 +546,7 @@ bool EditorApp::recover_last_draft(std::string& out_err) {
         s->set_name("Recovered Draft");
     }
     rebuild_hot_watch();
+    ++m_scene_serial;
     return true;
 }
 
@@ -797,6 +800,83 @@ bool EditorApp::set_decal(ecs::Entity e, const DecalEdit& edit, std::string& out
         return false;
     }
     auto cmd = make_decal_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_weapon(ecs::Entity e, const runtime::WeaponProfile& edit,
+                           std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_weapon_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_health(ecs::Entity e, const runtime::HealthComponent& edit,
+                           std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_health_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_combat_agent(ecs::Entity e,
+                                 const runtime::CombatAgentComponent& edit,
+                                 std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_combat_agent_command(*w, e, edit, out_err);
+    if (!cmd) {
+        return false;
+    }
+    m_stack.push(std::move(cmd), *w);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_faction(ecs::Entity e, const runtime::FactionComponent& edit,
+                            std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    auto cmd = make_faction_command(*w, e, edit, out_err);
     if (!cmd) {
         return false;
     }
@@ -3622,6 +3702,17 @@ bool EditorApp::save_player_profile(const std::string& name, std::string& out_er
         out_err = written.error;
         return false;
     }
+    // A profile is a PLAYER, not a set of sliders: their controls travel with
+    // their sensitivity, or a couch-co-op pair would swap hands every time
+    // they switched seats.
+    const std::string bindings_path =
+        "content://Settings/players/" + name + "/bindings.nfinput";
+    const auto bindings_written =
+        m_vfs.write_text(bindings_path, runtime::serialize_bindings(m_input_bindings));
+    if (!bindings_written.ok) {
+        out_err = bindings_written.error;
+        return false;
+    }
     // The index is what the picker reads. Rewritten whole rather than appended
     // so a name saved twice cannot appear twice.
     std::vector<std::string> names = player_profiles();
@@ -3665,6 +3756,31 @@ bool EditorApp::load_player_profile(const std::string& name, std::string& out_er
     if (!active.ok) {
         out_err = active.error;
         return false;
+    }
+    // The player's controls, when the profile carries them. A profile saved
+    // before bindings were part of it simply has no file, and the current
+    // table stays — an older profile must not silently reset a control scheme.
+    const std::string bindings_path =
+        "content://Settings/players/" + name + "/bindings.nfinput";
+    if (const auto bindings_text = m_vfs.read_text(bindings_path); bindings_text.ok) {
+        std::string bindings_parse_error;
+        const runtime::InputBindings parsed_bindings =
+            runtime::InputBindings::parse(bindings_text.value, &bindings_parse_error);
+        if (bindings_parse_error.empty()) {
+            runtime::InputBindings merged = runtime::InputBindings::defaults();
+            merged.merge(parsed_bindings);
+            m_input_bindings = std::move(merged);
+            m_input_bindings_loaded = true;
+            const auto active_bindings =
+                m_vfs.write_text(kInputBindingsPath, runtime::serialize_bindings(m_input_bindings));
+            if (!active_bindings.ok) {
+                out_err = active_bindings.error;
+                return false;
+            }
+        } else {
+            out_err = name + " bindings: " + bindings_parse_error;
+            return false;
+        }
     }
     return true;
 }

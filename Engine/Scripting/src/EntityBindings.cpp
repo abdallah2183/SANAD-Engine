@@ -234,8 +234,263 @@ int l_recoil(lua_State* L) {
     return 0;
 }
 
-int l_set_entity_scale(lua_State* L) {    ecs::World* w = bound_world(L);    ecs::Entity e;
-    if (!check_entity(L, 1, e) || !w) {
+// --- the gun and hit points (Phase 44) ---------------------------------------
+//
+// These are READS of a weapon the runtime already stepped, plus two verbs
+// (reload, fire) that the weapon itself may refuse. A script never owns the
+// fire-rate clock: it asks, and the same cadence that governs the trigger
+// governs the script, so a Lua turret and a player's rifle cannot drift apart.
+
+int l_weapon_ammo(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const f32 ammo = (input != nullptr && input->weapon_ammo) ? input->weapon_ammo() : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(ammo));
+    return 1;
+}
+
+int l_weapon_reserve(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const f32 reserve = (input != nullptr && input->weapon_reserve) ? input->weapon_reserve() : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(reserve));
+    return 1;
+}
+
+int l_weapon_reloading(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const bool reloading =
+        (input != nullptr && input->weapon_reloading) ? input->weapon_reloading() : false;
+    lua_pushboolean(L, reloading ? 1 : 0);
+    return 1;
+}
+
+int l_weapon_reload(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const bool started = (input != nullptr && input->weapon_reload) ? input->weapon_reload() : false;
+    lua_pushboolean(L, started ? 1 : 0);
+    return 1;
+}
+
+int l_weapon_fire(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const f32 traced = (input != nullptr && input->weapon_fire) ? input->weapon_fire() : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(traced));
+    return 1;
+}
+
+// nf.last_hit() -> hit, x, y, z, distance.
+int l_last_hit(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    bool hit = false;
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+    f32 distance = 0.0f;
+    if (input != nullptr && input->last_hit) {
+        input->last_hit(hit, x, y, z, distance);
+    }
+    lua_pushboolean(L, hit ? 1 : 0);
+    lua_pushnumber(L, static_cast<lua_Number>(x));
+    lua_pushnumber(L, static_cast<lua_Number>(y));
+    lua_pushnumber(L, static_cast<lua_Number>(z));
+    lua_pushnumber(L, static_cast<lua_Number>(distance));
+    return 5;
+}
+
+// nf.impact_count() -> number of impacts in the previous completed frame.
+int l_impact_count(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const u32 count = (input != nullptr && input->impact_count) ? input->impact_count() : 0u;
+    lua_pushinteger(L, static_cast<lua_Integer>(count));
+    return 1;
+}
+
+// nf.impact(i) -> table, or nil. Lua indices are 1-based; the runtime's vector
+// is 0-based, so the conversion happens here and nowhere else.
+int l_impact(lua_State* L) {
+    const lua_Integer index = luaL_checkinteger(L, 1);
+    const ScriptInput* input = bound_input(L);
+    ScriptImpact impact;
+    if (index < 1 || input == nullptr || !input->impact_at ||
+        !input->impact_at(static_cast<u32>(index - 1), impact)) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    lua_createtable(L, 0, 15);
+    const auto set_int = [L](const char* key, lua_Integer value) {
+        lua_pushinteger(L, value);
+        lua_setfield(L, -2, key);
+    };
+    const auto set_num = [L](const char* key, lua_Number value) {
+        lua_pushnumber(L, value);
+        lua_setfield(L, -2, key);
+    };
+    const auto set_bool = [L](const char* key, bool value) {
+        lua_pushboolean(L, value ? 1 : 0);
+        lua_setfield(L, -2, key);
+    };
+    set_int("shooter", static_cast<lua_Integer>(impact.shooter_id));
+    set_int("shooter_gen", static_cast<lua_Integer>(impact.shooter_generation));
+    set_int("target", static_cast<lua_Integer>(impact.target_id));
+    set_int("target_gen", static_cast<lua_Integer>(impact.target_generation));
+    lua_pushlstring(L, impact.target_name.data(),
+                    static_cast<size_t>(impact.target_name.size()));
+    lua_setfield(L, -2, "name");
+    set_num("x", static_cast<lua_Number>(impact.x));
+    set_num("y", static_cast<lua_Number>(impact.y));
+    set_num("z", static_cast<lua_Number>(impact.z));
+    set_num("nx", static_cast<lua_Number>(impact.nx));
+    set_num("ny", static_cast<lua_Number>(impact.ny));
+    set_num("nz", static_cast<lua_Number>(impact.nz));
+    set_num("distance", static_cast<lua_Number>(impact.distance));
+    set_num("damage", static_cast<lua_Number>(impact.damage));
+    set_num("applied", static_cast<lua_Number>(impact.applied));
+    lua_pushlstring(L, impact.hit_zone.data(), impact.hit_zone.size());
+    lua_setfield(L, -2, "zone");
+    set_num("armor_absorbed", static_cast<lua_Number>(impact.armor_absorbed));
+    lua_pushlstring(L, impact.damage_type.data(), impact.damage_type.size());
+    lua_setfield(L, -2, "damage_type");
+    set_bool("blocked", impact.blocked_by_faction);
+    set_bool("killed", impact.killed);
+    set_bool("splash", impact.splash);
+    set_bool("status", impact.status);
+    return 1;
+}
+
+// nf.shot_count() -> number of shots in the previous completed frame.
+int l_shot_count(lua_State* L) {
+    const ScriptInput* input = bound_input(L);
+    const u32 count = (input != nullptr && input->shot_count) ? input->shot_count() : 0u;
+    lua_pushinteger(L, static_cast<lua_Integer>(count));
+    return 1;
+}
+
+// nf.shot(i) -> table, or nil. 1-based, like nf.impact.
+int l_shot(lua_State* L) {
+    const lua_Integer index = luaL_checkinteger(L, 1);
+    const ScriptInput* input = bound_input(L);
+    ScriptShot shot;
+    if (index < 1 || input == nullptr || !input->shot_at ||
+        !input->shot_at(static_cast<u32>(index - 1), shot)) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    lua_createtable(L, 0, 13);
+    const auto set_int = [L](const char* key, lua_Integer value) {
+        lua_pushinteger(L, value);
+        lua_setfield(L, -2, key);
+    };
+    const auto set_num = [L](const char* key, lua_Number value) {
+        lua_pushnumber(L, value);
+        lua_setfield(L, -2, key);
+    };
+    const auto set_bool = [L](const char* key, bool value) {
+        lua_pushboolean(L, value ? 1 : 0);
+        lua_setfield(L, -2, key);
+    };
+    set_int("shooter", static_cast<lua_Integer>(shot.shooter_id));
+    set_int("shooter_gen", static_cast<lua_Integer>(shot.shooter_generation));
+    set_num("x", static_cast<lua_Number>(shot.x));
+    set_num("y", static_cast<lua_Number>(shot.y));
+    set_num("z", static_cast<lua_Number>(shot.z));
+    set_num("dx", static_cast<lua_Number>(shot.dx));
+    set_num("dy", static_cast<lua_Number>(shot.dy));
+    set_num("dz", static_cast<lua_Number>(shot.dz));
+    set_num("damage", static_cast<lua_Number>(shot.damage));
+    set_int("pellet", static_cast<lua_Integer>(shot.pellet));
+    set_int("pellets", static_cast<lua_Integer>(shot.pellets));
+    set_int("seed", static_cast<lua_Integer>(shot.seed));
+    set_bool("projectile", shot.projectile);
+    return 1;
+}
+
+// nf.apply_status(id, gen, kind, dps, seconds, tick=0.5) -> bool.
+int l_apply_status(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* kind = luaL_checkstring(L, 3);
+    const f32 dps = static_cast<f32>(luaL_checknumber(L, 4));
+    const f32 seconds = static_cast<f32>(luaL_checknumber(L, 5));
+    const f32 tick = static_cast<f32>(luaL_optnumber(L, 6, 0.5));
+    const ScriptInput* input = bound_input(L);
+    const bool ok = (input != nullptr && input->apply_status)
+                        ? input->apply_status(e.id, e.generation, kind, dps, seconds, tick)
+                        : false;
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+// nf.status_remaining(id, gen, kind) -> seconds, 0 when absent.
+int l_status_remaining(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    const char* kind = luaL_checkstring(L, 3);
+    const ScriptInput* input = bound_input(L);
+    const f32 seconds = (input != nullptr && input->status_remaining)
+                            ? input->status_remaining(e.id, e.generation, kind)
+                            : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(seconds));
+    return 1;
+}
+
+// nf.clear_status(id, gen, kind) -> bool.
+int l_clear_status(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* kind = luaL_checkstring(L, 3);
+    const ScriptInput* input = bound_input(L);
+    const bool ok = (input != nullptr && input->clear_status)
+                        ? input->clear_status(e.id, e.generation, kind)
+                        : false;
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+// nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.
+int l_health(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        return 2;
+    }
+    const ScriptInput* input = bound_input(L);
+    f32 current = 0.0f;
+    f32 maximum = 0.0f;
+    if (input != nullptr && input->health_of) {
+        input->health_of(e.id, e.generation, current, maximum);
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(current));
+    lua_pushnumber(L, static_cast<lua_Number>(maximum));
+    return 2;
+}
+
+// nf.damage(id, gen, amount) -> applied.
+int l_damage(lua_State* L) {
+    ecs::Entity e;
+    if (!check_entity(L, 1, e)) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    const f32 amount = static_cast<f32>(luaL_checknumber(L, 3));
+    const ScriptInput* input = bound_input(L);
+    const f32 applied =
+        (input != nullptr && input->damage) ? input->damage(e.id, e.generation, amount) : 0.0f;
+    lua_pushnumber(L, static_cast<lua_Number>(applied));
+    return 1;
+}
+
+int l_set_entity_scale(lua_State* L) {    ecs::World* w = bound_world(L);    ecs::Entity e;    if (!check_entity(L, 1, e) || !w) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -319,6 +574,36 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "shake");
     lua_pushcfunction(L, l_recoil);
     lua_setfield(L, -2, "recoil");
+    lua_pushcfunction(L, l_weapon_ammo);
+    lua_setfield(L, -2, "weapon_ammo");
+    lua_pushcfunction(L, l_weapon_reserve);
+    lua_setfield(L, -2, "weapon_reserve");
+    lua_pushcfunction(L, l_weapon_reloading);
+    lua_setfield(L, -2, "weapon_reloading");
+    lua_pushcfunction(L, l_weapon_reload);
+    lua_setfield(L, -2, "weapon_reload");
+    lua_pushcfunction(L, l_weapon_fire);
+    lua_setfield(L, -2, "weapon_fire");
+    lua_pushcfunction(L, l_last_hit);
+    lua_setfield(L, -2, "last_hit");
+    lua_pushcfunction(L, l_impact_count);
+    lua_setfield(L, -2, "impact_count");
+    lua_pushcfunction(L, l_impact);
+    lua_setfield(L, -2, "impact");
+    lua_pushcfunction(L, l_shot_count);
+    lua_setfield(L, -2, "shot_count");
+    lua_pushcfunction(L, l_shot);
+    lua_setfield(L, -2, "shot");
+    lua_pushcfunction(L, l_health);
+    lua_setfield(L, -2, "health");
+    lua_pushcfunction(L, l_damage);
+    lua_setfield(L, -2, "damage");
+    lua_pushcfunction(L, l_apply_status);
+    lua_setfield(L, -2, "apply_status");
+    lua_pushcfunction(L, l_status_remaining);
+    lua_setfield(L, -2, "status_remaining");
+    lua_pushcfunction(L, l_clear_status);
+    lua_setfield(L, -2, "clear_status");
     lua_pop(L, 1);
 }
 

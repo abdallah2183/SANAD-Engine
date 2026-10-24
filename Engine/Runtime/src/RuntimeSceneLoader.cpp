@@ -272,6 +272,10 @@ static bool parse_post_process(const std::string& line, PostProcessComponent& ou
     // than what its author wrote. The target frame rate uses the same bounds
     // the editor slider uses.
     out.dynamic_resolution = line.find("dynamic_resolution=true") != std::string::npos;
+    // The window policy is an alternative decision source for the SAME scale:
+    // it reads the same ceiling/floor/target, so it needs no keys of its own
+    // beyond the switch.
+    out.frame_policy = line.find("frame_policy=true") != std::string::npos;
     if (!optional_float_in_range(line, "target_fps=", rendering::kMinTargetFps,
                                  rendering::kMaxTargetFps, out.target_fps, out_bad)) {
         return false;
@@ -283,6 +287,23 @@ static bool parse_post_process(const std::string& line, PostProcessComponent& ou
     if (out.min_render_scale > out.render_scale) {
         out_bad = "min_render_scale=";
         return false;
+    }
+    // Phase 40: the governor's load clock. `cpu` is the default and is never
+    // written because its absence already means CPU; `gpu` opts into the real
+    // timestamp sample (with an automatic CPU fallback when none is fresh).
+    // A closed set: a typo must fail by name, not silently run on the CPU.
+    {
+        const std::string timing = field_value(line, "dynamic_resolution_timing=");
+        if (!timing.empty()) {
+            if (timing == "cpu") {
+                out.dynamic_resolution_timing = kDynamicResolutionTimingCpu;
+            } else if (timing == "gpu") {
+                out.dynamic_resolution_timing = kDynamicResolutionTimingGpu;
+            } else {
+                out_bad = "dynamic_resolution_timing=";
+                return false;
+            }
+        }
     }
 
     // Exposure and the tonemap operator, both OPT-IN. The sentinels (0 and -1)
@@ -449,6 +470,344 @@ static bool parse_nav_agent(const std::string& line, NavAgentComponent& out, std
     // The arrival radius must be positive: zero makes "arrived" unreachable on a
     // rounded waypoint, so an agent would orbit its goal forever.
     if (!optional_float_in_range(line, "arrive=", 0.001f, 100.0f, out.arrive_radius, out_bad)) return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+// --- Weapons and hit points (Phase 44) --------------------------------------
+//
+// The two lines follow the contract the rest of the format keeps: every key is
+// optional, an absent key keeps the component's default, and a key that is
+// present but impossible rejects the WHOLE line with a warning naming the key.
+// Half a weapon is worse than no weapon: a scene whose magazine was accepted
+// and whose cadence was not would fire at the engine's default rate and look
+// like the author's number was ignored.
+//
+// The bounds are what the runtime can honour, not taste. 3600 rpm is the
+// fastest cadence the clock represents (kMaxRoundsPerMinute); a spread past 90
+// degrees is a weapon that shoots behind itself, which no scene means.
+
+static bool parse_weapon(const std::string& line, WeaponProfile& out, std::string& out_bad) {
+    const std::string mode = field_value(line, "mode=");
+    if (!mode.empty() && !fire_mode_from_name(mode, out.mode)) {
+        out_bad = "mode";
+        return false;
+    }
+    const std::string delivery = field_value(line, "delivery=");
+    if (!delivery.empty() && !weapon_delivery_from_name(delivery, out.delivery)) {
+        out_bad = "delivery";
+        return false;
+    }
+    const std::string damage_type = field_value(line, "damage_type=");
+    if (!damage_type.empty() && !damage_type_from_name(damage_type, out.damage_type)) {
+        out_bad = "damage_type";
+        return false;
+    }
+    const std::string status = field_value(line, "status=");
+    if (!status.empty() && !status_kind_from_name(status, out.status)) {
+        out_bad = "status";
+        return false;
+    }
+    if (!optional_float_in_range(line, "status_dps=", 0.0f, 1000000.0f,
+                                 out.status_damage_per_second, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "status_time=", 0.0f, 3600.0f, out.status_seconds,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "status_tick=", 0.01f, 60.0f, out.status_tick_seconds,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "rpm=", 1.0f, kMaxRoundsPerMinute,
+                                 out.rounds_per_minute, out_bad)) {
+        return false;
+    }
+    if (!optional_int_in_range(line, "magazine=", 1, 10000, out.magazine, out_bad)) return false;
+    if (!optional_int_in_range(line, "reserve=", 0, 100000, out.reserve, out_bad)) return false;
+    if (!optional_float_in_range(line, "reload=", 0.0f, 60.0f, out.reload_seconds, out_bad)) {
+        return false;
+    }
+    if (!optional_int_in_range(line, "burst=", 1, 100, out.burst_count, out_bad)) return false;
+    if (!optional_float_in_range(line, "burst_gap=", 0.0f, 10.0f, out.burst_gap_seconds,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "damage=", 0.0f, 100000.0f, out.damage, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "range=", 0.001f, 100000.0f, out.range, out_bad)) {
+        return false;
+    }
+    // Projectile delivery (Phase 46). The keys are accepted on a hitscan line
+    // too, but mean nothing there and are not written back; a scene that flips
+    // delivery later therefore does not need to retype them.
+    if (!optional_float_in_range(line, "speed=", 0.001f, 100000.0f, out.projectile_speed,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "gravity=", 0.0f, 1000.0f, out.projectile_gravity,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_int_in_range(line, "pellets=", 1, 64, out.pellets, out_bad)) return false;
+    // Radial blast (Phase 51). All three keys are optional and zero by default,
+    // so a weapon line written before this phase keeps its exact behaviour.
+    if (!optional_float_in_range(line, "blast_radius=", 0.0f, 1000.0f, out.blast_radius,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "blast_damage=", 0.0f, 1000000.0f, out.blast_damage,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "blast_min=", 0.0f, 1.0f, out.blast_min_scale, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "spread=", 0.0f, 90.0f, out.spread_deg, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "bloom=", 0.0f, 90.0f, out.spread_bloom_deg, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "spread_max=", 0.001f, 90.0f, out.spread_max_deg,
+                                 out_bad)) {
+        return false;
+    }
+    // The ceiling must be at least the floor, or the cone the weapon reports
+    // and the cone it may reach disagree from the first shot.
+    if (out.spread_max_deg < out.spread_deg) {
+        out_bad = "spread_max";
+        return false;
+    }
+    if (!optional_float_in_range(line, "recover=", 0.0f, 1000.0f, out.spread_recover_deg_per_s,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "recoil=", 0.0f, 45.0f, out.recoil_pitch, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "recoil_yaw=", 0.0f, 45.0f, out.recoil_yaw, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "recoil_growth=", 0.0f, 10.0f, out.recoil_growth,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "falloff_start=", 0.0f, 100000.0f, out.falloff_start,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "falloff_end=", 0.0f, 100000.0f, out.falloff_end,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "falloff_min=", 0.0f, 1.0f, out.falloff_min_scale,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "pierce=", 0.0f, 1.0f, out.armor_penetration, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "shake=", 0.0f, 1.0f, out.shake, out_bad)) return false;
+    if (!optional_int_in_range(line, "seed=", 0, 4294967295LL, out.seed, out_bad)) return false;
+    out.auto_reload = line.find("auto_reload=false") == std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+static bool parse_health(const std::string& line, HealthComponent& out, std::string& out_bad) {
+    const f32 authored_max = out.max_health;
+    if (!optional_float_in_range(line, "max=", 0.001f, 1000000.0f, out.max_health, out_bad)) {
+        return false;
+    }
+    // Current hit points default to the MAXIMUM, not to the component's
+    // default of 100: a scene that writes `max=250` and nothing else means a
+    // healthy 250, not a wounded 100.
+    if (out.health == authored_max) {
+        out.health = out.max_health;
+    }
+    if (!optional_float_in_range(line, "health=", 0.0f, 1000000.0f, out.health, out_bad)) {
+        return false;
+    }
+    if (out.health > out.max_health) {
+        out.health = out.max_health;
+    }
+    if (!optional_float_in_range(line, "regen=", 0.0f, 100000.0f, out.regen_per_second, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "regen_delay=", 0.0f, 3600.0f, out.regen_delay, out_bad)) {
+        return false;
+    }
+    // Armor (Phase 50). `armor=` is the CURRENT pool and `armor_max=` the
+    // denominator; an authored current without a maximum means a full vest, so
+    // `armor=50` is the obvious thing an author expects. A current above its
+    // maximum is clamped for the same reason health is.
+    const bool has_armor = line.find("armor=") != std::string::npos;
+    const bool has_armor_max = line.find("armor_max=") != std::string::npos;
+    if (!optional_float_in_range(line, "armor=", 0.0f, 1000000.0f, out.armor, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "armor_max=", 0.0f, 1000000.0f, out.max_armor, out_bad)) {
+        return false;
+    }
+    if (has_armor && !has_armor_max) {
+        out.max_armor = out.armor;
+    } else if (has_armor_max && !has_armor) {
+        // A scene that names only the ceiling means a full pool, the same way
+        // `Health: max=250` without `health=` starts at 250.
+        out.armor = out.max_armor;
+    }
+    if (out.max_armor <= 0.0f) {
+        // An armor pool with no denominator is not a pool: a scene that wrote
+        // only a current value gets its current value as the maximum above,
+        // and a scene that wrote neither stays at zero (armor disabled).
+        out.armor = 0.0f;
+    } else if (out.armor > out.max_armor) {
+        out.armor = out.max_armor;
+    }
+    if (!optional_float_in_range(line, "absorb=", 0.0f, 1.0f, out.armor_absorb, out_bad)) {
+        return false;
+    }
+    out.hit_zones = line.find("zones=true") != std::string::npos;
+    if (!optional_float_in_range(line, "head=", 0.001f, 100.0f, out.headshot_multiplier,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "limb=", 0.0f, 100.0f, out.limb_multiplier, out_bad)) {
+        return false;
+    }
+    // Per-type resistance (Phase 52). All three are optional and zero by
+    // default, so a pre-Phase-52 health line keeps its exact damage.
+    if (!optional_float_in_range(line, "resist_ballistic=", 0.0f, 1.0f,
+                                 out.ballistic_resistance, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "resist_explosive=", 0.0f, 1.0f,
+                                 out.explosive_resistance, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "resist_fire=", 0.0f, 1.0f, out.fire_resistance,
+                                 out_bad)) {
+        return false;
+    }
+    out.invulnerable = line.find("invulnerable=true") != std::string::npos;
+    out.enabled = line.find("enabled=false") != std::string::npos;
+    return true;
+}
+
+// One status entry: `burn=4,3,0.5` = dps, seconds, tick. A missing tick uses
+// half a second. The whole entry is refused on a malformed list, so a scene
+// cannot get a burn with no duration.
+static bool parse_status_entry(const std::string& line, const char* key, StatusKind kind,
+                               StatusEffectSet& out, std::string& out_bad) {
+    std::string value = field_value(line, key);
+    if (value.empty()) {
+        return true;
+    }
+    for (char& c : value) {
+        if (c == ',') {
+            c = ' ';
+        }
+    }
+    std::istringstream in(value);
+    std::vector<f32> numbers;
+    f32 number = 0.0f;
+    while (in >> number) {
+        numbers.push_back(number);
+    }
+    if (in.fail() && !in.eof()) {
+        out_bad = key;
+        return false;
+    }
+    if (numbers.size() < 2u || numbers.size() > 3u) {
+        out_bad = key;
+        return false;
+    }
+    const f32 tick = numbers.size() == 3u ? numbers[2] : 0.5f;
+    const StatusEffect effect = make_status(kind, numbers[0], numbers[1], tick);
+    if (!status_valid(effect) || !status_add(out, effect)) {
+        out_bad = key;
+        return false;
+    }
+    return true;
+}
+
+// `Status:` (Phase 54). The three effects are authored independently; a bad
+// one rejects the whole line, exactly like a bad Health key.
+static bool parse_status(const std::string& line, StatusEffectComponent& out,
+                         std::string& out_bad) {
+    if (!parse_status_entry(line, "burn=", StatusKind::Burning, out.effects, out_bad)) {
+        return false;
+    }
+    if (!parse_status_entry(line, "bleed=", StatusKind::Bleeding, out.effects, out_bad)) {
+        return false;
+    }
+    if (!parse_status_entry(line, "corrode=", StatusKind::Corroding, out.effects, out_bad)) {
+        return false;
+    }
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+// A combat agent (Phase 45). Every key is optional except the target, which is
+// free text and therefore written LAST — the same rule `follow=` follows, and
+// for the same reason: a name with a space would otherwise be read as two
+// fields.
+static bool parse_combat_agent(const std::string& line, CombatAgentComponent& out,
+                               std::string& out_bad) {
+    if (!optional_float_in_range(line, "eye=", 0.0f, 10.0f, out.eye_height, out_bad)) return false;
+    if (!optional_float_in_range(line, "aim=", 0.0f, 10.0f, out.target_height, out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "reaction=", 0.0f, 10.0f, out.config.reaction_seconds,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "turn=", 0.0f, 3600.0f, out.config.aim_speed_deg_per_s,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "cone=", 0.0f, 90.0f, out.config.fire_cone_deg,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "range=", 0.1f, 10000.0f, out.config.max_range,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "burst=", 0.0f, 60.0f, out.config.burst_on_seconds,
+                                 out_bad)) {
+        return false;
+    }
+    if (!optional_float_in_range(line, "rest=", 0.0f, 60.0f, out.config.burst_off_seconds,
+                                 out_bad)) {
+        return false;
+    }
+    out.target = field_value(line, "target=");
+    out.auto_target = line.find("auto_target=true") != std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    // An agent with no target is legal (it stands there), but an agent whose
+    // cone is empty can never fire, which is a scene bug worth naming.
+    if (out.config.fire_cone_deg <= 0.0f) {
+        out_bad = "cone";
+        return false;
+    }
+    return true;
+}
+
+static bool parse_faction(const std::string& line, FactionComponent& out,
+                          std::string& out_bad) {
+    // `team=` is a token, not free text: a name with a space would make the
+    // saved line ambiguous. It is written first and read with field_value,
+    // which already stops at whitespace.
+    out.team = field_value(line, "team=");
+    if (out.team.size() > 64u) {
+        out_bad = "team";
+        return false;
+    }
+    out.friendly_fire = line.find("friendly_fire=true") != std::string::npos;
     out.enabled = line.find("enabled=false") == std::string::npos;
     return true;
 }
@@ -1428,6 +1787,65 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 } else {
                     scene->world().add<NavAgentComponent>(e, std::move(comp));
                 }
+            } else if (line.rfind("  Weapon:",0)==0) {
+                // A gun (Phase 44): the authored profile only. The live state
+                // (rounds left, cooldown, burst queue) is session data and is
+                // built from the profile, so a loaded scene always starts with
+                // the magazine the file describes.
+                WeaponProfile profile;
+                std::string bad;
+                if (!parse_weapon(line, profile, bad) || !weapon_valid(profile)) {
+                    result.warnings.push_back("Weapon line with invalid '" +
+                                              (bad.empty() ? std::string("profile") : bad) +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<WeaponComponent>(e, WeaponComponent{profile});
+                }
+            } else if (line.rfind("  Health:",0)==0) {
+                HealthComponent health;
+                std::string bad;
+                if (!parse_health(line, health, bad) || !health_valid(health)) {
+                    result.warnings.push_back("Health line with invalid '" +
+                                              (bad.empty() ? std::string("profile") : bad) +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<HealthComponent>(e, health);
+                }
+            } else if (line.rfind("  Status:",0)==0) {
+                // Active effects can be authored for an environmental hazard
+                // (a burning room) or restored from a save. Source is session
+                // data and is left invalid on load.
+                StatusEffectComponent status;
+                std::string bad;
+                if (!parse_status(line, status, bad)) {
+                    result.warnings.push_back("Status line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else if (status.effects.count > 0u) {
+                    scene->world().add<StatusEffectComponent>(e, status);
+                }
+            } else if (line.rfind("  CombatAgent:",0)==0) {
+                // An NPC that shoots (Phase 45). Configuration only; the aim
+                // between frames is session state and is never parsed.
+                CombatAgentComponent agent;
+                std::string bad;
+                if (!parse_combat_agent(line, agent, bad)) {
+                    result.warnings.push_back("CombatAgent line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<CombatAgentComponent>(e, std::move(agent));
+                }
+            } else if (line.rfind("  Faction:",0)==0) {
+                // Affiliation (Phase 46). No component means neutral; the
+                // component exists so a team can be authored without inventing
+                // a field on Health or Weapon.
+                FactionComponent faction;
+                std::string bad;
+                if (!parse_faction(line, faction, bad)) {
+                    result.warnings.push_back("Faction line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<FactionComponent>(e, std::move(faction));
+                }
             } else if (line.rfind("  Vehicle:",0)==0) {
                 // A drivable car: configuration only. The four drive inputs
                 // are live state (same rule as Character's wish_dir/jump) and
@@ -1696,6 +2114,16 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 out << " dynamic_resolution=true"
                     << " target_fps=" << pp->target_fps
                     << " min_render_scale=" << pp->min_render_scale;
+                // CPU is the absent/default state; only the opt-in GPU clock
+                // adds a key, so a Phase 38/39 scene round-trips byte-identically.
+                if (pp->dynamic_resolution_timing == kDynamicResolutionTimingGpu) {
+                    out << " dynamic_resolution_timing=gpu";
+                }
+            }
+            // The window policy shares the governor's ceiling/floor/target, so
+            // it is a single switch and only written when a scene names it.
+            if (pp->frame_policy) {
+                out << " frame_policy=true";
             }
             // Written ONLY when authored. These two have sentinels, so an
             // unconditional write would turn every scene into one that names an
@@ -1792,6 +2220,159 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             if (!c->follow_target.empty()) {
                 out << " follow=" << c->follow_target;
+            }
+            out << "\n";
+        }
+        // The gun (Phase 44). Written in full, like Sky and Decal: the line is
+        // new, so there is no older file whose bytes must be preserved, and a
+        // reader can see every number a weapon has without opening the code.
+        // The burst pair is the exception — it only means anything in burst
+        // mode, and writing it for a rifle would suggest it did.
+        const auto* wc = scene_obj.world().get<WeaponComponent>(e);
+        if (wc) {
+            const WeaponProfile& w = wc->profile;
+            out << "  Weapon: mode=" << fire_mode_name(w.mode)
+                << " rpm=" << w.rounds_per_minute << " magazine=" << w.magazine
+                << " reserve=" << w.reserve << " reload=" << w.reload_seconds
+                << " damage=" << w.damage << " range=" << w.range
+                << " pellets=" << w.pellets << " spread=" << w.spread_deg
+                << " bloom=" << w.spread_bloom_deg << " spread_max=" << w.spread_max_deg
+                << " recover=" << w.spread_recover_deg_per_s
+                << " recoil=" << w.recoil_pitch << " recoil_yaw=" << w.recoil_yaw
+                << " recoil_growth=" << w.recoil_growth
+                << " falloff_start=" << w.falloff_start << " falloff_end=" << w.falloff_end
+                << " falloff_min=" << w.falloff_min_scale;
+            // Phase 50 is opt-in: an old line that never authored penetration
+            // round-trips without a new key.
+            if (w.damage_type != DamageType::Ballistic) {
+                out << " damage_type=" << damage_type_name(w.damage_type);
+            }
+            if (w.armor_penetration > 0.0f) {
+                out << " pierce=" << w.armor_penetration;
+            }
+            // A blast is opt-in too. Write all three values together so the
+            // line cannot describe a radius with no damage or vice versa.
+            if (w.blast_radius > 0.0f || w.blast_damage > 0.0f) {
+                out << " blast_radius=" << w.blast_radius
+                    << " blast_damage=" << w.blast_damage
+                    << " blast_min=" << w.blast_min_scale;
+            }
+            if (w.status != StatusKind::None) {
+                out << " status=" << status_kind_name(w.status)
+                    << " status_dps=" << w.status_damage_per_second
+                    << " status_time=" << w.status_seconds
+                    << " status_tick=" << w.status_tick_seconds;
+            }
+            out << " shake=" << w.shake << " seed=" << w.seed;
+            // Hitscan is the historical default, so it writes no key. A
+            // projectile writes its delivery and the two numbers that define
+            // its flight; keeping them off a hitscan line is what lets an
+            // older file round-trip byte-for-byte.
+            if (w.delivery == WeaponDelivery::Projectile) {
+                out << " delivery=projectile speed=" << w.projectile_speed
+                    << " gravity=" << w.projectile_gravity;
+            }
+            if (w.mode == FireMode::Burst) {
+                out << " burst=" << w.burst_count << " burst_gap=" << w.burst_gap_seconds;
+            }
+            if (!w.auto_reload) {
+                out << " auto_reload=false";
+            }
+            if (!w.enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
+        // Hit points. `health` is written as the CURRENT value: a scene saved
+        // mid-fight saves the wound, which is what "the scene says where this
+        // entity is" means everywhere else in this format.
+        const auto* hc = scene_obj.world().get<HealthComponent>(e);
+        if (hc) {
+            out << "  Health: max=" << hc->max_health << " health=" << hc->health;
+            if (hc->regen_per_second != 0.0f) {
+                out << " regen=" << hc->regen_per_second;
+            }
+            if (hc->regen_delay != 0.0f) {
+                out << " regen_delay=" << hc->regen_delay;
+            }
+            // Armor and zones are opt-in. The pair is written only when an
+            // armor pool exists, so a pre-Phase-50 scene stays byte-identical.
+            if (hc->max_armor > 0.0f || hc->armor > 0.0f) {
+                out << " armor=" << hc->armor << " armor_max=" << hc->max_armor
+                    << " absorb=" << hc->armor_absorb;
+            }
+            if (hc->hit_zones) {
+                out << " zones=true head=" << hc->headshot_multiplier
+                    << " limb=" << hc->limb_multiplier;
+            }
+            // Resistance is written only when authored, one key per type, so a
+            // scene that has none keeps its old line byte for byte.
+            if (hc->ballistic_resistance > 0.0f) {
+                out << " resist_ballistic=" << hc->ballistic_resistance;
+            }
+            if (hc->explosive_resistance > 0.0f) {
+                out << " resist_explosive=" << hc->explosive_resistance;
+            }
+            if (hc->fire_resistance > 0.0f) {
+                out << " resist_fire=" << hc->fire_resistance;
+            }
+            if (hc->invulnerable) {
+                out << " invulnerable=true";
+            }
+            if (!hc->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
+        // Active status effects (Phase 54). The remaining time is saved, like
+        // health, so a scene saved mid-burn resumes with the fire still on it.
+        // The source entity is session data and is not written.
+        const auto* status = scene_obj.world().get<StatusEffectComponent>(e);
+        if (status != nullptr && status->effects.count > 0u) {
+            out << "  Status:";
+            for (u32 i = 0; i < status->effects.count; ++i) {
+                const StatusEffect& effect = status->effects.effects[i];
+                out << " " << status_kind_name(effect.kind) << "="
+                    << effect.damage_per_second << "," << effect.remaining_seconds
+                    << "," << effect.tick_seconds;
+            }
+            if (!status->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
+        // An NPC that fights (Phase 45). `target=` is free text and therefore
+        // last, the same rule the camera's `follow=` follows.
+        const auto* ca = scene_obj.world().get<CombatAgentComponent>(e);
+        if (ca) {
+            out << "  CombatAgent: eye=" << ca->eye_height << " aim=" << ca->target_height
+                << " reaction=" << ca->config.reaction_seconds
+                << " turn=" << ca->config.aim_speed_deg_per_s
+                << " cone=" << ca->config.fire_cone_deg << " range=" << ca->config.max_range
+                << " burst=" << ca->config.burst_on_seconds
+                << " rest=" << ca->config.burst_off_seconds;
+            if (!ca->enabled) {
+                out << " enabled=false";
+            }
+            if (ca->auto_target) {
+                out << " auto_target=true";
+            }
+            if (!ca->target.empty()) {
+                out << " target=" << ca->target;
+            }
+            out << "\n";
+        }
+        // Affiliation (Phase 46). An empty team writes no line: the component
+        // is semantically identical to its absence, so preserving bytes for a
+        // neutral entity matters more than recording an empty component.
+        const auto* fc = scene_obj.world().get<FactionComponent>(e);
+        if (fc && !fc->team.empty()) {
+            out << "  Faction: team=" << fc->team;
+            if (fc->friendly_fire) {
+                out << " friendly_fire=true";
+            }
+            if (!fc->enabled) {
+                out << " enabled=false";
             }
             out << "\n";
         }
@@ -2104,6 +2685,43 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* c = src.get<CameraComponent>(se)) {
         dst.add<CameraComponent>(de, *c);
+    }
+    if (const auto* wc = src.get<WeaponComponent>(se)) {
+        // The profile is scene data; the state is rebuilt from it, so a copy
+        // of a scene in the middle of a burst starts with a full magazine —
+        // the same rule the physics body handle follows.
+        dst.add<WeaponComponent>(de, WeaponComponent{wc->profile});
+    }
+    if (const auto* hc = src.get<HealthComponent>(se)) {
+        HealthComponent fresh = *hc;
+        // The quiet clock is session state: a copied entity has not been shot.
+        fresh.since_damage = 0.0f;
+        dst.add<HealthComponent>(de, fresh);
+    }
+    if (const auto* sc = src.get<StatusEffectComponent>(se)) {
+        StatusEffectComponent fresh = *sc;
+        // The source entity is a session handle; a copied effect is
+        // environmental until a new hit names its shooter.
+        for (u32 i = 0; i < fresh.effects.count; ++i) {
+            fresh.effects.effects[i].source = ecs::kInvalidEntity;
+        }
+        dst.add<StatusEffectComponent>(de, fresh);
+    }
+    if (const auto* ca = src.get<CombatAgentComponent>(se)) {
+        CombatAgentComponent fresh = *ca;
+        // The aim between frames is session state: a copied agent starts
+        // facing wherever its Transform faces, not where the original was
+        // mid-turn.
+        fresh.state = CombatAimState{};
+        fresh.locked_target = ecs::kInvalidEntity;
+        fresh.last_target_position = Vec3{0.0f, 0.0f, 0.0f};
+        fresh.target_velocity = Vec3{0.0f, 0.0f, 0.0f};
+        fresh.has_target_history = false;
+        dst.add<CombatAgentComponent>(de, fresh);
+    }
+    if (const auto* fc = src.get<FactionComponent>(se)) {
+        // Affiliation is entirely authored data: copying it copies the side.
+        dst.add<FactionComponent>(de, *fc);
     }
     if (const auto* rb = src.get<physics::RigidBodyComponent>(se)) {
         physics::RigidBodyComponent fresh = *rb;

@@ -2,6 +2,7 @@
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Assert.hpp>
 
+#include <algorithm>
 #include <queue>
 #include <unordered_map>
 
@@ -249,10 +250,42 @@ bool RenderGraph::compile() {
     return true;
 }
 
+void RenderGraph::set_pass_timing(rhi::QueryPool* pool, u32 first_query, u32 max_passes) {
+    clear_pass_timing();
+    if (!pool || max_passes == 0 || first_query >= pool->count()) {
+        return;
+    }
+
+    // Each timed pass consumes a (begin, end) pair. Clamping here means a
+    // caller's estimate that is one pass too large records fewer samples
+    // instead of writing past the end of the pool.
+    const u32 available_pairs = (pool->count() - first_query) / 2;
+    if (available_pairs == 0) {
+        return;
+    }
+    m_pass_timing_pool = pool;
+    m_pass_timing_first = first_query;
+    m_pass_timing_max = std::min(max_passes, available_pairs);
+}
+
+void RenderGraph::clear_pass_timing() {
+    m_pass_timing_pool = nullptr;
+    m_pass_timing_first = 0;
+    m_pass_timing_max = 0;
+    m_pass_timings.clear();
+}
+
 void RenderGraph::execute(rhi::CommandBuffer& cmd) {
     NF_ASSERT(m_compiled, "RenderGraph::execute called before compile()");
     if (!m_compiled) {
         if (!compile()) return;
+    }
+
+    m_pass_timings.clear();
+    if (m_pass_timing_pool && m_pass_timing_max > 0) {
+        // clear() kept the previous capacity, so a steady-state frame does not
+        // allocate here; reserve only has an effect on the first timed frame.
+        m_pass_timings.reserve(m_pass_timing_max);
     }
 
     for (u32 pass_idx : m_execution_order) {
@@ -301,9 +334,32 @@ void RenderGraph::execute(rhi::CommandBuffer& cmd) {
             }
         }
 
-        // Execute the pass
+        // Execute the pass. Timestamps sit INSIDE the barrier work and directly
+        // around the pass body: the pass gets the blame for its own draws, not
+        // for the graph's transitions. BottomOfPipe at the end is what makes
+        // the duration real (and what makes this opt-in: it serialises the
+        // boundary between adjacent passes).
         if (pass.execute) {
+            const bool timed = m_pass_timing_pool != nullptr &&
+                               m_pass_timings.size() < m_pass_timing_max;
+            RGPassTiming sample;
+            if (timed) {
+                sample.name = pass.name;
+                sample.pass_index = pass_idx;
+                sample.begin_query = m_pass_timing_first +
+                                     static_cast<u32>(m_pass_timings.size() * 2);
+                sample.end_query = sample.begin_query + 1;
+                cmd.write_timestamp(*m_pass_timing_pool, sample.begin_query,
+                                    rhi::PipelineStage::TopOfPipe);
+            }
+
             pass.execute(cmd);
+
+            if (timed) {
+                cmd.write_timestamp(*m_pass_timing_pool, sample.end_query,
+                                    rhi::PipelineStage::BottomOfPipe);
+                m_pass_timings.push_back(std::move(sample));
+            }
         }
 
         // After the pass, update the state of written resources to reflect what the pass did
@@ -317,6 +373,10 @@ void RenderGraph::reset(bool keep_resources) {
     m_passes.clear();
     m_execution_order.clear();
     m_compiled = false;
+    // A rebuilt graph must not retain a pointer to a query pool that its
+    // renderer may recreate (resize, device loss) before the graph is used
+    // again. The renderer re-arms timing after rebuilding its pass list.
+    clear_pass_timing();
     if (!keep_resources) {
         m_resources.clear();
     }

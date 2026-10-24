@@ -60,6 +60,10 @@ read the design document.
 | [`Lua_Scripting_Ar.md`](Lua_Scripting_Ar.md) | Arabic Lua scripting reference. |
 | [`Asset_Import.md`](Asset_Import.md) | Importing glTF/GLB/OBJ/STL/PLY and `.nfmesh` assets. |
 | [`Blender_Pipeline.md`](Blender_Pipeline.md) | The shipped Blender add-on and its exporter settings. |
+| [`GPU_Profiling.md`](GPU_Profiling.md) | Real Vulkan timestamp queries: the two renderer toggles, runtime switch, GPU-aware dynamic resolution (fresh-sample gate, CPU fallback, wall-time cooldown), query layout, one-frame latency, overhead, and tests. |
+| [`Frame_Pacing.md`](Frame_Pacing.md) | Rolling-window frame telemetry: raw wall time, average/1% low/jitter, the CPU/GPU bound rule, editor rows, `NFPlayer --frame-stats`, and limits. |
+| [`Combat_Ballistics.md`](Combat_Ballistics.md) | Time-of-flight projectiles (speed, gravity, range-derived lifetime, swept segments), factions with friendly-fire filtering, faction-aware auto-targeting, projectile lead for moving targets, and per-frame impact events for effects: scene keys, runtime rules, editor sections, tests, and limits. |
+| [`Combat_Damage.md`](Combat_Damage.md) | Layered damage (hit zones, armor, penetration, per-type resistance), radial blasts, frame-local shot events for tracers/muzzle flashes, and damage-over-time statuses (burn/bleed/corrode): formulas, scene keys, event fields, editor fields, tests, and declared limits. |
 | [`Gamepad_Checklist.md`](Gamepad_Checklist.md) | Gamepad support checklist. |
 | [`Demo_Release.md`](Demo_Release.md) | What the 0.2.0 demo release is, and what it is not — including that it is **Windows only** (no Linux/macOS build yet). |
 

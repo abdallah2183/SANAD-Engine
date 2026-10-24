@@ -51,6 +51,22 @@ bool projector_might_see(const Mat4& view_proj, const BoundingSphere& sphere) {
     return true;
 }
 
+/// Converts two raw timestamps to milliseconds.
+///
+/// The 64-bit subtraction intentionally wraps. Vulkan guarantees only the low
+/// `valid_bits` of a timestamp are meaningful, so a counter that crossed 2^N
+/// produces a huge 64-bit difference that becomes the correct small delta once
+/// masked. `valid_bits == 64` needs no mask (and must not shift by 64).
+f64 timestamp_delta_ms(u64 begin, u64 end, u32 valid_bits, f64 period_ns) {
+    if (period_ns <= 0.0 || valid_bits == 0) return 0.0;
+    u64 delta = end - begin;
+    const u32 bits = std::min<u32>(valid_bits, 64);
+    if (bits < 64) {
+        delta &= (u64{1} << bits) - 1;
+    }
+    return static_cast<f64>(delta) * period_ns / 1'000'000.0;
+}
+
 } // namespace
 
 Renderer3D::~Renderer3D() { shutdown(); }
@@ -810,9 +826,133 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     m_height = height;
     if (!create_graph_targets()) return false;
 
+    create_gpu_timing_resources(device);
+
     NF_LOG_INFO(LogCategory::RHI, "Renderer3D initialized ({}x{}, render {}x{} scale {:.2f})",
                 m_width, m_height, m_render_width, m_render_height, m_render_scale);
     return true;
+}
+
+void Renderer3D::create_gpu_timing_resources(rhi::IGraphicsDevice& device) {
+    destroy_gpu_timing_resources();
+
+    if (!device.supports_timestamp_queries()) {
+        if (m_gpu_timing_enabled) {
+            NF_LOG_WARN(LogCategory::RHI,
+                        "Renderer3D: GPU timing requested but the device/queue has no timestamps");
+        }
+        return;
+    }
+
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        m_gpu_query_pools[slot] = device.create_timestamp_query_pool(kGpuQueryCount);
+        if (!m_gpu_query_pools[slot]) {
+            NF_LOG_WARN(LogCategory::RHI,
+                        "Renderer3D: timestamp query pool allocation failed; GPU timing disabled");
+            destroy_gpu_timing_resources();
+            return;
+        }
+    }
+    m_gpu_timer_supported = true;
+    NF_LOG_INFO(LogCategory::RHI, "GPU timestamps available: {} bits, {:.3f} ns/tick",
+                device.timestamp_valid_bits(), device.timestamp_period_ns());
+}
+
+void Renderer3D::destroy_gpu_timing_resources() {
+    for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+        m_gpu_query_pools[slot].reset();
+        m_gpu_pending[slot] = GpuPendingFrame{};
+    }
+    m_gpu_timer_supported = false;
+    m_gpu_frame_counter = 0;
+    clear_gpu_timing_stats();
+}
+
+void Renderer3D::clear_gpu_timing_stats() {
+    m_stats.gpu_timing_valid = false;
+    m_stats.gpu_sample_serial = 0;
+    m_stats.gpu_frame_ms = 0.0;
+    m_stats.gpu_passes.clear();
+}
+
+void Renderer3D::set_gpu_timing_enabled(bool enabled) {
+    if (m_gpu_timing_enabled == enabled) return;
+    m_gpu_timing_enabled = enabled;
+    if (!enabled) {
+        for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+            m_gpu_pending[slot].recorded = false;
+            m_gpu_pending[slot].passes.clear();
+        }
+        if (m_graph) m_graph->clear_pass_timing();
+        clear_gpu_timing_stats();
+    }
+}
+
+void Renderer3D::set_gpu_pass_timing_enabled(bool enabled) {
+    if (m_gpu_pass_timing_enabled == enabled) return;
+    m_gpu_pass_timing_enabled = enabled;
+    if (!enabled) {
+        // Drop pass samples already waiting to be consumed, so turning the
+        // breakdown off takes effect now rather than one slot later.
+        for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
+            m_gpu_pending[slot].passes.clear();
+        }
+        m_stats.gpu_passes.clear();
+    }
+}
+
+void Renderer3D::consume_gpu_timing(u32 frame_slot) {
+    auto& pending = m_gpu_pending[frame_slot];
+    auto& pool = m_gpu_query_pools[frame_slot];
+    if (!pending.recorded || !pool) return;
+
+    // Only queries that were actually written are pollable. The pass range can
+    // be shorter than kMaxTimedPasses (and is empty when per-pass timing is
+    // off), so reading the whole pool would see reset-but-unwritten queries and
+    // always report "not ready".
+    std::array<u64, 1> frame_begin{};
+    std::array<u64, 1> frame_end{};
+    if (!pool->get_results(frame_begin, kGpuFrameBeginQuery) ||
+        !pool->get_results(frame_end, kGpuFrameEndQuery)) {
+        // This pool is about to be reset for the new frame. Keeping the old
+        // names would attach them to the new results, so drop the sample.
+        pending.recorded = false;
+        pending.frame_index = 0;
+        pending.passes.clear();
+        return;
+    }
+
+    const u32 valid_bits = m_device->timestamp_valid_bits();
+    const f64 period_ns = m_device->timestamp_period_ns();
+    m_stats.gpu_frame_ms =
+        timestamp_delta_ms(frame_begin[0], frame_end[0], valid_bits, period_ns);
+    m_stats.gpu_timing_valid = true;
+    m_stats.gpu_sample_serial = ++m_gpu_sample_serial;
+    m_stats.gpu_passes.clear();
+
+    if (m_gpu_pass_timing_enabled && !pending.passes.empty()) {
+        std::array<u64, kMaxTimedPasses * 2> pass_stamps{};
+        const usize pass_count =
+            std::min<usize>(pending.passes.size(), kMaxTimedPasses);
+        const u32 pass_query_count = static_cast<u32>(pass_count * 2);
+        if (pool->get_results(
+                std::span<u64>(pass_stamps.data(), pass_query_count),
+                kGpuPassQueryBase)) {
+            m_stats.gpu_passes.reserve(pass_count);
+            for (usize i = 0; i < pass_count; ++i) {
+                GpuPassTiming sample;
+                sample.name = std::move(pending.passes[i].name);
+                sample.milliseconds =
+                    timestamp_delta_ms(pass_stamps[i * 2], pass_stamps[i * 2 + 1],
+                                       valid_bits, period_ns);
+                m_stats.gpu_passes.push_back(std::move(sample));
+            }
+        }
+    }
+
+    pending.recorded = false;
+    pending.frame_index = 0;
+    pending.passes.clear();
 }
 
 bool Renderer3D::create_graph_targets() {
@@ -1102,6 +1242,11 @@ void Renderer3D::shutdown() {
     if (!m_device) return;
     m_device->wait_idle();
     destroy_resolution_dependent();
+    // Query pools must die while the device is alive. The requested timing
+    // flags are deliberately preserved: a re-init of the same renderer keeps
+    // the caller's choice and re-creates the pools if the new device supports
+    // them.
+    destroy_gpu_timing_resources();
     for (u32 slot = 0; slot < kFramesInFlight; ++slot) {
         m_frame_uniforms[slot].reset();
         m_descriptor_allocators[slot].reset();
@@ -1435,6 +1580,19 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     // it does not depend on the output resolution.
     if (!ensure_shadow_atlas(m_shadow_tile_size)) return false;
     if (!ensure_local_shadow_atlas(m_local_shadow_tile_size)) return false;
+
+    // Consume the PREVIOUS frame recorded through this slot before its pool is
+    // reset. The per-slot fence contract means the results are ready; if a
+    // caller broke that contract the non-blocking poll simply loses the
+    // sample rather than stalling. Then start the new frame's bracket.
+    const bool gpu_timing =
+        gpu_timing_enabled() && m_gpu_query_pools[frame_slot] != nullptr;
+    if (gpu_timing) {
+        consume_gpu_timing(frame_slot);
+        auto& pool = *m_gpu_query_pools[frame_slot];
+        cmd.reset_query_pool(pool, 0, kGpuQueryCount);
+        cmd.write_timestamp(pool, kGpuFrameBeginQuery, rhi::PipelineStage::TopOfPipe);
+    }
 
     // SSAO stage state, decided once like bloom_on: the uniform fill, the
     // lighting binding, and the pass list below must agree, and a predicate
@@ -2882,7 +3040,33 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         NF_LOG_TRACE(LogCategory::RHI, "Renderer3D pass {}: {}", pi, m_graph->pass_name(pi));
     }
     NF_LOG_TRACE(LogCategory::RHI, "Renderer3D prepared meshes: {}", prepared.size());
+    if (gpu_timing && m_gpu_pass_timing_enabled) {
+        // reset() cleared the previous frame's configuration, so re-arm after
+        // the pass list has been rebuilt and before execute() consumes it.
+        m_graph->set_pass_timing(m_gpu_query_pools[frame_slot].get(),
+                                 kGpuPassQueryBase, kMaxTimedPasses);
+    }
     m_graph->execute(cmd);
+    if (gpu_timing) {
+        auto& pool = *m_gpu_query_pools[frame_slot];
+        cmd.write_timestamp(pool, kGpuFrameEndQuery, rhi::PipelineStage::BottomOfPipe);
+
+        // Copy the names and query indices NOW: present_texture() resets this
+        // same graph, which clears pass_timings(), and the editor presents in
+        // the same frame the scene rendered.
+        auto& pending = m_gpu_pending[frame_slot];
+        pending.recorded = true;
+        pending.frame_index = ++m_gpu_frame_counter;
+        pending.passes.clear();
+        if (m_gpu_pass_timing_enabled) {
+            const auto& timings = m_graph->pass_timings();
+            pending.passes.reserve(timings.size());
+            for (const auto& t : timings) {
+                pending.passes.push_back(
+                    GpuPendingPass{t.name, t.begin_query, t.end_query});
+            }
+        }
+    }
     // Remember the camera for the NEXT frame's motion blur. Recorded after the
     // graph runs so a frame that failed to record does not advance the history
     // and report a velocity for a frame that never appeared.

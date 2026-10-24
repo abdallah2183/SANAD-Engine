@@ -199,6 +199,7 @@ NF_TEST(scene_post_process_line_keeps_defaults_for_absent_keys) {
         NF_CHECK(!pp->dynamic_resolution);
         NF_CHECK_NEAR(pp->target_fps, 60.0f, 1e-5f);
         NF_CHECK_NEAR(pp->min_render_scale, 0.5f, 1e-5f);
+        NF_CHECK_EQ(pp->dynamic_resolution_timing, kDynamicResolutionTimingCpu);
     }
 
     std::filesystem::remove_all(tmp);
@@ -297,6 +298,7 @@ NF_TEST(scene_dynamic_resolution_is_written_only_while_enabled) {
     pp.fxaa_enabled = true;
     pp.target_fps = 90.0f;
     pp.min_render_scale = 0.6f;
+    pp.dynamic_resolution_timing = kDynamicResolutionTimingGpu;
     w.add<PostProcessComponent>(e, pp);
 
     const std::string off = serialize_scene_to_text(scene);
@@ -310,6 +312,15 @@ NF_TEST(scene_dynamic_resolution_is_written_only_while_enabled) {
     NF_CHECK(on.find("dynamic_resolution=true") != std::string::npos);
     NF_CHECK(on.find("target_fps=90") != std::string::npos);
     NF_CHECK(on.find("min_render_scale=0.6") != std::string::npos);
+    NF_CHECK(on.find("dynamic_resolution_timing=gpu") != std::string::npos);
+
+    // CPU is the absent/default state. A Phase 38/39 scene that never named a
+    // timing source must not gain a key on save.
+    w.get<PostProcessComponent>(e)->dynamic_resolution_timing =
+        kDynamicResolutionTimingCpu;
+    const std::string cpu = serialize_scene_to_text(scene);
+    NF_CHECK(cpu.find("dynamic_resolution=true") != std::string::npos);
+    NF_CHECK(cpu.find("dynamic_resolution_timing=") == std::string::npos);
 }
 
 NF_TEST(scene_dynamic_resolution_round_trips_and_refuses_inverted_bounds) {
@@ -325,7 +336,7 @@ NF_TEST(scene_dynamic_resolution_round_trips_and_refuses_inverted_bounds) {
                   "content://Scenes/dynamic.nfscene",
                   std::string(kSceneHeader) +
                       "  PostProcess: dynamic_resolution=true min_render_scale=0.6"
-                      " render_scale=1.5 target_fps=90\n")
+                      " render_scale=1.5 target_fps=90 dynamic_resolution_timing=gpu\n")
                   .ok);
     auto loaded = load_scene_from_vfs(vfs, "content://Scenes/dynamic.nfscene");
     NF_CHECK(loaded.success);
@@ -337,6 +348,30 @@ NF_TEST(scene_dynamic_resolution_round_trips_and_refuses_inverted_bounds) {
         NF_CHECK_NEAR(pp->render_scale, 1.5f, 1e-5f);
         NF_CHECK_NEAR(pp->target_fps, 90.0f, 1e-5f);
         NF_CHECK_NEAR(pp->min_render_scale, 0.6f, 1e-5f);
+        NF_CHECK_EQ(pp->dynamic_resolution_timing, kDynamicResolutionTimingGpu);
+    }
+
+    // The timing source is a closed set. An unknown name is refused by name,
+    // not treated as CPU: a typo must not silently run a different controller.
+    for (const char* value : {"auto", "GPU", "1"}) {
+        const std::string name = std::string("content://Scenes/timing_") + value + ".nfscene";
+        NF_CHECK(vfs.write_text(
+                      name,
+                      std::string(kSceneHeader) +
+                          "  PostProcess: dynamic_resolution=true"
+                          " dynamic_resolution_timing=" + value + "\n")
+                      .ok);
+        auto timing = load_scene_from_vfs(vfs, name);
+        NF_CHECK(timing.success);
+        NF_CHECK(timing.scene->world().get<PostProcessComponent>(
+                      timing.scene->world().all_entities()[0]) == nullptr);
+        bool timing_warned = false;
+        for (const std::string& warning : timing.warnings) {
+            if (warning.find("dynamic_resolution_timing=") != std::string::npos) {
+                timing_warned = true;
+            }
+        }
+        NF_CHECK(timing_warned);
     }
 
     // Inverted bounds are refused by naming the floor key, not by swapping the
@@ -665,6 +700,116 @@ NF_TEST(runtime_advances_dynamic_resolution_from_frame_time) {
     std::filesystem::remove_all(tmp);
 }
 
+NF_TEST(runtime_feeds_gpu_frame_time_to_dynamic_resolution) {
+    // Phase 40 integration. The governor's own fallback rules are covered in
+    // RHITests; this test proves the Runtime actually enables frame timestamps
+    // for a scene that asks for them, passes a fresh sample, and stops using it
+    // when no new frame was rendered. A cheap 64x64 GPU frame against a 30 fps
+    // budget is far inside the band, while every 40 ms CPU duration is outside
+    // it — so a CPU fallback is visible as a scale step and a GPU decision is
+    // visible as "keep 1.0".
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_rt_dynamic_gpu_timing";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    const std::string text =
+        std::string(kSceneHeader) +
+        "  PostProcess: fxaa=true dynamic_resolution=true target_fps=30"
+        " min_render_scale=0.5 render_scale=1.0 dynamic_resolution_timing=gpu\n";
+    NF_CHECK(vfs.write_text("content://Scenes/DynamicGpu.nfscene", text).ok);
+
+    auto device = rhi::create_device();
+    if (!device) {
+        std::filesystem::remove_all(tmp);
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        std::filesystem::remove_all(tmp);
+        NF_SKIP("headless Vulkan device init failed");
+    }
+    if (!device->supports_timestamp_queries()) {
+        device->shutdown();
+        std::filesystem::remove_all(tmp);
+        NF_SKIP("timestamp queries unsupported by this device/queue");
+    }
+
+    {
+        AssetRegistry reg;
+        AssetManager manager(vfs, reg);
+        {
+            Runtime rt(vfs, reg, manager, *device, nullptr);
+            std::string err;
+            NF_CHECK(rt.load_scene("content://Scenes/DynamicGpu.nfscene", err));
+
+            auto draw_frame = [&](bool& ok) {
+                rhi::TextureDesc td{};
+                td.width = 64;
+                td.height = 64;
+                td.format = rhi::Format::R8G8B8A8_UNorm;
+                td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
+                auto target = device->create_texture(td);
+                auto cmd = device->create_command_buffer();
+                auto fence = device->create_fence(false);
+                ok = (target != nullptr && cmd != nullptr && fence != nullptr);
+                if (!ok) return;
+                cmd->begin();
+                rt.render_offscreen(*target, *cmd);
+                cmd->end();
+                device->submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+                ok = fence->wait(5000000000ULL);
+                device->wait_idle();
+            };
+
+            bool ok = false;
+            draw_frame(ok);
+            NF_CHECK(ok);
+            draw_frame(ok);
+            NF_CHECK(ok);
+
+            const rendering::Renderer3D* renderer = rt.renderer();
+            NF_CHECK(renderer != nullptr);
+            if (renderer != nullptr) {
+                // The scene asked for GPU timing; the developer did not ask for
+                // profiling. Frame timestamps must be on, per-pass drains off.
+                NF_CHECK(renderer->gpu_timing_enabled());
+                NF_CHECK(!renderer->gpu_pass_timing_enabled());
+                NF_CHECK(renderer->last_stats().gpu_timing_valid);
+                NF_CHECK(renderer->last_stats().gpu_sample_serial > 0);
+
+                // One update per render means each update sees the sample
+                // published by the previous draw. The 40 ms CPU duration is
+                // past the band; the tiny GPU frame is not, so a CPU decision
+                // would step down.
+                for (int i = 0; i < 40; ++i) {
+                    rt.update(0.040f);
+                    draw_frame(ok);
+                    NF_CHECK(ok);
+                }
+                NF_CHECK_NEAR(rt.renderer()->render_scale(), 1.0f, 1e-5f);
+
+                // Now update without rendering. There is only one unconsumed
+                // sample, and the serial gate must not let the next nineteen
+                // updates reuse it. The CPU fallback is outside the band long
+                // enough to accept a step; a draw applies the new scale.
+                for (int i = 0; i < 20; ++i) {
+                    rt.update(0.040f);
+                }
+                draw_frame(ok);
+                NF_CHECK(ok);
+                NF_CHECK(rt.renderer()->render_scale() < 1.0f);
+            }
+        }
+        device->wait_idle();
+        device->shutdown();
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
 NF_TEST(scene_fog_keeps_defaults_when_only_the_switch_is_written) {
     // `fog=true` alone must be a complete line: the colour and band inherit the
     // renderer's neutral defaults rather than becoming zeroes (which would be a
@@ -734,5 +879,51 @@ NF_TEST(scene_fog_refuses_an_invalid_colour_or_a_zero_end) {
     }
     NF_CHECK(end_warned);
 
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_frame_policy_is_authored_and_round_trips) {
+    // Phase 42: the window policy is one switch that reuses the governor's
+    // ceiling/floor/target, so the file needs one key and nothing else.
+    auto tmp = nf::test::temp_root() / "nf_pp_frame_policy";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    {
+        assets::VirtualFileSystem vfs;
+        vfs.mount("content://", tmp);
+        auto scene = std::make_unique<scene::Scene>("FramePolicy");
+        scene::Scene& s = *scene;
+        ecs::Entity e = s.world().create_entity();
+        PostProcessComponent pp;
+        pp.dynamic_resolution = true;
+        pp.frame_policy = true;
+        pp.target_fps = 72.0f;
+        pp.render_scale = 0.9f;
+        pp.min_render_scale = 0.6f;
+        s.world().add<PostProcessComponent>(e, pp);
+
+        std::string err;
+        NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/fp.nfscene", s, err));
+        NF_CHECK(err.empty());
+
+        auto result = load_scene_from_vfs(vfs, "content://Scenes/fp.nfscene");
+        NF_CHECK(result.success);
+        NF_CHECK(result.scene);
+        if (result.scene) {
+            const auto* loaded = result.scene->world().get<PostProcessComponent>(
+                result.scene->world().all_entities()[0]);
+            NF_CHECK(loaded != nullptr);
+            if (loaded != nullptr) {
+                NF_CHECK(loaded->frame_policy);
+                NF_CHECK(loaded->dynamic_resolution);
+                NF_CHECK_NEAR(loaded->target_fps, 72.0f, 1e-5f);
+                NF_CHECK_NEAR(loaded->render_scale, 0.9f, 1e-5f);
+                NF_CHECK_NEAR(loaded->min_render_scale, 0.6f, 1e-5f);
+            }
+        }
+        // Written only when authored: a scene that never names it stays clean.
+        const std::string saved = serialize_scene_to_text(*scene);
+        NF_CHECK(saved.find("frame_policy=true") != std::string::npos);
+    }
     std::filesystem::remove_all(tmp);
 }

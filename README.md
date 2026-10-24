@@ -173,18 +173,105 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 - **Docs that match the build** — [release notes](RELEASE_NOTES_0.5.0.md),
   [demo notes](Docs/Demo_Release.md), and a five-minute quick start.
 
+## 🔬 GPU profiling (development tree)
+
+The development tree closes the RHI timing gap with **real Vulkan timestamp
+queries**. It is deliberately opt-in for games: normal gameplay records no
+timestamps and pays no per-frame profiling cost.
+
+- **Editor:** profiling is on by default as a development tool. The Performance
+  panel shows `GPU (timestamp)`, a decaying average, and one row per RenderGraph
+  pass. On a device without timestamp support it falls back to the existing
+  submit-to-fence estimate (`gpu_us`/`gpu_avg_us`).
+- **Player:** pass `--gpu-timing` (or set `NF_PLAYER_GPU_TIMING=1`) to print the
+  last completed frame and its per-pass breakdown at exit. Without it no report
+  is printed; a scene that explicitly asks for GPU-aware dynamic resolution may
+  still enable frame timestamps internally.
+- **Dynamic resolution can use it:** `dynamic_resolution_timing=gpu` makes the
+  frame-time governor consume real GPU frame time instead of CPU `dt`, with an
+  automatic fallback to CPU when no fresh sample exists. It needs frame timing
+  only — never the per-pass drains — and the cooldown stays on wall time.
+- **Two independent renderer switches:** frame timestamps and per-pass
+  timestamps. `Runtime::set_gpu_profiling_enabled(true)` enables both and
+  re-applies the request after every renderer init; direct `Renderer3D` users
+  can keep only the frame timing if per-pass drains are too intrusive.
+- **Honest numbers:** results are sampled one in-flight slot late, so the first
+  frame has no sample. Per-pass timing inserts a `BottomOfPipe` at each pass
+  boundary, which serialises the GPU; a timed run is useful for attribution but
+  is not a free measurement of an untimed frame. RenderGraph barriers stay
+  outside each pass's duration.
+- **Tests:** `RHITests` covers a real timestamped GPU transfer, availability
+  polling, RenderGraph pass brackets, a three-frame `Renderer3D` integration
+  run, and the governor's GPU-time/CPU-cooldown rules. `RuntimeTests` proves a
+  scene enables frame timing without profiling and that a stale sample falls
+  back to CPU. See [GPU profiling](Docs/GPU_Profiling.md) for the query layout,
+  API, and limitations.
+
+```bat
+:: development capture; NFPlayer also accepts NF_PLAYER_GPU_TIMING=1
+build\Release\bin\NFPlayer.exe --project Games\TreeWorld\TreeWorld.nfproj --gpu-timing
+```
+
+### Frame pacing (Phase 41)
+
+The editor's Performance panel and `NFPlayer --frame-stats` report a rolling
+120-frame window: average FPS, 1% low, frame-time jitter, and a CPU/GPU
+bottleneck verdict. It measures raw wall time, so presentation/vsync waiting is
+visible; add `--gpu-timing` for the GPU average and verdict. This is telemetry
+only and is separate from DynamicResolution. See
+[frame pacing](Docs/Frame_Pacing.md).
+
+```bat
+build\Release\bin\NFPlayer.exe --project Games\TreeWorld\TreeWorld.nfproj --frame-stats --gpu-timing
+```
+
+### Layered damage, blasts, shot events and status effects (Phases 50-54)
+
+The development tree turns one damage number into a layered hit. Hit zones are
+opt-in per target (`Health: ... zones=true head=2 limb=0.75`), armor is a real
+second pool (`armor=40 armor_max=40 absorb=0.6`), and a weapon's `pierce=` can
+bypass part of it. Damage types (`damage_type=ballistic|explosive|fire`) meet
+per-type resistance (`resist_fire=0.4`). The order is fixed and tested:
+falloff, zone, resistance, armor, health. `nf.impact(i)` carries `zone`,
+`armor_absorbed`, `damage_type` and `splash`.
+
+A weapon can own a radial blast (`blast_radius=4 blast_damage=45
+blast_min=0.2`). Damage falls linearly to the edge, distance is measured to the
+nearest point of a box, walls block the blast, factions still apply, and the
+direct victim is not hit twice. Every other victim gets its own `splash=true`
+impact event.
+
+`ShotEvent` is the other half: one event per pellet, with the muzzle origin,
+the post-spread direction and the pellet index. `nf.shot_count()` /
+`nf.shot(i)` let a game draw a muzzle flash or a tracer even when the shot
+misses.
+
+A hit can start a damage-over-time status (`status=burn status_dps=4
+status_time=3 status_tick=0.5`). Burning, bleeding and corrosion tick at a fixed
+cadence through the same resistance and armor path; a partial final tick pays
+exactly what is left. `nf.apply_status()` / `nf.status_remaining()` /
+`nf.clear_status()` expose it to Lua. See [Combat_Damage.md](Docs/Combat_Damage.md).
+
+```text
+Health: max=100 health=100 armor=40 armor_max=40 absorb=0.6 zones=true head=2 limb=0.75 resist_explosive=0.2
+Weapon: mode=semi rpm=60 magazine=1 damage=20 range=120
+        delivery=projectile speed=35 gravity=9.81 damage_type=explosive
+        blast_radius=4 blast_damage=45 blast_min=0.2
+```
+
 ## 🧱 Features
 
 | Area | What it does |
 |:---|:---|
 | **Rendering** | Vulkan 1.2+ RHI, DAG RenderGraph, deferred PBR (GGX), cascaded shadows, procedural sky, sky-baked IBL, SSAO, bloom/grading/tonemap, GPU picking, LOD |
+| **Profiling** | Opt-in Vulkan timestamp queries for frame and per-pass GPU time, GPU-aware dynamic resolution with fresh-sample gating and CPU fallback, non-blocking one-slot-late sampling, editor breakdown, rolling frame pacing (average/1% low/jitter) and `NFPlayer --gpu-timing` / `--frame-stats` |
 | **Editor** | ImGui docking shell, outliner, reflected inspector, gizmos, undo/redo, asset browser, Start Here guide, Arabic RTL UI |
 | **Physics** | Deterministic solver plus Jolt Physics (vehicles, ragdolls, CCD, heightfields, compound bodies), PBD cloth |
 | **Scripting** | Sandboxed Lua 5.4 (`nf.*` API, entity bindings) and C# via a .NET 10 sandbox host |
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, and per-frame impact events for effects; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>

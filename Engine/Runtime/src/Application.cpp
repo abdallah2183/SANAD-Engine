@@ -13,6 +13,7 @@
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/RHI/RHI.hpp>
+#include <NF/Rendering/FramePacing.hpp>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -266,6 +267,16 @@ int Application::run() {
         assets::AssetManager asset_manager(vfs, registry);
         Runtime runtime(vfs, registry, asset_manager, *device, swapchain.get());
 
+        // Opt-in developer profiling. Applying it before load_scene matters:
+        // the renderer is created lazily by the first scene, and the request is
+        // re-applied after every Renderer3D init as well.
+        if (m_config.gpu_timing) {
+            runtime.set_gpu_profiling_enabled(true);
+            NF_LOG_INFO(LogCategory::Core,
+                        "GPU profiling requested: frame timestamps + per-pass breakdown "
+                        "(profiling overhead included in the numbers)");
+        }
+
         // A windowed run IS a played run: gameplay modules own the camera and
         // the player entity, so they must be allowed to write (set_playing),
         // and something real must answer their input polls. Headless keeps
@@ -440,6 +451,13 @@ int Application::run() {
         };
 
         Clock clock;
+        // Phase 41 telemetry lives in the host loop, not in Runtime::update:
+        // raw wall time includes presentation/vsync waiting and hitches, while
+        // the simulation deliberately receives a clamped dt. Feeding the
+        // telemetry from the simulation clock would hide exactly the stalls it
+        // exists to report.
+        rendering::FramePacing frame_pacing;
+        u64 frame_pacing_gpu_serial = 0;
         while (true) {
             if (!m_config.headless) {
                 window.poll_events();
@@ -467,6 +485,15 @@ int Application::run() {
             const float raw_dt = static_cast<float>(clock.elapsed_seconds());
             clock.reset();
             const float dt = std::min(raw_dt, kMaxFrameDelta);
+
+            // Phase 42: a scene that decides its render scale from the frame
+            // WINDOW needs the window. `stats()` sorts a copy of the ring, so
+            // once every eight frames is enough for a 120-frame window and
+            // keeps that sort off the per-frame path. A scene that never opts
+            // in ignores the value entirely.
+            if ((frame_count % 8u) == 0u) {
+                runtime.set_frame_window(frame_pacing.stats());
+            }
 
             runtime.update(dt);
 
@@ -541,6 +568,27 @@ int Application::run() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
 
+            // One pacing sample per presented/updated frame. The GPU duration
+            // is the last completed timestamp sample, so it is paired with the
+            // wall time of the frame that just finished. GPU data stays
+            // opt-in: without --gpu-timing the bound is reported as unknown.
+            {
+                f64 gpu_frame_s = 0.0;
+                bool gpu_sample = false;
+                if (m_config.gpu_timing) {
+                    if (const auto* renderer = runtime.renderer(); renderer != nullptr) {
+                        const auto& stats = renderer->last_stats();
+                        if (stats.gpu_timing_valid && stats.gpu_sample_serial != 0 &&
+                            stats.gpu_sample_serial != frame_pacing_gpu_serial) {
+                            frame_pacing_gpu_serial = stats.gpu_sample_serial;
+                            gpu_frame_s = stats.gpu_frame_ms / 1000.0;
+                            gpu_sample = true;
+                        }
+                    }
+                }
+                frame_pacing.push_frame(raw_dt, gpu_frame_s, gpu_sample);
+            }
+
             ++frame_count;
             if (frame_limit > 0 && frame_count >= frame_limit) {
                 break;
@@ -554,10 +602,62 @@ int Application::run() {
         }
 
         NF_LOG_INFO(LogCategory::Core, "Rendered {} frames (meshes={})", frame_count, runtime.mesh_count());
+        if (m_config.frame_stats) {
+            const auto pacing = frame_pacing.stats();
+            if (pacing.samples == 0) {
+                NF_LOG_WARN(LogCategory::Core, "Frame stats requested, but no frame was sampled");
+            } else {
+                NF_LOG_INFO(
+                    LogCategory::Core,
+                    "Frame stats ({} frames): {:.2f} fps avg ({:.2f} ms) | 1% low {:.2f} fps "
+                    "({:.2f} ms) | jitter {:.2f} ms | range {:.2f}-{:.2f} ms | bound {}",
+                    pacing.samples, pacing.average_fps, pacing.average_frame_ms,
+                    pacing.low_1pct_fps, pacing.low_1pct_frame_ms, pacing.stddev_ms,
+                    pacing.min_frame_ms, pacing.max_frame_ms,
+                    rendering::frame_pacing_bound_name(pacing.bound));
+                if (pacing.gpu_samples > 0) {
+                    NF_LOG_INFO(LogCategory::Core,
+                                "  GPU frame time: {:.2f} ms average across {} samples in the "
+                                "window",
+                                pacing.gpu_average_ms, pacing.gpu_samples);
+                } else if (m_config.gpu_timing && m_config.headless) {
+                    NF_LOG_INFO(LogCategory::Core,
+                                "  GPU frame time: none (headless runs do not render a frame)");
+                } else if (!m_config.gpu_timing) {
+                    NF_LOG_INFO(LogCategory::Core,
+                                "  GPU frame time: not measured (add --gpu-timing for a bound "
+                                "verdict)");
+                } else {
+                    NF_LOG_INFO(LogCategory::Core,
+                                "  GPU frame time: no valid sample yet (timestamps unsupported or "
+                                "the run was too short)");
+                }
+            }
+        }
         if (runtime.renderer() != nullptr) {
             const auto& stats = runtime.renderer()->last_stats();
             NF_LOG_INFO(LogCategory::Core, "Last frame: extracted={} visible={} draws={}", stats.extracted,
                         stats.visible, stats.draw_calls);
+            // Display stays opt-in. A scene with GPU-aware dynamic resolution
+            // enables frame timestamps internally even when the player was not
+            // asked to profile; that is a control input, not a report, and it
+            // must not print timing the user did not request.
+            if (stats.gpu_timing_valid && m_config.gpu_timing) {
+                NF_LOG_INFO(LogCategory::Core, "GPU timestamps: frame {:.4f} ms across {} passes",
+                            stats.gpu_frame_ms, stats.gpu_passes.size());
+                for (const auto& pass : stats.gpu_passes) {
+                    NF_LOG_INFO(LogCategory::Core, "  GPU pass {:<18} {:.4f} ms", pass.name,
+                                pass.milliseconds);
+                }
+            } else if (m_config.gpu_timing && m_config.headless) {
+                NF_LOG_WARN(LogCategory::Core,
+                            "GPU timing requested in headless mode, but this player does not "
+                            "render a frame; run with a window to capture timestamps");
+            } else if (m_config.gpu_timing) {
+                NF_LOG_WARN(LogCategory::Core,
+                            "GPU timing requested but no completed timestamp sample was consumed "
+                            "(run at least two frames)");
+            }
             // A scene that loaded but drew no geometry is a failure, not a
             // quiet success. Without this the sample reported a clean exit for a
             // run that rendered an empty frame.

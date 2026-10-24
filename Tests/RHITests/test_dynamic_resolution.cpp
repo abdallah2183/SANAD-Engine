@@ -49,6 +49,18 @@ f32 feed(DynamicResolution& governor, f32 frame_s, int count) {
     return scale;
 }
 
+/// Feeds a wall-clock duration and a GPU load sample independently. This is the
+/// Phase 40 shape: the cooldown must follow the wall clock even when the load
+/// decision follows the GPU.
+f32 feed_timed(DynamicResolution& governor, f32 cpu_s, f32 gpu_s, bool gpu_valid,
+               int count) {
+    f32 scale = governor.scale();
+    for (int i = 0; i < count; ++i) {
+        scale = governor.update(cpu_s, gpu_s, gpu_valid);
+    }
+    return scale;
+}
+
 } // namespace
 
 NF_TEST(dynamic_resolution_is_off_by_default) {
@@ -57,6 +69,7 @@ NF_TEST(dynamic_resolution_is_off_by_default) {
     // fed a catastrophically slow frame. Scenes that never opt in render at
     // exactly the resolution they did before this feature existed.
     NF_CHECK(!governor.enabled());
+    NF_CHECK(governor.config().timing == DynamicResolutionTiming::Cpu);
     NF_CHECK_NEAR(governor.scale(), 1.0f, 1e-6f);
     NF_CHECK_NEAR(governor.update(1.0f), 1.0f, 1e-6f);
     NF_CHECK_NEAR(governor.scale(), 1.0f, 1e-6f);
@@ -72,9 +85,11 @@ NF_TEST(dynamic_resolution_sanitizes_an_illegal_config) {
     bad.step = std::numeric_limits<f32>::quiet_NaN();
     bad.cooldown_s = -3.0f;
     bad.tolerance = 9.0f;
+    bad.timing = static_cast<DynamicResolutionTiming>(99);
 
     governor.configure(bad);
     NF_CHECK(governor.enabled());
+    NF_CHECK(governor.config().timing == DynamicResolutionTiming::Cpu);
     NF_CHECK_NEAR(governor.config().target_frame_ms, DynamicResolution::kDefaultTargetFrameMs,
                   1e-4f);
     NF_CHECK_NEAR(governor.config().min_scale, kMinRenderScale, 1e-6f);
@@ -115,6 +130,60 @@ NF_TEST(dynamic_resolution_stays_inside_the_hysteresis_band) {
     // frames are enough to cross the band but not enough to earn a second step
     // after the cooldown resets — that is what "one step at a time" means.
     NF_CHECK_NEAR(feed(governor, 0.020f, 10), 0.9f, 1e-6f);
+}
+
+NF_TEST(dynamic_resolution_uses_gpu_load_and_cpu_cooldown) {
+    DynamicResolution governor;
+    DynamicResolutionConfig c = config(16.6667f, 0.5f, 1.0f, 0.1f, 0.2f);
+    c.timing = DynamicResolutionTiming::Gpu;
+    governor.configure(c);
+
+    // Each simulated frame has a cheap 16 ms wall duration and an expensive
+    // 40 ms GPU duration. The GPU duration is outside the 10% band, so if the
+    // cooldown were also measured with GPU time it would fire after five
+    // frames (5 x 40 ms = 0.2 s). Eight frames is only 128 ms of wall time.
+    NF_CHECK_NEAR(feed_timed(governor, 0.016f, 0.040f, true, 8), 1.0f, 1e-6f);
+    NF_CHECK(governor.last_timing() == DynamicResolutionTiming::Gpu);
+
+    // Five more frames cross the real 0.2 s cooldown, and the GPU load then
+    // takes one step. This is the distinction Phase 40 exists to preserve.
+    NF_CHECK_NEAR(feed_timed(governor, 0.016f, 0.040f, true, 5), 0.9f, 1e-6f);
+    NF_CHECK(governor.last_timing() == DynamicResolutionTiming::Gpu);
+}
+
+NF_TEST(dynamic_resolution_falls_back_to_cpu_when_gpu_sample_is_missing) {
+    DynamicResolution governor;
+    DynamicResolutionConfig c = config(16.6667f, 0.5f, 1.0f, 0.1f, 0.2f);
+    c.timing = DynamicResolutionTiming::Gpu;
+    governor.configure(c);
+
+    // No completed GPU frame yet: the 25 ms CPU frame is the only evidence,
+    // and it is outside the band. A GPU preference must not turn the governor
+    // into a no-op on a device without timestamps.
+    NF_CHECK_NEAR(feed_timed(governor, 0.025f, 0.040f, false, 9), 0.9f, 1e-6f);
+    NF_CHECK(governor.last_timing() == DynamicResolutionTiming::Cpu);
+
+    // A non-finite or non-positive GPU sample is also missing, even with the
+    // valid flag set: a zero-length timestamp must not mean "infinitely fast".
+    governor.reset(1.0f);
+    NF_CHECK_NEAR(governor.update(0.025f, 0.0f, true), 1.0f, 1e-6f);
+    NF_CHECK_NEAR(governor.update(0.025f,
+                                  std::numeric_limits<f32>::quiet_NaN(), true),
+                  1.0f, 1e-6f);
+    NF_CHECK(governor.last_timing() == DynamicResolutionTiming::Cpu);
+}
+
+NF_TEST(dynamic_resolution_ignores_gpu_time_when_configured_for_cpu) {
+    DynamicResolution governor;
+    DynamicResolutionConfig c = config(16.6667f, 0.5f, 1.0f, 0.1f, 0.2f);
+    c.timing = DynamicResolutionTiming::Cpu;
+    governor.configure(c);
+
+    // CPU is inside the band while GPU is far outside it. Forty frames of CPU
+    // evidence must keep the scale still: asking for the GPU clock is the only
+    // way to see that 40 ms number.
+    NF_CHECK_NEAR(feed_timed(governor, 0.016f, 0.040f, true, 40), 1.0f, 1e-6f);
+    NF_CHECK(governor.last_timing() == DynamicResolutionTiming::Cpu);
 }
 
 NF_TEST(dynamic_resolution_clamps_at_both_bounds) {

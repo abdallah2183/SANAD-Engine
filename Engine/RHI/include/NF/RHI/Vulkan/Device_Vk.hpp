@@ -59,6 +59,12 @@ struct VulkanContext {
     VkPhysicalDeviceProperties device_properties{};
     VkPhysicalDeviceMemoryProperties memory_props{};
 
+    // Timestamp support, copied from the selected graphics queue family and
+    // the physical-device limits during logical-device creation. Zero when the
+    // queue cannot write timestamps.
+    u32 timestamp_valid_bits = 0;
+    f64 timestamp_period_ns = 0.0;
+
     // Enabled features
     bool enable_validation = false;
     // Vulkan independentBlend. Enabled only when the physical device reports
@@ -102,6 +108,7 @@ public:
     std::unique_ptr<CommandBuffer> create_command_buffer() override;
     std::unique_ptr<Semaphore> create_semaphore() override;
     std::unique_ptr<Fence> create_fence(bool signaled) override;
+    std::unique_ptr<QueryPool> create_timestamp_query_pool(u32 count) override;
 
     void submit(const CommandBuffer& cmd, const SubmitInfo& info) override;
     void wait_idle() override;
@@ -110,6 +117,9 @@ public:
 
     bool validation_enabled() const override { return m_ctx.enable_validation; }
     bool supports_independent_blend() const override { return m_ctx.independent_blend; }
+    bool supports_timestamp_queries() const override;
+    f64 timestamp_period_ns() const override { return m_ctx.timestamp_period_ns; }
+    u32 timestamp_valid_bits() const override { return m_ctx.timestamp_valid_bits; }
     u32 alive_objects() const override { return m_alive_objects.load(std::memory_order_relaxed); }
 
     /// Bookkeeping for the alive-object counter. Every backend object calls

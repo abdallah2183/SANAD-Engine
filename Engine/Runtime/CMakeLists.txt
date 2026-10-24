@@ -17,7 +17,20 @@ set(NFRUNTIME_SOURCES
     src/CameraFollow.cpp
     src/PlayerLook.cpp
     src/PlayerSettings.cpp
+    src/SceneValidator.cpp
     src/CharacterRuntime.cpp
+    src/Weapon.cpp
+    src/Health.cpp
+    src/Damage.cpp
+    src/Explosion.cpp
+    src/Hitscan.cpp
+    src/Projectile.cpp
+    src/Factions.cpp
+    src/Impact.cpp
+    src/Shot.cpp
+    src/StatusEffect.cpp
+    src/WeaponRuntime.cpp
+    src/CombatAI.cpp
 )
 
 nf_engine_library(NFRuntime

@@ -202,6 +202,43 @@ std::unique_ptr<ICommand> make_decal_command(ecs::World& world, ecs::Entity e,
 std::unique_ptr<ICommand> make_post_process_command(ecs::World& world, ecs::Entity e,
                                                     const runtime::PostProcessComponent& edit,
                                                     std::string& out_err);
+
+/// The entity's weapon (Phase 44), as the panel edits it: the PROFILE only.
+///
+/// The live state (rounds left, cooldown, burst queue) is session data, so the
+/// factory builds a fresh one from the edited profile — an author who changes
+/// the magazine from 12 to 30 wants a 30-round magazine, not "12 rounds in a
+/// 30-round magazine". Undo restores the state the component had, because the
+/// command carries the whole component.
+runtime::WeaponProfile read_weapon(const ecs::World& world, ecs::Entity e, bool& out_has);
+std::unique_ptr<ICommand> make_weapon_command(ecs::World& world, ecs::Entity e,
+                                              const runtime::WeaponProfile& edit,
+                                              std::string& out_err);
+
+/// The entity's hit points (Phase 44). `health` is clamped into [0, max]
+/// rather than refused: a slider dragged past the ceiling means "full", which
+/// is what the author sees on screen anyway.
+runtime::HealthComponent read_health(const ecs::World& world, ecs::Entity e, bool& out_has);
+std::unique_ptr<ICommand> make_health_command(ecs::World& world, ecs::Entity e,
+                                              const runtime::HealthComponent& edit,
+                                              std::string& out_err);
+
+/// The entity's combat agent (Phase 46 authoring). The target is a name, and
+/// the aim state is session data: the factory builds a fresh state and the
+/// command's undo restores the whole component.
+runtime::CombatAgentComponent read_combat_agent(const ecs::World& world, ecs::Entity e,
+                                                bool& out_has);
+std::unique_ptr<ICommand> make_combat_agent_command(ecs::World& world, ecs::Entity e,
+                                                    const runtime::CombatAgentComponent& edit,
+                                                    std::string& out_err);
+
+/// The entity's affiliation (Phase 46). An empty team is legal and means
+/// neutral; a team with whitespace is refused because the file format uses
+/// whitespace as its separator.
+runtime::FactionComponent read_faction(const ecs::World& world, ecs::Entity e, bool& out_has);
+std::unique_ptr<ICommand> make_faction_command(ecs::World& world, ecs::Entity e,
+                                               const runtime::FactionComponent& edit,
+                                               std::string& out_err);
 // Scene audio environment. The reverb zone's bounds match the scene loader's
 // (radius > 0, inner <= radius, wet in [0,1]); music/ambience refuse an empty
 // buffer path, because a component that names no file is silent and would look

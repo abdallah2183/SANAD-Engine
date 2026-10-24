@@ -172,6 +172,37 @@ void Runtime::on_swapchain_resized(rhi::Swapchain* swapchain) {
     }
 }
 
+void Runtime::set_gpu_profiling_enabled(bool enabled) {
+    m_gpu_profiling_enabled = enabled;
+    apply_gpu_timing_state();
+}
+
+void Runtime::apply_gpu_timing_state() {
+    if (!m_renderer || !m_renderer_initialized) {
+        return;
+    }
+    const bool frame_timing = m_gpu_profiling_enabled || m_gpu_frame_timing_required;
+    m_renderer->set_gpu_timing_enabled(frame_timing);
+    m_renderer->set_gpu_pass_timing_enabled(m_gpu_profiling_enabled);
+    if (!frame_timing) {
+        m_gpu_timing_warning_shown = false;
+        return;
+    }
+    if (!m_renderer->gpu_timing_supported() && !m_gpu_timing_warning_shown) {
+        if (m_gpu_profiling_enabled) {
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: GPU profiling requested but this device/queue cannot "
+                        "write timestamps - falling back to the submit-to-fence estimate");
+        } else {
+            NF_LOG_WARN(LogCategory::Core,
+                        "Runtime: GPU-aware dynamic resolution requested but this "
+                        "device/queue cannot write timestamps - falling back to CPU "
+                        "frame time");
+        }
+        m_gpu_timing_warning_shown = true;
+    }
+}
+
 bool Runtime::ensure_renderer_initialized() {
     uint32_t width = 1280;
     uint32_t height = 720;
@@ -272,6 +303,11 @@ bool Runtime::ensure_renderer_initialized_for(uint32_t width, uint32_t height) {
     m_renderer->set_ambient(0.2f);
     m_renderer->set_exposure(1.0f);
     m_renderer_initialized = true;
+    // Re-apply the requested developer/scene state after every init: shutdown()
+    // during a scene change destroys the timestamp pools, and a renderer that
+    // comes back with profiling silently off is the failure this guards.
+    m_gpu_timing_warning_shown = false;
+    apply_gpu_timing_state();
     ensure_default_material();
     NF_LOG_INFO(LogCategory::Core, "Runtime: Renderer3D initialized ({}x{}, shader_dir='{}')", width, height,
                 shader_dir.string());
@@ -424,6 +460,12 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     m_scene_data_ptr = std::make_unique<SceneRuntimeData>();
     m_scene_data_ptr->scene = std::move(scene);
     m_loaded_scene_path = logical_path;
+    // A round in the old world must not appear in the new one. Projectiles
+    // carry entity handles and profile snapshots from the scene they were
+    // fired in, so a scene change is the one place they cannot be repaired.
+    m_projectiles.clear();
+    m_impacts.clear();
+    m_shots.clear();
     // The characters load here, before the first frame: a character is a
     // glTF with a skin and animations, and the mesh it needs has to exist
     // before anything tries to draw it.
@@ -436,6 +478,12 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // The next scene is allowed to overflow the light slots too, and saying so
     // again is a fact about this scene, not a fact about the run.
     m_local_light_warning_shown = false;
+    // A scene-owned GPU timing request does not carry across a scene change.
+    // extract_post_process() re-enables it before the first render if the new
+    // scene asks. The developer's profiling switch is untouched.
+    m_gpu_frame_timing_required = false;
+    m_last_gpu_sample_serial = 0;
+    apply_gpu_timing_state();
     // Assign display names to entities that have none (older scenes predate
     // NameComponent). Keeps the outliner meaningful without touching the file.
     {
@@ -581,6 +629,10 @@ void Runtime::mark_scene_edited() {
 }
 
 void Runtime::update(float dt) {
+    // Frame-local combat events: the completed frame becomes the script-visible
+    // `previous` slot, and `current` starts empty for this frame's shots.
+    m_impacts.begin_frame();
+    m_shots.begin_frame();
     // The input source refreshes once, here, before anything reads it: a
     // pointer reports a DELTA, and a delta that two readers each consumed
     // would make the camera and the script disagree about how far the mouse
@@ -669,6 +721,23 @@ void Runtime::update(float dt) {
     // what the skinning reads) and after the transforms are final (the speed
     // that drives the locomotion state machine is measured from them).
     step_characters(dt);
+    // Damage over time ticks before this frame's new hits. A burn applied by a
+    // shot below therefore begins next frame, never in the same instant it was
+    // applied, even if its tick interval is shorter than one frame.
+    step_status_effects(dt);
+    // The gun fires after the player has moved, so the pivot a shot leaves
+    // from is this frame's, and BEFORE the camera is placed, so the recoil the
+    // shot adds is part of the frame the player sees rather than the next one.
+    // The agents decide first: step_weapons reads their trigger, so each weapon
+    // is stepped exactly once per frame.
+    // No-op unless an entity carries a WeaponComponent and an active camera
+    // follows it.
+    step_combat_ai(dt);
+    step_weapons(dt);
+    // Rounds in flight advance immediately after the trigger that spawned
+    // them, so a projectile fired this frame already travels this frame. Its
+    // swept segment is traced against the same colliders a hitscan shot uses.
+    step_projectiles(dt);
     // The camera is placed AFTER the transforms are final, so it follows the
     // character where the character actually IS this frame and not where it
     // was. It is also after the scripts, so a script that moved the player
@@ -678,8 +747,40 @@ void Runtime::update(float dt) {
     // after the frame's work so the sample describes the frame that just ran,
     // and the next render applies the new scale. Disabled by default; a scene
     // has to opt in with `dynamic_resolution=true`.
-    if (m_dynamic_resolution.enabled()) {
-        m_dynamic_resolution.update(dt);
+    //
+    // Phase 40: a GPU source uses the last completed timestamp sample, not the
+    // submit-to-fence estimate and not the same sample twice. The renderer
+    // publishes a serial with every completed readback; consuming it here is
+    // what keeps an editor that updates more often than it renders from
+    // treating one GPU frame as evidence for many. No new sample (or no
+    // timestamp support) means a CPU fallback inside the governor.
+    // Phase 42: a scene that opted into the window policy owns the scale, and
+    // the per-frame governor is skipped — two policies on one number would
+    // fight, and the loser would be whichever ran last.
+    if (m_frame_policy_active) {
+        const auto decision = rendering::frame_policy_step(m_frame_window, m_frame_policy_config,
+                                                           m_frame_policy_state, dt);
+        if (decision.changed) {
+            NF_LOG_INFO(LogCategory::Render, "Frame policy: {} -> render scale {:.2f}",
+                        rendering::frame_policy_reason_name(decision.reason), decision.scale);
+        }
+        m_frame_policy_reason = decision.reason;
+    } else if (m_dynamic_resolution.enabled()) {
+        f32 gpu_frame_s = 0.0f;
+        bool gpu_frame_valid = false;
+        if (m_dynamic_resolution.config().timing ==
+                rendering::DynamicResolutionTiming::Gpu &&
+            m_renderer != nullptr) {
+            const auto& stats = m_renderer->last_stats();
+            if (stats.gpu_timing_valid && stats.gpu_sample_serial != 0 &&
+                stats.gpu_sample_serial != m_last_gpu_sample_serial &&
+                std::isfinite(stats.gpu_frame_ms) && stats.gpu_frame_ms > 0.0) {
+                gpu_frame_s = static_cast<f32>(stats.gpu_frame_ms / 1000.0);
+                gpu_frame_valid = true;
+                m_last_gpu_sample_serial = stats.gpu_sample_serial;
+            }
+        }
+        m_dynamic_resolution.update(dt, gpu_frame_s, gpu_frame_valid);
     }
 }
 
@@ -1238,6 +1339,105 @@ u32 Runtime::step_script(float dt) {
         // Trauma is a number the script owns; the runtime owns the clock.
         input.shake = [self](f32 amount) { self->add_camera_shake(amount); };
         input.recoil = [self](f32 pitch, f32 yaw) { self->add_recoil(pitch, yaw); };
+    }
+    // The gun and hit points need no device, so they are wired OUTSIDE the
+    // input branch: a headless run still answers "how much ammo", and a
+    // scripted turret still fires on its own timer. Each hook reads the state
+    // the runtime already stepped this frame, never a copy that could drift.
+    {
+        Runtime* self = this;
+        input.weapon_ammo = [self]() { return static_cast<f32>(self->weapon_snapshot().ammo); };
+        input.weapon_reserve = [self]() { return static_cast<f32>(self->weapon_snapshot().reserve); };
+        input.weapon_reloading = [self]() { return self->weapon_snapshot().reloading; };
+        input.weapon_reload = [self]() { return self->weapon_reload(); };
+        input.weapon_fire = [self]() { return static_cast<f32>(self->fire_weapon()); };
+        input.last_hit = [self](bool& hit, f32& x, f32& y, f32& z, f32& distance) {
+            const Runtime::WeaponHitInfo& info = self->last_weapon_hit();
+            hit = info.hit;
+            x = info.position.x;
+            y = info.position.y;
+            z = info.position.z;
+            distance = info.distance;
+        };
+        input.impact_count = [self]() {
+            return static_cast<u32>(self->previous_impact_events().size());
+        };
+        input.impact_at = [self](u32 index, scripting::ScriptImpact& out) {
+            const auto& events = self->previous_impact_events();
+            if (static_cast<usize>(index) >= events.size()) {
+                return false;
+            }
+            const ImpactEvent& event = events[index];
+            out.shooter_id = event.shooter.id;
+            out.shooter_generation = event.shooter.generation;
+            out.target_id = event.victim.id;
+            out.target_generation = event.victim.generation;
+            out.target_name = event.victim_name;
+            out.x = event.position.x;
+            out.y = event.position.y;
+            out.z = event.position.z;
+            out.nx = event.normal.x;
+            out.ny = event.normal.y;
+            out.nz = event.normal.z;
+            out.distance = event.distance;
+            out.damage = event.damage;
+            out.applied = event.applied;
+            out.hit_zone = hit_zone_name(event.hit_zone);
+            out.armor_absorbed = event.armor_absorbed;
+            out.damage_type = damage_type_name(event.damage_type);
+            out.blocked_by_faction = event.blocked_by_faction;
+            out.killed = event.killed;
+            out.splash = event.splash;
+            out.status = event.status;
+            return true;
+        };
+        input.shot_count = [self]() {
+            return static_cast<u32>(self->previous_shot_events().size());
+        };
+        input.shot_at = [self](u32 index, scripting::ScriptShot& out) {
+            const auto& shots = self->previous_shot_events();
+            if (static_cast<usize>(index) >= shots.size()) {
+                return false;
+            }
+            const ShotEvent& shot = shots[index];
+            out.shooter_id = shot.shooter.id;
+            out.shooter_generation = shot.shooter.generation;
+            out.x = shot.origin.x;
+            out.y = shot.origin.y;
+            out.z = shot.origin.z;
+            out.dx = shot.direction.x;
+            out.dy = shot.direction.y;
+            out.dz = shot.direction.z;
+            out.damage = shot.damage;
+            out.pellet = shot.pellet;
+            out.pellets = shot.pellets;
+            out.seed = shot.seed;
+            out.projectile = shot.projectile;
+            return true;
+        };
+        input.health_of = [self](u32 id, u32 gen, f32& current, f32& maximum) {
+            const HealthComponent* h = self->health_of(ecs::Entity{id, gen});
+            if (h == nullptr) {
+                current = 0.0f;
+                maximum = 0.0f;
+                return;
+            }
+            current = h->health;
+            maximum = h->max_health;
+        };
+        input.damage = [self](u32 id, u32 gen, f32 amount) {
+            return self->apply_health_damage(ecs::Entity{id, gen}, amount);
+        };
+        input.apply_status = [self](u32 id, u32 gen, std::string_view kind, f32 dps,
+                                    f32 seconds, f32 tick) {
+            return self->apply_status(ecs::Entity{id, gen}, kind, dps, seconds, tick);
+        };
+        input.status_remaining = [self](u32 id, u32 gen, std::string_view kind) {
+            return self->status_remaining(ecs::Entity{id, gen}, kind);
+        };
+        input.clear_status = [self](u32 id, u32 gen, std::string_view kind) {
+            return self->clear_status(ecs::Entity{id, gen}, kind);
+        };
     }
     m_scripts->set_input_source(input);
     m_scripts->update(world, dt);
@@ -3960,15 +4160,57 @@ void Runtime::extract_post_process() {
         // effect on the next frame, and a scene without a PostProcess component
         // leaves the previous scale alone. The governor itself is advanced by
         // Runtime::update(dt), which owns the frame clock.
+        // Phase 40: `dynamic_resolution_timing=gpu` asks the governor to use
+        // real timestamps. That is the only scene-owned reason to turn frame
+        // timing on; the per-pass breakdown stays a developer switch because it
+        // drains at every pass boundary.
+        const bool wants_gpu_timing =
+            pp->dynamic_resolution &&
+            pp->dynamic_resolution_timing == kDynamicResolutionTimingGpu;
+        if (wants_gpu_timing != m_gpu_frame_timing_required) {
+            m_gpu_frame_timing_required = wants_gpu_timing;
+            // Require a sample published AFTER the switch. The current stats
+            // may describe a frame rendered while the CPU clock was selected.
+            m_last_gpu_sample_serial =
+                m_renderer ? m_renderer->last_stats().gpu_sample_serial : 0;
+            apply_gpu_timing_state();
+            NF_LOG_INFO(LogCategory::Core, "Dynamic resolution timing: {}",
+                        wants_gpu_timing
+                            ? "GPU frame timestamps (CPU fallback until a sample is ready)"
+                            : "CPU frame time");
+        }
         rendering::DynamicResolutionConfig dynamic{};
         dynamic.enabled = pp->dynamic_resolution;
         dynamic.max_scale = pp->render_scale;
         dynamic.min_scale = pp->min_render_scale;
         dynamic.target_frame_ms =
             pp->target_fps > 0.0f ? 1000.0f / pp->target_fps : 16.6667f;
+        dynamic.timing = pp->dynamic_resolution_timing == kDynamicResolutionTimingGpu
+                             ? rendering::DynamicResolutionTiming::Gpu
+                             : rendering::DynamicResolutionTiming::Cpu;
         m_dynamic_resolution.configure(dynamic);
+
+        // The window policy reuses the same ceiling/floor/target as the
+        // governor: `render_scale` is where it may return to, `min_render_scale`
+        // is where it stops, and `target_fps` is what the 1% low is measured
+        // against. Nothing new to author, and a scene can switch sources
+        // without re-tuning.
+        m_frame_policy_active = pp->frame_policy;
+        if (m_frame_policy_active) {
+            rendering::FramePolicyConfig policy{};
+            policy.target_fps = pp->target_fps > 0.0f ? pp->target_fps : 60.0f;
+            policy.min_scale = pp->min_render_scale;
+            policy.max_scale = pp->render_scale;
+            m_frame_policy_config = policy;
+            // A scene authored at 0.8 that enables the policy starts at 0.8,
+            // not at the state's default 1.0.
+            m_frame_policy_state.scale =
+                std::clamp(m_frame_policy_state.scale, policy.min_scale, policy.max_scale);
+        }
         const f32 requested_scale =
-            pp->dynamic_resolution ? m_dynamic_resolution.scale() : pp->render_scale;
+            m_frame_policy_active
+                ? m_frame_policy_state.scale
+                : (pp->dynamic_resolution ? m_dynamic_resolution.scale() : pp->render_scale);
         if (requested_scale != m_renderer->render_scale()) {
             NF_LOG_INFO(LogCategory::Render, "Render scale {:.2f} -> {:.2f}{}",
                         m_renderer->render_scale(), requested_scale,

@@ -678,6 +678,31 @@ struct SubmitInfo {
     Fence* signal_fence = nullptr; // Signaled when the submission completes
 };
 
+// --- Timestamp queries ---
+//
+// A query pool currently models TIMESTAMP queries. That is the one query type
+// the RHI needs to measure real GPU duration without putting a CPU stall on
+// the frame: the CPU writes timestamps while recording, and polls the results
+// later, after the frame's fence has signalled.
+//
+// It is deliberately NOT a general occlusion/statistics pool yet. Adding those
+// types without a consumer would only create untested surface area.
+class QueryPool {
+public:
+    virtual ~QueryPool() = default;
+
+    /// Number of queries in the pool.
+    virtual u32 count() const = 0;
+
+    /// Polls the results for [first, first + out.size()) into `out`.
+    ///
+    /// Non-blocking: returns false while any requested result is not yet
+    /// available (the GPU may still be executing the submission), and leaves
+    /// `out` untouched in that case. The pool itself is written only by the
+    /// GPU, so polling never stalls the frame.
+    virtual bool get_results(std::span<u64> out, u32 first = 0) = 0;
+};
+
 // --- CommandBuffer ---
 //
 // Command buffers are owned and reused by the caller, not by the device. The
@@ -761,6 +786,18 @@ public:
     // per-feature transition code.
     virtual void barrier_texture(Texture& texture, ImageUsage before, ImageUsage after) = 0;
 
+    /// Resets `count` timestamp queries starting at `first`. Must be recorded
+    /// outside a render pass. Query results become unavailable until the next
+    /// write_timestamp() for each index.
+    virtual void reset_query_pool(QueryPool& pool, u32 first, u32 count) = 0;
+
+    /// Writes the GPU clock into `query` when `stage` is reached. A frame
+    /// profiler typically brackets work with TopOfPipe before and BottomOfPipe
+    /// after; BottomOfPipe intentionally drains the pipeline, so pass-level
+    /// timestamps are a profiling mode rather than an always-on default.
+    virtual void write_timestamp(QueryPool& pool, u32 query,
+                                 PipelineStage stage = PipelineStage::BottomOfPipe) = 0;
+
     /// GPU → CPU readback: copies a texture region into a buffer. Required for
     /// screenshots, GPU-side occlusion culling, and — critically — for tests
     /// that must prove pixels were actually written.
@@ -843,6 +880,24 @@ public:
     /// states. The decal pass needs this: it blends GBuffer0 with straight
     /// alpha while GBuffer2's alpha carries the untouched emission strength.
     virtual bool supports_independent_blend() const { return false; }
+
+    /// True when the backend can create timestamp query pools AND the graphics
+    /// queue can write timestamps. A device that returns false must not be
+    /// asked for a pool; callers fall back to CPU/clock measurements.
+    virtual bool supports_timestamp_queries() const { return false; }
+
+    /// Nanoseconds represented by one timestamp tick. Zero means unsupported.
+    virtual f64 timestamp_period_ns() const { return 0.0; }
+
+    /// Number of significant low bits in a timestamp. Zero means unsupported;
+    /// when this is below 64, deltas must be masked to this many bits.
+    virtual u32 timestamp_valid_bits() const { return 0; }
+
+    /// Creates a timestamp-only query pool with `count` entries. Returns null
+    /// when the backend has no timestamp support or the allocation failed.
+    virtual std::unique_ptr<QueryPool> create_timestamp_query_pool(u32 /*count*/) {
+        return nullptr;
+    }
 
     /// True when the backend's validation machinery is actually active (the
     /// KHRONOS validation layer was found and enabled). Tests use this to

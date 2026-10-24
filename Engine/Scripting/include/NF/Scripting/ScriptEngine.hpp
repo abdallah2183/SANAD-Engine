@@ -44,6 +44,55 @@ using LogCallback = std::function<void(const std::string& level, const std::stri
 /// dependency on NFPlatform or NFGameplay): the Runtime owns the real source and
 /// adapts it here. Both callbacks may be empty (headless, or a paused game) and
 /// then every query is false/zero rather than an error.
+struct ScriptImpact {
+    u32 shooter_id = 0u;
+    u32 shooter_generation = 0u;
+    u32 target_id = 0u;
+    u32 target_generation = 0u;
+    std::string target_name;
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+    f32 nx = 0.0f;
+    f32 ny = 0.0f;
+    f32 nz = 0.0f;
+    f32 distance = 0.0f;
+    f32 damage = 0.0f;
+    f32 applied = 0.0f;
+    /// Phase 50: where the hit landed and how much armor stopped. The zone is
+    /// a stable scene-format name ("body", "head", "limbs"), not an enum value,
+    /// so a Lua script does not depend on C++ declaration order.
+    std::string hit_zone = "body";
+    f32 armor_absorbed = 0.0f;
+    /// "ballistic", "explosive" or "fire" (Phase 52).
+    std::string damage_type = "ballistic";
+    bool blocked_by_faction = false;
+    bool killed = false;
+    /// True when the event came from a radial blast rather than the direct hit.
+    bool splash = false;
+    /// True when the event came from a damage-over-time tick (Phase 54).
+    bool status = false;
+};
+
+/// One shot from the previous completed frame (Phase 53). A game uses this for
+/// a muzzle flash, a tracer, a casing sound or a recoil overlay; it is the
+/// event for the shot itself, not for what it hit.
+struct ScriptShot {
+    u32 shooter_id = 0u;
+    u32 shooter_generation = 0u;
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+    f32 dx = 0.0f;
+    f32 dy = 0.0f;
+    f32 dz = -1.0f;
+    f32 damage = 0.0f;
+    u32 pellet = 1u;
+    u32 pellets = 1u;
+    u32 seed = 0u;
+    bool projectile = false;
+};
+
 struct ScriptInput {
     std::function<bool(std::string_view action)> pressed;
     std::function<f32(std::string_view action)> axis;
@@ -75,6 +124,58 @@ struct ScriptInput {
     /// the camera recovers on its own and the view returns to the player's
     /// aim, so the script never has to undo anything.
     std::function<void(f32, f32)> recoil;
+
+    // --- The gun and hit points (Phase 44) ---------------------------------
+    //
+    // A script reads the weapon the runtime already stepped — it does not own
+    // the fire-rate clock, the magazine or the spread. That distinction is the
+    // whole design: a Lua script that fired on its own timer would drift from
+    // the animation and from the sound, and two scripts would fight over the
+    // ammo. `weapon_fire` therefore asks the weapon to fire, and the weapon's
+    // cadence decides whether it may.
+    //
+    // Every hook is empty in a run with no runtime behind it, which is why each
+    // has a documented "no weapon" answer instead of an error.
+
+    /// Rounds in the magazine / carried in reserve. 0 when there is no weapon.
+    std::function<f32()> weapon_ammo;
+    std::function<f32()> weapon_reserve;
+    /// Whether a reload is in progress.
+    std::function<bool()> weapon_reloading;
+    /// Starts a reload. False when there is nothing to load.
+    std::function<bool()> weapon_reload;
+    /// Fires one volley if the weapon is ready; returns the projectiles traced.
+    std::function<f32()> weapon_fire;
+
+    /// The last projectile's result: hit, x, y, z, distance. A miss reports
+    /// false and leaves the numbers at zero, so a script can branch on the
+    /// first value alone.
+    std::function<void(bool&, f32&, f32&, f32&, f32&)> last_hit;
+
+    /// Every impact from the PREVIOUS completed frame (Phase 49). A script
+    /// reads them with `nf.impact_count()` and `nf.impact(i)`; the runtime
+    /// keeps the current frame separate so an impact fired by the script
+    /// itself is not lost before the next update.
+    std::function<u32()> impact_count;
+    std::function<bool(u32, ScriptImpact&)> impact_at;
+
+    /// Every shot from the previous completed frame (Phase 53). Same two-slot
+    /// contract as impacts, so a script that fires sees its own shot next frame.
+    std::function<u32()> shot_count;
+    std::function<bool(u32, ScriptShot&)> shot_at;
+
+    /// An entity's hit points by (id, generation): current, max. A dead entity
+    /// reports 0 for both rather than failing — "how much health does this
+    /// have" is a question with an answer even when the answer is none.
+    std::function<void(u32, u32, f32&, f32&)> health_of;
+
+    /// Applies damage by (id, generation, amount); returns what was taken.
+    std::function<f32(u32, u32, f32)> damage;
+
+    /// Status effects (Phase 54): apply/refresh, query remaining, remove.
+    std::function<bool(u32, u32, std::string_view, f32, f32, f32)> apply_status;
+    std::function<f32(u32, u32, std::string_view)> status_remaining;
+    std::function<bool(u32, u32, std::string_view)> clear_status;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

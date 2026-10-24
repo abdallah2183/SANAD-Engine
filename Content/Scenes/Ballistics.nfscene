@@ -1,0 +1,77 @@
+# SANAD Scene v1
+version: 1
+name: Ballistics
+entity_count: 10
+---
+entity: 1:0
+  Name: Player
+  Transform: local(0,1,6) world(0,1,6) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Health: max=100 health=100 regen=2 regen_delay=4
+  Faction: team=Blue
+  Weapon: mode=auto rpm=420 magazine=18 reserve=90 reload=1.6 damage=18 range=120 spread=0.4 bloom=0.2 spread_max=3 recover=5 recoil=0.7 recoil_yaw=0.2 recoil_growth=0.15 falloff_start=30 falloff_end=100 falloff_min=0.5 shake=0.1 seed=1592266351 delivery=projectile speed=220 gravity=9.81
+---
+entity: 2:0
+  Name: MainCamera
+  Transform: local(0,1.5,9) world(0,1.5,9) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=70 aspect=1.7777778 near=0.1 far=1000 active=true follow=Player pivot=0,1.2,0 distance=3.5 yaw=180 pitch=-10 align=90 mouse=1
+---
+entity: 3:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.35,-1,-0.4) color(1,1,1) intensity=1.1
+---
+entity: 4:0
+  Name: Sky
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Sky: zenith(0.16,0.3,0.6) horizon(0.55,0.6,0.7) ground(0.08,0.08,0.1) clear(0.02,0.02,0.05) sun_disk=0.6 sun_glow=0.8 enabled=true
+---
+entity: 5:0
+  Name: Ground
+  Transform: local(0,-0.1,0) world(0,-0.1,0) rot(0,0,0) scale(20,0.1,20) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.8 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(20,0.1,20)
+---
+entity: 6:0
+  Name: BackWall
+  Transform: local(0,2,-18) world(0,2,-18) rot(0,0,0) scale(8,2,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.8 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(8,2,0.5)
+---
+entity: 7:0
+  Name: Ally
+  Transform: local(2.5,1,-2) world(2.5,1,-2) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Health: max=100 health=100
+  Faction: team=Blue
+  Collider: shape=Box half(0.5,1,0.5)
+---
+entity: 8:0
+  Name: Enemy
+  Transform: local(-2.5,1,-9) world(-2.5,1,-9) rot(0,0,0) scale(0.5,0.5,0.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  Health: max=80 health=80
+  Faction: team=Red
+  Collider: shape=Box half(0.5,1,0.5)
+  Weapon: mode=burst rpm=360 magazine=12 reserve=48 reload=2 burst=3 burst_gap=0.08 damage=9 range=80 spread=1 bloom=0.3 spread_max=4 recover=4 recoil=0.4 recoil_yaw=0.1 recoil_growth=0.1 falloff_start=20 falloff_end=70 falloff_min=0.4 shake=0.06 seed=2026418351 delivery=projectile speed=180 gravity=9.81
+  CombatAgent: eye=1.4 aim=1 auto_target=true reaction=0.6 turn=140 cone=5 range=45 burst=0.45 rest=1.1
+---
+entity: 9:0
+  Name: AllyCrate
+  Transform: local(4,0.75,-6) world(4,0.75,-6) rot(0,0,0) scale(1.5,1.5,1.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.8 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(0.75,0.75,0.75)
+  Health: max=40 health=40
+  Faction: team=Blue
+---
+entity: 10:0
+  Name: EnemyCrate
+  Transform: local(-4,0.75,-12) world(-4,0.75,-12) rot(0,0,0) scale(1.5,1.5,1.5) parent(4294967295:0)
+  Mesh: asset_id=f04e488b-4dc8-414b-baee-e3c50e8829ad material=content://Materials/Default
+  RigidBody: type=Static mass=0 friction=0.8 restitution=0.1 linear_damping=0.05 angular_damping=0.05 allow_sleep=true
+  Collider: shape=Box half(0.75,0.75,0.75)
+  Health: max=40 health=40
+  Faction: team=Red

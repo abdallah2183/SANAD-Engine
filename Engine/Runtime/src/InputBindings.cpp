@@ -305,6 +305,15 @@ InputBindings InputBindings::defaults() {
     b.set("aim", {{BindingSource::MouseButton, 0x02, 1.0f},              // RMB
                   {BindingSource::PadAxis, 5, 1.0f}});                   // RT
 
+    // The gun (Phase 44). Left mouse and the right bumper are where every
+    // shooter puts "fire", and R / Y is where they put "reload". Additive like
+    // `aim`: no existing action moves, and a scene with no WeaponComponent
+    // never reads either name.
+    b.set("fire", {{BindingSource::MouseButton, 0x01, 1.0f},             // LMB
+                   {BindingSource::PadButton, 5, 1.0f}});                // RB
+    b.set("reload", {{BindingSource::Key, 'R', 1.0f},
+                     {BindingSource::PadButton, 3, 1.0f}});              // Y
+
     // Legacy orbit axes, kept so a scene written for OrbitCameraModule still
     // reads something sensible.
     b.set("look", {{BindingSource::Key, 0x25, -1.0f}, {BindingSource::Key, 0x27, 1.0f}});
@@ -576,6 +585,45 @@ binding_rows(const InputBindings& bindings) {
         rows.emplace_back(action, *bindings.find(action));
     }
     return rows;
+}
+
+
+std::vector<BindingConflict> find_binding_conflicts(const InputBindings& bindings) {
+    std::vector<BindingConflict> conflicts;
+    const auto rows = binding_rows(bindings);
+
+    // Two actions with identical binding lists are aliases of one action, not
+    // two actions fighting over a key. Comparing the lists is the only rule
+    // that needs no second table to stay in sync with the defaults.
+    const auto identical = [](const std::vector<InputBinding>& a,
+                              const std::vector<InputBinding>& b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].source != b[i].source || a[i].code != b[i].code) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    for (size_t i = 0; i < rows.size(); ++i) {
+        for (size_t j = i + 1; j < rows.size(); ++j) {
+            if (identical(rows[i].second, rows[j].second)) {
+                continue; // aliases
+            }
+            for (const auto& a : rows[i].second) {
+                for (const auto& b : rows[j].second) {
+                    if (a.source == b.source && a.code == b.code) {
+                        conflicts.push_back(
+                            BindingConflict{rows[i].first, rows[j].first, a.source, a.code});
+                    }
+                }
+            }
+        }
+    }
+    return conflicts;
 }
 
 } // namespace nf::runtime

@@ -15,13 +15,21 @@
 //   * It knows nothing about Vulkan or the renderer. It consumes frame times in
 //     seconds and returns a scale. That makes every decision testable without a
 //     GPU, and keeps the runtime from owning policy.
-//   * It reacts to a smoothed frame time, not to one frame. A single shader
+//   * It reacts to a smoothed LOAD sample, not to one frame. A single shader
 //     compile hitch must not drop the resolution for the next half second.
 //   * It has a cooldown and a hysteresis band. Without both, a controller
 //     oscillates every frame between two scales — and every change rebuilds
 //     every render target, which is the most expensive thing the renderer does.
 //   * It steps additively (default 0.05) rather than snapping to an extreme, so
 //     a transient load produces a small change, not a visible resolution pop.
+//
+// Phase 40 lets the LOAD sample come from real GPU timestamps while the
+// cooldown keeps running on CPU wall time. Those are different clocks: 0.5 s of
+// GPU work can span several seconds of wall time, so using the GPU sample for
+// both would make the cooldown depend on how fast the GPU happens to be. A GPU
+// sample is an OPTION with an automatic fallback — a device without timestamps,
+// a disabled profiler, or no fresh sample all fall back to CPU frame time. The
+// governor itself still touches no GPU API.
 //
 // The average is reset to the target after every accepted change: the samples
 // that justified the change describe the OLD resolution. Keeping them would
@@ -43,12 +51,25 @@ namespace nf::rendering {
 inline constexpr f32 kMinTargetFps = 10.0f;
 inline constexpr f32 kMaxTargetFps = 360.0f;
 
+/// Which clock the governor uses to decide whether the frame is too expensive.
+/// `Cpu` is the historical behaviour: the frame duration the runtime already
+/// receives. `Gpu` prefers a fresh timestamp sample and falls back to the CPU
+/// value when none is available. It never changes the clock used by the
+/// cooldown, which is always CPU wall time.
+enum class DynamicResolutionTiming : u8 {
+    Cpu = 0,
+    Gpu = 1,
+};
+
 struct DynamicResolutionConfig {
     /// Off by default. A scene that never asks for this renders exactly as it
     /// did before the governor existed.
     bool enabled = false;
     /// The frame budget, in milliseconds. 16.667 = 60 fps, 8.333 = 120 fps.
     f32 target_frame_ms = 16.6667f;
+    /// Load clock. `Gpu` is a preference, not a requirement: any missing or
+    /// non-positive GPU sample falls back to the CPU frame time.
+    DynamicResolutionTiming timing = DynamicResolutionTiming::Cpu;
     /// Lowest allowed scale. Never above max_scale; configure() swaps an
     /// inverted pair rather than silently producing an empty range.
     f32 min_scale = 0.5f;
@@ -83,24 +104,40 @@ public:
     const DynamicResolutionConfig& config() const { return m_config; }
     bool enabled() const { return m_config.enabled; }
     f32 scale() const { return m_scale; }
+    /// The source used by the last accepted update. Equal to the configured
+    /// source when it had a usable sample, otherwise `Cpu` (the fallback).
+    DynamicResolutionTiming last_timing() const { return m_last_timing; }
 
     /// Forces the current scale and clears the smoothing/cooldown state.
     /// Clamped to the current config's range.
     void reset(f32 scale);
 
-    /// Feeds one frame's duration in seconds and returns the scale to use for
-    /// the NEXT frame. A disabled governor, a non-positive time, or a
-    /// non-finite time is ignored and returns the current scale unchanged.
+    /// Feeds one CPU frame duration in seconds and returns the scale to use
+    /// for the NEXT frame. This is the CPU-only form; a scene configured for
+    /// `Gpu` timing cannot get a GPU sample through it and therefore falls back
+    /// to this value. A disabled governor, a non-positive time, or a non-finite
+    /// time is ignored and returns the current scale unchanged.
     f32 update(f32 frame_time_s);
+
+    /// Feeds both clocks. When `timing` is `Gpu` and `gpu_frame_time_s` is
+    /// positive and finite and `gpu_frame_time_valid` is true, the GPU value is
+    /// the load sample. Otherwise the CPU value is used. `cpu_frame_time_s` is
+    /// also the wall clock that advances the cooldown, even on a GPU sample:
+    /// 0.5 s of GPU work is not 0.5 s of real time. A non-positive CPU time with
+    /// a usable GPU sample still advances time by the GPU sample, so a caller
+    /// without a wall clock can drive the governor.
+    f32 update(f32 cpu_frame_time_s, f32 gpu_frame_time_s, bool gpu_frame_time_valid);
 
 private:
     DynamicResolutionConfig m_config{};
     f32 m_scale = 1.0f;
-    /// Exponential moving average of (clamped) frame times, in seconds.
+    /// Exponential moving average of (clamped) load samples, in seconds.
     f32 m_average_frame_s = 0.0f;
-    /// Time accumulated since the last accepted change, in seconds. Hitches
-    /// are clamped before they reach this, so a freeze cannot bypass cooldown.
+    /// Wall time accumulated since the last accepted change, in seconds.
+    /// Hitches are clamped before they reach this, so a freeze cannot bypass
+    /// cooldown.
     f32 m_time_since_change_s = 0.0f;
+    DynamicResolutionTiming m_last_timing = DynamicResolutionTiming::Cpu;
     bool m_has_sample = false;
     bool m_has_scale = false;
 };

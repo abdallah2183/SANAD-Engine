@@ -773,6 +773,54 @@ void camera_panel(EditorApp& app) {
             ImGui::EndDisabled();
         }
 
+        // Player profiles. One machine, more than one player: a profile is a
+        // named copy of everything above, and switching copies it over the
+        // active file the game reads — so the runtime keeps its one-file
+        // contract and a later session starts on the chosen profile.
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", AV("profiles").c_str());
+        static int selected_profile = 0;
+        const std::vector<std::string> profiles = app.player_profiles();
+        if (!profiles.empty()) {
+            if (selected_profile >= static_cast<int>(profiles.size())) {
+                selected_profile = 0;
+            }
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::BeginCombo((AV("profiles") + "##ps_combo").c_str(),
+                                  profiles[selected_profile].c_str())) {
+                for (int i = 0; i < static_cast<int>(profiles.size()); ++i) {
+                    const bool is_selected = (i == selected_profile);
+                    if (ImGui::Selectable(profiles[i].c_str(), is_selected)) {
+                        selected_profile = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button((AV("load_profile") + "##ps_load").c_str())) {
+                std::string err;
+                if (!app.load_player_profile(profiles[selected_profile], err)) {
+                    push_error(app.console(), "Load profile failed", err);
+                } else {
+                    push_info(app.console(), "Profile loaded: " + profiles[selected_profile]);
+                }
+            }
+        }
+        static char profile_name[33] = "";
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::InputText((AV("profile_name") + "##ps_pname").c_str(), profile_name,
+                         sizeof(profile_name));
+        ImGui::SameLine();
+        if (ImGui::Button((AV("save_profile") + "##ps_psave").c_str())) {
+            std::string err;
+            if (!app.save_player_profile(profile_name, err)) {
+                push_error(app.console(), "Save profile failed", err);
+            } else {
+                push_info(app.console(), std::string("Profile saved: ") + profile_name);
+            }
+        }
+        hint(AV("profile_hint"));
+
         if (ImGui::Button((AV("apply") + "##ps_apply").c_str())) {
             app.apply_player_settings();
         }
@@ -982,6 +1030,24 @@ void input_panel(EditorApp& app) {
     }
     ImGui::EndChild();
 
+    // One control, two actions: whichever fires first is the one the player
+    // gets, and nothing in the runtime can explain that. The list is capped
+    // because the point is to make the player look, not to enumerate.
+    const auto conflicts = nf::runtime::find_binding_conflicts(app.input_bindings());
+    if (!conflicts.empty()) {
+        ImGui::TextColored(theme::warning(), "%s: %d", AV("binding_conflicts").c_str(),
+                           static_cast<int>(conflicts.size()));
+        for (size_t i = 0; i < conflicts.size() && i < 4; ++i) {
+            const nf::runtime::InputBinding as_binding{conflicts[i].source, conflicts[i].code,
+                                                       1.0f};
+            ImGui::BulletText("%s / %s: %s", conflicts[i].action_a.c_str(),
+                              conflicts[i].action_b.c_str(), binding_label(as_binding).c_str());
+        }
+        if (conflicts.size() > 4) {
+            ImGui::BulletText("…");
+        }
+    }
+
     if (ImGui::Button((AV("save") + "##bind_save").c_str())) {
         std::string err;
         if (!app.save_input_bindings(err)) {
@@ -1010,8 +1076,47 @@ void render_panel(EditorApp& app, const UiFrameStats& stats) {
         // Frame time next to FPS: the average hides a stutter, the instantaneous
         // number is what the user actually feels.
         kv(AV("frame_time"), fmt("%.2f ms", frame_ms));
-        kv(AV("gpu_time"), fmt("%.2f ms", static_cast<double>(stats.gpu_us) / 1000.0));
-        kv(AV("gpu_avg"), fmt("%.2f ms", static_cast<double>(stats.gpu_avg_us) / 1000.0));
+        if (stats.frame_samples > 0) {
+            // Phase 41 window: stable numbers over the last ~two seconds. The
+            // instantaneous rows above still answer "what is happening now";
+            // these answer "what did the session feel like".
+            kv(AV("fps_avg"), fmt("%.1f", stats.fps_average));
+            kv(AV("fps_1pct_low"), fmt("%.1f", stats.fps_1pct_low));
+            kv(AV("frame_jitter"), fmt("%.2f ms", stats.frame_stddev_ms));
+            const char* bound_key = "bound_unknown";
+            switch (stats.frame_bound) {
+            case rendering::FramePacingBound::Cpu:
+                bound_key = "bound_cpu";
+                break;
+            case rendering::FramePacingBound::Gpu:
+                bound_key = "bound_gpu";
+                break;
+            case rendering::FramePacingBound::Balanced:
+                bound_key = "bound_balanced";
+                break;
+            case rendering::FramePacingBound::Unknown:
+                break;
+            }
+            kv(AV("frame_bound"), AV(bound_key));
+            hint(AV("frame_pacing_hint"));
+        }
+        const bool gpu_real = stats.gpu_timing_valid;
+        kv(AV(gpu_real ? "gpu_timestamp" : "gpu_time"),
+           fmt("%.2f ms", gpu_real ? stats.gpu_frame_ms
+                                   : static_cast<double>(stats.gpu_us) / 1000.0));
+        kv(AV("gpu_avg"), fmt("%.2f ms", gpu_real ? stats.gpu_frame_ms_avg
+                                                 : static_cast<double>(stats.gpu_avg_us) / 1000.0));
+        if (gpu_real) {
+            kv(AV("gpu_passes"), std::to_string(stats.gpu_passes.size()));
+            for (const UiGpuPassTiming& pass : stats.gpu_passes) {
+                // Pass names are the developer-facing identifiers from
+                // RenderGraph, not UI copy: leave them unshaped and LTR.
+                kv("    " + pass.name, fmt("%.3f ms", pass.milliseconds));
+            }
+            hint(AV("gpu_timing_note"));
+        } else if (!stats.gpu_timing_supported) {
+            hint(AV("gpu_timing_unavailable"));
+        }
         kv(AV("cull_time"), fmt("%.1f us", stats.cull_us));
         kv(AV("draw_prep"), fmt("%.1f us", stats.draw_prep_us));
         kv(AV("draw_calls"), std::to_string(stats.draw_calls));

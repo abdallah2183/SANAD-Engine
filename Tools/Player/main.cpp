@@ -8,6 +8,9 @@
 
 #include <NF/Runtime/Application.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
+#include <NF/Assets/VirtualFileSystem.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Runtime/SceneValidator.hpp>
 #include <NF/Core/CrashHandler.hpp>
 
 #include <charconv>
@@ -48,6 +51,11 @@ void print_help() {
               << "  --frames N          Run N frames then exit (0 = until the window closes)\n"
               << "  --validation        Enable Vulkan validation layers\n"
               << "  --headless          No window (offscreen only)\n"
+              << "  --validate          Check the scene and exit (no window, no GPU); exit 2 on errors\n"
+              << "  --validate-all      Check every .nfscene under Content/Scenes\n"
+              << "  --validate-json     Print the report as JSON (one object per line)\n"
+              << "  --gpu-timing        Enable real GPU timestamps + per-pass breakdown\n"
+              << "  --frame-stats       Report average/1% low frame pacing at exit\n"
               << "  --input-log <file>  Record the input gameplay polls to <file>\n"
               << "  --replay <file>     Replay a recorded input log instead of the keyboard\n"
               << "  --replay-strict     Fail the run if --replay served no frames\n"
@@ -141,6 +149,12 @@ int main(int argc, char** argv) {
     // inside its own folder (see UNINSTALL.txt).
     bool crash_test = false;
     std::string crash_test_dir;
+    /// Validate the scene and exit without opening a window or a device.
+    bool validate_only = false;
+    /// Validate every .nfscene under Content/Scenes, not just the startup one.
+    bool validate_all = false;
+    /// Print the report as JSON (one object per scene) instead of text.
+    bool validate_json = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> std::string { return (i + 1 < argc) ? argv[++i] : std::string(); };
@@ -168,6 +182,14 @@ int main(int argc, char** argv) {
             config.max_frames = frames;
         } else if (arg == "--validation") config.validation = true;
         else if (arg == "--headless") config.headless = true;
+        else if (arg == "--validate") validate_only = true;
+        else if (arg == "--validate-json") validate_json = true;
+        else if (arg == "--validate-all") {
+            validate_only = true;
+            validate_all = true;
+        }
+        else if (arg == "--gpu-timing") config.gpu_timing = true;
+        else if (arg == "--frame-stats") config.frame_stats = true;
         else if (arg == "--input-log") config.input_log_path = next();
         else if (arg.rfind("--input-log=", 0) == 0) config.input_log_path = arg.substr(12);
         else if (arg == "--replay") config.input_replay_path = next();
@@ -256,6 +278,16 @@ int main(int argc, char** argv) {
         config.headless = true;
         std::free(b4);
     }
+    char* b5 = nullptr; size_t s5 = 0;
+    if (_dupenv_s(&b5, &s5, "NF_PLAYER_GPU_TIMING") == 0 && b5) {
+        config.gpu_timing = true;
+        std::free(b5);
+    }
+    char* b6 = nullptr; size_t s6 = 0;
+    if (_dupenv_s(&b6, &s6, "NF_PLAYER_FRAME_STATS") == 0 && b6) {
+        config.frame_stats = true;
+        std::free(b6);
+    }
 #else
     if (auto e = std::getenv("NF_PLAYER_PROJECT"); e && project_path.empty()) project_path = e;
     if (auto e = std::getenv("NF_PLAYER_FRAMES")) {
@@ -269,6 +301,8 @@ int main(int argc, char** argv) {
     }
     if (std::getenv("NF_PLAYER_VALIDATION")) config.validation = true;
     if (std::getenv("NF_PLAYER_HEADLESS")) config.headless = true;
+    if (std::getenv("NF_PLAYER_GPU_TIMING")) config.gpu_timing = true;
+    if (std::getenv("NF_PLAYER_FRAME_STATS")) config.frame_stats = true;
 #endif
 
     if (project_path.empty()) {
@@ -290,6 +324,74 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::cout << "NFPlayer: project '" << desc->name() << "' (" << project_path << ")\n";
+
+        // `--validate`: read the scene, run the rules, report, exit. No window
+        // and no device — a validator that needs a GPU is a validator CI
+        // cannot run.
+        if (validate_only) {
+            nf::assets::VirtualFileSystem vfs;
+            std::string mount_error;
+            if (!desc->apply_mounts(vfs, mount_error)) {
+                std::cerr << "NFPlayer: " << mount_error << "\n";
+                return 1;
+            }
+            const auto exists_in_project = [&vfs](std::string_view path) {
+                const auto exists = vfs.exists(path);
+                return exists.ok && exists.value;
+            };
+
+            std::vector<std::string> scenes;
+            if (validate_all) {
+                // Every scene the project ships, found on disk rather than
+                // asked for one at a time: a CI run should not need a list
+                // that goes stale the moment someone adds a level.
+                const std::filesystem::path dir = desc->mount_path("content://Scenes");
+                std::error_code ec;
+                for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                    if (entry.is_regular_file(ec) && entry.path().extension() == ".nfscene") {
+                        scenes.push_back("content://Scenes/" + entry.path().filename().string());
+                    }
+                }
+                std::sort(scenes.begin(), scenes.end());
+                if (scenes.empty()) {
+                    std::cerr << "NFPlayer: no .nfscene files under " << dir.string() << "\n";
+                    return 1;
+                }
+            } else {
+                const std::string scene_path =
+                    config.scene_path.empty() ? desc->startup_scene() : config.scene_path;
+                if (scene_path.empty()) {
+                    std::cerr << "NFPlayer: --validate needs --scene or a startup_scene in the "
+                                 "project\n";
+                    return 1;
+                }
+                scenes.push_back(scene_path);
+            }
+
+            uint32_t total_errors = 0;
+            uint32_t total_warnings = 0;
+            for (const std::string& scene_path : scenes) {
+                const auto loaded = nf::runtime::load_scene_from_vfs(vfs, scene_path);
+                if (!loaded.success) {
+                    std::cerr << "NFPlayer: cannot load '" << scene_path << "': " << loaded.error
+                              << "\n";
+                    ++total_errors;
+                    continue;
+                }
+                const auto report =
+                    nf::runtime::validate_scene(*loaded.scene, scene_path, exists_in_project);
+                std::cout << (validate_json ? nf::runtime::format_validation_json(report)
+                                            : nf::runtime::format_validation_report(report));
+                total_errors += report.errors;
+                total_warnings += report.warnings;
+            }
+            if (scenes.size() > 1 && !validate_json) {
+                std::cout << "\n" << scenes.size() << " scene(s): " << total_errors
+                          << " error(s), " << total_warnings << " warning(s)\n";
+            }
+            // 0 = clean (infos allowed), 2 = errors. A shell script can gate on it.
+            return total_errors == 0 ? 0 : 2;
+        }
     }
 
     config.project_path = project_path;

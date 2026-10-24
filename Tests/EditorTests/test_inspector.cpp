@@ -424,6 +424,7 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     edit.dynamic_resolution = true;
     edit.target_fps = 90.0f;
     edit.min_render_scale = 0.75f;
+    edit.dynamic_resolution_timing = runtime::kDynamicResolutionTimingGpu;
     edit.exposure = 1.75f;
     edit.tonemap = 2; // Reinhard
     edit.lut_path = "content://LUTs/grade.png";
@@ -469,6 +470,8 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
         NF_CHECK(pp->dynamic_resolution);
         NF_CHECK_NEAR(pp->target_fps, 90.0f, 1e-6f);
         NF_CHECK_NEAR(pp->min_render_scale, 0.75f, 1e-6f);
+        NF_CHECK_EQ(pp->dynamic_resolution_timing,
+                    runtime::kDynamicResolutionTimingGpu);
         NF_CHECK_NEAR(pp->exposure, 1.75f, 1e-6f);
         NF_CHECK(pp->tonemap == 2);
         NF_CHECK(pp->lut_path == "content://LUTs/grade.png");
@@ -487,6 +490,8 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     NF_CHECK(back.bloom_enabled);
     NF_CHECK_NEAR(back.bloom_threshold, 2.5f, 1e-6f);
     NF_CHECK_NEAR(back.grade_temperature, -0.75f, 1e-6f);
+    NF_CHECK_EQ(back.dynamic_resolution_timing,
+                runtime::kDynamicResolutionTimingGpu);
 
     // Redo restores the same block.
     NF_CHECK(stack.undo(scene.world()));
@@ -548,6 +553,13 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     runtime::PostProcessComponent nan_floor = edit;
     nan_floor.min_render_scale = std::numeric_limits<float>::quiet_NaN();
     NF_CHECK(editor::make_post_process_command(scene.world(), e, nan_floor, err) == nullptr);
+
+    // The timing source is a closed set in the editor too: an unknown int must
+    // not reach the component and silently run as CPU in the runtime.
+    runtime::PostProcessComponent bad_timing = edit;
+    bad_timing.dynamic_resolution_timing = 7;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, bad_timing, err) == nullptr);
+    NF_CHECK(!err.empty());
 
     // Lens bounds match the scene loader's: past +/-0.5 the warp folds the
     // corners over themselves, and a negative chromatic aberration would swap
@@ -708,4 +720,243 @@ NF_TEST(editor_inspector_decal_edit) {
 
     ecs::Entity dead{};
     NF_CHECK(editor::make_decal_command(scene.world(), dead, edit, err) == nullptr);
+}
+
+// --- weapons and hit points (Phase 44) ---------------------------------------
+//
+// The panel edits a PROFILE and the command rebuilds the live state from it.
+// Two things are worth pinning: an authored magazine starts full (an author
+// who widens the magazine must not get 12 rounds in a 30-round gun), and undo
+// restores the component the entity actually had — state included, because the
+// undo stack is not allowed to invent a magazine either.
+
+NF_TEST(editor_inspector_weapon_edit_rebuilds_the_magazine) {
+    scene::Scene scene("WeaponEdit");
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    scene.world().add<scene::NameComponent>(e, scene::NameComponent{"Gun"});
+
+    runtime::WeaponProfile profile;
+    profile.mode = runtime::FireMode::Auto;
+    profile.magazine = 30u;
+    profile.reserve = 90u;
+
+    std::string err;
+    auto cmd = editor::make_weapon_command(scene.world(), e, profile, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+
+    const auto* w = scene.world().get<runtime::WeaponComponent>(e);
+    NF_CHECK(w != nullptr);
+    if (w != nullptr) {
+        NF_CHECK(w->profile.magazine == 30u);
+        NF_CHECK(w->profile.mode == runtime::FireMode::Auto);
+        NF_CHECK_EQ(w->state.in_magazine, 30u);
+        NF_CHECK_EQ(w->state.reserve, 90u);
+    }
+
+    // Undo removes a component that did not exist before the edit.
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::WeaponComponent>(e) == nullptr);
+    NF_CHECK(stack.redo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::WeaponComponent>(e) != nullptr);
+}
+
+NF_TEST(editor_inspector_weapon_edit_refuses_a_gun_that_cannot_fire) {
+    scene::Scene scene("WeaponInvalid");
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    std::string err;
+
+    runtime::WeaponProfile profile;
+    profile.magazine = 0u;
+    NF_CHECK(editor::make_weapon_command(scene.world(), e, profile, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    profile = runtime::WeaponProfile{};
+    profile.spread_deg = 4.0f;
+    profile.spread_max_deg = 1.0f;
+    err.clear();
+    NF_CHECK(editor::make_weapon_command(scene.world(), e, profile, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    // Nothing was written by a refused edit.
+    NF_CHECK(scene.world().get<runtime::WeaponComponent>(e) == nullptr);
+}
+
+NF_TEST(editor_inspector_health_edit_clamps_into_the_ceiling) {
+    scene::Scene scene("HealthEdit");
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    std::string err;
+
+    runtime::HealthComponent h;
+    h.max_health = 50.0f;
+    h.health = 500.0f; // the slider was dragged past the end
+    auto cmd = editor::make_health_command(scene.world(), e, h, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+
+    const auto* stored = scene.world().get<runtime::HealthComponent>(e);
+    NF_CHECK(stored != nullptr);
+    if (stored != nullptr) {
+        NF_CHECK_NEAR(stored->max_health, 50.0f, 1e-5f);
+        NF_CHECK_NEAR(stored->health, 50.0f, 1e-5f);
+    }
+
+    // A zero ceiling is refused: the entity could be neither alive nor dead.
+    runtime::HealthComponent broken;
+    broken.max_health = 0.0f;
+    err.clear();
+    NF_CHECK(editor::make_health_command(scene.world(), e, broken, err) == nullptr);
+    NF_CHECK(!err.empty());
+}
+
+NF_TEST(editor_inspector_authors_layered_damage_and_a_blast) {
+    scene::Scene scene("LayeredEdit");
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    std::string err;
+
+    runtime::WeaponProfile p;
+    p.damage_type = runtime::DamageType::Fire;
+    p.status = runtime::StatusKind::Burning;
+    p.status_damage_per_second = 4.0f;
+    p.status_seconds = 3.0f;
+    p.status_tick_seconds = 0.5f;
+    p.armor_penetration = 0.4f;
+    p.blast_radius = 3.5f;
+    p.blast_damage = 45.0f;
+    p.blast_min_scale = 0.2f;
+    auto weapon_cmd = editor::make_weapon_command(scene.world(), e, p, err);
+    NF_CHECK(weapon_cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(weapon_cmd), scene.world());
+    const auto* w = scene.world().get<runtime::WeaponComponent>(e);
+    NF_CHECK(w != nullptr);
+    if (w != nullptr) {
+        NF_CHECK(w->profile.damage_type == runtime::DamageType::Fire);
+        NF_CHECK(w->profile.status == runtime::StatusKind::Burning);
+        NF_CHECK_NEAR(w->profile.status_damage_per_second, 4.0f, 1e-5f);
+        NF_CHECK_NEAR(w->profile.status_seconds, 3.0f, 1e-5f);
+        NF_CHECK_NEAR(w->profile.armor_penetration, 0.4f, 1e-5f);
+        NF_CHECK_NEAR(w->profile.blast_radius, 3.5f, 1e-5f);
+        NF_CHECK_NEAR(w->profile.blast_damage, 45.0f, 1e-5f);
+        NF_CHECK_NEAR(w->profile.blast_min_scale, 0.2f, 1e-5f);
+    }
+
+    runtime::HealthComponent h;
+    h.max_armor = 40.0f;
+    h.armor = 60.0f; // past the ceiling: the command clamps it
+    h.armor_absorb = 0.5f;
+    h.hit_zones = true;
+    h.headshot_multiplier = 2.5f;
+    h.limb_multiplier = 0.5f;
+    h.ballistic_resistance = 0.2f;
+    h.explosive_resistance = 0.3f;
+    h.fire_resistance = 0.4f;
+    auto health_cmd = editor::make_health_command(scene.world(), e, h, err);
+    NF_CHECK(health_cmd != nullptr);
+    stack.push(std::move(health_cmd), scene.world());
+    const auto* stored = scene.world().get<runtime::HealthComponent>(e);
+    NF_CHECK(stored != nullptr);
+    if (stored != nullptr) {
+        NF_CHECK_NEAR(stored->max_armor, 40.0f, 1e-5f);
+        NF_CHECK_NEAR(stored->armor, 40.0f, 1e-5f);
+        NF_CHECK(stored->hit_zones);
+        NF_CHECK_NEAR(stored->headshot_multiplier, 2.5f, 1e-5f);
+        NF_CHECK_NEAR(stored->ballistic_resistance, 0.2f, 1e-5f);
+        NF_CHECK_NEAR(stored->explosive_resistance, 0.3f, 1e-5f);
+        NF_CHECK_NEAR(stored->fire_resistance, 0.4f, 1e-5f);
+    }
+
+    // An impossible blast is refused, not silently clamped.
+    runtime::WeaponProfile bad;
+    bad.blast_radius = -1.0f;
+    err.clear();
+    NF_CHECK(editor::make_weapon_command(scene.world(), e, bad, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::WeaponProfile bad_status;
+    bad_status.status = runtime::StatusKind::Burning;
+    bad_status.status_damage_per_second = 0.0f; // named but no dose
+    bad_status.status_seconds = 3.0f;
+    err.clear();
+    NF_CHECK(editor::make_weapon_command(scene.world(), e, bad_status, err) == nullptr);
+    NF_CHECK(!err.empty());
+}
+
+// --- combat agent and faction (Phase 46) -------------------------------------
+
+NF_TEST(editor_inspector_authors_a_combat_agent_and_undoes_it) {
+    scene::Scene scene("AgentEdit");
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    std::string err;
+
+    runtime::CombatAgentComponent agent;
+    agent.target = "Player";
+    agent.eye_height = 1.7f;
+    agent.target_height = 1.1f;
+    agent.config.reaction_seconds = 0.2f;
+    agent.config.aim_speed_deg_per_s = 300.0f;
+    agent.config.fire_cone_deg = 4.0f;
+    agent.config.max_range = 80.0f;
+    agent.config.burst_on_seconds = 0.4f;
+    agent.config.burst_off_seconds = 0.6f;
+    auto cmd = editor::make_combat_agent_command(scene.world(), e, agent, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+
+    const auto* stored = scene.world().get<runtime::CombatAgentComponent>(e);
+    NF_CHECK(stored != nullptr);
+    if (stored != nullptr) {
+        NF_CHECK(stored->target == "Player");
+        NF_CHECK_NEAR(stored->eye_height, 1.7f, 1e-5f);
+        NF_CHECK_NEAR(stored->config.max_range, 80.0f, 1e-5f);
+    }
+
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::CombatAgentComponent>(e) == nullptr);
+
+    // An impossible cone is refused whole, and the refusal names a value.
+    agent.config.fire_cone_deg = 0.0f;
+    err.clear();
+    NF_CHECK(editor::make_combat_agent_command(scene.world(), e, agent, err) == nullptr);
+    NF_CHECK(!err.empty());
+}
+
+NF_TEST(editor_inspector_authors_a_faction_and_refuses_whitespace) {
+    scene::Scene scene("FactionEdit");
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+    std::string err;
+
+    runtime::FactionComponent faction;
+    faction.team = "Blue";
+    faction.friendly_fire = true;
+    auto cmd = editor::make_faction_command(scene.world(), e, faction, err);
+    NF_CHECK(cmd != nullptr);
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+
+    const auto* stored = scene.world().get<runtime::FactionComponent>(e);
+    NF_CHECK(stored != nullptr);
+    if (stored != nullptr) {
+        NF_CHECK(stored->team == "Blue");
+        NF_CHECK(stored->friendly_fire);
+    }
+
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(scene.world().get<runtime::FactionComponent>(e) == nullptr);
+
+    // Whitespace would split the saved `team=` token, so it is refused rather
+    // than silently saved as a team nobody can load.
+    faction.team = "Blue Team";
+    err.clear();
+    NF_CHECK(editor::make_faction_command(scene.world(), e, faction, err) == nullptr);
+    NF_CHECK(!err.empty());
 }

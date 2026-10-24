@@ -442,11 +442,19 @@ bool load_device_functions(VkDevice device, VkInstance instance) {
         return false;
     }
 
-    // Optional: object naming + command buffer labels (profiling aids).
+    // Optional: object naming + command buffer labels (profiling aids) and
+    // timestamp queries. These are core 1.0 entry points, but resolving them
+    // optionally means a stripped loader leaves the pointers null and the RHI
+    // reports no timestamp support instead of failing device creation.
     load_opt_dev_fn(vkSetDebugUtilsObjectNameEXT,   vkGetDeviceProcAddr, device, "vkSetDebugUtilsObjectNameEXT");
     load_opt_dev_fn(vkCmdBeginDebugUtilsLabelEXT,  vkGetDeviceProcAddr, device, "vkCmdBeginDebugUtilsLabelEXT");
     load_opt_dev_fn(vkCmdEndDebugUtilsLabelEXT,    vkGetDeviceProcAddr, device, "vkCmdEndDebugUtilsLabelEXT");
     load_opt_dev_fn(vkCmdInsertDebugUtilsLabelEXT, vkGetDeviceProcAddr, device, "vkCmdInsertDebugUtilsLabelEXT");
+    load_opt_dev_fn(vkCreateQueryPool,             vkGetDeviceProcAddr, device, "vkCreateQueryPool");
+    load_opt_dev_fn(vkDestroyQueryPool,            vkGetDeviceProcAddr, device, "vkDestroyQueryPool");
+    load_opt_dev_fn(vkGetQueryPoolResults,         vkGetDeviceProcAddr, device, "vkGetQueryPoolResults");
+    load_opt_dev_fn(vkCmdResetQueryPool,           vkGetDeviceProcAddr, device, "vkCmdResetQueryPool");
+    load_opt_dev_fn(vkCmdWriteTimestamp,           vkGetDeviceProcAddr, device, "vkCmdWriteTimestamp");
 
     capture_device_table(slot->device_fns);
     NF_LOG_DEBUG(LogCategory::RHI, "Vulkan device entry points installed ({} device(s) live)",

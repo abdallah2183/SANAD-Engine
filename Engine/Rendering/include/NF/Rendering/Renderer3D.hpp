@@ -459,6 +459,12 @@ public:
                   "one level is a blur, not a bloom: the sum needs at least "
                   "two scales to read as a glow");
 
+    /// One pass measured by real GPU timestamps, in milliseconds.
+    struct GpuPassTiming {
+        std::string name;
+        f64 milliseconds = 0.0;
+    };
+
     struct Stats {
         u32 extracted = 0;   // objects received in the RenderWorld
         u32 visible = 0;     // after frustum culling
@@ -486,6 +492,22 @@ public:
         // "the stage is enabled" and "the stage recorded work" are different
         // claims, and only the second one is worth asserting.
         u32 bloom_levels_recorded = 0;
+
+        // Real GPU timestamps (Phase 39). These are NOT wall-clock estimates:
+        // they come from vkCmdWriteTimestamp around the frame and its passes.
+        // Results are consumed when the slot is reused, so a valid sample can
+        // be one frame old. `gpu_timing_valid` means at least one timed frame
+        // completed; `gpu_passes` is ordered exactly like execution. The
+        // values include the profiling-induced pipeline drains, so compare
+        // like-for-like (both frames timed), not against an untimed run.
+        bool gpu_timing_valid = false;
+        /// Monotonic id of the last published sample, or 0 before the first
+        /// one. A caller that consumes one sample per update (the dynamic
+        /// resolution governor) compares this against the id it last used so a
+        /// stats read cannot count the same completed frame twice.
+        u64 gpu_sample_serial = 0;
+        f64 gpu_frame_ms = 0.0;
+        std::vector<GpuPassTiming> gpu_passes;
     };
 
     Renderer3D() = default;
@@ -762,6 +784,22 @@ public:
 
     const Stats& last_stats() const { return m_stats; }
 
+    // --- GPU timestamps (Phase 39) ---
+    //
+    // Opt-in: the frame probe records one reset plus two timestamps per timed
+    // frame, which is cheap, but it forces a BottomOfPipe at the end so the
+    // reported duration is the GPU's own. Per-pass timing is a second switch
+    // because it also drains at every pass boundary. Normal gameplay leaves
+    // both off; the editor and `NFPlayer --gpu-timing` turn them on.
+    bool gpu_timing_supported() const { return m_gpu_timer_supported; }
+    bool gpu_timing_enabled() const {
+        return m_gpu_timer_supported && m_gpu_timing_enabled;
+    }
+    void set_gpu_timing_enabled(bool enabled);
+    bool gpu_pass_timing_enabled() const {
+        return gpu_timing_enabled() && m_gpu_pass_timing_enabled;
+    }
+    void set_gpu_pass_timing_enabled(bool enabled);
 
     /// Readback-friendly access to intermediate targets for tests. The depth
     /// target carries TransferSrc usage, so copy_texture_to_buffer works.
@@ -791,6 +829,17 @@ private:
     /// next one — which is the next frame's compile(), i.e. a first frame that
     /// records bloom passes against nothing.
     void create_bloom_textures(u32 width, u32 height);
+
+    // GPU timing lifecycle. Creation is best-effort: a device without
+    // timestamp support or a failed pool leaves timing inactive and never
+    // fails renderer init.
+    void create_gpu_timing_resources(rhi::IGraphicsDevice& device);
+    void destroy_gpu_timing_resources();
+    void clear_gpu_timing_stats();
+    /// Polls the slot's previous frame before its pool is reset for the new
+    /// recording. The caller's per-slot fence contract makes the results
+    /// complete; a still-not-ready poll simply keeps the previous stats.
+    void consume_gpu_timing(u32 frame_slot);
 
     // Frame uniform block — must stay in sync with lighting.frag (std140).
     struct FrameUniforms {
@@ -1137,11 +1186,47 @@ private:
     // scene render (viewport, cmd A) and a present (cmd B) in the SAME frame —
     // sharing one allocator would recycle sets cmd A is still executing with.
     static constexpr u32 kFramesInFlight = 2;
+
+    // Timestamp layout inside each slot's pool. The frame pair sits outside
+    // the pass range so enabling/disabling per-pass timing never moves the
+    // frame begin/end indices; the pass pairs stay one contiguous range that
+    // can be polled without touching unused queries.
+    static constexpr u32 kMaxTimedPasses = 32;
+    static constexpr u32 kGpuFrameBeginQuery = 0;
+    static constexpr u32 kGpuPassQueryBase = 1;
+    static constexpr u32 kGpuFrameEndQuery = kGpuPassQueryBase + 2 * kMaxTimedPasses;
+    static constexpr u32 kGpuQueryCount = kGpuFrameEndQuery + 1;
+
+    struct GpuPendingPass {
+        std::string name;
+        u32 begin_query = 0;
+        u32 end_query = 0;
+    };
+    struct GpuPendingFrame {
+        bool recorded = false;
+        u64 frame_index = 0;
+        std::vector<GpuPendingPass> passes;
+    };
+
     std::unique_ptr<rhi::DescriptorAllocator> m_descriptor_allocators[kFramesInFlight];
     std::unique_ptr<rhi::DescriptorAllocator> m_present_allocators[kFramesInFlight];
     std::unique_ptr<MaterialLibrary> m_material_library; // created in init()
     std::unique_ptr<rhi::Buffer> m_frame_uniforms[kFramesInFlight]; // persistent, updated per frame
     std::vector<u32> m_visible;                    // culled indices into the render world
+
+    // One timestamp pool per in-flight slot. The pool is reset and rewritten
+    // when the slot is recorded, and polled when the SAME slot is reused, by
+    // which point the caller has waited that slot's fence.
+    std::unique_ptr<rhi::QueryPool> m_gpu_query_pools[kFramesInFlight];
+    GpuPendingFrame m_gpu_pending[kFramesInFlight];
+    bool m_gpu_timer_supported = false;
+    bool m_gpu_timing_enabled = false;
+    bool m_gpu_pass_timing_enabled = false;
+    u64 m_gpu_frame_counter = 0; // timed frames recorded since init
+    // Published-sample id. Deliberately NOT reset by destroy_gpu_timing_resources:
+    // a consumer holding the previous id must be able to tell a new sample from
+    // a stale one across a renderer re-init.
+    u64 m_gpu_sample_serial = 0;
 
     // CPU scratch for draw submission — written and consumed during recording
     // only (push constants copy their bytes at record time), so a single

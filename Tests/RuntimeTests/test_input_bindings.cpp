@@ -391,3 +391,64 @@ NF_TEST(an_action_with_no_bindings_is_written_not_dropped) {
     d.press(0x20); // Space would have been jump
     NF_CHECK(!binding_pressed(back, "jump", d.state()));
 }
+
+// --- conflicts ---------------------------------------------------------------
+
+namespace {
+
+bool has_conflict(const std::vector<BindingConflict>& list, std::string_view a,
+                  std::string_view b, u16 code) {
+    for (const auto& c : list) {
+        const bool same = (c.action_a == a && c.action_b == b) ||
+                          (c.action_a == b && c.action_b == a);
+        if (same && c.code == code) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+NF_TEST(aliases_are_not_reported_as_conflicts) {
+    // move_forward / forward / up are three names for one action. They share
+    // W and the up arrow on purpose; a rebinding screen that warned about them
+    // would teach the player to ignore its warnings.
+    const InputBindings defaults = InputBindings::defaults();
+    const auto conflicts = find_binding_conflicts(defaults);
+    NF_CHECK(!has_conflict(conflicts, "move_forward", "forward", 'W'));
+    NF_CHECK(!has_conflict(conflicts, "move_forward", "up", 'W'));
+    NF_CHECK(!has_conflict(conflicts, "forward", "up", 0x26));
+}
+
+NF_TEST(the_legacy_arrow_overlap_is_reported_honestly) {
+    // The shipped defaults DO bind the arrow keys twice: movement and the
+    // pre-0.4.0 orbit axes. The check says so instead of hiding the one table
+    // everybody starts from.
+    const InputBindings defaults = InputBindings::defaults();
+    const auto conflicts = find_binding_conflicts(defaults);
+    NF_CHECK(has_conflict(conflicts, "move_left", "look", 0x25));
+    NF_CHECK(has_conflict(conflicts, "move_forward", "zoom", 0x26));
+}
+
+NF_TEST(a_new_rebind_that_steals_a_key_is_reported) {
+    InputBindings b = InputBindings::defaults();
+    // Put jump on E, which is interact's key: one of the two can never fire.
+    b.set("jump", {{BindingSource::Key, 'E', 1.0f}});
+    const auto conflicts = find_binding_conflicts(b);
+    NF_CHECK(has_conflict(conflicts, "jump", "interact", 'E'));
+
+    // A sign difference still conflicts — both actions read the same key.
+    b.set("brake", {{BindingSource::Key, 'A', -1.0f}});
+    const auto with_brake = find_binding_conflicts(b);
+    NF_CHECK(has_conflict(with_brake, "brake", "move_left", 'A'));
+
+    // A mouse button is the same story, across source kinds only when the
+    // source matches: right mouse on two actions is a conflict, right mouse on
+    // one and a pad button on another is not.
+    b.set("attack", {{BindingSource::MouseButton, 0x02, 1.0f}});
+    b.set("block", {{BindingSource::MouseButton, 0x02, 1.0f}});
+    NF_CHECK(has_conflict(find_binding_conflicts(b), "attack", "block", 0x02));
+    b.set("block", {{BindingSource::PadButton, 5, 1.0f}});
+    NF_CHECK(!has_conflict(find_binding_conflicts(b), "attack", "block", 0x02));
+}

@@ -16,6 +16,7 @@ if(NF_USE_VULKAN)
         src/Vulkan/VulkanContext.cpp
         src/Vulkan/Swapchain_Vk.cpp
         src/Vulkan/CommandBuffer_Vk.cpp
+        src/Vulkan/QueryPool_Vk.cpp
         src/Vulkan/Buffer_Vk.cpp
         src/Vulkan/Texture_Vk.cpp
         src/Vulkan/Pipeline_Vk.cpp

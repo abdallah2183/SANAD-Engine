@@ -99,6 +99,54 @@ Games/MyGame/
   is optional; `mouse=0` restores the old fixed orbit.
 - Keep `entity_count` in the scene header equal to the number of `entity:`
   blocks.
+- A gun is one line, and it fires along the camera the player aims with:
+  `Weapon: mode=auto rpm=600 magazine=30 reserve=120 damage=18 range=120
+  spread=0.4 recoil=0.8`. The entity the ACTIVE camera follows is the player,
+  so its weapon is the one the trigger drives (`fire` = LMB/RB, `reload` =
+  R/Y); every other weapon ticks but only fires when a script calls
+  `nf.weapon_fire()`. Hitscan tests the scene's colliders as world boxes.
+  Add `delivery=projectile speed=220 gravity=9.81` for a round with real flight
+  time and drop; its lifetime is `range / speed`, and each frame sweeps the
+  segment it travelled so it cannot tunnel through a wall.
+  `damage_type=ballistic|explosive|fire` selects the damage channel (ballistic
+  is the default and is not written), and `pierce=0..1` is the fraction of a hit
+  that ignores armor. Add
+  `blast_radius=4 blast_damage=45 blast_min=0.2` for a radial blast at the
+  impact point: damage falls linearly to `blast_min` at the edge, walls block
+  it, the direct victim takes only the direct hit, and every other victim in
+  range gets its own `splash=true` impact event. A hit can also apply a
+  damage-over-time status: `status=burn status_dps=4 status_time=3
+  status_tick=0.5` (or `bleed` / `corrode`). The same status is applied by the
+  direct hit and by each splash victim; a dead or invulnerable target is not
+  ignited.
+- A side is one optional line: `Faction: team=Blue`. Entities on the same
+  non-empty team cannot damage each other; `friendly_fire=true` on the SHOOTER
+  opts in. No faction, or an empty team, is neutral and preserves the old
+  behaviour. A combat agent whose target is on its own team holds fire, and the
+  validator warns about it.
+- Something to shoot at needs hit points:
+  `Health: max=100 regen=2 regen_delay=4`. Damage clamps at zero; the engine
+  does not delete a dead entity — a script reads `nf.health()` and decides.
+  Armor is a second pool: `armor=40 armor_max=40 absorb=0.6` spends armor before
+  health, and `pierce=` on the weapon bypasses part of it. Hit zones are opt-in:
+  `zones=true head=2 limb=0.75` reads the top 18% of the collider as a head and
+  the bottom 28% as limbs. Without `zones=true` every hit is a body hit, so old
+  scenes keep their exact damage. Per-type resistance is a fraction in `0..1`:
+  `resist_ballistic=0.2 resist_explosive=0.1 resist_fire=0.4` reduces that type
+  after the zone and before armor; absent keys mean zero.
+- An active status can be authored or restored with
+  `Status: burn=4,3,0.5 bleed=2,5,1` (dps, seconds, tick). The runtime ticks it
+  through the same resistance/armor path and emits `status=true` impact events.
+- An enemy is one line, and it fights on its own:
+  `CombatAgent: target=Player eye=1.5 reaction=0.35 turn=220 cone=3 range=60
+  burst=0.55 rest=0.85`. It needs a `Weapon:` on the same entity, and the
+  target needs a `Health:` and a collider (the visibility ray hits colliders).
+  `target=` is free text and must stay last on the line. Add
+  `auto_target=true` (with a `Faction:` on the agent) to pick the nearest
+  visible enemy team instead of naming one; the current target is held until it
+  dies, leaves range or becomes hidden. A projectile weapon on an agent leads a
+  moving target automatically — the solver is in `Projectile.hpp` and falls back
+  to the current position when no intercept exists.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -126,6 +174,24 @@ nf.camera_move()                  -- x, z: move_x/move_z ROTATED BY THE CAMERA
 nf.camera_yaw()                   -- the active camera's yaw in degrees (0 = none)
 nf.clamp(v, lo, hi)
 nf.lerp(a, b, t)
+nf.weapon_ammo()                  -- rounds in the magazine (0 with no weapon)
+nf.weapon_reserve()               -- rounds carried
+nf.weapon_reloading()             -- true while a reload runs
+nf.weapon_reload()                -- start one; false if nothing to load
+nf.weapon_fire()                  -- fire if the cadence allows; pellets traced
+nf.last_hit()                     -- hit, x, y, z, distance
+nf.impact_count()                -- impacts in the previous completed frame
+nf.impact(i)                     -- table: target, name, x/y/z, nx/ny/nz,
+                                 -- damage, applied, zone, armor_absorbed,
+                                 -- damage_type, blocked, killed, splash
+nf.shot_count()                  -- shots in the previous completed frame
+nf.shot(i)                       -- table: shooter, x/y/z, dx/dy/dz, damage,
+                                 -- pellet, pellets, projectile, seed
+nf.health(id, gen)                -- current, max (0, 0 when it has none)
+nf.damage(id, gen, amount)        -- raw health damage; bypasses armor/zones
+nf.apply_status(id, gen, kind, dps, seconds, tick) -- burn/bleed/corrode
+nf.status_remaining(id, gen, kind) -- seconds left, 0 when absent
+nf.clear_status(id, gen, kind)    -- remove one kind
 print(...)                        -- engine log
 ```
 
