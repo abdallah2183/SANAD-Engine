@@ -162,11 +162,23 @@ std::filesystem::path find_project_file(std::string& out_error) {
 
 std::filesystem::path resolve_project(const std::string& explicit_path, std::string& out_error) {
     if (!explicit_path.empty()) {
-        if (!std::filesystem::exists(explicit_path)) {
+        // ABSOLUTE, always. A bare "Game.nfproj" has an EMPTY parent_path(), and
+        // ProjectDescriptor resolves its mount root from that parent — so the
+        // descriptor loaded with root "" and packaging failed with "failed to
+        // resolve project root ''". The documented invocation is a relative
+        // path (`nf build --project Games\MyGame\MyGame.nfproj`), which is also
+        // what a script run from the project directory uses.
+        std::error_code ec;
+        auto absolute = std::filesystem::absolute(explicit_path, ec);
+        if (ec || absolute.empty()) {
             out_error = "project file does not exist: '" + explicit_path + "'";
             return {};
         }
-        return explicit_path;
+        if (!std::filesystem::exists(absolute)) {
+            out_error = "project file does not exist: '" + explicit_path + "'";
+            return {};
+        }
+        return absolute;
     }
     return find_project_file(out_error);
 }
@@ -419,10 +431,20 @@ int cmd_run(const std::filesystem::path& project_file,
         return 1;
     }
 
+    // The child runs with `resolved_out` as its working directory, so a project
+    // path relative to nf's own cwd would be resolved against the dist folder
+    // and fail to open. `nf run --project Games\MyGame\MyGame.nfproj` is the
+    // documented invocation, so the fix is to hand the child an absolute path —
+    // the same one the "Run:" report above should be read as.
+    std::error_code absolute_error;
+    const auto packaged_absolute = std::filesystem::absolute(packaged, absolute_error);
+    const std::filesystem::path& packaged_for_child =
+        absolute_error ? packaged : packaged_absolute;
+
     std::vector<std::string> player_arguments;
     player_arguments.reserve(2 + passthrough.size());
     player_arguments.emplace_back("--project");
-    player_arguments.push_back(packaged.string());
+    player_arguments.push_back(packaged_for_child.string());
     player_arguments.insert(player_arguments.end(), passthrough.begin(), passthrough.end());
 
     std::cout << "Launching: " << player.string();
