@@ -8,18 +8,18 @@
 
 **محرك ألعاب ثلاثي الأبعاد مكتوب بـ C++23 وVulkan — ومحرر يتكلم العربية من أول يوم.**
 
-<a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0"><img alt="الإصدار 0.2.0" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
+<a href="https://github.com/abdallah2183/SANAD-Engine/releases/latest"><img alt="أحدث إصدار" src="https://img.shields.io/github/v/release/abdallah2183/SANAD-Engine?style=flat-square&label=release"></a>
 <a href="LICENSE"><img alt="الترخيص Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
 <a href="#"><img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=flat-square&logo=c%2B%2B"></a>
 <a href="#"><img alt="Vulkan 1.2+" src="https://img.shields.io/badge/Vulkan-1.2%2B-red?style=flat-square&logo=vulkan"></a>
 <a href="#"><img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square"></a>
-<a href="#"><img alt="1,875 اختبارًا ناجحًا" src="https://img.shields.io/badge/tests-1%2C875%20passing-brightgreen?style=flat-square"></a>
+<a href="#"><img alt="26 حزمة اختبار" src="https://img.shields.io/badge/tests-26%20suites-brightgreen?style=flat-square"></a>
 <a href="AGENTS.md"><img alt="سير عمل جاهز للوكلاء" src="https://img.shields.io/badge/AI--ready-agents-6f42c1?style=flat-square"></a>
 
 <br>
 
 [**جديد 0.5.0**](RELEASE_NOTES_0.5.0.md) ·
-[**تنزيل آخر حزمة (0.3.0)**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0) ·
+[**تنزيل آخر حزمة (0.5.0)**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0) ·
 [**شاهد الفيديو (43 ثانية)**](Docs/media/demo.mp4) ·
 [**التوثيق**](Docs/) ·
 [**English**](README.md)
@@ -37,9 +37,11 @@
 <div dir="rtl">
 
 > [!IMPORTANT]
-> **0.2.0 ديمو عام، وليس بيتا.** يُنشر كـ **نسخة محمولة لويندوز x64**. الملفات
-> **غير موقّعة**؛ قد يحجبها Smart App Control أو WDAC. لا تعطّل حماية جهازك —
-> راجع تحذير التوقيع/السياسة. يلزم تعريف GPU يدعم Vulkan.
+> **0.5.0 إصدار عام، وليس بيتا.** يُنشر كـ**نسخة محمولة لويندوز x64** مبنية من
+> هذه الشجرة، ومعها بصمة SHA-256. الثنائيات موقّعة بشهادة تطوير ذاتية
+> (`SANAD Dev Build`)، لا بشهادة عامة موثوقة، فقد يظهر "ناشر غير معروف" على جهاز
+> لا يثق بالشهادة. لا تعطّل Smart App Control أو WDAC لتشغيلها — راجع تحذير
+> التوقيع/السياسة. يلزم تعريف GPU يدعم Vulkan.
 
 ## 🌟 لماذا سَنَد؟
 
@@ -61,16 +63,16 @@
 
 ### 1. نزّل النسخة
 
-من صفحة [إصدار 0.2.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0):
+من صفحة [إصدار 0.5.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0):
 
 | الملف | ماذا تفعل |
 |:---|:---|
-| [`SANAD-0.3.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.3.0/SANAD-0.3.0-Windows-x64-Portable.zip) | فك الضغط في أي مكان → شغّل `SANADEditor.exe` |
-| [`SANAD_Engine_0.2.0_Demo.mp4`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.3.0/SANAD_Engine_0.2.0_Demo.mp4) | فيديو الديمو (43 ثانية) |
+| [`SANAD-0.5.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.5.0/SANAD-0.5.0-Windows-x64-Portable.zip) | فك الضغط في أي مكان → شغّل `SANADEditor.exe` |
+| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.5.0/SHA256SUMS.txt) | بصمة SHA-256 للحزمة المحمولة |
 
 > [!NOTE]
-> **لا يوجد مثبّت في هذا الديمو** ولا توقيع بعد. قد تظهر رسالة "ناشر غير معروف".
-> النسخة لويندوز 10/11 x64 فقط.
+> **لا يوجد مثبّت في هذا الإصدار بعد.** الحزمة تحمل توقيع تطوير ذاتيًا، فقد تظهر
+> رسالة "ناشر غير معروف" على جهاز لا يثق بالشهادة. النسخة لويندوز 10/11 x64 فقط.
 
 ### 2. أنشئ مشروعًا في 30 ثانية
 
@@ -130,32 +132,36 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
 
 > [!NOTE]
-> لعبة TreeWorld على فرع **`main`** وتُبنى من المصدر. حزمة **0.2.0** المحمولة
-> سبقتها؛ استخدم `build_nf.bat Release` (أو إصدارًا أحدث) لتشغيل اللعبة.
+> TreeWorld تأتي داخل حزمة **0.5.0** المحمولة تحت `Games/`، وعلى فرع **`main`**
+> كمصدر. استخدم `build_nf.bat Release` لتشغيلها من المستودع، أو شغّل النسخة
+> المعبّأة نفسها من الحزمة.
 
-## 🧪 أحدث ما في `main` (بعد 0.2.0)
+## ✨ جديد في 0.5.0
 
-- **جاهز للوكلاء من أول أمر.** `AGENTS.md` و`CLAUDE.md` وقواعد Cursor و`llms.txt`
-  و`AGENTS.md` لكل مشروع و`nf guide` تعلّم الوكيل نفس سير العمل الأصلي —
-  بلا HTML.
-- **Lua يكفي لإنهاء لعبة.** أفعال مسمّاة (`nf.action`)، محاور (`nf.axis`)، بحث عن
-  الكيانات (`nf.find_entity`)، أسماء وعدد ومواضع ومقاييس وفحص حياة.
-- **قالب يلعب فورًا.** `nf new --template ThirdPerson` ينشئ **Crate Hunter**:
-  لعبة جمع وفوز حقيقية، لا مشهد تمشية.
-- **أمان المحرر.** نسخ شجرة كاملة (`Ctrl+D`) ومسودة استرداد عبر
-  **File → Recover Last Draft**.
-- **أجواء مؤلّفة.** ضباب مسافة في `PostProcess:`، ولعبة TreeWorld بمواد PBR
-  وظلال وBloom وتصحيح ACES.
-
-## ✨ جديد في 0.2.0
-
-- واجهة محرر محايدة: لون واحد للحالة بدل تلوين كل زر.
-- تعريب كامل واتجاه RTL في القوائم واللوحات والتلميحات والحوارات.
-- **لا ضياع للشغل:** حوار Save / Discard / Cancel ونسخة استرداد عند الإغلاق.
-- **Play** يرفع نافذة اللعبة إلى المقدمة بدل فتحها خلف المحرر.
-- قوالب محمولة: المحرر من الحزمة يجد `Templates` بجانب الملف التنفيذي.
-- توثيق محدّث: [ملاحظات الديمو](Docs/Demo_Release.md) و
-  [ملاحظات الإصدار](RELEASE_NOTES_0.3.0.md).
+- **FXAA في مكانه الصحيح** — ممرّ FXAA 3.11 على صورة LDR بعد tonemap لا على HDR،
+  مع عتبات قابلة للضبط وصورة وسيطة يملكها العارض.
+- **الفأرة صارت زرًا** — الزر الأيمن يصوّب (ADS)، والكاميرا تهتز وترتد. إعدادات
+  اللاعب (حساسية الفأرة والعصا، مسافة التصويب، حدود التقريب، عكس Y) بيانات لا
+  كود، و`nf.shake()` / `nf.recoil()` متاحتان من Lua.
+- **ملصقات مسقطة** — ممرّ ملصقات بعد GBuffer مع واصفات لكل ملصق وقصّ وترتيب،
+  ومكوّن **Decal** في المحرر وأمر `SetDecalCommand` قابل للتراجع.
+- **مقياس رسم داخلي** — `render_scale=0.25..2.0` يفصل حجم المخرج عن حجم الرسم،
+  فـ`2.0` يزيد الدقة الداخلية بلا تغيير حجم النافذة.
+- **دقة ديناميكية** — `dynamic_resolution=true target_fps=… min_render_scale=…`
+  تخفض المقياس وتعيده بحسب زمن الإطار، مع منطقة تردد تمنع التذبذب.
+- **ديناميكيات الماستر** — ضاغط ستيريو مرتبط ومحدّد ذروة بنافذة استباق في
+  `AudioScene::finalize`، ومفاتيح `audio.dynamics.*` في المشهد.
+- **إعدادات اللاعب والإدخال** — ملف إعدادات لكل لاعب، وأزرار الفأرة في
+  `InputBindings`، ومفاتيح مشهد تحافظ على توافق المشاريع القديمة.
+- **TreeWorld وThirdPerson** يأتيان بـ`fxaa=true` و`ads=1`، فالمسار الجديد
+  والتصويب ظاهران من أول تشغيل.
+- **متحقَّق منه لا مفترض** — ملاحظات 0.5.0 تسرد النتائج: `RHITests` 320/320،
+  `RuntimeTests` 214/214، `EditorTests` 283/283، `UITests` 44/44،
+  `ToolTests` 55/55، `AudioTests` 132/132؛ و`StreamingTests` محجوب بسياسة
+  Device Guard على هذه الآلة. وقبول TreeWorld بلا نافذة يخرج بـ0 مع
+  `Validation errors: 0`.
+- **توثيق يطابق البناء** — [ملاحظات الإصدار](RELEASE_NOTES_0.5.0.md) و
+  [ملاحظات الديمو](Docs/Demo_Release.md) ودليل بدء سريع.
 
 ## 🧱 المزايا
 
@@ -174,7 +180,10 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 <summary><b>بوابات الجودة</b></summary>
 
 - بناء MSVC نظيف بـ `/W4 /WX`.
-- **26 حزمة اختبار، 1,875 ناجح / 0 فاشل / 2 متخطى** على ويندوز x64 (Release).
+- **26 حزمة اختبار.** حزم 0.5.0 نجحت على ويندوز x64 (Release): `RHITests`
+  320/320، `RuntimeTests` 214/214، `EditorTests` 283/283، `UITests` 44/44،
+  `ToolTests` 55/55، `AudioTests` 132/132. `StreamingTests` محجوب بسياسة
+  Device Guard على هذه الآلة، وليس فشلًا في الاختبار.
 - 0 أخطاء Vulkan validation و0 تسريبات RHI في اختبار قبول المحرر.
 - اختبار شامل: إنشاء مشروع بـ `nf`، بناؤه، تغليفه، وتشغيل اللاعب من الحزمة.
 
@@ -211,7 +220,7 @@ cmake --build build/release
 
 > [!NOTE]
 > سكربت `packaging/windows/build_installer.ps1` يستطيع إنتاج مثبّت Inno Setup
-> على جهاز فيه Inno Setup. ديمو 0.2.0 ينشر الـ zip المحمول فقط.
+> على جهاز فيه Inno Setup. إصدار 0.5.0 ينشر الـ zip المحمول فقط.
 
 ## 🎮 ابنِ لعبة
 
@@ -248,11 +257,12 @@ packaging/     سكربتات المثبّت والنسخة المحمولة
 
 ## 🗺 خارطة الطريق
 
-المراحل 1–29 موجودة في الشجرة (تصيير، محرر، فيزياء، سكربتات، شبكات، 2D،
-تدمير، ظلال متتالية، SSAO، PBR، IBL، NavMesh، مركبات Jolt). الديمو يركّز على
-سير العمل الذي يلمسه المستخدم الجديد.
+المراحل 1–38 موجودة في الشجرة (تصيير، محرر، فيزياء، سكربتات، شبكات، 2D،
+تدمير، ظلال متتالية، SSAO، PBR، IBL، NavMesh، مركبات Jolt، تصويب، ديناميكيات
+صوت، ملصقات، مقياس رسم، ودقة ديناميكية). 0.5.0 تغلق مرحلة الصورة واليد: FXAA،
+ملصقات مسقطة، دقة فائقة، دقة ديناميكية، ADS، اهتزاز، ارتداد، وإعدادات لاعب.
 
-التالي: بناء موقّع، مثبّت داخل الإصدار، استكشاف Linux، وأمثلة إضافية.
+التالي: توقيع عام موثوق، مثبّت داخل الإصدار، استكشاف Linux، وأمثلة إضافية.
 
 [ROADMAP.md](ROADMAP.md) ·
 [التصميم الكامل](Docs/SANAD_Engine_Complete_Design.md) ·

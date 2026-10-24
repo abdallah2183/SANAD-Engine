@@ -2,21 +2,21 @@
 ;
 ; Built by packaging/windows/build_installer.ps1 locally and by
 ; .github/workflows/release.yml on a v* tag. Both pass:
-;   /DAppVersion=0.2.0  (full string, shown in Add/Remove Programs)
-;   /DVersionInfo=0.2.0.0      (numeric x.y.z.b for the Setup.exe properties)
+;   /DAppVersion=0.5.0  (full string, shown in Add/Remove Programs)
+;   /DVersionInfo=0.5.0.0      (numeric x.y.z.b for the Setup.exe properties)
 ;   /DStageDir=<absolute staged folder produced by build_installer.ps1>
 ;   /DOutputDir=<absolute dir for the Setup.exe>
 ;   /DRepoDir=<absolute repo root, for the .ico>
 ; Defaults below let `iscc SANAD.iss` still work from this folder.
 ;
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "0.5.0"
 #endif
 #ifndef VersionInfo
-  #define VersionInfo "0.2.0.0"
+  #define VersionInfo "0.5.0.0"
 #endif
 #ifndef StageDir
-  #define StageDir "..\\..\\dist\\stage\\SANAD-0.2.0"
+  #define StageDir "..\\..\\dist\\stage\\SANAD-0.5.0"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\\..\\dist"

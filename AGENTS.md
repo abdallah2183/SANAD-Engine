@@ -148,10 +148,10 @@ A complete collect-the-crates example is in
 4. Build before reporting success. If a build or run fails, read the log and
    fix it; never claim a result you did not observe.
 5. Windows 10/11 x64 + Vulkan only. There is no browser build, no Linux player.
-6. The 0.2.0 demo binaries are unsigned; a machine with Smart App Control/WDAC
-   may block newly built executables. That is an environment policy, not a
-   reason to create a web game or to disable security. Two things DO help, and
-   both are legitimate:
+6. Release binaries are signed with the self-signed `SANAD Dev Build`
+   certificate; a machine with Smart App Control/WDAC may still block newly
+   built executables. That is an environment policy, not a reason to create a
+   web game or to disable security. Two things DO help, and both are legitimate:
    - **Sign the build**: `powershell -ExecutionPolicy Bypass -File
      Scripts\sign_build.ps1` signs every executable in `build\<cfg>\bin` with
      a code-signing certificate from `Cert:\CurrentUser\My`. A certificate in

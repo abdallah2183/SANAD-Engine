@@ -1,10 +1,15 @@
 # SANAD Engine 0.5.0 — الصورة واليد | the image and the hand
 
-**لم يُحزَّم بعد.** هذه الملاحظات تصف شجرة العمل. الحزمة المحمولة وحزمة اللعبة
-النموذجية ينتجهما `Scripts\build.ps1` / `nf ship` على آلة تشغّل الثنائيات المبنية،
-والبصمات تُملأ في تلك الخطوة لا يدويًا.
+**صدر الإصدار.** الحزمة المحمولة `SANAD-0.5.0-Windows-x64-Portable.zip` مبنية من
+هذه الشجرة ومرفوعة مع الإصدار (9.2 MB)، وبصمتها في `SHA256SUMS.txt`:
+`eb892770e43d0425f55cd396118c7f0a679bd3fcd8b292674e4fd89dba8d750e`. لعبة
+TreeWorld تأتي داخل `Games/` في الحزمة. الثنائيات موقّعة بشهادة تطوير ذاتية
+(`SANAD Dev Build`)، لا بشهادة توقيع عامة؛ ولا يوجد مثبّت في هذا الإصدار بعد.
 
 Windows 10/11 x64 · تعريف رسوميات يدعم Vulkan · واجهة عربية أولًا (الإنجليزية متاحة)
+
+[**تنزيل الحزمة المحمولة**](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.5.0/SANAD-0.5.0-Windows-x64-Portable.zip) ·
+[**بصمة SHA-256**](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.5.0/SHA256SUMS.txt)
 
 ---
 

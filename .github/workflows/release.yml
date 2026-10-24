@@ -1,7 +1,7 @@
 name: Release (Windows x64)
 
 # Publishes the downloadable release: a Windows installer EXE + a portable zip.
-# Trigger: push a version tag (v0.2.0) or run manually from the Actions tab.
+# Trigger: push a version tag (for example v0.5.0) or run manually from the Actions tab.
 # Windows-only by design — the job runs on windows-latest and the installer
 # declares ArchitecturesAllowed=x64compatible, MinVersion=10.0.
 

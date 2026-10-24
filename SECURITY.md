@@ -9,8 +9,8 @@ and the packaged player.
 | Version | Supported |
 |:---|:---:|
 | `main` (latest commit) | ✅ |
-| 0.2.0 public demo | ✅ (security fixes only) |
-| Older demos / snapshots | ❌ |
+| 0.5.0 public release | ✅ (security fixes only) |
+| 0.4.0 and older | ❌ |
 
 Security fixes land on `main` first. There is no long-term support branch yet.
 
@@ -46,19 +46,21 @@ In scope:
 Out of scope:
 
 - Crashes caused by unsupported GPUs, drivers, or missing Vulkan support.
-- Smart App Control / WDAC blocking **unsigned** demo executables. That is an
-  expected consequence of shipping unsigned binaries; do not disable your
-  security policy to work around it.
+- Smart App Control / WDAC blocking the self-signed **`SANAD Dev Build`**
+  binaries. That is expected until a publicly trusted code-signing certificate
+  is used; do not disable your security policy to work around it.
 - Denial of service from deliberately enormous but otherwise valid projects.
 - Issues in third-party dependencies that are already fixed upstream and not
   reachable through SANAD.
 
-## Unsigned binaries
+## Binary signing
 
-The public demo is distributed as an **unsigned portable zip**. Windows may show
-"Unknown publisher" or block a downloaded executable. Verify the SHA-256 from
-the release page and build from source if you need a binary you trust. Code
-signing is on the roadmap; it is not a substitute for reporting a vulnerability.
+The 0.5.0 release is a **portable zip** signed with the self-signed
+`SANAD Dev Build` certificate, not a publicly trusted code-signing certificate.
+Windows may show "Unknown publisher" or block a downloaded executable. Verify the
+SHA-256 from the release page and build from source if you need a binary you
+trust. A publicly trusted code-signing certificate is on the roadmap; it is not a
+substitute for reporting a vulnerability.
 
 ## Disclosure
 
