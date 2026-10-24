@@ -13,6 +13,7 @@ target_link_libraries(nf PRIVATE NFCore NFAssets NFProjectTool)
 nf_target_set_warnings(nf)
 
 target_compile_definitions(nf PRIVATE
+    "NF_ENGINE_VERSION=\"${NF_VERSION_STRING}\""
     "NF_TEMPLATE_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Default\""
     "NF_TEMPLATES_ROOT=\"${CMAKE_SOURCE_DIR}/Templates\""
     "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""

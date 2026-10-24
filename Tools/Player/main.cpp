@@ -29,11 +29,15 @@
 #include <windows.h>
 #endif
 
+#ifndef NF_ENGINE_VERSION
+#define NF_ENGINE_VERSION "0.0.0-dev"
+#endif
+
 namespace {
 
 // Stamped into every crash report the player writes, so a dump that arrives
 // from a player can be tied back to the exact build that produced it.
-constexpr const char* kPlayerVersion = "NFPlayer 0.1 (SANAD Phase 7)";
+constexpr const char* kPlayerVersion = "NFPlayer " NF_ENGINE_VERSION;
 
 void print_help() {
     std::cout << "NFPlayer — SANAD standalone runtime\n"

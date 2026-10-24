@@ -12,6 +12,10 @@ add_executable(NFPlayer
 target_link_libraries(NFPlayer PRIVATE NFCore NFAssets NFRuntime)
 nf_target_set_warnings(NFPlayer)
 
+target_compile_definitions(NFPlayer PRIVATE
+    "NF_ENGINE_VERSION=\"${NF_VERSION_STRING}\""
+)
+
 # NFRuntime bakes NF_BASIC3D_SHADER_DIR in and loads the Basic3D pipelines
 # from it at startup, so a player built without the compiled SPIR-V present
 # starts up with no shaders and renders nothing. The same edge as the editor

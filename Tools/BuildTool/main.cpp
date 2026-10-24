@@ -52,9 +52,13 @@
 using namespace nf;
 using namespace nf::project;
 
+#ifndef NF_ENGINE_VERSION
+#define NF_ENGINE_VERSION "0.0.0-dev"
+#endif
+
 namespace {
 
-constexpr const char* kVersion = "nf 0.1 (SANAD Phase 7)";
+constexpr const char* kVersion = "nf " NF_ENGINE_VERSION;
 
 void print_help() {
     std::cout << "nf — SANAD project tool\n"
