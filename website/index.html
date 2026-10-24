@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>محرك سَنَد | SANAD Engine</title>
-    <meta name="description" content="محرك سَنَد (SANAD Engine) — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
+    <meta name="description" content="محرك سَنَد (SANAD Engine) 0.5.0 — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -596,18 +596,18 @@
             <img src="assets/logo.jpg" alt="SANAD Engine Logo">
         </div>
         <div class="hero-badge-container">
-            <span class="hero-badge" data-i18n="hero_badge">محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
+            <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.5.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
             <span class="author-badge" data-i18n="author_badge">المؤسس والقائم على العمل: عبدالله (Abdallah)</span>
         </div>
         <h1>
             <span data-i18n="hero_title">محرك سَنَد | SANAD Engine</span>
         </h1>
         <p class="hero-desc" data-i18n="hero_subtitle">
-            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية.
+            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.5.0 يضيف FXAA، ملصقات مسقطة، مقياس رسم فائق، دقة ديناميكية، وتصويب ADS.
         </p>
         <div class="hero-cta-group">
-            <a href="#community" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_join">
-                المساهمة في التطوير
+            <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_download">
+                تنزيل 0.5.0
             </a>
             <a href="#quickstart" class="btn-secondary" data-i18n="hero_cta_build">
                 البناء والتشغيل
@@ -649,7 +649,7 @@
                 <img src="assets/screenshots/shot_editor_en.png" alt="SANAD Editor" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
                 <span class="feature-tag">Editor</span>
                 <h3 data-i18n="show_editor_title">محرر سند الأصلي</h3>
-                <p data-i18n="show_editor_desc">منفذ عرض Vulkan حي، شجرة مشهد، مفتش انعكاسي، طرفية سجلات، وسماء إجرائية — يعمل بـ 100+ إطار/ثانية.</p>
+                <p data-i18n="show_editor_desc">منفذ عرض Vulkan حي، شجرة مشهد، مفتش انعكاسي، FXAA وملصقات مسقطة، وسماء إجرائية — يعمل بـ 100+ إطار/ثانية.</p>
             </div>
 
             <div class="feature-card">
@@ -660,10 +660,10 @@
             </div>
 
             <div class="feature-card">
-                <img src="assets/screenshots/shot_game.png" alt="Cube Collector game" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
+                <img src="assets/screenshots/shot_treeworld.png" alt="TreeWorld game" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
                 <span class="feature-tag">Playable</span>
-                <h3 data-i18n="show_game_title">لعبة عاملة: جامع المكعبات</h3>
-                <p data-i18n="show_game_desc">عدو يتحرك بسكربت Lua، فيزياء إضاءة PBR، ظلال PCF، ونقاط ومستويات — مبنية بالمحرك نفسه.</p>
+                <h3 data-i18n="show_game_title">لعبة عاملة: TreeWorld</h3>
+                <p data-i18n="show_game_desc">عالم شجر حي بشخصية هيكلية، كاميرا تتبع، ظلال متتالية، وضباب — يُبنى ويُلعب بمحرك سند نفسه.</p>
             </div>
 
             <div class="feature-card" id="joltShowcase">
@@ -675,7 +675,7 @@
                 </div>
                 <span class="feature-tag">Jolt Physics</span>
                 <h3 data-i18n="show_jolt_title">مركبات وقيود Jolt</h3>
-                <p data-i18n="show_jolt_desc">مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومختبرة بـ 175 اختباراً.</p>
+                <p data-i18n="show_jolt_desc">مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومغطاة باختبارات المحرك.</p>
             </div>
 
             <div class="feature-card">
@@ -692,8 +692,8 @@
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">1007 / 1007</div>
-                <div class="stat-label" data-i18n="stat_tests">اختبار مؤتمت ناجح عبر 23 حزمة</div>
+                <div class="stat-num">0.5.0</div>
+                <div class="stat-label" data-i18n="stat_tests">أحدث إصدار عام — 26 حزمة اختبار</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">0</div>
@@ -721,7 +721,7 @@
             <div class="feature-card">
                 <span class="feature-tag">Rendering & RHI</span>
                 <h3 data-i18n="feat_rhi_title">تصيير مؤجل حديث PBR</h3>
-                <p data-i18n="feat_rhi_desc">مسار تصيير مؤجل متعدد الممرات بمكتبة Vulkan، يشمل ممر العمق، وتوليد GBuffer، وإضاءة واقعية Cook-Torrance GGX، وإدارة ممرات بـ RenderGraph ديناميكي.</p>
+                <p data-i18n="feat_rhi_desc">مسار تصيير مؤجل متعدد الممرات بمكتبة Vulkan: عمق وGBuffer وإضاءة Cook-Torrance GGX، مع RenderGraph ديناميكي وFXAA بعد tonemap وملصقات مسقطة ومقياس رسم داخلي حتى 2×.</p>
             </div>
 
             <div class="feature-card">
@@ -751,7 +751,7 @@
             <div class="feature-card">
                 <span class="feature-tag">Audio</span>
                 <h3 data-i18n="feat_audio_title">صوتيات ثلاثية الأبعاد</h3>
-                <p data-i18n="feat_audio_desc">توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج التوهين وموجه WASAPI، وخط استيراد حقيقي يفك WAV وOGG وMP3 وFLAC ويربطها بالمشاهد تلقائياً.</p>
+                <p data-i18n="feat_audio_desc">توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج التوهين وموجه WASAPI، وخط استيراد يفك WAV وOGG وMP3 وFLAC، وديناميكيات ماستر: ضاغط ستيريو ومحدّد ذروة.</p>
             </div>
 
             <div class="feature-card">
@@ -793,7 +793,7 @@
             <div class="feature-card">
                 <span class="feature-tag">Tools & Editor</span>
                 <h3 data-i18n="feat_editor_title">محرر متكامل Native Editor</h3>
-                <p data-i18n="feat_editor_desc">محرر أصلي بواجهة Dear ImGui: تقسيم نوافذ، مفتش انعكاسي، تراجع/إعادة، نافذة Profiler حية، وتعريب RTL كامل بخط أميري.</p>
+                <p data-i18n="feat_editor_desc">محرر أصلي بواجهة Dear ImGui: تقسيم نوافذ، مفتش انعكاسي، تراجع/إعادة، Profiler حي، إعدادات لاعب، ADS وربط مفاتيح، وتعريب RTL كامل بخط أميري.</p>
             </div>
         </div>
     </section>
@@ -830,59 +830,62 @@
     <section class="container" id="roadmap">
         <div class="section-header">
             <h2 data-i18n="roadmap_title">خارطة طريق التطوير</h2>
-            <p data-i18n="roadmap_desc">مراحل محددة تتيح للمطورين اختيار الجزئيات التي يرغبون في بنائها</p>
+            <p data-i18n="roadmap_desc">38 مرحلة مكتملة — 0.5.0 يغلق مرحلة الصورة واليد، والمرحلة التالية مفتوحة للمساهمة</p>
         </div>
 
         <div class="roadmap-grid">
             <div class="roadmap-card done">
                 <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 1–11: الأساس المعماري</h4>
+                <h4>Phase 1–15: الأساس المعماري</h4>
                 <ul>
-                    <li>تصيير مؤجل PBR ومكتبة Vulkan</li>
-                    <li>معمارية ECS موجهة للبيانات</li>
-                    <li>فيزياء وتحريك وهيكل عظام أصلي</li>
-                    <li>محرر ImGui مع تفقد الخصائص</li>
-                    <li>1007 اختباراً مؤتمتاً ناجحاً عبر 23 حزمة</li>
+                    <li>Vulkan RHI، تصيير مؤجل PBR، وRenderGraph</li>
+                    <li>ECS موجهة للبيانات، فيزياء حتمية، تحريك هيكلي، وصوت 3D</li>
+                    <li>محرر ImGui، Lua 5.4، استيراد النماذج، وواجهة عربية RTL</li>
+                    <li>ظلال اتجاهية، سماء إجرائية، وLOD شبكي</li>
                 </ul>
             </div>
 
             <div class="roadmap-card done">
                 <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 12–13: الظلال والسماء وLOD</h4>
+                <h4>Phase 16–25: Jolt والعالم الحي</h4>
                 <ul>
-                    <li>خرائط ظلال 2048 بتقنية 3x3 PCF</li>
-                    <li>سماء إجرائية بمعاملات + تحكم محرر</li>
-                    <li>مولد LOD شبكي حتمي + مستورد موديلات</li>
+                    <li>Jolt v5.6: مركبات، قيود، راجدول، Cloth، CCD، وأشكال مركبة</li>
+                    <li>شبكات UDP موثوقة، سيرفر Authoritative، وتنبؤ عميل، ونسخ الأجسام والقيود</li>
+                    <li>تدمير هندسي، ظلال متتالية، وذكاء إدراكي</li>
+                    <li>طبقة 2D، تأليف السكربت في المحرر، والتوصيل الشامل</li>
                 </ul>
             </div>
 
             <div class="roadmap-card done">
                 <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 14–15: الصوت وglTF والسكربت والتعريب</h4>
+                <h4>Phase 26–30: التوصيل والكاميرا</h4>
                 <ul>
-                    <li>فك WAV وOGG وMP3 وFLAC وربط المشاهد</li>
-                    <li>قارئ نماذج موحّد للصيغ الست + الموادّ والخامات + سكربت Lua معزول</li>
-                    <li>واجهة محرر عربية RTL بخط أميري</li>
+                    <li>معالجة لاحقة: Bloom، تصحيح ألوان HDR، وحدّة</li>
+                    <li>NavMesh ووكلاء، ومركبات Jolt داخل المشهد</li>
+                    <li>كاميرا بيد اللاعب: فأرة وعصا، تقريب، ومحاذاة تلقائية</li>
+                    <li>حركة منسوبة للكاميرا عبر nf.camera_move</li>
                 </ul>
             </div>
 
             <div class="roadmap-card done">
-                <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 16: فيزياء Jolt والشبكات</h4>
+                <span class="roadmap-status done">مكتمل ومثبت — 0.5.0</span>
+                <h4>Phase 31–38: الصورة واليد</h4>
                 <ul>
-                    <li>Jolt v5.6: مركبات وقيود وRagdolls وCloth</li>
-                    <li>استعلامات ومستشعرات وCCD وأشكال معقدة</li>
-                    <li>UDP موثوق + سيرفر Authoritative + تنبؤ</li>
-                    <li>قيادة المركبات وحالاتها + أحداث القيود على الشبكة</li>
-                    <li>1007 اختباراً عبر 23 حزمة، كلها ناجحة</li>
+                    <li>مفاتيح قابلة لإعادة الربط وملف bindings.nfinput</li>
+                    <li>FXAA فوق LDR، ADS، ارتداد، اهتزاز، وإعدادات لاعب</li>
+                    <li>ملصقات مسقطة، مقياس رسم 0.25–2×، ودقة ديناميكية</li>
+                    <li>ديناميكيات صوت ماستر: ضاغط ومحدّد ذروة</li>
+                    <li>26 حزمة اختبار، وحزمة 0.5.0 المحمولة منشورة</li>
                 </ul>
             </div>
 
             <div class="roadmap-card active">
                 <span class="roadmap-status active">مفتوح للمساهمة</span>
-                <h4 data-i18n="roadmap_next_title">ما بعد Phase 16</h4>
+                <h4>التالي: ما بعد 0.5.0</h4>
                 <ul>
-                    <li data-i18n="roadmap_next_3">عرض فيديو/صور حية لخاصية الجديد</li>
+                    <li>توقيع Windows عام موثوق ومثبّت داخل الإصدار</li>
+                    <li>استكشاف Linux، عينات إضافية، وتحسينات عرض</li>
+                    <li>قنوات المساهمة مفتوحة للمطورين</li>
                 </ul>
             </div>
         </div>
@@ -892,7 +895,7 @@
     <section class="container" id="quickstart" style="margin-bottom: 5rem;">
         <div class="section-header">
             <h2 data-i18n="quick_title">البدء السريع: البناء والتشغيل</h2>
-            <p data-i18n="quick_desc">بناء المحرك على نظام Windows باستخدام CMake و Visual Studio / Ninja</p>
+            <p data-i18n="quick_desc">ابنِ 0.5.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة</p>
         </div>
 
         <div class="code-box">
@@ -900,18 +903,22 @@
             <div><span class="code-cmd">git clone</span> <span class="code-arg">https://github.com/abdallah2183/SANAD-Engine.git</span></div>
             <div><span class="code-cmd">cd</span> <span class="code-arg">SANAD-Engine</span></div>
             <br>
-            <div class="code-comment"># 2. بناء المحرك (Build with batch script or CMake)</div>
-            <div><span class="code-cmd">build_nf.bat</span></div>
+            <div class="code-comment"># 2. بناء الإصدار 0.5.0 (Build Release)</div>
+            <div><span class="code-cmd">build_nf.bat</span> <span class="code-arg">Release</span></div>
             <br>
-            <div class="code-comment"># 3. تشغيل محرر سند التفاعلي (Run SANAD Editor)</div>
-            <div><span class="code-cmd">.\build\DebugNinja\bin\SANADEditor.exe</span></div>
+            <div class="code-comment"># 3. تشغيل محرر سند (Run SANAD Editor)</div>
+            <div><span class="code-cmd">.\build\Release\bin\SANADEditor.exe</span></div>
             <br>
-            <div class="code-comment"># 4. تشغيل لعبة جامع المكعبات (Run the Cube Collector game)</div>
-            <div><span class="code-cmd">.\build\DebugNinja\bin\NFSampleSimpleGame.exe</span></div>
+            <div class="code-comment"># 4. تشغيل TreeWorld (Play the packaged sample)</div>
+            <div><span class="code-cmd">.\build\Release\bin\nf.exe</span> <span class="code-arg">run --project Games\TreeWorld\TreeWorld.nfproj</span></div>
             <br>
-            <div class="code-comment"># 5. المحرر بالواجهة العربية (Run the editor in Arabic)</div>
-            <div><span class="code-cmd">.\build\DebugNinja\bin\SANADEditor.exe</span> <span class="code-arg">--arabic</span></div>
+            <div class="code-comment"># 5. أو أنشئ لعبتك من قالب ThirdPerson</div>
+            <div><span class="code-cmd">.\build\Release\bin\nf.exe</span> <span class="code-arg">new Games\MyGame --name MyGame --template ThirdPerson</span></div>
+            <div><span class="code-cmd">.\build\Release\bin\nf.exe</span> <span class="code-arg">run --project Games\MyGame\MyGame.nfproj</span></div>
         </div>
+        <p style="margin-top: 1rem; color: var(--text-secondary);">
+            تفضّل عدم البناء؟ <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0" style="color: var(--primary-orange);">نزّل حزمة 0.5.0 المحمولة</a>.
+        </p>
     </section>
 
     <!-- Footer -->
@@ -1092,13 +1099,13 @@
                 show_title: "لقطات حقيقية من المحرك",
                 show_desc: "صور ملتقطة مباشرة من المحرر واللعبة العاملة — بدون فوتوشوب",
                 show_editor_title: "محرر سند الأصلي",
-                show_editor_desc: "منفذ عرض Vulkan حي، شجرة مشهد، مفتش انعكاسي، طرفية سجلات، وسماء إجرائية — يعمل بـ 100+ إطار/ثانية.",
+                show_editor_desc: "منفذ عرض Vulkan حي، شجرة مشهد، مفتش انعكاسي، FXAA وملصقات مسقطة، وسماء إجرائية — يعمل بـ 100+ إطار/ثانية.",
                 show_ar_title: "واجهة عربية كاملة",
                 show_ar_desc: "تشكيل سياقي للحروف، ligatures، وترتيب RTL بخط أميري — أول محرك ألعاب بواجهة عربية حقيقية.",
-                show_game_title: "لعبة عاملة: جامع المكعبات",
-                show_game_desc: "عدو يتحرك بسكربت Lua، فيزياء إضاءة PBR، ظلال PCF، ونقاط ومستويات — مبنية بالمحرك نفسه.",
+                show_game_title: "لعبة عاملة: TreeWorld",
+                show_game_desc: "عالم شجر حي بشخصية هيكلية، كاميرا تتبع، ظلال متتالية، وضباب — يُبنى ويُلعب بمحرك سند نفسه.",
                 show_jolt_title: "مركبات وقيود Jolt",
-                show_jolt_desc: "مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومختبرة بـ 175 اختباراً.",
+                show_jolt_desc: "مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومغطاة باختبارات المحرك.",
                 show_vehicle_title: "ديمو قابل للعب: قيادة مركبة",
                 show_vehicle_desc: "سيارة Jolt حقيقية بعجلات مرئية وكاميرا تتبع: قد بـ WASD، اجمع البوابات الذهبية وحطم الصناديق — NFSampleVehicleDemo.",
                 show_jolt_alt: "فيديو: محاكاة مركبات وقيود Jolt في محرك سند",
@@ -1119,22 +1126,22 @@
                 nav_roadmap: "خارطة الطريق",
                 nav_quickstart: "البدء السريع",
                 btn_github: "مستودع GitHub",
-                hero_badge: "محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
+                hero_badge: "الإصدار 0.5.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
                 author_badge: "المؤسس والقائم على العمل: عبدالله (Abdallah)",
                 hero_title: "محرك سَنَد | SANAD Engine",
-                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية.",
-                hero_cta_join: "المساهمة في التطوير",
+                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.5.0 يضيف FXAA، ملصقات مسقطة، مقياس رسم فائق، دقة ديناميكية، وتصويب ADS.",
+                hero_cta_download: "تنزيل 0.5.0",
                 hero_cta_build: "البناء والتشغيل",
                 hero_cta_explore: "استعراض المميزات",
                 canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
-                stat_tests: "اختبار مؤتمت ناجح عبر 23 حزمة",
+                stat_tests: "أحدث إصدار عام — 26 حزمة اختبار",
                 stat_val: "أخطاء Vulkan Validation (خالٍ من التسريب)",
                 stat_cpp: "معيار C++ الحديث للأداء الأقصى",
                 stat_det: "محاكاة حتمية متوافقة مع الخوادم",
                 features_title: "الأنظمة والمزايا الأساسية",
                 features_desc: "صُمم كل نظام ليعمل باستقلالية تامة وكفاءة عالية مع جدولة متعددة الخيوط",
                 feat_rhi_title: "تصيير مؤجل حديث PBR",
-                feat_rhi_desc: "مسار تصيير مؤجل متعدد الممرات بمكتبة Vulkan، يشمل ممر العمق، وتوليد GBuffer، وإضاءة واقعية Cook-Torrance GGX، وإدارة ممرات بـ RenderGraph ديناميكي.",
+                feat_rhi_desc: "مسار تصيير مؤجل متعدد الممرات بمكتبة Vulkan: عمق وGBuffer وإضاءة Cook-Torrance GGX، مع RenderGraph ديناميكي وFXAA بعد tonemap وملصقات مسقطة ومقياس رسم داخلي حتى 2×.",
                 feat_ecs_title: "معمارية الكيانات والمكونات (ECS)",
                 feat_ecs_desc: "نظام Sparse-Set متقدم يوفر أعلى سرعة وصول للذاكرة وتوافقاً كاملاً مع ذاكرة الكاش، مع دعم الهرميات وتحويلات المشاهد وقوالب Prefabs.",
                 feat_phys_title: "محرك فيزياء حتمي",
@@ -1144,19 +1151,17 @@
                 feat_anim_title: "نظام تحريك هيكلي",
                 feat_anim_desc: "حسابات حركة العظام، آلة حالات التحريك (State Machine) مع الانتقالات والتلاشي والدمج المتعدد، وتوليد مقاطع حركية إجرائية حتمية.",
                 feat_audio_title: "صوتيات ثلاثية الأبعاد",
-                feat_audio_desc: "توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج توهين المسافات (Attenuation) وموجه WASAPI مع دعم نمط الاختبار الصامت (Headless).",
+                feat_audio_desc: "توزيع ومزج صوتي ثلاثي الأبعاد مع نماذج توهين المسافات وموجه WASAPI، وديناميكيات ماستر: ضاغط ستيريو ومحدّد ذروة بنافذة استباق.",
                 feat_editor_title: "محرر متكامل Native Editor",
-                feat_editor_desc: "محرر أصلي بواجهة Dear ImGui يدعم تقسيم النوافذ (Docking)، واستعراض الكائنات (Outliner)، ومفتش الخصائص بالانعكاس البرمجي، وتاريخ التراجع والإعادة.",
+                feat_editor_desc: "محرر أصلي بواجهة Dear ImGui: تقسيم نوافذ، Outliner، مفتش انعكاسي، تراجع/إعادة، Profiler حي، إعدادات لاعب، ADS وربط مفاتيح، وتعريب RTL كامل.",
                 callout_title: "نداء للمطورين والمبدعين العرب",
                 callout_desc: "محرك سَنَد مشروع عربي طموح أسسه ويقوده عبدالله ليكون سنداً حقيقياً لمطوري وصناع الألعاب. صُمم المحرك بمعمارية برمجية صارمة ومفتوحة المصدر بالكامل للتوسع والتطوير المستمر. نرحب بكافة المطورين في مجالات الرسوميات، وهندسة الصوت، والمحاكاة الفيزيائية، والواجهات، والتوثيق للمشاركة في بناء هذا المشروع.",
                 callout_btn_pr: "فتح مساهمة عبر Pull Request",
                 callout_btn_guide: "دليل المساهمة (CONTRIBUTING.md)",
                 roadmap_title: "خارطة طريق التطوير",
-                roadmap_desc: "مراحل محددة تتيح للمطورين اختيار الجزئيات التي يرغبون في بنائها",
-                roadmap_next_title: "ما بعد Phase 16",
-                roadmap_next_3: "عرض فيديو/صور حية لخاصية الجديد",
+                roadmap_desc: "38 مرحلة مكتملة — 0.5.0 يغلق مرحلة الصورة واليد، والمرحلة التالية مفتوحة للمساهمة",
                 quick_title: "البدء السريع: البناء والتشغيل",
-                quick_desc: "بناء المحرك على نظام Windows باستخدام CMake و Visual Studio / Ninja"
+                quick_desc: "ابنِ 0.5.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة"
             },
             en: {
                 nav_features: "Features",
@@ -1164,13 +1169,13 @@
                 show_title: "Real Engine Captures",
                 show_desc: "Screenshots taken straight from the running editor and game — no Photoshop.",
                 show_editor_title: "The Native SANAD Editor",
-                show_editor_desc: "Live Vulkan viewport, outliner, reflected inspector, log console, and procedural sky — running at 100+ FPS.",
+                show_editor_desc: "Live Vulkan viewport, outliner, reflected inspector, FXAA and projected decals, and procedural sky — running at 100+ FPS.",
                 show_ar_title: "Fully Arabic Interface",
                 show_ar_desc: "Contextual shaping, ligatures, and RTL ordering in the Amiri typeface — the first game engine with a real Arabic UI.",
-                show_game_title: "Playable: Cube Collector",
-                show_game_desc: "Lua-scripted enemy AI, PBR lighting, PCF shadows, score and levels — built with the engine itself.",
+                show_game_title: "Playable: TreeWorld",
+                show_game_desc: "A living forest with a skinned explorer, follow camera, cascaded shadows, and fog — built and played by SANAD itself.",
                 show_jolt_title: "Jolt Vehicles & Constraints",
-                show_jolt_desc: "Wheeled vehicle with engine, constraint cloning between bodies, ragdolls, and scene queries — deterministic and covered by 175 tests.",
+                show_jolt_desc: "Wheeled vehicle with engine, constraint cloning between bodies, ragdolls, and scene queries — deterministic and covered by the engine suites.",
                 show_vehicle_title: "Playable Demo: Vehicle Driving",
                 show_vehicle_desc: "A real Jolt car with visible wheels and chase camera: drive with WASD, collect golden gates and smash crates — NFSampleVehicleDemo.",
                 show_jolt_alt: "Video: Jolt vehicles and constraints simulation in SANAD Engine",
@@ -1191,22 +1196,22 @@
                 nav_roadmap: "Roadmap",
                 nav_quickstart: "Quickstart",
                 btn_github: "GitHub Repository",
-                hero_badge: "SANAD — Extensible Arabic 3D Game Engine",
+                hero_badge: "SANAD 0.5.0 — Extensible Arabic 3D Game Engine",
                 author_badge: "Founder & Project Lead: Abdallah",
                 hero_title: "SANAD Engine | محرك سند",
-                hero_subtitle: "High-performance 3D game engine engineered from scratch with modern C++23, low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio.",
-                hero_cta_join: "Join the Development",
+                hero_subtitle: "High-performance 3D game engine built with modern C++23, a low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio. 0.5.0 adds FXAA, projected decals, supersampling, dynamic resolution, and ADS.",
+                hero_cta_download: "Download 0.5.0",
                 hero_cta_build: "Build and Run",
                 hero_cta_explore: "Explore Features",
                 canvas_hint: "Click and drag to orbit the 3D entity in world space",
-                stat_tests: "Automated Tests Passed Across 23 Suites",
+                stat_tests: "Current Public Release — 26 Test Suites",
                 stat_val: "Vulkan Validation Errors (Zero Leaks)",
                 stat_cpp: "Modern C++23 ISO Standard",
                 stat_det: "Deterministic & Server-Authoritative Ready",
                 features_title: "Core Architecture and Subsystems",
                 features_desc: "Every subsystem is isolated behind strict abstraction layers with multi-threaded scheduling.",
                 feat_rhi_title: "Modern Vulkan 1.2+ PBR Renderer",
-                feat_rhi_desc: "Multi-pass deferred rendering pipeline with depth prepass, GBuffer generation, Cook-Torrance GGX lighting, and dynamic DAG RenderGraph.",
+                feat_rhi_desc: "Multi-pass deferred rendering with depth prepass, GBuffer, Cook-Torrance GGX lighting, and a dynamic RenderGraph — plus post-tonemap FXAA, projected decals, and internal render scale up to 2×.",
                 feat_ecs_title: "Data-Oriented ECS & Scene Graph",
                 feat_ecs_desc: "Cache-optimized sparse-set Entity Component System with hierarchical transform propagation and high memory locality.",
                 feat_phys_title: "Deterministic 3D Physics Solver",
@@ -1216,19 +1221,17 @@
                 feat_anim_title: "Skeletal Animation & State Machines",
                 feat_anim_desc: "Hierarchical bone evaluation, clip blending, state machines with cross-fading, and procedural motion clip generators.",
                 feat_audio_title: "3D Spatial Audio & Mixer",
-                feat_audio_desc: "Positional 3D audio, distance attenuation models, bus mixer, WASAPI shared-mode backend, and headless test driver.",
+                feat_audio_desc: "Positional 3D audio, distance attenuation, bus mixer, and WASAPI shared-mode backend — with master dynamics: a linked stereo compressor and a look-ahead peak limiter.",
                 feat_editor_title: "Native ImGui Docking Editor",
-                feat_editor_desc: "Integrated editor shell with full docking layout, outliner, reflected inspector, asset browser, undo/redo, and interactive viewport gizmos.",
+                feat_editor_desc: "Integrated editor shell with docking, outliner, reflected inspector, asset browser, undo/redo, viewport gizmos, player settings, ADS controls, and key rebinding.",
                 callout_title: "Calling Developers & Creators — Build SANAD With Us",
                 callout_desc: "SANAD Engine was founded and is led by Abdallah to be the bedrock for game development across the Arab world and internationally. Whether you specialize in graphics, audio, physics, tooling, or documentation, we welcome your contributions.",
                 callout_btn_pr: "Submit a Pull Request",
                 callout_btn_guide: "Read Contributing Guide",
                 roadmap_title: "Development Roadmap",
-                roadmap_desc: "Clear milestones where you can easily pick up a subsystem and make an immediate impact.",
-                roadmap_next_title: "Beyond Phase 16",
-                roadmap_next_3: "Live video/screenshots of the new features",
+                roadmap_desc: "38 completed phases — 0.5.0 closes the image-and-hand phase, and the next milestone is open for contributions.",
                 quick_title: "Quick Start: Build & Run",
-                quick_desc: "Build SANAD immediately on Windows using CMake and Visual Studio 2022 / Ninja"
+                quick_desc: "Build 0.5.0 on Windows with CMake and Visual Studio 2022 / Ninja — or download the portable package."
             }
         };
 
