@@ -1,6 +1,7 @@
 // Editor inspector: transform/camera/light/mesh edits apply, propagate, and
 // reject invalid input without mutating the scene.
 
+#define _CRT_SECURE_NO_WARNINGS
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Editor/Commands.hpp>
 #include <NF/Editor/Inspector.hpp>
@@ -9,6 +10,7 @@
 #include <NF/Scene/Transform.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 using namespace nf;
@@ -418,6 +420,10 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     edit.fog_b = 0.75f;
     edit.fog_start = 12.0f;
     edit.fog_end = 48.0f;
+    edit.render_scale = 1.5f;
+    edit.dynamic_resolution = true;
+    edit.target_fps = 90.0f;
+    edit.min_render_scale = 0.75f;
     edit.exposure = 1.75f;
     edit.tonemap = 2; // Reinhard
     edit.lut_path = "content://LUTs/grade.png";
@@ -455,6 +461,14 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
         NF_CHECK_NEAR(pp->fog_b, 0.75f, 1e-6f);
         NF_CHECK_NEAR(pp->fog_start, 12.0f, 1e-6f);
         NF_CHECK_NEAR(pp->fog_end, 48.0f, 1e-6f);
+        // Internal render scale is part of the same undoable edit: it is image
+        // state, authored with the post stack, not a transient viewport flag.
+        NF_CHECK_NEAR(pp->render_scale, 1.5f, 1e-6f);
+        // The governor's tuning is authored with the same command, and the
+        // static scale above is its ceiling.
+        NF_CHECK(pp->dynamic_resolution);
+        NF_CHECK_NEAR(pp->target_fps, 90.0f, 1e-6f);
+        NF_CHECK_NEAR(pp->min_render_scale, 0.75f, 1e-6f);
         NF_CHECK_NEAR(pp->exposure, 1.75f, 1e-6f);
         NF_CHECK(pp->tonemap == 2);
         NF_CHECK(pp->lut_path == "content://LUTs/grade.png");
@@ -496,6 +510,44 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     nan.grade_contrast = std::numeric_limits<float>::quiet_NaN();
     NF_CHECK(editor::make_post_process_command(scene.world(), e, nan, err) == nullptr);
     NF_CHECK(!err.empty());
+
+    // Render scale: the editor's bounds are the renderer's bounds. Below 0.25
+    // the image is unrecognisable, above 2 the fragment bill is 4x native for
+    // no further edge detail the author can see.
+    runtime::PostProcessComponent tiny_scale = edit;
+    tiny_scale.render_scale = 0.1f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, tiny_scale, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent huge_scale = edit;
+    huge_scale.render_scale = 2.5f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, huge_scale, err) == nullptr);
+
+    runtime::PostProcessComponent nan_scale = edit;
+    nan_scale.render_scale = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, nan_scale, err) == nullptr);
+
+    // Dynamic resolution: the frame target and floor use the same bounds as the
+    // loader, and the floor may not exceed the ceiling. The command must refuse
+    // the inverted pair instead of writing a component the loader will reject.
+    runtime::PostProcessComponent slow_target = edit;
+    slow_target.target_fps = 5.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, slow_target, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent fast_target = edit;
+    fast_target.target_fps = 1000.0f;
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, fast_target, err) == nullptr);
+
+    runtime::PostProcessComponent floor_above_ceiling = edit;
+    floor_above_ceiling.min_render_scale = 1.75f; // render_scale is 1.5
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, floor_above_ceiling, err) ==
+             nullptr);
+    NF_CHECK(!err.empty());
+
+    runtime::PostProcessComponent nan_floor = edit;
+    nan_floor.min_render_scale = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(editor::make_post_process_command(scene.world(), e, nan_floor, err) == nullptr);
 
     // Lens bounds match the scene loader's: past +/-0.5 the warp folds the
     // corners over themselves, and a negative chromatic aberration would swap
@@ -570,4 +622,90 @@ NF_TEST(inspector_post_process_command_adds_edits_and_undoes_cleanly) {
     // A dead entity is refused rather than silently editing nothing.
     ecs::Entity dead{};
     NF_CHECK(editor::make_post_process_command(scene.world(), dead, edit, err) == nullptr);
+}
+
+NF_TEST(editor_inspector_decal_edit) {
+    // Phase 36: the decal inspector's validated path. Adding through the command
+    // must create the component, undo must remove it (so a scene with no
+    // `Decal:` line round-trips to one), and a value the scene loader would
+    // refuse must be refused here rather than saved and then dropped on load.
+    scene::Scene scene("DecalEdit");
+    ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::Transform>(e, scene::Transform{});
+
+    editor::DecalEdit edit;
+    std::strncpy(edit.material, "content://Materials/scorch.nfmat", sizeof(edit.material) - 1);
+    edit.size_x = 2.5f;
+    edit.size_y = 4.0f;
+    edit.size_z = 0.75f;
+    edit.opacity = 0.4f;
+    edit.enabled = false;
+
+    std::string err;
+    auto cmd = editor::make_decal_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd != nullptr);
+    if (!cmd) {
+        return;
+    }
+
+    editor::CommandStack stack;
+    stack.push(std::move(cmd), scene.world());
+    const auto* decal = scene.world().get<runtime::DecalComponent>(e);
+    NF_CHECK(decal != nullptr);
+    if (decal != nullptr) {
+        NF_CHECK(decal->material == "content://Materials/scorch.nfmat");
+        NF_CHECK_NEAR(decal->size_x, 2.5f, 1e-6f);
+        NF_CHECK_NEAR(decal->size_y, 4.0f, 1e-6f);
+        NF_CHECK_NEAR(decal->size_z, 0.75f, 1e-6f);
+        NF_CHECK_NEAR(decal->opacity, 0.4f, 1e-6f);
+        NF_CHECK(!decal->enabled);
+    }
+
+    // Undoing the create removes the component entirely, not a default decal.
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(!scene.world().has<runtime::DecalComponent>(e));
+
+    // Re-apply and read back through the inspector's own reader.
+    auto cmd2 = editor::make_decal_command(scene.world(), e, edit, err);
+    NF_CHECK(cmd2 != nullptr);
+    stack.push(std::move(cmd2), scene.world());
+    bool has = false;
+    const editor::DecalEdit back = editor::read_decal(scene.world(), e, has);
+    NF_CHECK(has);
+    NF_CHECK(std::string(back.material) == "content://Materials/scorch.nfmat");
+    NF_CHECK_NEAR(back.size_x, 2.5f, 1e-6f);
+    NF_CHECK_NEAR(back.size_y, 4.0f, 1e-6f);
+    NF_CHECK_NEAR(back.size_z, 0.75f, 1e-6f);
+    NF_CHECK_NEAR(back.opacity, 0.4f, 1e-6f);
+    NF_CHECK(!back.enabled);
+
+    // Redo restores the same values.
+    NF_CHECK(stack.undo(scene.world()));
+    NF_CHECK(stack.redo(scene.world()));
+    NF_CHECK(scene.world().has<runtime::DecalComponent>(e));
+
+    // Zero extent, out-of-range opacity and NaN are all refused. Each would
+    // otherwise produce an invisible decal or a poisoned inverse matrix.
+    editor::DecalEdit zero = edit;
+    zero.size_z = 0.0f;
+    NF_CHECK(editor::make_decal_command(scene.world(), e, zero, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    editor::DecalEdit over = edit;
+    over.opacity = 1.5f;
+    NF_CHECK(editor::make_decal_command(scene.world(), e, over, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    editor::DecalEdit nan = edit;
+    nan.size_x = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(editor::make_decal_command(scene.world(), e, nan, err) == nullptr);
+    NF_CHECK(!err.empty());
+
+    // An empty material is legitimate: the runtime substitutes its fallback.
+    editor::DecalEdit plain = edit;
+    plain.material[0] = '\0';
+    NF_CHECK(editor::make_decal_command(scene.world(), e, plain, err) != nullptr);
+
+    ecs::Entity dead{};
+    NF_CHECK(editor::make_decal_command(scene.world(), dead, edit, err) == nullptr);
 }

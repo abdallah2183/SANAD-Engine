@@ -32,11 +32,13 @@ constexpr float kEps = 1e-4f;
 struct FakeDevice {
     std::set<u16> keys;
     std::set<u16> buttons;
+    std::set<u16> mouse;
     float axes[6] = {};
 
     void press(u16 vk) { keys.insert(vk); }
     void release(u16 vk) { keys.erase(vk); }
     void hold_pad(u16 button) { buttons.insert(button); }
+    void hold_mouse(u16 vk) { mouse.insert(vk); }
     void set_axis(u16 axis, float value) {
         if (axis < 6) {
             axes[axis] = value;
@@ -54,6 +56,9 @@ struct FakeDevice {
         };
         s.pad_axis = [](const void* c, u16 code) {
             return code < 6 ? static_cast<const FakeDevice*>(c)->axes[code] : 0.0f;
+        };
+        s.mouse_down = [](const void* c, u16 code) {
+            return static_cast<const FakeDevice*>(c)->mouse.count(code) > 0;
         };
         return s;
     }
@@ -255,6 +260,57 @@ NF_TEST(names_round_trip_through_the_tables) {
     NF_CHECK(key_name_from_code('W') == "W");
     NF_CHECK(key_name_from_code(0x20) == "space");
     NF_CHECK(key_name_from_code(0xFFF) == std::string_view{});
+
+    // Mouse buttons have their own table and their own inverse. The codes are
+    // the Windows virtual-key ones because the pointer-capture path already
+    // asks the platform layer about VK_LBUTTON — a binding must be the same
+    // question, not a parallel one.
+    NF_CHECK(mouse_button_from_name("Left", code));
+    NF_CHECK(code == 0x01);
+    NF_CHECK(mouse_button_from_name("RIGHT", code));
+    NF_CHECK(code == 0x02);
+    NF_CHECK(mouse_button_from_name("x1", code));
+    NF_CHECK(code == 0x05);
+    NF_CHECK(!mouse_button_from_name("side", code));
+    NF_CHECK(mouse_button_name_from_code(0x01) == "left");
+    NF_CHECK(mouse_button_name_from_code(0x06) == "x2");
+    NF_CHECK(mouse_button_name_from_code(0x09) == std::string_view{});
+}
+
+NF_TEST(mouse_buttons_bind_and_evaluate_like_keys) {
+    // The gap this closes: 0.4.0 could move jump to the keyboard or the pad,
+    // but "attack on the left mouse button" still meant replacing the input
+    // source. It is one more token now, and it evaluates through the same
+    // (table, action, device) function as everything else.
+    std::string err;
+    const InputBindings b = InputBindings::parse(
+        "# a shooter's two buttons\n"
+        "attack = mouse:Left, pad:X\n"
+        "aim    = mouse:Right\n"
+        "brake  = -mouse:Left\n",
+        &err);
+    NF_CHECK(err.empty());
+    NF_CHECK(b.action_count() == 3);
+
+    FakeDevice d;
+    NF_CHECK(!binding_pressed(b, "attack", d.state()));
+    d.hold_mouse(0x01);
+    NF_CHECK(binding_pressed(b, "attack", d.state()));
+    NF_CHECK(!binding_pressed(b, "aim", d.state()));
+    NF_CHECK_NEAR(binding_axis(b, "attack", d.state()), 1.0f, kEps);
+    // The sign on a mouse token means what it means on a key: it is the
+    // contribution to the axis, not a different button.
+    NF_CHECK_NEAR(binding_axis(b, "brake", d.state()), -1.0f, kEps);
+
+    // And the pad half of `attack` still works when no mouse is held.
+    FakeDevice pad_only;
+    pad_only.hold_pad(2); // X
+    NF_CHECK(binding_pressed(b, "attack", pad_only.state()));
+
+    // An unknown button is refused with the token named, like every other kind.
+    std::string bad_err;
+    InputBindings::parse("attack = mouse:Trigger\n", &bad_err);
+    NF_CHECK(bad_err.find("mouse") != std::string::npos);
 }
 
 NF_TEST(an_empty_table_answers_nothing) {
@@ -274,4 +330,64 @@ NF_TEST(a_device_with_no_callbacks_answers_nothing) {
     const DeviceState none;
     NF_CHECK(!binding_pressed(b, "jump", none));
     NF_CHECK_NEAR(binding_axis(b, "move_x", none), 0.0f, kEps);
+}
+
+NF_TEST(the_table_writes_back_to_the_file_format_it_reads) {
+    // The rebinding screen's other half: what the editor saves has to be what
+    // the runtime loads. Round-trip the DEFAULTS, which are the widest table
+    // this engine ships (every source kind, both signs, the aliases).
+    const InputBindings defaults = InputBindings::defaults();
+    const std::string text = serialize_bindings(defaults);
+
+    std::string err;
+    const InputBindings back = InputBindings::parse(text, &err);
+    NF_CHECK(err.empty());
+    NF_CHECK(back.action_count() == defaults.action_count());
+
+    // Every action keeps every binding, signs included — `move_z` has a
+    // negative pad axis and `aim` a mouse button, and both must survive.
+    for (const auto& action : defaults.actions()) {
+        const auto* before = defaults.find(action);
+        const auto* after = back.find(action);
+        NF_CHECK(after != nullptr);
+        if (before == nullptr || after == nullptr) {
+            continue;
+        }
+        NF_CHECK(before->size() == after->size());
+        for (size_t i = 0; i < before->size() && i < after->size(); ++i) {
+            NF_CHECK((*before)[i].source == (*after)[i].source);
+            NF_CHECK((*before)[i].code == (*after)[i].code);
+            // The format carries the SIGN, not the magnitude; every shipped
+            // default is +/-1, so equality here is exact.
+            NF_CHECK_NEAR((*before)[i].value, (*after)[i].value, 1e-6f);
+        }
+    }
+
+    // The evaluator agrees after the round trip, which is the claim that
+    // matters: a saved file that loads to a different control scheme would
+    // look fine and play wrong.
+    FakeDevice d;
+    d.press('W');
+    NF_CHECK(binding_pressed(back, "move_forward", d.state()));
+    NF_CHECK_NEAR(binding_axis(back, "move_z", d.state()), -1.0f, kEps);
+    d.hold_mouse(0x02);
+    NF_CHECK(binding_pressed(back, "aim", d.state()));
+}
+
+NF_TEST(an_action_with_no_bindings_is_written_not_dropped) {
+    // Clearing an action in the rebinding screen must not resurrect the
+    // default: the file has to say "this action has nothing", and parse has
+    // to read that back as an action that answers nothing.
+    InputBindings b = InputBindings::defaults();
+    b.set("jump", {});
+    const std::string text = serialize_bindings(b);
+    NF_CHECK(text.find("jump =") != std::string::npos);
+
+    std::string err;
+    const InputBindings back = InputBindings::parse(text, &err);
+    NF_CHECK(err.empty());
+    NF_CHECK(back.find("jump") != nullptr);
+    FakeDevice d;
+    d.press(0x20); // Space would have been jump
+    NF_CHECK(!binding_pressed(back, "jump", d.state()));
 }

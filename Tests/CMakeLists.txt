@@ -79,6 +79,14 @@ add_executable(RHITests
     # pinned without a GPU) plus three GPU tests that assert the chain is
     # recorded and that its result reaches the pixels.
     RHITests/test_post_stack.cpp
+    # Internal render scale (Phase 37): the clamp/rounding contract without a
+    # GPU, plus a renderer test that a 32x32 output still renders after the
+    # internal targets are rebuilt at 64x64 (2x SSAA) and 16x16.
+    RHITests/test_render_scale.cpp
+    # Dynamic resolution (Phase 38): pure CPU governor. Cooldown, hysteresis,
+    # step direction, clamps, reset, illegal config and hitch handling, with no
+    # GPU required — the renderer integration is covered by RuntimeTests.
+    RHITests/test_dynamic_resolution.cpp
     # Pure arithmetic (splits, fit, tiling, bias) over NFRendering's cascade
     # math, so it runs without a GPU — the one suite that proves the committed
     # CSM work, which had been sitting unregistered and unrun.
@@ -88,6 +96,11 @@ add_executable(RHITests
     # reason — the failures here look like soft or misplaced shadows, not
     # crashes, so they need pinning where a GPU can't.
     RHITests/test_local_shadows.cpp
+    # Projected screen-space decals (Phase 36): the CPU size/inverse/rect/sort
+    # contract, plus GPU proofs that the blend lands in GBuffer0/2, preserves
+    # the normal/emissive attachments and the emission-strength alpha, and that
+    # disabled/offscreen/backfacing decals are bit-exact no-ops.
+    RHITests/test_decals.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -107,8 +120,9 @@ target_compile_definitions(RHITests PRIVATE
 
 if(NF_GLSLC_EXECUTABLE)
     add_dependencies(RHITests NFTriangleShaders NFQuadShaders NFRHIPushShaders
-        NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders
-        NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
+        NFBasic3DDepthShaders NFBasic3DGBufferShaders NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DFXAAShaders
+        NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders
+        NFBasic3DDecalShaders)
     # The present pass is its own shader target (present_vert.spv /
     # present_frag.spv). Renderer3D::present_texture() — the path
     # Runtime::update() takes every frame — loads those two files, and
@@ -141,6 +155,7 @@ add_executable(RuntimeTests
     RuntimeTests/test_runtime_scene.cpp
     RuntimeTests/test_camera_follow.cpp
     RuntimeTests/test_player_look.cpp
+    RuntimeTests/test_player_settings.cpp
     RuntimeTests/test_input_bindings.cpp
     RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp
@@ -203,6 +218,11 @@ add_executable(RuntimeTests
     # merely declares `Vehicle:` is bound, driven by update() from live inputs
     # and written back into its Transform, with no game code spawning bodies.
     RuntimeTests/test_runtime_vehicles.cpp
+    # Phase 36: projected decals. The CPU box/projection contract and the GPU
+    # composite live in RHITests/test_decals.cpp; this file is the scene half —
+    # `Decal:` round-trips, refuses an impossible size by name, and the Runtime
+    # really extracts enabled decals with the entity Transform and authored size.
+    RuntimeTests/test_runtime_decals.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)
@@ -263,6 +283,10 @@ AudioTests/test_audio_game_settings.cpp
     AudioTests/test_audio_occlusion.cpp
     AudioTests/test_audio_reverb.cpp
     AudioTests/test_audio_scene.cpp
+    # Master-bus dynamics: the compressor's static curve and times, the
+    # limiter's brickwall and latency, the neutral/bit-exact contract, and the
+    # AudioScene integration that puts both stages after the bus volumes.
+    AudioTests/test_audio_dynamics.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
@@ -522,7 +546,7 @@ endif()
 if(NF_GLSLC_EXECUTABLE)
     # The packager copies these, so they must exist before the tests run.
     add_dependencies(ToolTests NFBasic3DDepthShaders NFBasic3DGBufferShaders
-        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
+        NFBasic3DLightingShaders NFBasic3DForwardShaders NFBasic3DTonemapShaders NFBasic3DFXAAShaders NFBasic3DBloomShaders NFBasic3DSSAOShaders NFBasic3DSSAOBlurShaders NFBasic3DPickShaders)
     # The present pass too: a packaged scene is driven through the Runtime,
     # whose frame ends in Renderer3D::present_texture(), and the packaged
     # shader set has to carry present_vert.spv / present_frag.spv with it.

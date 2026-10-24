@@ -347,9 +347,15 @@ NF_TEST(nf_run_launches_player_and_forwards_validation_flags) {
     std::string error;
     require(scaffold_project(options, error), "nf run fixture scaffold failed: " + error);
 
+    // The project path is deliberately RELATIVE to the CLI's working
+    // directory. `nf run` hands the child the packaged copy and switches the
+    // child's cwd to the dist folder, so a relative path here used to be
+    // resolved against dist/ and the player reported "failed to open project
+    // file". The documented invocation is relative, so this is the shape the
+    // regression test has to use.
     const int exit_code = run_windows_process_and_wait(
         NF_CLI_EXE, scratch.path(),
-        {"run", "--project", (scratch.path() / "RunGame.nfproj").string(),
+        {"run", "--project", "RunGame.nfproj",
          "--frames", "2", "--headless", "--validation"},
         error);
     require(error.empty(), "nf run process launch failed: " + error);

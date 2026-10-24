@@ -108,6 +108,10 @@ bool latin_allowed_in_arabic(const std::string& key) {
         "frame_all_hint",         // Shift+Home is a physical key chord
         "err_font_missing_ar",    // Resources/fonts + SANADEditor.exe: the
                                   // paths a user has to type, quoted verbatim
+        "aim_hint",               // Esc is a physical key, printed on the keyboard
+        "bindings_hint",          // same key, same reason
+        "anti_aliasing",          // FXAA is the technique's own name; the
+                                  // surrounding "مضاد التعرجات" is translated
     };
     for (const char* k : kAllowed) {
         if (key == k) {
@@ -212,7 +216,11 @@ NF_TEST(localization_arabic_values_carry_real_arabic) {
         }
     }
     set_language(Language::English); // restore for other tests
-    NF_CHECK(problems.empty());
+    // Throw the accumulated list rather than only the expression: "one of 300
+    // keys is wrong" is a five-minute bisect when the message names the key.
+    if (!problems.empty()) {
+        throw std::runtime_error("Arabic values need attention:" + problems);
+    }
 }
 
 NF_TEST(localization_launcher_keys_resolve) {
@@ -349,5 +357,54 @@ NF_TEST(localization_shaper_shapes_shell_arabic) {
     NF_CHECK(shape_arabic("Search projects") == "Search projects");
     NF_CHECK(shape_arabic("Sanad 0.1.0") == "Sanad 0.1.0");
     NF_CHECK(!needs_shaping("Open project file"));
+    set_language(Language::English); // restore for other tests
+}
+
+NF_TEST(localization_render_scale_keys_resolve) {
+    // Phase 37 adds the render-scale control and hint; Phase 38 adds the
+    // governor's switch, frame target and floor. The Arabic values must be real
+    // Arabic — the global Latin scan enforces that — and the two languages must
+    // differ so an English copy cannot pass as a translation.
+    const char* keys[] = {"render_scale", "supersampling", "render_scale_hint",
+                          "dynamic_resolution", "target_fps", "min_scale",
+                          "dynamic_resolution_hint"};
+    set_language(Language::English);
+    std::string english_scale;
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+        if (std::string(key) == "render_scale") english_scale = tr(key);
+    }
+    set_language(Language::Arabic);
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+    }
+    NF_CHECK(tr("render_scale") != english_scale);
+    set_language(Language::English); // restore for other tests
+}
+
+NF_TEST(localization_decal_inspector_keys_resolve) {
+    // Phase 36: the decal inspector is new UI, and a missing key renders as the
+    // raw key (e.g. "decal_size") rather than as a label. Every string the
+    // panel asks for must exist in both languages.
+    const char* keys[] = {"decal", "no_decal", "add_decal", "decal_hint",
+                          "decal_size", "decal_opacity"};
+    set_language(Language::English);
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+    }
+    const std::string english_decal = tr("decal");
+    const std::string english_size = tr("decal_size");
+    set_language(Language::Arabic);
+    for (const char* key : keys) {
+        NF_CHECK(tr(key) != key);
+        NF_CHECK(!tr(key).empty());
+    }
+    // The two languages must actually differ; an English copy in the Arabic
+    // column passes "non-empty" while shipping an untranslated panel.
+    NF_CHECK(tr("decal") != english_decal);
+    NF_CHECK(tr("decal_size") != english_size);
     set_language(Language::English); // restore for other tests
 }

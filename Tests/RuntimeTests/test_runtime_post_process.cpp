@@ -84,6 +84,7 @@ NF_TEST(scene_post_process_round_trip) {
     pp.motion_enabled = true;
     pp.motion_intensity = 1.75f;
     pp.motion_max_length = 0.08f;
+    pp.render_scale = 1.5f;
     pp.exposure = 2.5f;
     pp.tonemap = 1; // ACES
     pp.lut_path = "content://LUTs/teal_orange.png";
@@ -143,7 +144,13 @@ NF_TEST(scene_post_process_round_trip) {
         NF_CHECK_NEAR(loaded->fog_b, 0.75f, 1e-5f);
         NF_CHECK_NEAR(loaded->fog_start, 14.0f, 1e-5f);
         NF_CHECK_NEAR(loaded->fog_end, 55.0f, 1e-5f);
+        NF_CHECK_NEAR(loaded->render_scale, 1.5f, 1e-5f);
     }
+
+    // A non-default scale is authored state and must be written; the next
+    // test proves the default is omitted.
+    const std::string saved = serialize_scene_to_text(*result.scene);
+    NF_CHECK(saved.find("render_scale=1.5") != std::string::npos);
 
     std::filesystem::remove_all(tmp);
 }
@@ -178,6 +185,20 @@ NF_TEST(scene_post_process_line_keeps_defaults_for_absent_keys) {
         NF_CHECK(!pp->sharpen_enabled);
         NF_CHECK_NEAR(pp->saturation, 1.0f, 1e-5f);
         NF_CHECK_NEAR(pp->vignette, 0.0f, 1e-5f);
+        // Anti-aliasing is one of them: an absent `fxaa=` leaves the pass off,
+        // and the thresholds keep the FXAA 3.11 console defaults so a scene that
+        // turns it on with one key gets the classic look.
+        NF_CHECK(!pp->fxaa_enabled);
+        NF_CHECK_NEAR(pp->fxaa_threshold, 0.125f, 1e-5f);
+        NF_CHECK_NEAR(pp->fxaa_threshold_min, 0.0312f, 1e-5f);
+        // Render scale is absent too, and its default is the identity. A line
+        // that only turns on bloom must not change the internal resolution.
+        NF_CHECK_NEAR(pp->render_scale, 1.0f, 1e-5f);
+        // Dynamic resolution is opt-in: absent means the governor is off, even
+        // though its tuning fields always have usable defaults.
+        NF_CHECK(!pp->dynamic_resolution);
+        NF_CHECK_NEAR(pp->target_fps, 60.0f, 1e-5f);
+        NF_CHECK_NEAR(pp->min_render_scale, 0.5f, 1e-5f);
     }
 
     std::filesystem::remove_all(tmp);
@@ -207,6 +228,153 @@ NF_TEST(scene_post_process_line_refuses_a_zero_radius) {
         if (warning.find("bloom_radius=") != std::string::npos) warned = true;
     }
     NF_CHECK(warned);
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_post_process_line_refuses_an_out_of_range_render_scale) {
+    // The loader validates against the renderer's own bounds. Accepting 0.1 or
+    // 2.5 here would mean the file says one resolution and the renderer quietly
+    // renders another, which is exactly the drift the shared constants exist to
+    // prevent.
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_scene_pp_scale_bad";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    for (const char* value : {"0.1", "2.5", "nan"}) {
+        const std::string name = std::string("content://Scenes/scale_") + value + ".nfscene";
+        NF_CHECK(vfs.write_text(name,
+                                std::string(kSceneHeader) +
+                                    "  PostProcess: fxaa=true render_scale=" + value + "\n")
+                     .ok);
+        auto result = load_scene_from_vfs(vfs, name);
+        NF_CHECK(result.success); // the scene is valid; the line is not
+        NF_CHECK(result.scene->world().get<PostProcessComponent>(
+                     result.scene->world().all_entities()[0]) == nullptr);
+        bool warned = false;
+        for (const std::string& warning : result.warnings) {
+            if (warning.find("render_scale=") != std::string::npos) warned = true;
+        }
+        NF_CHECK(warned);
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_post_process_writes_render_scale_only_when_non_default) {
+    // The compatibility rule the whole writer follows: absent means unchanged,
+    // and a default value is not authored state. Emitting `render_scale=1`
+    // would rewrite every existing level on its first save.
+    scene::Scene scene("ScaleWrite");
+    auto& w = scene.world();
+    ecs::Entity e = w.create_entity();
+    w.add<Transform>(e, Transform{});
+    PostProcessComponent pp;
+    pp.fxaa_enabled = true; // make sure the line itself is emitted
+    w.add<PostProcessComponent>(e, pp);
+
+    const std::string native = serialize_scene_to_text(scene);
+    NF_CHECK(native.find("PostProcess:") != std::string::npos);
+    NF_CHECK(native.find("render_scale=") == std::string::npos);
+
+    w.get<PostProcessComponent>(e)->render_scale = 2.0f;
+    const std::string supersampled = serialize_scene_to_text(scene);
+    NF_CHECK(supersampled.find("render_scale=2") != std::string::npos);
+}
+
+NF_TEST(scene_dynamic_resolution_is_written_only_while_enabled) {
+    // `target_fps` and `min_render_scale` are tuning for a feature that can be
+    // off. Writing them unconditionally would put two keys into every level on
+    // its first save; writing them only while enabled keeps "off" literally
+    // indistinguishable from a scene authored before Phase 38.
+    scene::Scene scene("DynamicWrite");
+    auto& w = scene.world();
+    ecs::Entity e = w.create_entity();
+    w.add<Transform>(e, Transform{});
+    PostProcessComponent pp;
+    pp.fxaa_enabled = true;
+    pp.target_fps = 90.0f;
+    pp.min_render_scale = 0.6f;
+    w.add<PostProcessComponent>(e, pp);
+
+    const std::string off = serialize_scene_to_text(scene);
+    NF_CHECK(off.find("PostProcess:") != std::string::npos);
+    NF_CHECK(off.find("dynamic_resolution") == std::string::npos);
+    NF_CHECK(off.find("target_fps=") == std::string::npos);
+    NF_CHECK(off.find("min_render_scale=") == std::string::npos);
+
+    w.get<PostProcessComponent>(e)->dynamic_resolution = true;
+    const std::string on = serialize_scene_to_text(scene);
+    NF_CHECK(on.find("dynamic_resolution=true") != std::string::npos);
+    NF_CHECK(on.find("target_fps=90") != std::string::npos);
+    NF_CHECK(on.find("min_render_scale=0.6") != std::string::npos);
+}
+
+NF_TEST(scene_dynamic_resolution_round_trips_and_refuses_inverted_bounds) {
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_scene_dynamic_bounds";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    // A well-formed line: the ceiling is 1.5, the floor 0.6, and the target is
+    // 90 fps. All three values must survive a save/load cycle unchanged.
+    NF_CHECK(vfs.write_text(
+                  "content://Scenes/dynamic.nfscene",
+                  std::string(kSceneHeader) +
+                      "  PostProcess: dynamic_resolution=true min_render_scale=0.6"
+                      " render_scale=1.5 target_fps=90\n")
+                  .ok);
+    auto loaded = load_scene_from_vfs(vfs, "content://Scenes/dynamic.nfscene");
+    NF_CHECK(loaded.success);
+    const auto* pp = loaded.scene->world().get<PostProcessComponent>(
+        loaded.scene->world().all_entities()[0]);
+    NF_CHECK(pp != nullptr);
+    if (pp != nullptr) {
+        NF_CHECK(pp->dynamic_resolution);
+        NF_CHECK_NEAR(pp->render_scale, 1.5f, 1e-5f);
+        NF_CHECK_NEAR(pp->target_fps, 90.0f, 1e-5f);
+        NF_CHECK_NEAR(pp->min_render_scale, 0.6f, 1e-5f);
+    }
+
+    // Inverted bounds are refused by naming the floor key, not by swapping the
+    // pair: the file would then mean a different range than it says.
+    NF_CHECK(vfs.write_text(
+                  "content://Scenes/inverted.nfscene",
+                  std::string(kSceneHeader) +
+                      "  PostProcess: render_scale=1.0 dynamic_resolution=true"
+                      " min_render_scale=1.5\n")
+                  .ok);
+    auto inverted = load_scene_from_vfs(vfs, "content://Scenes/inverted.nfscene");
+    NF_CHECK(inverted.success);
+    NF_CHECK(inverted.scene->world().get<PostProcessComponent>(
+                  inverted.scene->world().all_entities()[0]) == nullptr);
+    bool floor_warned = false;
+    for (const std::string& warning : inverted.warnings) {
+        if (warning.find("min_render_scale=") != std::string::npos) floor_warned = true;
+    }
+    NF_CHECK(floor_warned);
+
+    // The frame target uses the same bounds the editor slider does.
+    for (const char* value : {"5", "1000", "nan"}) {
+        const std::string name = std::string("content://Scenes/fps_") + value + ".nfscene";
+        NF_CHECK(vfs.write_text(name,
+                                std::string(kSceneHeader) +
+                                    "  PostProcess: dynamic_resolution=true target_fps=" +
+                                    value + "\n")
+                     .ok);
+        auto fps = load_scene_from_vfs(vfs, name);
+        NF_CHECK(fps.success);
+        NF_CHECK(fps.scene->world().get<PostProcessComponent>(
+                      fps.scene->world().all_entities()[0]) == nullptr);
+        bool fps_warned = false;
+        for (const std::string& warning : fps.warnings) {
+            if (warning.find("target_fps=") != std::string::npos) fps_warned = true;
+        }
+        NF_CHECK(fps_warned);
+    }
 
     std::filesystem::remove_all(tmp);
 }
@@ -257,6 +425,7 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
         " saturation=1.5 vignette=0.25 lens=true lens_distortion=0.3 lens_chroma=0.02"
         " dof=true dof_focus=18 dof_range=3.5 dof_radius=7"
         " motion=true motion_intensity=2.5 motion_length=0.07"
+        " fxaa=true fxaa_threshold=0.2 fxaa_threshold_min=0.05 render_scale=1.5"
         " exposure=2.25 tonemap=aces lut=content://LUTs/grade.png lut_strength=0.6"
         " fog=true fog_color(0.7,0.6,0.5) fog_start=12 fog_end=40\n";
     NF_CHECK(vfs.write_text("content://Scenes/Post.nfscene", text).ok);
@@ -336,6 +505,19 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
                 NF_CHECK(seen.motion.enabled);
                 NF_CHECK_NEAR(seen.motion.intensity, 2.5f, 1e-5f);
                 NF_CHECK_NEAR(seen.motion.max_length, 0.07f, 1e-6f);
+                // Anti-aliasing is renderer state rather than a PostFxParams
+                // stage (it is a separate pass on the tonemapped image), so it
+                // is read back from the renderer.
+                NF_CHECK(renderer->fxaa_enabled());
+                NF_CHECK_NEAR(renderer->fxaa_threshold(), 0.2f, 1e-5f);
+                NF_CHECK_NEAR(renderer->fxaa_threshold_min(), 0.05f, 1e-5f);
+                // Render scale is a renderer property, not a PostFxParams
+                // stage: the internal targets have already been rebuilt at
+                // 1.5x the 64x64 offscreen target when this frame rendered.
+                NF_CHECK_NEAR(renderer->render_scale(), 1.5f, 1e-5f);
+                NF_CHECK_EQ(renderer->width(), 64u);
+                NF_CHECK_EQ(renderer->render_width(), 96u);
+                NF_CHECK_EQ(renderer->render_height(), 96u);
                 // Exposure and the tonemap operator live on the renderer
                 // rather than in PostFxParams, so they are read back from it.
                 NF_CHECK_NEAR(renderer->exposure(), 2.25f, 1e-5f);
@@ -372,6 +554,108 @@ NF_TEST(runtime_pushes_post_process_into_the_renderer) {
                 // display preference the author set.
                 NF_CHECK_NEAR(rt.renderer()->exposure(), 2.25f, 1e-5f);
                 NF_CHECK(rt.renderer()->tonemap_mode() == rendering::TonemapMode::ACES);
+            }
+        }
+        device->wait_idle();
+        device->shutdown();
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(runtime_advances_dynamic_resolution_from_frame_time) {
+    // The integration claim for Phase 38. The governor's own arithmetic is
+    // covered in RHITests; this proves the Runtime actually advances it from
+    // dt and pushes the resulting scale into the live renderer. Without this
+    // test the feature could compile, parse, save, and do nothing.
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_rt_dynamic_scale";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    const std::string text =
+        std::string(kSceneHeader) +
+        "  PostProcess: fxaa=true dynamic_resolution=true target_fps=240"
+        " min_render_scale=0.5 render_scale=1.0\n";
+    NF_CHECK(vfs.write_text("content://Scenes/Dynamic.nfscene", text).ok);
+
+    auto device = rhi::create_device();
+    if (!device) {
+        std::filesystem::remove_all(tmp);
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        std::filesystem::remove_all(tmp);
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    {
+        AssetRegistry reg;
+        AssetManager manager(vfs, reg);
+        {
+            Runtime rt(vfs, reg, manager, *device, nullptr);
+            std::string err;
+            NF_CHECK(rt.load_scene("content://Scenes/Dynamic.nfscene", err));
+
+            auto draw_frame = [&](bool& ok) {
+                rhi::TextureDesc td{};
+                td.width = 64;
+                td.height = 64;
+                td.format = rhi::Format::R8G8B8A8_UNorm;
+                td.usage = rhi::ImageUsage::ColorAtt | rhi::ImageUsage::TransferSrc;
+                auto target = device->create_texture(td);
+                auto cmd = device->create_command_buffer();
+                auto fence = device->create_fence(false);
+                ok = (target != nullptr && cmd != nullptr && fence != nullptr);
+                if (!ok) return;
+                cmd->begin();
+                rt.render_offscreen(*target, *cmd);
+                cmd->end();
+                device->submit(*cmd, rhi::SubmitInfo{.signal_fence = fence.get()});
+                ok = fence->wait(5000000000ULL);
+                device->wait_idle();
+            };
+
+            bool ok = false;
+            draw_frame(ok);
+            NF_CHECK(ok);
+            const rendering::Renderer3D* renderer = rt.renderer();
+            NF_CHECK(renderer != nullptr);
+            if (renderer != nullptr) {
+                // The first frame configures the governor and starts at the
+                // authored ceiling.
+                NF_CHECK_NEAR(renderer->render_scale(), 1.0f, 1e-5f);
+                NF_CHECK_EQ(renderer->width(), 64u);
+                NF_CHECK_EQ(renderer->render_width(), 64u);
+            }
+
+            // 0.8 s of 20 ms frames against a 1/240 s budget: far outside the
+            // band for longer than the 0.5 s cooldown. The governor must take
+            // exactly one step (to 0.95) and no more.
+            for (int i = 0; i < 40; ++i) {
+                rt.update(0.020f);
+            }
+            draw_frame(ok);
+            NF_CHECK(ok);
+            if (rt.renderer() != nullptr) {
+                NF_CHECK_NEAR(rt.renderer()->render_scale(), 0.95f, 1e-5f);
+                NF_CHECK_EQ(rt.renderer()->width(), 64u); // output never moves
+                NF_CHECK_EQ(rt.renderer()->render_width(), 61u);
+            }
+
+            // 0.8 s of 2 ms frames: under the lower edge of the band. One
+            // upward step restores the ceiling and then stops there.
+            for (int i = 0; i < 400; ++i) {
+                rt.update(0.002f);
+            }
+            draw_frame(ok);
+            NF_CHECK(ok);
+            if (rt.renderer() != nullptr) {
+                NF_CHECK_NEAR(rt.renderer()->render_scale(), 1.0f, 1e-5f);
+                NF_CHECK_EQ(rt.renderer()->render_width(), 64u);
             }
         }
         device->wait_idle();

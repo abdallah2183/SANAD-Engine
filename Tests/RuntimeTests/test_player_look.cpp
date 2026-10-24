@@ -56,9 +56,10 @@ public:
     f32 look_x = 0.0f;
     f32 look_y = 0.0f;
     bool captured = false;
+    bool aim = false;
 
     [[nodiscard]] bool action_pressed(std::string_view action) const override {
-        (void)action;
+        if (action == "aim") return aim;
         return false;
     }
     [[nodiscard]] f32 action_axis(std::string_view action) const override {
@@ -535,4 +536,178 @@ NF_TEST(a_script_sees_the_camera_yaw_and_a_rotated_move_vector) {
     move_relative(0.0f, -1.0f, f.runtime->camera_yaw(), x, z);
     NF_CHECK_NEAR(x, 1.0f, 0.01f);
     NF_CHECK_NEAR(z, 0.0f, 0.01f);
+}
+
+// --- aiming down sights ------------------------------------------------------
+
+NF_TEST(the_aim_blend_eases_and_is_frame_rate_independent) {
+    // Snap speed: the scene's "no animation" choice.
+    NF_CHECK_NEAR(aim_blend_step(0.0f, true, 0.0f, 1.0f / 60.0f), 1.0f, kEps);
+    NF_CHECK_NEAR(aim_blend_step(1.0f, false, 0.0f, 1.0f / 60.0f), 0.0f, kEps);
+
+    // Eased: one frame moves part of the way, not all of it.
+    const f32 first = aim_blend_step(0.0f, true, 12.0f, 1.0f / 60.0f);
+    NF_CHECK(first > 0.0f && first < 1.0f);
+
+    // Frame-rate independence: sixty 1/60 steps and thirty 1/30 steps land on
+    // the same value. A per-frame step would make the sights snap faster on a
+    // 144 Hz monitor, which is a difference a player feels but cannot name.
+    f32 a = 0.0f;
+    for (int i = 0; i < 60; ++i) a = aim_blend_step(a, true, 12.0f, 1.0f / 60.0f);
+    f32 b = 0.0f;
+    for (int i = 0; i < 30; ++i) b = aim_blend_step(b, true, 12.0f, 1.0f / 30.0f);
+    NF_CHECK_NEAR(a, b, 1e-4f);
+
+    // A paused frame does not advance the animation, and a NaN blend is
+    // treated as "not aiming" rather than propagating.
+    NF_CHECK_NEAR(aim_blend_step(0.4f, true, 12.0f, 0.0f), 0.4f, kEps);
+    NF_CHECK_NEAR(aim_blend_step(std::nanf(""), false, 12.0f, 1.0f / 60.0f), 0.0f, kEps);
+}
+
+NF_TEST(the_aim_blend_interpolates_distance_and_sensitivity) {
+    // 0 is exactly the authored camera, 1 is exactly the sights — a scene
+    // that never enables ADS must not see a rounded-off distance.
+    NF_CHECK_NEAR(aim_distance(5.0f, 2.0f, 0.0f), 5.0f, kEps);
+    NF_CHECK_NEAR(aim_distance(5.0f, 2.0f, 1.0f), 2.0f, kEps);
+    NF_CHECK_NEAR(aim_distance(5.0f, 2.0f, 0.5f), 3.5f, kEps);
+    // Out-of-range blends clamp instead of extrapolating past the sights.
+    NF_CHECK_NEAR(aim_distance(5.0f, 2.0f, 2.0f), 2.0f, kEps);
+    NF_CHECK_NEAR(aim_distance(5.0f, 2.0f, -1.0f), 5.0f, kEps);
+
+    NF_CHECK_NEAR(aim_sensitivity_scale(0.5f, 0.0f), 1.0f, kEps);
+    NF_CHECK_NEAR(aim_sensitivity_scale(0.5f, 1.0f), 0.5f, kEps);
+    NF_CHECK_NEAR(aim_sensitivity_scale(0.5f, 0.5f), 0.75f, kEps);
+}
+
+NF_TEST(holding_aim_pulls_the_camera_in_and_releasing_restores_it) {
+    LookFixture f;
+    if (!f.ok()) NF_SKIP("no Vulkan device available");
+    const ecs::Entity cam = f.adopt();
+    CameraComponent* c = f.runtime->edit_scene()->world().get<CameraComponent>(cam);
+    NF_CHECK(c != nullptr);
+    if (c == nullptr) return;
+    c->ads_enabled = true;
+    c->ads_distance = 2.0f;
+    c->ads_speed = 0.0f; // snap, so the test reads the distance not the ease
+
+    const auto distance_now = [&f]() {
+        const auto& s = f.runtime->follow_camera_state();
+        return (s.position - s.target).length();
+    };
+
+    f.runtime->update(1.0f / 60.0f);
+    NF_CHECK_NEAR(distance_now(), 5.0f, 0.05f);
+
+    f.input.aim = true;
+    f.runtime->update(1.0f / 60.0f);
+    NF_CHECK_NEAR(distance_now(), 2.0f, 0.05f);
+
+    f.input.aim = false;
+    f.runtime->update(1.0f / 60.0f);
+    NF_CHECK_NEAR(distance_now(), 5.0f, 0.05f);
+}
+
+NF_TEST(shake_adds_trauma_that_decays_on_its_own) {
+    LookFixture f;
+    if (!f.ok()) NF_SKIP("no Vulkan device available");
+    f.adopt();
+
+    NF_CHECK_NEAR(f.runtime->camera_trauma(), 0.0f, kEps);
+    f.runtime->add_camera_shake(0.8f);
+    NF_CHECK_NEAR(f.runtime->camera_trauma(), 0.8f, 1e-3f);
+
+    // A non-finite or negative request is refused rather than poisoning the
+    // noise clock for the rest of the run.
+    f.runtime->add_camera_shake(std::nanf(""));
+    f.runtime->add_camera_shake(-1.0f);
+    NF_CHECK_NEAR(f.runtime->camera_trauma(), 0.8f, 1e-3f);
+
+    for (int i = 0; i < 30; ++i) {
+        f.runtime->update(1.0f / 60.0f);
+    }
+    // Half a second at the default 1.4/s decay leaves about half the trauma.
+    NF_CHECK(f.runtime->camera_trauma() < 0.8f);
+    NF_CHECK(f.runtime->camera_trauma() > 0.0f);
+}
+
+// --- recoil ------------------------------------------------------------------
+
+NF_TEST(recoil_clamps_its_kick_and_recovers_exponentially) {
+    RecoilState r;
+    recoil_add(r, 3.0f, -1.0f, 12.0f);
+    NF_CHECK_NEAR(r.pitch, 3.0f, kEps);
+    NF_CHECK_NEAR(r.yaw, -1.0f, kEps);
+
+    // A burst cannot point the camera at the sky: the offset stops at the
+    // scene's limit instead of accumulating without bound.
+    recoil_add(r, 100.0f, 100.0f, 12.0f);
+    NF_CHECK_NEAR(r.pitch, 12.0f, kEps);
+    NF_CHECK_NEAR(r.yaw, 12.0f, kEps);
+
+    // A non-finite kick is ignored — a script can divide by zero, and the
+    // offset would otherwise stay NaN for the rest of the run.
+    recoil_add(r, std::nanf(""), 0.0f, 12.0f);
+    NF_CHECK_NEAR(r.pitch, 12.0f, kEps);
+
+    // Recovery: 8/s leaves exp(-4) of the kick after half a second, and the
+    // same curve at 30 fps as at 60 — the offset is an angle, so a faster
+    // machine must not settle it faster.
+    RecoilState start{10.0f, -5.0f};
+    const RecoilState half = recoil_recover(start, 8.0f, 0.5f);
+    NF_CHECK_NEAR(half.pitch, 10.0f * std::exp(-4.0f), 1e-3f);
+    NF_CHECK_NEAR(half.yaw, -5.0f * std::exp(-4.0f), 1e-3f);
+
+    RecoilState a = start;
+    for (int i = 0; i < 60; ++i) a = recoil_recover(a, 8.0f, 1.0f / 60.0f);
+    RecoilState b = start;
+    for (int i = 0; i < 30; ++i) b = recoil_recover(b, 8.0f, 1.0f / 30.0f);
+    NF_CHECK_NEAR(a.pitch, b.pitch, 1e-3f);
+    NF_CHECK_NEAR(a.yaw, b.yaw, 1e-3f);
+
+    // Rate 0 is "hold the kick", not "snap to zero", and a paused frame does
+    // not recover anything.
+    const RecoilState held = recoil_recover(start, 0.0f, 0.5f);
+    NF_CHECK_NEAR(held.pitch, 10.0f, kEps);
+    const RecoilState paused = recoil_recover(start, 8.0f, 0.0f);
+    NF_CHECK_NEAR(paused.pitch, 10.0f, kEps);
+}
+
+NF_TEST(recoil_moves_the_view_and_settles_back_onto_the_aim) {
+    LookFixture f;
+    if (!f.ok()) NF_SKIP("no Vulkan device available");
+    const ecs::Entity cam = f.adopt();
+    CameraComponent* c = f.runtime->edit_scene()->world().get<CameraComponent>(cam);
+    NF_CHECK(c != nullptr);
+    if (c == nullptr) return;
+    c->recoil_recover = 0.0f; // hold the kick so the test can read it
+
+    f.runtime->update(1.0f / 60.0f);
+    const Vec3 before = f.runtime->follow_camera_state().position;
+    NF_CHECK_NEAR(f.runtime->recoil_pitch(), 0.0f, kEps);
+
+    f.runtime->add_recoil(6.0f, 0.0f);
+    NF_CHECK_NEAR(f.runtime->recoil_pitch(), 6.0f, kEps);
+    f.runtime->update(1.0f / 60.0f);
+    // The view moved. The follow target is the pivot on the character and does
+    // NOT move with the pitch, so the observable is the camera POSITION: a
+    // raised view angle swings the eye around the pivot.
+    NF_CHECK((f.runtime->follow_camera_state().position - before).length() > 1e-3f);
+
+    // A held kick stays held, because the scene said rate 0.
+    f.runtime->update(1.0f / 60.0f);
+    NF_CHECK_NEAR(f.runtime->recoil_pitch(), 6.0f, 1e-3f);
+
+    // With recovery on, the offset is gone in half a second and the camera is
+    // back on the aim the player built — the aim itself never moved.
+    c->recoil_recover = 8.0f;
+    // 0.75 s at 8/s leaves exp(-6) ≈ 0.25% of the 6° kick, comfortably under
+    // the 0.05° assertion below.
+    for (int i = 0; i < 45; ++i) {
+        f.runtime->update(1.0f / 60.0f);
+    }
+    NF_CHECK(std::fabs(f.runtime->recoil_pitch()) < 0.05f);
+    NF_CHECK_NEAR(f.runtime->camera_yaw(), 0.0f, 1e-3f);
+    // ...and the camera is back where the player left it, not merely close in
+    // angle: the offset was never written into the aim.
+    NF_CHECK((f.runtime->follow_camera_state().position - before).length() < 0.05f);
 }
