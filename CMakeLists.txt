@@ -8,6 +8,11 @@ cmake_minimum_required(VERSION 3.24)
 # A hand-maintained literal in a .cpp is what made the launcher keep advertising
 # 0.1.0 after every build; the fix is that there is nowhere left to put one.
 #
+# 0.5.0: the frame and the hand. FXAA on the tonemapped image, mouse buttons in
+# the binding table, aim-down-sights, camera shake and recoil — the rendering
+# item 0.4.0 named as next, and the three decisions that turn a camera the
+# player can turn into a camera that behaves like a game's.
+#
 # 0.4.0: the player can aim. Mouse look, gamepad look, camera-relative
 # movement, wheel zoom and auto-align — the one gap the 0.3.0 notes named —
 # plus the scene format, the editor panel, the Lua API and the templates that
@@ -22,7 +27,7 @@ cmake_minimum_required(VERSION 3.24)
 # Docs/Demo_Release.md says exactly that. Advertising "cross-platform" for a
 # Windows-only product is a claim the repository cannot back.
 project(SANAD
-    VERSION 0.4.0
+    VERSION 0.5.0
     LANGUAGES C CXX
     DESCRIPTION "SANAD Engine - High-performance Windows x64 game engine"
 )

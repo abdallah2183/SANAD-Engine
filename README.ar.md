@@ -18,7 +18,8 @@
 
 <br>
 
-[**تنزيل 0.2.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0) ·
+[**جديد 0.5.0**](RELEASE_NOTES_0.5.0.md) ·
+[**تنزيل آخر حزمة (0.3.0)**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0) ·
 [**شاهد الفيديو (43 ثانية)**](Docs/media/demo.mp4) ·
 [**التوثيق**](Docs/) ·
 [**English**](README.md)

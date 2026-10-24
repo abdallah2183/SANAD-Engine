@@ -19,6 +19,7 @@
 
 <br>
 
+[**What's new in 0.5.0**](RELEASE_NOTES_0.5.0.md) ·
 [**Download 0.3.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.3.0) ·
 [**Watch the 43s demo**](Docs/media/demo.mp4) ·
 [**Docs**](Docs/) ·
