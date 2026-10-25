@@ -471,11 +471,11 @@ constexpr Entry kEntries[] = {
     {"sh_st_low_integrity",
      "Windows runs this copy at Low integrity (downloaded ZIP), so Desktop and Documents are "
      "read-only. Run FixPermissions.cmd once, then reopen the editor.",
-     "يشغّل ويندوز هذه النسخة بصلاحية منخفضة (ملف ZIP منزّل)، لذا سطح المكتب والمستندات للقراءة "
-     "فقط۔ شغّل FixPermissions.cmd مرة واحدة ثم أعد فتح المحرر۔"},
+     "يشغّل ويندوز هذه النسخة بصلاحية منخفضة لأنها مستخرجة من أرشيف مُنزَّل، لذا سطح المكتب "
+     "والمستندات للقراءة فقط۔ شغّل ملف إصلاح الصلاحيات المرفق مرة واحدة ثم أعد فتح المحرر۔"},
     {"sh_st_low_integrity_hint",
      "Run FixPermissions.cmd in the engine folder once, then reopen the editor.",
-     "شغّل FixPermissions.cmd في مجلد المحرك مرة واحدة ثم أعد فتح المحرر۔"},
+     "شغّل ملف إصلاح الصلاحيات المرفق مع المحرك مرة واحدة ثم أعد فتح المحرر۔"},
     {"sh_st_low_integrity_dir", "New projects go to:", "تُنشأ المشاريع الجديدة في:"},
     {"sh_st_nfproj_missing", "The project was created but its .nfproj is missing:",
                              "أُنشئ المشروع لكن ملف .nfproj مفقود:"},

@@ -153,7 +153,15 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                            std::to_string(rendering::kMinRenderScale) + ", " +
                            std::to_string(rendering::kMaxRenderScale) + "]");
         }
-        if (pp->min_render_scale > pp->render_scale) {
+        // The floor has its own bounds: 8.0 is not "too high relative to the
+        // ceiling" when the ceiling is 9.0, but the renderer still rejects it.
+        if (!sane(pp->min_render_scale, rendering::kMinRenderScale,
+                  rendering::kMaxRenderScale)) {
+            report.add(ValidationSeverity::Error, label,
+                       "min_render_scale " + std::to_string(pp->min_render_scale) +
+                           " is outside [" + std::to_string(rendering::kMinRenderScale) + ", " +
+                           std::to_string(rendering::kMaxRenderScale) + "]");
+        } else if (pp->min_render_scale > pp->render_scale) {
             report.add(ValidationSeverity::Error, label,
                        "min_render_scale is above render_scale; the governor could never hold "
                        "its ceiling");

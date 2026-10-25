@@ -610,7 +610,11 @@ std::vector<BindingConflict> find_binding_conflicts(const InputBindings& binding
 
     for (size_t i = 0; i < rows.size(); ++i) {
         for (size_t j = i + 1; j < rows.size(); ++j) {
-            if (identical(rows[i].second, rows[j].second)) {
+            // A repeated binding table is evidence of an alias (move_forward /
+            // forward / up share W and Up on purpose). A single shared binding
+            // is not: two different actions quietly moved onto the same button
+            // is exactly the conflict this function exists to report.
+            if (rows[i].second.size() >= 2 && identical(rows[i].second, rows[j].second)) {
                 continue; // aliases
             }
             for (const auto& a : rows[i].second) {

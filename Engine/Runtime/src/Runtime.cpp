@@ -460,6 +460,11 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     m_scene_data_ptr = std::make_unique<SceneRuntimeData>();
     m_scene_data_ptr->scene = std::move(scene);
     m_loaded_scene_path = logical_path;
+    // A scene built in code normally sets local transforms only. The runtime
+    // (weapons, AI visibility, blasts) reads WORLD space, so publish the world
+    // transform here rather than waiting for the first update - the first shot
+    // can be fired before any update runs.
+    scene::propagate_transforms(m_scene_data_ptr->scene->world());
     // A round in the old world must not appear in the new one. Projectiles
     // carry entity handles and profile snapshots from the scene they were
     // fired in, so a scene change is the one place they cannot be repaired.

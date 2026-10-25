@@ -352,7 +352,9 @@ NF_TEST(the_shipped_ballistics_scene_loads_and_validates) {
         }
     }
     NF_CHECK_EQ(projectiles, 2u);
-    NF_CHECK_EQ(factions, 4u);
+    // Player, Ally, Enemy, AllyCrate, EnemyCrate. The Player joined the Blue
+    // team in Phase 46 so friendly fire has an owner to filter against.
+    NF_CHECK_EQ(factions, 5u);
 
     const ValidationReport report = validate_scene(*loaded.scene, path);
     NF_CHECK_EQ(report.errors, 0u);
@@ -538,6 +540,11 @@ NF_TEST(a_projectile_does_no_damage_until_it_arrives) {
         cam.follow_target = "Player";
         cam.pivot_y = 1.5f;
         cam.distance = 4.0f;
+        // Aim flat at the target. The camera's default pitch looks 15 degrees
+        // down (right for a third-person orbit, wrong for a geometry test
+        // that expects the shot to cross the whole range at eye height).
+        cam.yaw = 0.0f;
+        cam.pitch = 0.0f;
         cam.mouse_look = false;
         world_scene->world().add<CameraComponent>(camera, cam);
 
@@ -654,6 +661,11 @@ NF_TEST(the_runtime_blocks_a_shot_into_a_teammate) {
         cam.follow_target = "Player";
         cam.pivot_y = 1.5f;
         cam.distance = 4.0f;
+        // Aim flat at the target. The camera's default pitch looks 15 degrees
+        // down (right for a third-person orbit, wrong for a geometry test
+        // that expects the shot to cross the whole range at eye height).
+        cam.yaw = 0.0f;
+        cam.pitch = 0.0f;
         cam.mouse_look = false;
         world_scene->world().add<CameraComponent>(camera, cam);
 
