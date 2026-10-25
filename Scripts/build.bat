@@ -106,8 +106,20 @@ if errorlevel 1 (
 )
 
 echo [NF] Building...
-cmake --build "%BUILD_DIR%" --parallel
-if errorlevel 1 (
+REM Capture the log and inspect it as well as ERRORLEVEL: some cmake/ninja
+REM combinations have reported 0 after a failed link, which made this script
+REM print BUILD_SUCCEEDED over a stale executable. A "FAILED:" line or
+REM "ninja: build stopped" is authoritative.
+set "BUILD_LOG=%BUILD_DIR%\build.log"
+cmake --build "%BUILD_DIR%" --parallel > "%BUILD_LOG%" 2>&1
+set "BUILD_RC=%ERRORLEVEL%"
+type "%BUILD_LOG%"
+if not "%BUILD_RC%"=="0" (
+    echo [NF] ERROR: Build failed.
+    exit /b 1
+)
+findstr /C:"FAILED:" /C:"ninja: build stopped" "%BUILD_LOG%" >nul
+if not errorlevel 1 (
     echo [NF] ERROR: Build failed.
     exit /b 1
 )

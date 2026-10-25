@@ -234,6 +234,10 @@ A complete collect-the-crates example is in
      after a file is first seen, and a blocked binary becomes runnable on its
      own. Re-run it later instead of concluding that the test failed.
 7. Do not commit `Cache/`, `dist/`, or generated binaries.
+8. Launcher text goes through `draw_text_ext` (`ExtTextOutW`). `DrawTextW` can
+   return a line height while drawing nothing on some Windows sessions; do not
+   reintroduce it. `shell_w_str` pre-shapes Arabic to visual order for the same
+   reason.
 
 ## Useful docs
 

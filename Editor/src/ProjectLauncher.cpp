@@ -156,15 +156,19 @@ inline std::string shell_tr(const char* key) {
     return nf::ui::tr(key);
 }
 
-// Display-ready UTF-16 for HAND-DRAWN text: translate, then widen LOGICAL.
-// GDI/Uniscribe shapes AND bidi-orders natively — the سند wordmark always
-// rendered connected from logical text — so pre-shaping through
-// shape_arabic() (visual order) would run the bidi pass TWICE and mirror
-// every line. Proven by screenshot: shaped-then-DrawTextW showed "دنس
-// تادادعا" for "إعدادات سند". shape_arabic() therefore stays the ImGui path
-// only, where no bidi engine exists. Pure Latin is unaffected either way, so
-// paths, versions and dates share this path safely.
+// Display-ready UTF-16 for HAND-DRAWN text: translate, shape Arabic to visual
+// order, then widen. DrawTextW used to do the joining natively, but it drops
+// text on some Windows sessions; ExtTextOutW is the reliable primitive and
+// does not shape, so this function owns the shaping now. Pure Latin is
+// returned byte-identical by shape_arabic, so paths, versions and dates share
+// this path safely.
 inline std::wstring shell_w_str(const std::string& logical_utf8) {
+    // ExtTextOutW draws glyphs left-to-right and does not run Uniscribe's
+    // Arabic joining. Convert to visual order here; pure Latin is returned
+    // byte-identical by shape_arabic, so LTR labels cost nothing.
+    if (nf::ui::needs_shaping(logical_utf8)) {
+        return widen(nf::ui::shape_arabic(logical_utf8));
+    }
     return widen(logical_utf8);
 }
 
@@ -330,8 +334,8 @@ int scale_dpi(const LauncherState* st, int px) {
 HFONT make_font(int pt, bool semibold, UINT dpi) {
     const int height = -::MulDiv(pt, static_cast<int>(dpi), 72);
     return ::CreateFontW(height, 0, 0, 0, semibold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE, FALSE,
-                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                         ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 
 // Display face (Amiri) for headings/wordmark: authentic Arabic typography for
@@ -367,8 +371,8 @@ HFONT make_font_face(int pt, bool semibold, UINT dpi, bool display) {
     const int height = -::MulDiv(pt, static_cast<int>(dpi), 72);
     const wchar_t* face = (display && g_amiri_ok) ? L"Amiri" : L"Segoe UI";
     return ::CreateFontW(height, 0, 0, 0, semibold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE, FALSE,
-                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                         DEFAULT_PITCH | FF_DONTCARE, face);
+                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                         ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face);
 }
 
 // Shell font set: built once at startup, rebuilt when the window moves to a
@@ -450,7 +454,7 @@ void refresh_dpi(HWND hwnd, LauncherState* st) {
 void set_status(HWND hwnd, const std::string& text, COLORREF color = theme::error) {
     if (LauncherState* st = state_of(hwnd)) {
         st->status_color = color;
-        st->status_text = widen(text); // owner-draw reads the cache (draw_status)
+        st->status_text = shell_w_str(text); // owner-draw reads the cache (draw_status)
     }
     ::SetDlgItemTextW(hwnd, kIdStatus, widen(text).c_str());
     if (HWND h = ::GetDlgItem(hwnd, kIdStatus)) {
@@ -682,6 +686,124 @@ void frame_round(HDC dc, const RECT& rc, COLORREF color, int radius, int width =
     ::DeleteObject(pen);
 }
 
+// DrawTextW is unreliable on some Windows sessions: it returns a line height
+// and leaves the surface untouched. ExtTextOutW is the primitive underneath
+// TextOut and keeps working there, so every hand-drawn string goes through this
+// helper. It reproduces the small set of DT_* features the shell uses:
+// single line, left/center/right, vertical centering, end ellipsis and word
+// wrap. Arabic has already been converted to visual order by shell_w_str;
+// this helper only draws left-to-right glyph runs.
+void draw_text_ext(HDC dc, const wchar_t* text, int x, int y, int w, int h, HFONT font,
+                   COLORREF color, UINT fmt) {
+    if (dc == nullptr || text == nullptr || text[0] == L'\0' || w <= 0 || h <= 0) {
+        return;
+    }
+    const int saved = ::SaveDC(dc);
+    ::SetBkMode(dc, TRANSPARENT);
+    ::SetTextColor(dc, color);
+    ::SetTextAlign(dc, TA_LEFT | TA_TOP | TA_NOUPDATECP);
+    if (font != nullptr) {
+        ::SelectObject(dc, font);
+    }
+    const RECT clip{x, y, x + w, y + h};
+    // ETO_RTLREADING makes ExtTextOutW drop the whole string on this Windows
+    // session (the same failure family as DrawTextW). Alignment is mirrored by
+    // paint_text instead; Arabic visual order is handled before this call.
+    const UINT eto = ETO_CLIPPED;
+
+    const auto extent = [&](const wchar_t* s, int len) {
+        SIZE sz{};
+        ::GetTextExtentPoint32W(dc, s, len, &sz);
+        return sz;
+    };
+    const auto draw_line = [&](const std::wstring& line, int top, bool vcenter) {
+        if (line.empty()) {
+            return;
+        }
+        const SIZE sz = extent(line.c_str(), static_cast<int>(line.size()));
+        int tx = x;
+        if ((fmt & DT_CENTER) != 0) {
+            tx = x + (w - sz.cx) / 2;
+        } else if ((fmt & DT_RIGHT) != 0) {
+            tx = x + w - sz.cx;
+        }
+        const int ty = vcenter ? top + (h - sz.cy) / 2 : top;
+        ::ExtTextOutW(dc, tx, ty, eto, &clip, line.c_str(),
+                      static_cast<UINT>(line.size()), nullptr);
+    };
+
+    std::wstring all(text);
+    if ((fmt & DT_SINGLELINE) != 0 || (fmt & DT_WORDBREAK) == 0) {
+        const SIZE sz = extent(all.c_str(), static_cast<int>(all.size()));
+        if ((fmt & DT_END_ELLIPSIS) != 0 && sz.cx > w) {
+            constexpr wchar_t kEllipsis = L'\u2026';
+            const SIZE ell = extent(&kEllipsis, 1);
+            while (!all.empty()) {
+                const SIZE cur = extent(all.c_str(), static_cast<int>(all.size()));
+                if (cur.cx + ell.cx <= w) {
+                    break;
+                }
+                all.pop_back();
+            }
+            all.push_back(kEllipsis);
+        }
+        draw_line(all, y, (fmt & DT_VCENTER) != 0);
+        ::RestoreDC(dc, saved);
+        return;
+    }
+
+    // Word wrap: split paragraphs on newlines, then words on spaces. A single
+    // word wider than the box is drawn clipped rather than dropped.
+    const SIZE metrics = extent(L"Ag", 2);
+    const int line_h = metrics.cy > 0 ? metrics.cy : h;
+    int top = y;
+    std::size_t begin = 0;
+    while (begin <= all.size() && top < y + h) {
+        std::size_t end = begin;
+        while (end < all.size() && all[end] != L'\n') {
+            ++end;
+        }
+        const std::wstring paragraph = all.substr(begin, end - begin);
+        std::wstring line;
+        std::size_t i = 0;
+        while (i < paragraph.size()) {
+            while (i < paragraph.size() && paragraph[i] == L' ') {
+                ++i;
+            }
+            const std::size_t word_begin = i;
+            while (i < paragraph.size() && paragraph[i] != L' ') {
+                ++i;
+            }
+            if (word_begin == i) {
+                break;
+            }
+            const std::wstring word = paragraph.substr(word_begin, i - word_begin);
+            const std::wstring candidate = line.empty() ? word : (line + L" " + word);
+            const SIZE candidate_size =
+                extent(candidate.c_str(), static_cast<int>(candidate.size()));
+            if (!line.empty() && candidate_size.cx > w) {
+                draw_line(line, top, false);
+                top += line_h;
+                line = word;
+                if (top >= y + h) {
+                    break;
+                }
+            } else {
+                line = candidate;
+            }
+        }
+        if (!line.empty() && top < y + h) {
+            draw_line(line, top, false);
+            top += line_h;
+        }
+        if (end >= all.size()) {
+            break;
+        }
+        begin = end + 1;
+    }
+    ::RestoreDC(dc, saved);
+}
+
 void draw_button(const DRAWITEMSTRUCT* dis, const BtnExtra* ex) {
     RECT rc = dis->rcItem;
     const int radius = ::MulDiv(6, 96, 96); // 6px logical
@@ -727,17 +849,10 @@ void draw_button(const DRAWITEMSTRUCT* dis, const BtnExtra* ex) {
     wchar_t text[128] = {};
     ::GetWindowTextW(dis->hwndItem, text, 128);
 
-    ::SetBkMode(dis->hDC, TRANSPARENT);
-    ::SetTextColor(dis->hDC, label);
-    HFONT old = nullptr;
-    if (ex != nullptr && ex->font != nullptr) {
-        old = static_cast<HFONT>(::SelectObject(dis->hDC, ex->font));
-    }
-    RECT text_rc = rc;
-    ::DrawTextW(dis->hDC, text, -1, &text_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (old != nullptr) {
-        ::SelectObject(dis->hDC, old);
-    }
+    const std::wstring shaped = shell_w_str(narrow(text));
+    draw_text_ext(dis->hDC, shaped.c_str(), rc.left, rc.top, rc.right - rc.left,
+                  rc.bottom - rc.top, ex != nullptr ? ex->font : nullptr, label,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     if ((dis->itemState & ODS_FOCUS) != 0) {
         RECT focus_rc = rc;
@@ -780,31 +895,23 @@ void draw_list_item(const DRAWITEMSTRUCT* dis, const LauncherState* st) {
     const int pad_t = scale_dpi(st, 6);
     const int pad_r = scale_dpi(st, 12);
 
-    ::SetBkMode(dis->hDC, TRANSPARENT);
-
     // Name (row 1)
-    RECT name_rc = {rc.left + pad_l, rc.top + pad_t, rc.right - pad_r, rc.top + pad_t + scale_dpi(st, 18)};
-    ::SetTextColor(dis->hDC, theme::text);
-    HFONT old_name = nullptr;
-    if (st != nullptr && st->font_body != nullptr) {
-        old_name = static_cast<HFONT>(::SelectObject(dis->hDC, st->font_body));
-    }
-    std::wstring wname = widen(name);
-    ::DrawTextW(dis->hDC, wname.c_str(), -1, &name_rc, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT name_rc = {rc.left + pad_l, rc.top + pad_t, rc.right - pad_r,
+                    rc.top + pad_t + scale_dpi(st, 18)};
+    const UINT row_fmt =
+        (g_shell_rtl ? DT_RIGHT : DT_LEFT) | DT_SINGLELINE | DT_END_ELLIPSIS;
+    const std::wstring wname = shell_w_str(name);
+    draw_text_ext(dis->hDC, wname.c_str(), name_rc.left, name_rc.top,
+                  name_rc.right - name_rc.left, name_rc.bottom - name_rc.top,
+                  st != nullptr ? st->font_body : nullptr, theme::text, row_fmt);
 
     // Path (row 2)
     RECT path_rc = {rc.left + pad_l, name_rc.bottom + scale_dpi(st, 2), rc.right - pad_r,
                     rc.bottom - scale_dpi(st, 4)};
-    ::SetTextColor(dis->hDC, theme::text_dim);
-    if (st != nullptr && st->font_small != nullptr) {
-        ::SelectObject(dis->hDC, st->font_small);
-    }
-    std::wstring wpath = widen(path);
-    ::DrawTextW(dis->hDC, wpath.c_str(), -1, &path_rc, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    if (old_name != nullptr) {
-        ::SelectObject(dis->hDC, old_name);
-    }
+    const std::wstring wpath = shell_w_str(path);
+    draw_text_ext(dis->hDC, wpath.c_str(), path_rc.left, path_rc.top,
+                  path_rc.right - path_rc.left, path_rc.bottom - path_rc.top,
+                  st != nullptr ? st->font_small : nullptr, theme::text_dim, row_fmt);
 
     if (focused && !selected) {
         ::DrawFocusRect(dis->hDC, &rc);
@@ -989,25 +1096,10 @@ void paint_text(HDC dc, const wchar_t* s, int x, int y, int w, int h, HFONT font
         } else {
             fmt |= DT_RIGHT;
         }
-        // DT_RTLREADING tells DrawTextW the reading order is right-to-left, so
-        // the bidi engine lays out Arabic in logical order and shapes it. It
-        // does NOT mirror the glyphs — it just fixes the paragraph direction
-        // (and keeps punctuation at the correct end). Without it, an RTL
-        // line's Arabic can render with the presentation forms unshaped and
-        // the neutral punctuation drifting to the wrong end.
-        fmt |= DT_RTLREADING;
+        // shell_w_str already shaped the string into visual order; only the
+        // box alignment still needs mirroring.
     }
-    ::SetBkMode(dc, TRANSPARENT);
-    ::SetTextColor(dc, color);
-    HFONT old = nullptr;
-    if (font != nullptr) {
-        old = static_cast<HFONT>(::SelectObject(dc, font));
-    }
-    RECT rc{x, y, x + w, y + h};
-    ::DrawTextW(dc, s, -1, &rc, fmt);
-    if (old != nullptr) {
-        ::SelectObject(dc, old);
-    }
+    draw_text_ext(dc, s, x, y, w, h, font, color, fmt);
 }
 
 // Translated + shaped text for hand-drawn positions: the single chokepoint
@@ -1029,34 +1121,26 @@ inline void paint_text_key(HDC dc, const char* key, int x, int y, int w, int h, 
 //
 // The status carries MIXED scripts — an Arabic prefix line above an English
 // error/path line — and the native STATIC draw scrambles those runs (screenshot:
-// the Latin path rendered mirrored).  Hand-drawn text goes through the same
-// rules as paint_text: DT_RTLREADING fixes the paragraph direction without
-// mirroring glyphs, so the Latin run inside an Arabic-context line stays in
-// order.  Multi-line (the failure prefix and its detail are separate lines), so
-// no DT_SINGLELINE — word-break wraps a long path instead.
+// the Latin path rendered mirrored). Hand-drawn text goes through the same
+// shaping helper as paint_text, so the Latin run inside an Arabic-context line
+// stays in order. Multi-line (the failure prefix and its detail are separate
+// lines), so no DT_SINGLELINE — word-break wraps a long path instead.
 void draw_status(const DRAWITEMSTRUCT* dis, const LauncherState* st) {
     RECT rc = dis->rcItem;
     if (st != nullptr && st->brush_bg != nullptr) {
         ::FillRect(dis->hDC, &rc, st->brush_bg);
     }
-    ::SetBkMode(dis->hDC, TRANSPARENT);
-    ::SetTextColor(dis->hDC, st != nullptr ? st->status_color : theme::error);
-    HFONT old = nullptr;
-    if (st != nullptr && st->font_small != nullptr) {
-        old = static_cast<HFONT>(::SelectObject(dis->hDC, st->font_small));
-    }
     UINT fmt = DT_LEFT | DT_WORDBREAK | DT_NOPREFIX;
     if (g_shell_rtl) {
         // Same "V-center only for single-line" omission as paint_text: this is
         // a small multi-line report, drawn from the top when it overflows.
-        fmt |= DT_RIGHT | DT_RTLREADING;
+        fmt |= DT_RIGHT;
     }
     const wchar_t* s = (st != nullptr && !st->status_text.empty())
                            ? st->status_text.c_str() : L"";
-    ::DrawTextW(dis->hDC, s, -1, &rc, fmt);
-    if (old != nullptr) {
-        ::SelectObject(dis->hDC, old);
-    }
+    draw_text_ext(dis->hDC, s, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+                  st != nullptr ? st->font_small : nullptr,
+                  st != nullptr ? st->status_color : theme::error, fmt);
 }
 
 // Thumbnail blit, aspect-fill into (x,y,w,h). Missing bitmap = vertical
@@ -1170,12 +1254,9 @@ void paint_nav_icon(HDC dc, LauncherState* st, ShellPage page, int x, int y, int
         case ShellPage::Help: {
             // Question mark: text glyph (always present) in the row font size.
             HFONT f = make_font(11, true, st->dpi);
-            HFONT old = static_cast<HFONT>(::SelectObject(dc, f));
-            ::SetBkMode(dc, TRANSPARENT);
-            ::SetTextColor(dc, col);
-            RECT rc{x0, y0 - S(st, 2), x1, y1};
-            ::DrawTextW(dc, L"?", 1, &rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-            ::SelectObject(dc, old);
+            draw_text_ext(dc, L"?", x0, y0 - S(st, 2), x1 - x0,
+                          (y1 - y0) + S(st, 2), f, col,
+                          DT_CENTER | DT_SINGLELINE | DT_VCENTER);
             ::DeleteObject(f);
             break;
         }
@@ -1207,7 +1288,8 @@ void paint_sidebar(HDC dc, LauncherState* st, int W, int H) {
     // tagline translates with the shell.
     paint_text(dc, L"\u2699", sx + S(st, 16), S(st, 14), S(st, 28), S(st, 28), st->font_title,
               theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    paint_text(dc, L"\u0633\u0646\u062F", sx + S(st, 46), S(st, 12), S(st, 120), S(st, 26),
+    const std::wstring brand = shell_w_str("\xD8\xB3\xD9\x86\xD8\xAF"); // "سند"
+    paint_text(dc, brand.c_str(), sx + S(st, 46), S(st, 12), S(st, 120), S(st, 26),
               st->font_title, theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     paint_text_key(dc, "sh_tagline", sx + S(st, 46), S(st, 36), S(st, 120), S(st, 16),
                    st->font_small, theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -1341,7 +1423,7 @@ void paint_project_card(HDC dc, LauncherState* st, const std::string& path, int 
     // first and re-framing the border over it.
     paint_thumb(dc, th, x + 1, y + 1, w - 2, img_h);
     // Name/dir travel through the shaping path: project paths can be Arabic
-    // (Arabic-first UI), and raw DrawTextW would disconnect them.
+    // (Arabic-first UI), so they go through shell_w_str's shaping.
     paint_text(dc, shell_w_str(std::filesystem::path(path).stem().string()).c_str(),
               x + S(st, 12), y + img_h + S(st, 8), w - S(st, 24), S(st, 20), st->font_body,
               theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -3291,7 +3373,7 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
         const int cW = crc.right - crc.left;
         const int cH = crc.bottom - crc.top;
         // Status: OWNERDRAW — mixed Arabic/Latin text scrambles under the
-        // native STATIC draw (draw_status repaints it through DrawTextW's
+        // native STATIC draw (draw_status repaints it through the ExtTextOut
         // bidi path instead). Alignment flips inside draw_status with
         // g_shell_rtl, so no per-language style flip is applied here.
         add_control(hwnd, L"STATIC", L"", SS_OWNERDRAW,
@@ -3453,12 +3535,24 @@ void save_recent_projects(const std::vector<std::string>& recent) {
 
 #ifdef _WIN32
 std::string settings_store_path() {
+    std::filesystem::path p;
     char buf[MAX_PATH * 4] = {};
     const DWORD n = ::GetEnvironmentVariableA("APPDATA", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) {
+    if (n != 0 && n < sizeof(buf)) {
+        p = buf;
+    } else {
+        // A GUI process launched from a stripped environment can lack APPDATA.
+        // Ask the shell for the real roaming folder instead of silently
+        // falling back to English defaults and ignoring the saved language.
+        PWSTR known = nullptr;
+        if (SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &known))) {
+            p = known;
+            ::CoTaskMemFree(known);
+        }
+    }
+    if (p.empty()) {
         return {};
     }
-    std::filesystem::path p(buf);
     p /= "SANAD";
     std::error_code ec;
     std::filesystem::create_directories(p, ec);
