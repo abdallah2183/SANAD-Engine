@@ -558,11 +558,13 @@ void on_create(HWND hwnd) {
     if (so.template_dir.empty()) {
         // A named template whose folder is missing must not silently scaffold an
         // empty project: say which template is broken and stop.
+        NF_LOG_ERROR(LogCategory::Editor, "launcher template error: {}", create_err);
         set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + create_err);
         return;
     }
     std::string perr;
     if (!nf::project::scaffold_project(so, perr)) {
+        NF_LOG_ERROR(LogCategory::Editor, "launcher scaffold error: {}", perr);
         set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + perr);
         return;
     }
@@ -2456,7 +2458,9 @@ void layout_children(HWND hwnd, LauncherState* st) {
         }
     }
     if (HWND status = ::GetDlgItem(hwnd, kIdStatus)) {
-        ::MoveWindow(status, content_x(st), H - S(st, 34), content_w(st, W), S(st, 22), TRUE);
+        // Two lines: "Could not create the project:" plus the detail. The old
+        // 22 px box clipped the second line to an unreadable sliver.
+        ::MoveWindow(status, content_x(st), H - S(st, 58), content_w(st, W), S(st, 44), TRUE);
     }
 }
 
@@ -2884,7 +2888,8 @@ LRESULT CALLBACK shell_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const int H = rc.bottom - rc.top;
             const int x = static_cast<int>(static_cast<short>(LOWORD(lp)));
             const int y = static_cast<int>(static_cast<short>(HIWORD(lp)));
-            shell::do_action(hwnd, st, shell::hit_test(st, x, y, W, H));
+            const shell::Hit hit = shell::hit_test(st, x, y, W, H);
+            shell::do_action(hwnd, st, hit);
             return 0;
         }
         case WM_MOUSEMOVE: {
@@ -3103,6 +3108,53 @@ LRESULT CALLBACK edit_subclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_P
         if (shell::handle_edit_key(parent, st, static_cast<int>(id), wp)) {
             return 0;
         }
+    }
+    if (msg == WM_CHAR || msg == WM_KEYDOWN || msg == WM_SETTEXT || msg == WM_PASTE) {
+        const LRESULT r = ::DefSubclassProc(hwnd, msg, wp, lp);
+        ::InvalidateRect(hwnd, nullptr, TRUE);
+        return r;
+    }
+    // Native EDIT paints its text with DrawText, which is blank on this
+    // Windows session. Keep the native editing model (keyboard, selection,
+    // caret, scrolling) and repaint the client with ExtTextOutW ourselves.
+    if (msg == WM_ERASEBKGND) {
+        return 1;
+    }
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC dc = ::BeginPaint(hwnd, &ps);
+        RECT rc;
+        ::GetClientRect(hwnd, &rc);
+        if (rc.right > rc.left && rc.bottom > rc.top) {
+            HBRUSH bg = ::CreateSolidBrush(theme::list_bg);
+            ::FillRect(dc, &rc, bg);
+            ::DeleteObject(bg);
+
+            wchar_t text[1024] = {};
+            const int len = ::GetWindowTextW(hwnd, text, 1024);
+            std::wstring shown;
+            COLORREF color = theme::text;
+            if (len > 0) {
+                shown = shell_w_str(narrow(text));
+            } else if (::GetFocus() != hwnd) {
+                wchar_t cue[256] = {};
+                if (::SendMessageW(hwnd, EM_GETCUEBANNER,
+                                   reinterpret_cast<WPARAM>(cue), 256) != FALSE) {
+                    shown = shell_w_str(narrow(cue));
+                    color = theme::text_dim;
+                }
+            }
+            const HFONT font = reinterpret_cast<HFONT>(
+                ::SendMessageW(hwnd, WM_GETFONT, 0, 0));
+            UINT fmt = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
+            if (g_shell_rtl) {
+                fmt = (fmt & static_cast<UINT>(~DT_LEFT)) | DT_RIGHT;
+            }
+            draw_text_ext(dc, shown.c_str(), rc.left + 8, rc.top,
+                          rc.right - rc.left - 16, rc.bottom - rc.top, font, color, fmt);
+        }
+        ::EndPaint(hwnd, &ps);
+        return 0;
     }
     return ::DefSubclassProc(hwnd, msg, wp, lp);
 }

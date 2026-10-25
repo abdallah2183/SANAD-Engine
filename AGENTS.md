@@ -237,7 +237,9 @@ A complete collect-the-crates example is in
 8. Launcher text goes through `draw_text_ext` (`ExtTextOutW`). `DrawTextW` can
    return a line height while drawing nothing on some Windows sessions; do not
    reintroduce it. `shell_w_str` pre-shapes Arabic to visual order for the same
-   reason.
+   reason. Native `EDIT` controls have the same problem, so `edit_subclass`
+   repaints their client with `draw_text_ext`; keep keyboard/selection/caret
+   handling in the native control.
 
 ## Useful docs
 

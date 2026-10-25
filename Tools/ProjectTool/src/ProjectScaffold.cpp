@@ -276,9 +276,17 @@ bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
         return false;
     }
 
+    // exists() above can leave a stale error_code in some MSVC runs; clear it
+    // before create_directories or a successful mkdir is reported as failure.
+    ec.clear();
     std::filesystem::create_directories(root, ec);
     if (ec) {
-        out_error = "failed to create '" + root.string() + "': " + ec.message();
+        out_error = "failed to create '" + root.string() + "': " + ec.message() + " (code " +
+                    std::to_string(ec.value()) + ")";
+        if (ec.value() == 5) {
+            out_error += ". Access denied: run the editor from a normal desktop session or "
+                         "choose a folder this process can write to.";
+        }
         return false;
     }
 
@@ -291,6 +299,7 @@ bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
     // The directories the descriptor's mounts point at. Created up front so a
     // freshly scaffolded project can be cooked and run immediately.
     for (const char* sub : {"Cache", "Shaders", "dist", "Content"}) {
+        ec.clear();
         std::filesystem::create_directories(root / sub, ec);
         if (ec) {
             out_error = "failed to create '" + (root / sub).string() + "': " + ec.message();
