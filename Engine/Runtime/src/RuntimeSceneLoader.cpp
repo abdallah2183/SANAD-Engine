@@ -360,6 +360,27 @@ static bool parse_post_process(const std::string& line, PostProcessComponent& ou
     return true;
 }
 
+// `Feedback:` (Phase 56). Same contract as the post-process line: every key is
+// optional, an absent key keeps the component default, and a present value the
+// director would have had to silently re-clamp is refused by name. The bounds
+// are the director's own clamps, so a line that passes here means exactly what
+// it says.
+static bool parse_feedback(const std::string& line, FeedbackComponent& out,
+                           std::string& out_bad) {
+    if (!optional_float_in_range(line, "flash_time=", 0.002f, 10.0f, out.flash_seconds, out_bad)) return false;
+    if (!optional_float_in_range(line, "flash_size=", 0.001f, 10.0f, out.flash_size, out_bad)) return false;
+    if (!optional_float_in_range(line, "tracer_time=", 0.002f, 10.0f, out.tracer_seconds, out_bad)) return false;
+    if (!optional_float_in_range(line, "tracer_length=", 0.01f, 1000.0f, out.tracer_length, out_bad)) return false;
+    if (!optional_float_in_range(line, "tracer_width=", 0.0005f, 1.0f, out.tracer_width, out_bad)) return false;
+    if (!optional_float_in_range(line, "impact_time=", 0.01f, 600.0f, out.impact_seconds, out_bad)) return false;
+    if (!optional_float_in_range(line, "impact_size=", 0.001f, 10.0f, out.impact_size, out_bad)) return false;
+    if (!optional_float_in_range(line, "shot_volume=", 0.0f, 4.0f, out.shot_volume, out_bad)) return false;
+    if (!optional_float_in_range(line, "impact_volume=", 0.0f, 4.0f, out.impact_volume, out_bad)) return false;
+    out.audio = line.find("audio=false") == std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
 static bool parse_point_light(const std::string& line, PointLightComponent& out,
                               std::string& out_bad) {
     if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
@@ -1162,6 +1183,18 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     scene->world().add<PostProcessComponent>(e, pp);
                 } else {
                     result.warnings.push_back("PostProcess line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  Feedback:",0)==0) {
+                // Combat feedback (Phase 56). Absent means "draw nothing new";
+                // the line opts the scene in. A bad value rejects the line by
+                // name, the same rule `Decal:` and `PostProcess:` follow.
+                FeedbackComponent fb;
+                std::string bad;
+                if (parse_feedback(line, fb, bad)) {
+                    scene->world().add<FeedbackComponent>(e, fb);
+                } else {
+                    result.warnings.push_back("Feedback line with invalid " + bad +
                                               " was ignored: " + line);
                 }
             } else if (line.rfind("  Camera:",0)==0) {
@@ -2150,6 +2183,29 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " fog_start=" << pp->fog_start << " fog_end=" << pp->fog_end;
             out << "\n";
         }
+        // Combat feedback (Phase 56). Only an entity that carries the component
+        // writes the line, so every scene authored before 0.6.0 round-trips to
+        // the same bytes. It is new, so writing every key makes a hand-written
+        // one-key line save back as the complete state the reader resolved.
+        const auto* fb = scene_obj.world().get<FeedbackComponent>(e);
+        if (fb) {
+            out << "  Feedback: flash_time=" << fb->flash_seconds
+                << " flash_size=" << fb->flash_size
+                << " tracer_time=" << fb->tracer_seconds
+                << " tracer_length=" << fb->tracer_length
+                << " tracer_width=" << fb->tracer_width
+                << " impact_time=" << fb->impact_seconds
+                << " impact_size=" << fb->impact_size
+                << " shot_volume=" << fb->shot_volume
+                << " impact_volume=" << fb->impact_volume;
+            if (!fb->audio) {
+                out << " audio=false";
+            }
+            if (!fb->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
         const auto* rigged = scene_obj.world().get<CharacterComponent>(e);
         if (rigged) {
             // Only the source is written: the skeleton, the clips and the
@@ -2686,6 +2742,9 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* pp = src.get<PostProcessComponent>(se)) {
         dst.add<PostProcessComponent>(de, *pp);
+    }
+    if (const auto* fb = src.get<FeedbackComponent>(se)) {
+        dst.add<FeedbackComponent>(de, *fb);
     }
     if (const auto* c = src.get<CameraComponent>(se)) {
         dst.add<CameraComponent>(de, *c);

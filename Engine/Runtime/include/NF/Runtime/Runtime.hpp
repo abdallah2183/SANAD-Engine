@@ -26,6 +26,7 @@
 #include <NF/Runtime/Impact.hpp>
 #include <NF/Runtime/Shot.hpp>
 #include <NF/Runtime/StatusEffect.hpp>
+#include <NF/Runtime/CombatFeedback.hpp>
 #include <NF/Runtime/Suppression.hpp>
 #include <NF/Runtime/Projectile.hpp>
 #include <NF/Physics/Components.hpp>
@@ -287,7 +288,7 @@ public:
     const audio::AudioListener& audio_listener() const { return m_audio_listener; }
     /// The audio backend. Never null; a NullAudioDevice until one is installed.
     audio::AudioDevice* audio_device() const { return m_audio_device.get(); }
-    /// The live mixer — the one object a Settings window binds to.
+    /// The live mixer - the one object a Settings window binds to.
     ///
     /// This is the seam a game needs in order to ship its own audio settings
     /// without replacing the runtime: read/write `audio_scene().settings()` and
@@ -295,6 +296,18 @@ public:
     /// ambience layers (`music()`) and the reverb zones.
     audio::AudioScene& audio_scene() { return m_audio_scene; }
     const audio::AudioScene& audio_scene() const { return m_audio_scene; }
+
+    // --- Combat feedback (Phase 56) -----------------------------------------
+    //
+    // Shot/impact events are published every frame. This turns them into what a
+    // player sees and hears, but only for a scene that opts in with a
+    // `Feedback:` line: `m_feedback_bound` is false otherwise, and the render
+    // and audio paths then do exactly nothing new. The director is exposed
+    // read-only so a test (or a debug overlay) can tell "an event was
+    // published" from "an effect actually spawned".
+    [[nodiscard]] const runtime::CombatFeedback& combat_feedback() const { return m_feedback; }
+    /// True when the loaded scene carries an enabled FeedbackComponent.
+    [[nodiscard]] bool combat_feedback_bound() const { return m_feedback_bound; }
 
     // --- Gameplay modules (Phase 10) ----------------------------------------
     //
@@ -413,6 +426,11 @@ public:
     /// difference is that these are per-scene artefacts, not renderer state a
     /// caller might have configured directly.
     void build_scene_audio();
+
+    /// Reads the first enabled FeedbackComponent into the director and binds
+    /// the effect layer for this scene. Called from adopt_scene, so the
+    /// previous scene's flashes, tracers, marks and voices never carry over.
+    void bind_scene_feedback();
 
     // --- Navigation (Phase 28 — the voxel NavMesh, in the frame and the scene)
     //
@@ -1420,6 +1438,15 @@ private:
     /// shard path: no ECS entities, so the outliner, the PlayMode snapshot and
     /// the scene serializer never see wheels — and a save never gains them.
     void build_vehicle_wheels_render_world(rendering::RenderWorld& out);
+    /// The combat feedback objects and decals for this frame (Phase 56).
+    /// Render-only: ids are 0, so picking never reports a flash as an entity.
+    /// A no-op unless the scene carries an enabled FeedbackComponent and the
+    /// director has something alive.
+    void build_combat_feedback_render_world(rendering::RenderWorld& out);
+    /// Lazily creates the shared unit cube and the three emissive/scorch
+    /// material instances. A headless runtime has no device: the mesh upload
+    /// fails, the handles stay invalid, and feedback simply does not draw.
+    void ensure_feedback_resources();
     /// Cooked assets, owned by the runtime (the "asset table" a
     /// DestructibleComponent's asset_index indexes).
     std::vector<destruction::FractureAsset>            m_fracture_assets;
@@ -1631,6 +1658,34 @@ private:
     f32 m_audio_accumulator = 0.0f;
     size_t m_audio_sources_mixed = 0;
     f32 m_audio_output_peak = 0.0f;
+
+    // --- Combat feedback (Phase 56) ----------------------------------------
+    //
+    // The director is pure arithmetic. This block is the bridge from its lists
+    // to the two things that own resources: RenderWorld (one shared cube and
+    // three materials) and AudioScene (one Emitter per live cue). Nothing here
+    // runs for a scene whose `Feedback:` line is absent.
+    runtime::CombatFeedback m_feedback;
+    bool m_feedback_bound = false;
+    rendering::StaticMeshHandle m_feedback_mesh{};
+    rendering::MaterialHandle m_feedback_flash_material{};
+    rendering::MaterialHandle m_feedback_tracer_material{};
+    rendering::MaterialHandle m_feedback_impact_material{};
+    /// Cues the director produced but no mix block has consumed yet. step_audio
+    /// can return 0 blocks for a short frame while the director clears its own
+    /// list on the next update; holding them here is what makes a shot heard
+    /// when several frames fit inside one fixed-size audio block.
+    std::vector<runtime::FeedbackSound> m_feedback_pending;
+    /// One live voice per started cue. The Emitter owns the playback cursor,
+    /// so it must survive across blocks; a non-looping source stops itself when
+    /// the buffer ends and is retired on the next mix.
+    std::vector<audio::Emitter> m_feedback_voices;
+    /// Procedural one-shots, built once the device rate is known. The voice
+    /// emitters point into these, so the buffers must outlive them and never be
+    /// rebuilt while a voice is live.
+    audio::AudioBuffer m_feedback_shot_buffer;
+    audio::AudioBuffer m_feedback_impact_buffer;
+    u32 m_feedback_buffer_rate = 0;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;

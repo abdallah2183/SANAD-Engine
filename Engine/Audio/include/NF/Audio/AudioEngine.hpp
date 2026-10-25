@@ -81,6 +81,17 @@ struct AudioBuffer {
 AudioBuffer make_tone_buffer(f32 frequency_hz, f32 duration_seconds,
                              u32 sample_rate, u32 channels = 1);
 
+/// Deterministic procedural one-shots for combat feedback (Phase 56).
+///
+/// A gunshot is a broadband crack plus a low thump; an impact is a shorter,
+/// brighter click. Both are built from a fixed-seed xorshift, so the same binary
+/// produces the same samples on every run and a test can assert the exact shape
+/// contract (non-silent, bounded, decaying) without a golden WAV. They are mono
+/// because the emitter spatialises them; `sample_rate` of zero returns an empty
+/// buffer, matching make_tone_buffer's refusal to invent a clock.
+AudioBuffer make_gunshot_buffer(u32 sample_rate);
+AudioBuffer make_impact_buffer(u32 sample_rate);
+
 /// Audio source: a buffer + playback state.
 struct AudioSource {
     const AudioBuffer* buffer = nullptr;

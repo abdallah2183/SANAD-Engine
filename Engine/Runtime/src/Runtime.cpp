@@ -152,6 +152,17 @@ void Runtime::shutdown() {
     m_lut_path.clear();
     m_lut_view = nullptr;
     m_default_material = rendering::kInvalidMaterialHandle;
+    // Feedback resources died with the renderer above (materials) and with the
+    // mesh library (the cube). Drop the handles so the next render rebuilds
+    // them instead of drawing through dead ones.
+    m_feedback_flash_material = rendering::kInvalidMaterialHandle;
+    m_feedback_tracer_material = rendering::kInvalidMaterialHandle;
+    m_feedback_impact_material = rendering::kInvalidMaterialHandle;
+    m_feedback_mesh = rendering::StaticMeshHandle{};
+    // The voices point into the procedural buffers below and are per-scene
+    // artefacts; a mix after shutdown starts from silence.
+    m_feedback_voices.clear();
+    m_feedback_pending.clear();
     // Free GPU-backed libraries while the device is still alive.
     // Recreate empty ones so the Runtime stays usable after shutdown.
     m_mesh_library = std::make_unique<rendering::MeshLibrary>();
@@ -543,6 +554,9 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // Same rule as the two above — the scene owns them, so the previous scene's
     // do not carry over.
     build_scene_audio();
+    // Combat feedback: the first enabled FeedbackComponent owns the level's
+    // tuning, and a scene without one draws and mixes nothing new.
+    bind_scene_feedback();
     // AI population is game-registered per scene; a previous scene's crowd
     // must not govern the next one.
     if (m_ai_world) {
@@ -670,6 +684,14 @@ void Runtime::update(float dt) {
         scene::propagate_transforms(world);
         return;
     }
+    // Combat feedback consumes the PREVIOUS frame's events, which begin_frame
+    // just published. That is what makes a fire_weapon() call made between
+    // updates (a host, a test, a Lua script's own shot) visible: the events are
+    // ingested exactly once, effects start at age 0, and the render path below
+    // sees them this frame. Unbound scenes do no work at all.
+    if (m_feedback_bound) {
+        m_feedback.update(dt, m_shots.previous(), m_impacts.previous());
+    }
     // Quiet clocks advance once per frame, before new damage can reset them.
     step_damage_ledgers(dt);
     // Physics runs on its own fixed clock, so the scene's motion is the same
@@ -694,10 +716,6 @@ void Runtime::update(float dt) {
     // render() instead would make the hour depend on how often the frame was
     // drawn, which is not the same thing as how long it took.
     advance_time_of_day(dt);
-    // Audio mixes after the transforms are final for this frame, so a source on
-    // a moving entity is spatialised where it will actually be rendered rather
-    // than one frame behind.
-    step_audio(dt);
     // Gameplay runs after simulation, so a module observes where this frame
     // actually put everything, and before propagation, so whatever it writes
     // is what gets rendered rather than a frame late.
@@ -753,6 +771,11 @@ void Runtime::update(float dt) {
     // was. It is also after the scripts, so a script that moved the player
     // is followed in the same frame.
     update_follow_camera(dt);
+    // Audio mixes after the transforms AND the camera are final for this frame.
+    // The listener is the camera, so doing this before placement would pan a
+    // source against last frame's view; feedback one-shots generated this frame
+    // are also mixed with the listener they will actually be heard from.
+    step_audio(dt);
     // Dynamic resolution consumes the same dt the simulation did. It advances
     // after the frame's work so the sample describes the frame that just ran,
     // and the next render applies the new scale. Disabled by default; a scene
@@ -976,6 +999,58 @@ u32 Runtime::step_audio(float dt) {
 
     auto& world = m_scene_data_ptr->scene->world();
 
+    // Combat feedback cues (Phase 56). A cue can arrive on a frame that mixes
+    // no whole block (step_audio returns 0 below); the director clears its own
+    // list on the next update, so copy into a pending list and start an Emitter
+    // now. The Emitter owns the playback cursor and survives until the buffer
+    // ends, which is what makes a shot audible even when two frames fit inside
+    // one fixed-size audio block.
+    if (m_feedback_bound) {
+        const u32 rate = m_audio_device->sample_rate();
+        if (rate != 0 && rate != m_feedback_buffer_rate) {
+            // New rate: old voices point at buffers built for the old clock.
+            m_feedback_voices.clear();
+            m_feedback_shot_buffer = audio::make_gunshot_buffer(rate);
+            m_feedback_impact_buffer = audio::make_impact_buffer(rate);
+            m_feedback_buffer_rate = rate;
+        }
+        constexpr usize kMaxPendingCues = 64;
+        for (const runtime::FeedbackSound& cue : m_feedback.sounds()) {
+            if (m_feedback_pending.size() >= kMaxPendingCues) {
+                m_feedback_pending.erase(m_feedback_pending.begin());
+            }
+            m_feedback_pending.push_back(cue);
+        }
+        m_feedback.clear_sounds();
+
+        constexpr usize kMaxFeedbackVoices = 24;
+        for (const runtime::FeedbackSound& cue : m_feedback_pending) {
+            const audio::AudioBuffer* buffer =
+                cue.kind == runtime::FeedbackSound::Kind::Shot ? &m_feedback_shot_buffer
+                                                               : &m_feedback_impact_buffer;
+            if (buffer->samples.empty()) {
+                continue;
+            }
+            if (m_feedback_voices.size() >= kMaxFeedbackVoices) {
+                m_feedback_voices.erase(m_feedback_voices.begin());
+            }
+            audio::Emitter voice{};
+            voice.buffer = buffer;
+            voice.position = cue.position;
+            voice.volume = cue.volume;
+            voice.pitch = cue.pitch;
+            voice.playing = true;
+            voice.looping = false;
+            voice.spatial = true;
+            // Gunfire and impacts are world sounds: a wall between the listener
+            // and the hit should muffle them like any other source.
+            voice.occluded = true;
+            voice.bus = audio::BusId::Sfx;
+            m_feedback_voices.push_back(voice);
+        }
+        m_feedback_pending.clear();
+    }
+
     // The listener follows the active camera, so a source pans relative to what
     // the player is actually looking at.
     {
@@ -1082,6 +1157,24 @@ u32 Runtime::step_audio(float dt) {
                       it->first) != m_audio_emitter_seen.end();
         it = live ? std::next(it) : m_audio_emitters.erase(it);
     }
+
+    // Feedback one-shots mix after the scene's own sources, through the same
+    // buses and reverb. The mixer clears `playing` when a non-looping buffer
+    // reaches its end; retiring here is what keeps a fight from growing one
+    // voice per shot for the whole level.
+    for (audio::Emitter& voice : m_feedback_voices) {
+        if (!voice.playing || voice.buffer == nullptr) {
+            continue;
+        }
+        m_audio_scene.mix_emitter(voice);
+        ++m_audio_sources_mixed;
+    }
+    m_feedback_voices.erase(
+        std::remove_if(m_feedback_voices.begin(), m_feedback_voices.end(),
+                       [](const audio::Emitter& voice) {
+                           return !voice.playing || voice.buffer == nullptr;
+                       }),
+        m_feedback_voices.end());
 
     m_audio_scene.finalize(m_audio_left.data(), m_audio_right.data());
 
@@ -1657,6 +1750,42 @@ void Runtime::build_scene_audio() {
     }
     if (!ambience_from_scene) {
         m_audio_scene.music().clear_ambience(0.0f);
+    }
+}
+
+void Runtime::bind_scene_feedback() {
+    // A scene change ends the old fight: its flashes, tracers, scorch marks,
+    // pending cues and live voices all belong to the level that produced them.
+    // configure({}) puts the director back on its defaults too, so a scene with
+    // no Feedback line cannot inherit the previous scene's tuning.
+    m_feedback.reset();
+    m_feedback.configure(runtime::CombatFeedbackConfig{});
+    m_feedback_bound = false;
+    m_feedback_pending.clear();
+    m_feedback_voices.clear();
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    for (auto e : world.query<FeedbackComponent>()) {
+        const auto* fb = world.get<FeedbackComponent>(e);
+        if (fb == nullptr || !fb->enabled) {
+            continue;
+        }
+        runtime::CombatFeedbackConfig config;
+        config.flash_seconds = fb->flash_seconds;
+        config.flash_size = fb->flash_size;
+        config.tracer_seconds = fb->tracer_seconds;
+        config.tracer_length = fb->tracer_length;
+        config.tracer_width = fb->tracer_width;
+        config.impact_seconds = fb->impact_seconds;
+        config.impact_size = fb->impact_size;
+        config.shot_volume = fb->shot_volume;
+        config.impact_volume = fb->impact_volume;
+        config.audio = fb->audio;
+        m_feedback.configure(config);
+        m_feedback_bound = true;
+        break;
     }
 }
 
@@ -3410,6 +3539,186 @@ void Runtime::build_vehicle_wheels_render_world(rendering::RenderWorld& out) {
     }
 }
 
+void Runtime::ensure_feedback_resources() {
+    if (!m_feedback_bound || !m_renderer || !m_renderer_initialized || !m_mesh_library) {
+        return;
+    }
+    rendering::Material* gbuffer = m_renderer->gbuffer_material();
+    if (gbuffer == nullptr || !gbuffer->valid()) {
+        return;
+    }
+    // The flash and the tracer are emissive so they read as light rather than
+    // as plastic cubes. The values are deliberately above 1: with bloom enabled
+    // a shot glows, and with bloom off it still saturates to white.
+    if (!m_feedback_flash_material.valid()) {
+        rendering::PBRMaterialParams params{};
+        params.base_color[0] = 0.35f;
+        params.base_color[1] = 0.22f;
+        params.base_color[2] = 0.08f;
+        params.base_color[3] = 1.0f;
+        params.metallic = 0.0f;
+        params.roughness = 1.0f;
+        params.ao = 1.0f;
+        params.emission[0] = 1.0f;
+        params.emission[1] = 0.62f;
+        params.emission[2] = 0.22f;
+        params.emission_strength = 14.0f;
+        m_feedback_flash_material =
+            m_renderer->materials().create_instance(*gbuffer, params, "feedback_flash");
+    }
+    if (!m_feedback_tracer_material.valid()) {
+        rendering::PBRMaterialParams params{};
+        params.base_color[0] = 0.30f;
+        params.base_color[1] = 0.18f;
+        params.base_color[2] = 0.06f;
+        params.base_color[3] = 1.0f;
+        params.metallic = 0.0f;
+        params.roughness = 1.0f;
+        params.ao = 1.0f;
+        params.emission[0] = 1.0f;
+        params.emission[1] = 0.42f;
+        params.emission[2] = 0.12f;
+        params.emission_strength = 9.0f;
+        m_feedback_tracer_material =
+            m_renderer->materials().create_instance(*gbuffer, params, "feedback_tracer");
+    }
+    // A scorch mark is not emissive: it is a soot-dark patch that the scene's
+    // own lights still shade. No texture, so the decal's material is complete
+    // without the asset pipeline and a hit always leaves something visible.
+    if (!m_feedback_impact_material.valid()) {
+        rendering::PBRMaterialParams params{};
+        params.base_color[0] = 0.025f;
+        params.base_color[1] = 0.022f;
+        params.base_color[2] = 0.020f;
+        params.base_color[3] = 1.0f;
+        params.metallic = 0.0f;
+        params.roughness = 0.95f;
+        params.ao = 1.0f;
+        params.emission_strength = 0.0f;
+        m_feedback_impact_material =
+            m_renderer->materials().create_instance(*gbuffer, params, "feedback_scorch");
+    }
+    // One shared cube for every flash and every beam segment. Lazily uploaded
+    // exactly like the wheel mesh: a headless device has no GPU, so the upload
+    // fails once and the layer simply does not draw instead of crashing.
+    if (!m_feedback_mesh.valid()) {
+        auto mesh = rendering::StaticMesh::create_cube(1.0f);
+        if (mesh == nullptr || !mesh->upload(m_device)) {
+            return;
+        }
+        const rendering::StaticMeshHandle handle = m_mesh_library->add(std::move(mesh));
+        if (!handle.valid()) {
+            return;
+        }
+        m_feedback_mesh = handle;
+    }
+}
+
+void Runtime::build_combat_feedback_render_world(rendering::RenderWorld& out) {
+    if (!m_feedback_bound || m_feedback.empty()) {
+        return;
+    }
+    ensure_feedback_resources();
+    if (!m_feedback_mesh.valid() || !m_mesh_library) {
+        return;
+    }
+    const rendering::StaticMesh* mesh = m_mesh_library->get(m_feedback_mesh);
+    if (mesh == nullptr || !mesh->is_uploaded()) {
+        return;
+    }
+
+    // The one orientation problem this layer has: the cube/beam's local +Z must
+    // point along a world direction, and Quat has no from_to. Cross product and
+    // angle is exact, with the antiparallel case handled explicitly (its cross
+    // product is zero and acos would otherwise return a degenerate axis).
+    const auto align_z = [](const Vec3& direction) {
+        Vec3 dir = direction.normalized();
+        if (dir.length_sq() < 1.0e-8f) {
+            dir = Vec3{0.0f, 0.0f, 1.0f};
+        }
+        const f32 dot = std::clamp(dir.z, -1.0f, 1.0f);
+        if (dot > 0.99999f) {
+            return Quat::identity();
+        }
+        if (dot < -0.99999f) {
+            return Quat::from_axis_angle(Vec3{0.0f, 1.0f, 0.0f}, PI);
+        }
+        const Vec3 axis = Vec3{0.0f, 0.0f, 1.0f}.cross(dir);
+        return Quat::from_axis_angle(axis, std::acos(dot));
+    };
+
+    const auto push_cube = [&](const Mat4& world, rendering::MaterialHandle material) {
+        rendering::RenderObject ro{};
+        ro.id = 0; // not an entity: a flash is never a pick result
+        ro.visible = true;
+        ro.world = world;
+        ro.mesh_handle = m_feedback_mesh;
+        ro.material_handle = material;
+        ro.lod = 0;
+        ro.bounds = rendering::transform_aabb(mesh->bounds(), world);
+        ro.sphere = rendering::transform_sphere(mesh->bounding_sphere(), world);
+        out.objects.push_back(std::move(ro));
+    };
+
+    if (m_feedback_flash_material.valid()) {
+        for (const runtime::FeedbackFlash& flash : m_feedback.flashes()) {
+            // Strength shrinks the cube as it dies, so the last visible frame is
+            // a small bright point instead of a full-size block vanishing.
+            const f32 s = std::max(0.001f, flash.size * (0.35f + 0.65f * flash.strength));
+            const Mat4 world = Mat4::scale(Vec3{s, s, s * 0.85f}) *
+                               align_z(flash.direction).to_matrix() *
+                               Mat4::translate(flash.position);
+            push_cube(world, m_feedback_flash_material);
+        }
+    }
+
+    if (m_feedback_tracer_material.valid()) {
+        for (const runtime::FeedbackTracer& tracer : m_feedback.tracers()) {
+            const Vec3 delta = tracer.end - tracer.start;
+            const f32 length = delta.length();
+            if (length < 1.0e-4f) {
+                continue;
+            }
+            const f32 width =
+                std::max(0.0005f, tracer.width * (0.55f + 0.45f * tracer.strength));
+            const Vec3 mid = (tracer.start + tracer.end) * 0.5f;
+            const Mat4 world = Mat4::scale(Vec3{width, width, length}) *
+                               align_z(delta).to_matrix() * Mat4::translate(mid);
+            push_cube(world, m_feedback_tracer_material);
+        }
+    }
+
+    if (m_feedback_impact_material.valid()) {
+        for (const runtime::FeedbackImpact& mark : m_feedback.impacts()) {
+            // Steady for the first three quarters, then a linear fade. Using
+            // the director's linear strength here would make a six-second mark
+            // faint almost immediately.
+            f32 opacity = 1.0f;
+            const f32 fade = mark.life * 0.25f;
+            if (fade > 0.0f && mark.age > mark.life - fade) {
+                opacity = (mark.life - mark.age) / fade;
+            }
+            opacity = std::clamp(opacity, 0.0f, 1.0f);
+            if (opacity <= 0.0f) {
+                continue;
+            }
+            const f32 roll = static_cast<f32>(mark.seed % 360u) * DEG_TO_RAD;
+            // Row-vector composition is rightmost-first: M(q1*q2) =
+            // M(q2)*M(q1), so `align * roll` rolls around the decal's own +Z
+            // FIRST and only then aims that axis at the surface normal. The
+            // other order would spin the mark around world Z and tilt it off
+            // the wall for any normal that is not +Z.
+            const Quat rotation =
+                align_z(mark.normal) * Quat::from_axis_angle(Vec3{0.0f, 0.0f, 1.0f}, roll);
+            const Mat4 entity_world = rotation.to_matrix() * Mat4::translate(mark.position);
+            const Mat4 world = rendering::decal_world_matrix(
+                entity_world, Vec3{mark.size, mark.size, std::max(0.02f, mark.size)});
+            out.decals.push_back(
+                rendering::make_decal(0u, world, m_feedback_impact_material, opacity));
+        }
+    }
+}
+
 u32 Runtime::step_physics(float frame_delta) {
     if (!m_physics || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return 0;
@@ -4403,6 +4712,7 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
     }
     build_debris_render_world(out);
     build_vehicle_wheels_render_world(out);
+    build_combat_feedback_render_world(out);
 
     // Projected decals (Phase 36). Placement and facing come from the entity
     // Transform; the authored size is baked into the matrix here so the GPU's

@@ -10,6 +10,7 @@ entity: 1:0
   Health: max=100 health=100 regen=2 regen_delay=4
   Faction: team=Blue
   Weapon: mode=auto rpm=420 magazine=18 reserve=90 reload=1.6 damage=18 range=120 spread=0.4 bloom=0.2 spread_max=3 recover=5 recoil=0.7 recoil_yaw=0.2 recoil_growth=0.15 falloff_start=30 falloff_end=100 falloff_min=0.5 shake=0.1 seed=1592266351 delivery=projectile speed=220 gravity=9.81
+  Feedback: flash_time=0.06 flash_size=0.26 tracer_time=0.1 tracer_length=7 tracer_width=0.03 impact_time=8 impact_size=0.18 shot_volume=0.6 impact_volume=0.4
 ---
 entity: 2:0
   Name: MainCamera

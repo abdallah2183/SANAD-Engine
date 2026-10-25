@@ -268,6 +268,10 @@ add_executable(RuntimeTests
     # `Decal:` round-trips, refuses an impossible size by name, and the Runtime
     # really extracts enabled decals with the entity Transform and authored size.
     RuntimeTests/test_runtime_decals.cpp
+    # Phase 56: shot/impact events become visible and audible. The director's
+    # arithmetic, the `Feedback:` scene line, and one real fired shot through
+    # the Runtime into RenderWorld objects, a decal and the mixer.
+    RuntimeTests/test_combat_feedback.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)
@@ -338,6 +342,9 @@ AudioTests/test_audio_game_settings.cpp
     # limiter's brickwall and latency, the neutral/bit-exact contract, and the
     # AudioScene integration that puts both stages after the bus volumes.
     AudioTests/test_audio_dynamics.cpp
+    # Phase 56: the procedural gunshot/impact one-shots the feedback layer
+    # plays. Fixed-seed noise, bounded, decaying, deterministic.
+    AudioTests/test_feedback_audio.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
@@ -569,6 +576,10 @@ target_include_directories(ToolTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 # scaffolded Main.nfscene through the same loader the player uses.
 target_link_libraries(ToolTests PRIVATE NFCore NFAssets NFProjectTool NFRendering NFRuntime)
 target_compile_definitions(ToolTests PRIVATE
+    # The crash-report test asserts the version NFPlayer was built with, so it
+    # must read the same single source of truth instead of a hand-copied literal
+    # that goes stale on every release bump.
+    "NF_ENGINE_VERSION=\"${NF_VERSION_STRING}\""
     "NF_TEMPLATE_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Default\""
     "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC3D_SHADER_DIR}\""
     # test_blender_preset.cpp pins the shipped add-on's exporter option names.

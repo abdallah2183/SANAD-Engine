@@ -19,8 +19,8 @@
 
 <br>
 
-[**What's new in 0.5.0**](RELEASE_NOTES_0.5.0.md) ·
-[**Download 0.5.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0) ·
+[**What's new in 0.6.0**](RELEASE_NOTES_0.6.0.md) ·
+[**Download 0.6.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.6.0) ·
 [**Watch the 43s demo**](Docs/media/demo.mp4) ·
 [**Docs**](Docs/) ·
 [**العربية**](README.ar.md)
@@ -34,7 +34,7 @@
 ---
 
 > [!IMPORTANT]
-> **0.5.0 is a public release, not a beta.** It ships as a **portable Windows x64
+> **0.6.0 is a public release, not a beta.** It ships as a **portable Windows x64
 > zip** built from this tree, with a SHA-256 checksum. The executables are signed
 > with the self-signed **`SANAD Dev Build`** certificate, not a publicly trusted
 > one, so Windows may still show "Unknown publisher". Do not disable Smart App
@@ -63,12 +63,12 @@
 
 ### 1. Download
 
-Grab the portable build from the [0.5.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0):
+Grab the portable build from the [0.6.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.6.0):
 
 | File | What to do |
 |:---|:---|
-| [`SANAD-0.5.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.5.0/SANAD-0.5.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
-| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.5.0/SHA256SUMS.txt) | SHA-256 checksum for the portable zip |
+| [`SANAD-0.6.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.6.0/SANAD-0.6.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
+| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.6.0/SHA256SUMS.txt) | SHA-256 checksum for the portable zip |
 
 > [!NOTE]
 > There is **no installer in this release yet**. The portable zip carries a
@@ -144,41 +144,36 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
 
 > [!NOTE]
-> TreeWorld ships **in the 0.5.0 portable zip** under `Games/`, and on
+> TreeWorld ships **in the 0.6.0 portable zip** under `Games/`, and on
 > **`main`** as source. `nf run --project Games\TreeWorld\TreeWorld.nfproj`
 > builds and plays it from the repository; the packaged copy plays the same
 > scene standalone.
 
-## ✨ What's in 0.5.0
+## ✨ What's in 0.6.0
 
-- **FXAA, where it belongs** — a console-style FXAA 3.11 pass runs on the
-  tonemapped LDR image, not on HDR, with adjustable threshold controls. The
-  tonemap owns an intermediate image, so the pass is part of the render graph,
-  not bolted on after it.
-- **The mouse is a button** — right-click aims down sights; the camera can shake
-  and recoil. Player settings (mouse/stick sensitivity, ADS distance, zoom
-  limits, invert Y) are data, not code, and `nf.shake()` / `nf.recoil()` expose
-  the new effects to Lua.
-- **Projected decals** — a GBuffer decal pass with per-decal descriptors,
-  screen-rectangle clipping and ordering. The editor gets a **Decal** component
-  and an undoable `SetDecalCommand`.
-- **Internal render scale** — `render_scale=0.25..2.0` separates output size from
-  render size, so `2.0` supersamples without resizing the window.
-- **Dynamic resolution** — `dynamic_resolution=true target_fps=… min_render_scale=…`
-  lowers and restores the internal scale from frame time, with a hold band so it
-  does not oscillate.
-- **Master dynamics** — a linked stereo compressor and a look-ahead peak limiter
-  in `AudioScene::finalize`, plus `audio.dynamics.*` scene keys.
-- **Player settings and input** — a per-player settings file, mouse buttons in
-  `InputBindings`, and scene keys that keep older projects compatible.
-- **TreeWorld and ThirdPerson** ship with `fxaa=true` and `ads=1`, so the new
-  image path and aiming are visible from the first run.
-- **Verified, not assumed** — the 0.5.0 notes list per-suite counts:
-  `RHITests` 320/320, `RuntimeTests` 214/214, `EditorTests` 283/283,
-  `UITests` 44/44, `ToolTests` 55/55, `AudioTests` 132/132. `StreamingTests` is
-  blocked by this machine's Device Guard policy. TreeWorld's headless acceptance
-  run exits 0 with `Validation errors: 0`.
-- **Docs that match the build** — [release notes](RELEASE_NOTES_0.5.0.md),
+- **Combat feedback, from one scene line** — `Feedback: flash_time=0.06
+  flash_size=0.26 tracer_time=0.1 tracer_length=7 tracer_width=0.03
+  impact_time=8 impact_size=0.18 shot_volume=0.6 impact_volume=0.4` turns the
+  shot and impact events the engine already publishes into a muzzle flash per
+  volley, a tracer per pellet, and a projected scorch decal per surface hit.
+- **No new GPU pass, no new asset** — flashes and tracers are render-only
+  `RenderWorld` objects on one shared procedural cube; the scorch is a decal.
+  The gunshot and impact are procedural one-shots, so a game does not need a WAV
+  to hear its own gun.
+- **Opt-in, byte-for-byte compatible** — a scene without the line draws and
+  mixes exactly what it did in 0.5.0. The component round-trips through the real
+  writer/reader, bad values are refused by key name, and the validator warns on
+  out-of-range tuning.
+- **Events land where the player can see them** — the director ingests the
+  previous frame's events after `begin_frame()`, ages before ingest, and holds
+  cues until a whole audio block is mixed, so the first shot of a fight is
+  neither dropped nor inaudible.
+- **`Ballistics.nfscene` demonstrates it** — the shipped scene opts in, so the
+  projectile-vs-hitscan showcase now shows and hears the fight.
+- **Everything from 0.5.0 remains** — FXAA on the tonemapped image, ADS, mouse
+  buttons, camera shake and recoil, decals, render scale, dynamic resolution,
+  master dynamics, and player settings.
+- **Docs that match the build** — [release notes](RELEASE_NOTES_0.6.0.md),
   [demo notes](Docs/Demo_Release.md), and a five-minute quick start.
 
 ## 🔬 GPU profiling (development tree)
@@ -233,7 +228,7 @@ only and is separate from DynamicResolution. See
 build\Release\bin\NFPlayer.exe --project Games\TreeWorld\TreeWorld.nfproj --frame-stats --gpu-timing
 ```
 
-### Layered damage, blasts, shot events, statuses and combat memory (Phases 50-55)
+### Layered damage, blasts, shot events, statuses and combat memory (Phases 50-56)
 
 The development tree turns one damage number into a layered hit. Hit zones are
 opt-in per target (`Health: ... zones=true head=2 limb=0.75`), armor is a real
@@ -274,6 +269,28 @@ Weapon: mode=semi rpm=60 magazine=1 damage=20 range=120
         blast_radius=4 blast_damage=45 blast_min=0.2
 ```
 
+### Combat feedback (`Feedback:`, Phase 56)
+
+Events are only data until something draws them. The `Feedback:` line opts a
+scene into the visible and audible half: one muzzle flash and one gunshot per
+volley, one tracer per pellet, and one scorch decal plus one impact sound per
+real surface hit. Status ticks and splash victims are excluded, because they are
+not a new round landing.
+
+```text
+Feedback: flash_time=0.06 flash_size=0.26 tracer_time=0.1 tracer_length=7
+          tracer_width=0.03 impact_time=8 impact_size=0.18
+          shot_volume=0.6 impact_volume=0.4
+```
+
+There is no new render pass and no audio asset. Flashes and tracers are
+render-only objects on a shared procedural cube, the scorch is a projected
+decal, and the two sounds are generated one-shots with a fixed seed. The runtime
+keeps the live voices across audio blocks, applies the scene's occlusion and bus
+volumes, and retires a voice when it finishes. A scene with no `Feedback:` line
+draws and mixes exactly what it did before, and the validator names a key whose
+value is out of range. `Ballistics.nfscene` ships opted in.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -286,17 +303,20 @@ Weapon: mode=semi rpm=60 magazine=1 damage=20 range=120
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, and per-frame impact events for effects; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
 <summary><b>Quality gates</b></summary>
 
 - Clean MSVC `/W4 /WX` build.
-- **26 test suites.** The 0.5.0 suites passed on Windows x64 (Release):
-  `RHITests` 320/320, `RuntimeTests` 214/214, `EditorTests` 283/283,
-  `UITests` 44/44, `ToolTests` 55/55, `AudioTests` 132/132. `StreamingTests`
-  remains blocked by this machine's Device Guard policy, not by a test failure.
+- **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
+  `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
+  `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
+  (`ctest -j 4`: 100%). On a machine whose Smart App Control blocks a freshly
+  signed binary, a suite can be reported as "process not started" until the
+  reputation service catches up - that is an environment policy, not a test
+  failure.
 - 0 Vulkan validation errors and 0 leaked RHI objects in the editor acceptance run.
 - End-to-end check: create a project with `nf`, build it, package it, and run the
   shipped player without the dev-tree shaders. The portable zip is extracted
@@ -373,7 +393,7 @@ cmake --build build\release --parallel
 
 > [!NOTE]
 > The release script `packaging/windows/build_installer.ps1` can produce an Inno
-> Setup installer on a machine that has Inno Setup. 0.5.0 intentionally ships the
+> Setup installer on a machine that has Inno Setup. 0.6.0 intentionally ships the
 > portable zip only.
 
 ## 🎮 Make a game
@@ -432,8 +452,10 @@ website/       Showcase site source
 Phases 1–38 are in the tree (rendering, editor, physics, scripting, networking,
 2D, destruction, cascaded shadows, SSAO, PBR maps, sky IBL, navmesh, Jolt
 vehicles, aiming, audio dynamics, decals, render scale, and dynamic resolution).
-0.5.0 closes the image-and-hand phase: FXAA, projected decals, supersampling,
-dynamic resolution, ADS, shake, recoil, and player settings.
+0.5.0 closed the image-and-hand phase: FXAA, projected decals, supersampling,
+dynamic resolution, ADS, shake, recoil, and player settings. 0.6.0 closes the
+feedback gap in combat: shot and impact events now become a muzzle flash, a
+tracer, a scorch decal and a procedural one-shot, opt-in from one scene line.
 
 Next up: a publicly trusted Windows signature, an installer in the release,
 Linux exploration, and more first-party samples.

@@ -262,6 +262,89 @@ AudioBuffer make_tone_buffer(f32 frequency_hz, f32 duration_seconds,
 }
 
 // ---------------------------------------------------------------------------
+// Procedural one-shots for combat feedback (Phase 56)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Small deterministic noise source. xorshift32 has no library dependency, no
+/// allocation and no platform-defined behaviour, which is what a procedural
+/// sound needs: two runs of the same binary must produce the same samples.
+struct DeterministicNoise {
+    u32 state;
+
+    explicit DeterministicNoise(u32 seed) : state(seed != 0u ? seed : 0x9e3779b9u) {}
+
+    f32 next() {
+        state ^= state << 13u;
+        state ^= state >> 17u;
+        state ^= state << 5u;
+        // 0 .. 2^32-1 mapped to -1 .. 1 without a signed conversion.
+        return static_cast<f32>(state) * (2.0f / 4294967295.0f) - 1.0f;
+    }
+};
+
+AudioBuffer make_noise_one_shot(u32 sample_rate, f32 seconds, u32 seed) {
+    AudioBuffer buf;
+    if (sample_rate == 0 || seconds <= 0.0f) {
+        return buf;
+    }
+    const usize frames = static_cast<usize>(seconds * static_cast<f32>(sample_rate));
+    if (frames == 0) {
+        return buf;
+    }
+    buf.sample_rate = sample_rate;
+    buf.channels = 1;
+    buf.samples.resize(frames);
+
+    DeterministicNoise noise(seed);
+    for (usize f = 0; f < frames; ++f) {
+        const f32 t = static_cast<f32>(f) / static_cast<f32>(sample_rate);
+        // A gunshot's noise is loud immediately and decays fast; the low thump
+        // decays slower, which is what makes it read as a body rather than a
+        // click. Values are mixed instead of summed at full scale so the
+        // procedural buffer never clips before the bus does.
+        const f32 crack = noise.next() * 0.55f * std::exp(-t * 18.0f);
+        const f32 thump = std::sin(TWO_PI * 68.0f * t) * 0.45f * std::exp(-t * 14.0f);
+        const f32 transient = (t < 0.004f) ? noise.next() * 0.25f : 0.0f;
+        buf.samples[f] = std::clamp(crack + thump + transient, -0.95f, 0.95f);
+    }
+    return buf;
+}
+
+} // namespace
+
+AudioBuffer make_gunshot_buffer(u32 sample_rate) {
+    return make_noise_one_shot(sample_rate, 0.24f, 0x5eed1234u);
+}
+
+AudioBuffer make_impact_buffer(u32 sample_rate) {
+    AudioBuffer buf;
+    if (sample_rate == 0) {
+        return buf;
+    }
+    const f32 seconds = 0.12f;
+    const usize frames = static_cast<usize>(seconds * static_cast<f32>(sample_rate));
+    if (frames == 0) {
+        return buf;
+    }
+    buf.sample_rate = sample_rate;
+    buf.channels = 1;
+    buf.samples.resize(frames);
+
+    DeterministicNoise noise(0x1badd00du);
+    for (usize f = 0; f < frames; ++f) {
+        const f32 t = static_cast<f32>(f) / static_cast<f32>(sample_rate);
+        const f32 tick = noise.next() * 0.42f * std::exp(-t * 42.0f);
+        const f32 ring = (std::sin(TWO_PI * 820.0f * t) * 0.18f +
+                          std::sin(TWO_PI * 160.0f * t) * 0.22f) *
+                         std::exp(-t * 30.0f);
+        buf.samples[f] = std::clamp(tick + ring, -0.9f, 0.9f);
+    }
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
 // NullAudioDevice
 // ---------------------------------------------------------------------------
 

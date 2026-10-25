@@ -34,6 +34,10 @@
 #include <utility>
 #include <vector>
 
+#ifndef NF_ENGINE_VERSION
+#define NF_ENGINE_VERSION "0.0.0-unknown"
+#endif
+
 #if defined(_WIN32)
     #ifndef NOMINMAX
     #define NOMINMAX
@@ -477,7 +481,7 @@ NF_TEST(packaged_player_writes_crash_artifacts_inside_its_own_folder) {
     const std::string text = read_text(reports.front());
     NF_CHECK(contains(text, "SANAD crash report"));
     NF_CHECK(contains(text, "exception:  0xE0000046"));
-    NF_CHECK(contains(text, "version:    NFPlayer 0.5.0"));
+    NF_CHECK(contains(text, std::string("version:    NFPlayer ") + NF_ENGINE_VERSION));
     NF_CHECK(contains(text, dumps.front().filename().string()));
     NF_CHECK(contains(text, "written")); // the dump itself succeeded
 

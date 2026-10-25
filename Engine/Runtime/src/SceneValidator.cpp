@@ -182,6 +182,37 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- combat feedback (Phase 56) -------------------------------------
+    // The loader refuses a bad line, so this is for the other two paths into a
+    // scene (C++ and the editor) and for the values the editor can type after
+    // load. A volume of zero is legal (that cue is silent); a non-positive or
+    // non-finite duration is not, because the director would clamp it and the
+    // author would be looking at a number that means something else.
+    for (const ecs::Entity e : entities) {
+        const auto* fb = world.get<FeedbackComponent>(e);
+        if (fb == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        auto check = [&report, &label](f32 value, f32 lo, f32 hi, const char* name) {
+            if (!sane(value, lo, hi)) {
+                report.add(ValidationSeverity::Warning, label,
+                           std::string(name) + " " + std::to_string(value) + " is outside [" +
+                               std::to_string(lo) + ", " + std::to_string(hi) +
+                               "]; the director will clamp it");
+            }
+        };
+        check(fb->flash_seconds, 0.002f, 10.0f, "flash_time");
+        check(fb->flash_size, 0.001f, 10.0f, "flash_size");
+        check(fb->tracer_seconds, 0.002f, 10.0f, "tracer_time");
+        check(fb->tracer_length, 0.01f, 1000.0f, "tracer_length");
+        check(fb->tracer_width, 0.0005f, 1.0f, "tracer_width");
+        check(fb->impact_seconds, 0.01f, 600.0f, "impact_time");
+        check(fb->impact_size, 0.001f, 10.0f, "impact_size");
+        check(fb->shot_volume, 0.0f, 4.0f, "shot_volume");
+        check(fb->impact_volume, 0.0f, 4.0f, "impact_volume");
+    }
+
     // --- combat (Phase 44) ---------------------------------------------
     //
     // A `Weapon:` line the loader refused never reaches here, so these rules

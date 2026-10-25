@@ -8,6 +8,12 @@ cmake_minimum_required(VERSION 3.24)
 # A hand-maintained literal in a .cpp is what made the launcher keep advertising
 # 0.1.0 after every build; the fix is that there is nowhere left to put one.
 #
+# 0.6.0: the fight you can see. Shots and impacts, which the engine has
+# published since Phase 49, are finally consumed: a muzzle flash, a tracer per
+# pellet, a projected scorch mark and a procedural one-shot - all opt-in from
+# one `Feedback:` scene line, and all reusing render-only objects and decals so
+# no new GPU pass and no audio asset is required.
+#
 # 0.5.0: the frame and the hand. FXAA on the tonemapped image, mouse buttons in
 # the binding table, aim-down-sights, camera shake and recoil — the rendering
 # item 0.4.0 named as next, and the three decisions that turn a camera the
@@ -27,7 +33,7 @@ cmake_minimum_required(VERSION 3.24)
 # Docs/Demo_Release.md says exactly that. Advertising "cross-platform" for a
 # Windows-only product is a claim the repository cannot back.
 project(SANAD
-    VERSION 0.5.0
+    VERSION 0.6.0
     LANGUAGES C CXX
     DESCRIPTION "SANAD Engine - High-performance Windows x64 game engine"
 )

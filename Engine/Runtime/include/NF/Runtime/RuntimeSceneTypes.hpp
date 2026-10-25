@@ -292,6 +292,42 @@ struct PostProcessComponent {
     float fog_end = 120.0f;
 };
 
+/// Combat feedback as scene data (Phase 56).
+///
+/// A scene with a `Weapon:` line already publishes shots and impacts, but a
+/// scene never asked for them to be *shown*. This component is the opt-in:
+/// absent means the runtime draws nothing new and mixes no new sound, so every
+/// level authored through 0.5.0 keeps the exact frame it had. A present line
+/// turns the event streams into a muzzle flash, a tracer, a scorch decal and a
+/// procedural one-shot.
+///
+/// The first enabled component wins, like `Sky:` and `PostProcess:`. Fields are
+/// durations in seconds, sizes in metres and volumes in linear gain. A volume of
+/// zero is "silent" (the cue is not produced); durations and sizes must stay
+/// positive, because a zero lifetime would be an effect that is never seen.
+struct FeedbackComponent {
+    bool enabled = true;
+    /// Procedural shot/impact one-shots. Off keeps the visuals.
+    bool audio = true;
+
+    /// Per-volley muzzle flash lifetime and cube edge length.
+    float flash_seconds = 0.055f;
+    float flash_size = 0.22f;
+
+    /// Per-pellet tracer beam lifetime, visible run and thickness.
+    float tracer_seconds = 0.09f;
+    float tracer_length = 9.0f;
+    float tracer_width = 0.025f;
+
+    /// Scorch decal lifetime and edge length on the hit surface.
+    float impact_seconds = 6.0f;
+    float impact_size = 0.14f;
+
+    /// One-shot gains, before the SFX bus and master volume.
+    float shot_volume = 0.7f;
+    float impact_volume = 0.45f;
+};
+
 // Local lights (Phase 26). A scene until now could only carry one directional
 // light, which is the light of an outdoor day: the renderer has accepted point
 // and spot lights since Phase 21 and the deferred path lights and shadows them
