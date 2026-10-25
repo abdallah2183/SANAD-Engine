@@ -26,4 +26,13 @@ if not defined SANAD_EDITOR (
     pause
     exit /b 1
 )
+rem A browser-downloaded ZIP gets a Low integrity label, extraction inherits it,
+rem and Windows then starts the editor at Low IL: it cannot write to Desktop,
+rem Documents, or OneDrive, so "Create Project" fails with Access denied (5).
+rem Raising the label needs a normal (Medium) process, which this script is when
+rem double-clicked. Harmless when the files are already Medium. Relabel the
+rem whole bin folder, not just the editor: it also holds nf.exe and the player.
+for %%f in ("%SANAD_EDITOR%") do (
+    icacls "%%~dpf*" /setintegritylevel Medium /C /Q >nul 2>&1
+)
 start "SANAD Editor" "%SANAD_EDITOR%"

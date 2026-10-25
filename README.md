@@ -76,6 +76,14 @@ Grab the portable build from the [0.5.0 release](https://github.com/abdallah2183
 > machine that does not trust that certificate. The release is Windows 10/11 x64
 > only.
 
+> [!TIP]
+> **Create Project says "Access is denied (code 5)"?** Windows stamps files
+> extracted from a downloaded ZIP with a *Low integrity* label, and a process at
+> that level cannot write to Desktop, Documents, or OneDrive. Double-click
+> `FixPermissions.cmd` once from the engine folder (no administrator rights
+> needed), then reopen the editor. `RunEditor.cmd` also repairs the label on the
+> binaries each time it launches them.
+
 ### 2. Make something in 30 seconds
 
 1. `SANADEditor.exe` → **Create New Project**

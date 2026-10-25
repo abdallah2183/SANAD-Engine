@@ -284,8 +284,10 @@ bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
         out_error = "failed to create '" + root.string() + "': " + ec.message() + " (code " +
                     std::to_string(ec.value()) + ")";
         if (ec.value() == 5) {
-            out_error += ". Access denied: run the editor from a normal desktop session or "
-                         "choose a folder this process can write to.";
+            out_error += ". Access denied. This usually means the engine folder was extracted "
+                         "from a downloaded ZIP and inherited a Low integrity label: run "
+                         "FixPermissions.cmd once from the engine folder, or choose a folder "
+                         "this process can write to.";
         }
         return false;
     }

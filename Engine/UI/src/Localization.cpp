@@ -468,6 +468,15 @@ constexpr Entry kEntries[] = {
     {"sh_st_choose_loc", "Choose a location for the project.", "اختر موقعًا للمشروع۔"},
     {"sh_st_exists", "A folder with that name already exists:", "يوجد مجلد بهذا الاسم بالفعل:"},
     {"sh_st_create_fail", "Could not create the project:", "تعذر إنشاء المشروع:"},
+    {"sh_st_low_integrity",
+     "Windows runs this copy at Low integrity (downloaded ZIP), so Desktop and Documents are "
+     "read-only. Run FixPermissions.cmd once, then reopen the editor.",
+     "يشغّل ويندوز هذه النسخة بصلاحية منخفضة (ملف ZIP منزّل)، لذا سطح المكتب والمستندات للقراءة "
+     "فقط۔ شغّل FixPermissions.cmd مرة واحدة ثم أعد فتح المحرر۔"},
+    {"sh_st_low_integrity_hint",
+     "Run FixPermissions.cmd in the engine folder once, then reopen the editor.",
+     "شغّل FixPermissions.cmd في مجلد المحرك مرة واحدة ثم أعد فتح المحرر۔"},
+    {"sh_st_low_integrity_dir", "New projects go to:", "تُنشأ المشاريع الجديدة في:"},
     {"sh_st_nfproj_missing", "The project was created but its .nfproj is missing:",
                              "أُنشئ المشروع لكن ملف .nfproj مفقود:"},
     {"sh_st_docs_missing", "Docs folder not found beside this build.",

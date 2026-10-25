@@ -328,11 +328,13 @@ void save_recent_projects(const std::vector<std::string>& recent);
 /// Native folder picker (IFileDialog + FOS_PICKFOLDERS). Shared by the New
 /// Project flow here and by the save-location flow in E4. False = cancelled,
 /// which is a normal outcome, never an error. `start_dir` seeds the dialog.
+/// `owner` is the HWND that owns the modal dialog (pass the launcher window):
+/// without it the dialog can open behind the launcher and the UI looks frozen.
 bool pick_folder_dialog(const std::string& title, const std::string& start_dir,
-                        std::string& out_dir);
+                        std::string& out_dir, void* owner = nullptr);
 
 /// Native "open file" picker for .nfproj files. False = cancelled.
 bool pick_project_file_dialog(const std::string& title, const std::string& start_dir,
-                              std::string& out_file);
+                              std::string& out_file, void* owner = nullptr);
 
 } // namespace nf::editor

@@ -212,6 +212,88 @@ std::string recent_store_path() {
     return p.string();
 }
 
+/// True when the process runs below Medium integrity. Browsers stamp
+/// downloaded archives with a Low mandatory label, and extraction inherits it;
+/// Windows then starts the editor at Low integrity, where Desktop and Documents
+/// are read-only. There is no way for such a process to raise its own label
+/// (write-up is blocked), so the launcher must explain the cause and keep
+/// working from a writable directory instead of failing the Create button.
+bool process_is_low_integrity() {
+    HANDLE token = nullptr;
+    if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token) == FALSE) {
+        return false;
+    }
+    DWORD len = 0;
+    ::GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &len);
+    bool low = false;
+    if (len != 0) {
+        std::vector<unsigned char> buffer(len);
+        if (::GetTokenInformation(token, TokenIntegrityLevel, buffer.data(), len, &len) != FALSE) {
+            auto* label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer.data());
+            if (label->Label.Sid != nullptr) {
+                const DWORD count = *::GetSidSubAuthorityCount(label->Label.Sid);
+                if (count > 0) {
+                    const DWORD rid = *::GetSidSubAuthority(label->Label.Sid, count - 1);
+                    low = rid < SECURITY_MANDATORY_MEDIUM_RID;
+                }
+            }
+        }
+    }
+    ::CloseHandle(token);
+    return low;
+}
+
+/// Creates and removes a uniquely named directory under `dir`. This is the
+/// exact operation Create needs (mkdir), so a location that passes here is a
+/// location scaffold_project can write to.
+bool directory_is_writable(const std::string& dir) {
+    if (dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) {
+        return false;
+    }
+    const std::filesystem::path probe =
+        std::filesystem::path(dir) /
+        (".sanad_write_probe_" + std::to_string(::GetCurrentProcessId()));
+    if (!std::filesystem::create_directory(probe, ec) || ec) {
+        return false;
+    }
+    std::error_code removed;
+    std::filesystem::remove(probe, removed);
+    return true;
+}
+
+/// Writable home for new projects when the Documents default is not usable
+/// (Low-integrity editor). AppData\LocalLow is Windows' designated write
+/// location for Low IL, so it works even when the whole profile is Medium. The
+/// module's Projects/ folder is the fallback for a tree that is itself Low
+/// (the raw downloaded ZIP case).
+std::string fallback_project_dir() {
+    std::vector<std::filesystem::path> candidates;
+    if (const std::string profile = env_var("USERPROFILE"); !profile.empty()) {
+        candidates.emplace_back(std::filesystem::path(profile) / "AppData" / "LocalLow" /
+                                "SANAD Projects");
+    }
+    const std::filesystem::path module = launcher_module_dir();
+    if (!module.empty()) {
+        candidates.emplace_back(module / "Projects");
+    }
+    for (const std::filesystem::path& candidate : candidates) {
+        std::error_code ec;
+        std::filesystem::create_directories(candidate, ec);
+        if (ec) {
+            continue;
+        }
+        const std::string text = candidate.string();
+        if (directory_is_writable(text)) {
+            return text;
+        }
+    }
+    return {};
+}
+
 // Defined with the gallery table below; declared here because
 // create_project_in_shell() — which comes first — calls it.
 std::string selected_template_dir(int index, const char* templates_root,
@@ -308,6 +390,13 @@ struct LauncherState {
     int hover_nav = -1;   // sidebar index under the cursor, -1 = none
     int hover_card = -1;  // project/template card index under cursor
     int hover_btn = -1;   // page-local button index under cursor
+    // True when Windows started the editor below Medium integrity. A ZIP
+    // downloaded by a browser carries a Low mandatory label; extraction
+    // inherits it, and a Low-IL process may not write to Desktop/Documents.
+    bool low_integrity = false;
+    // First writable directory found when the default location is read-only
+    // (empty when Documents was usable). Shown in the New Project form.
+    std::string fallback_dir;
     std::string search;   // Projects filter (mirrors the search EDIT)
     int selected_recent = 0; // featured project = filtered[selected_recent]
     // ThirdPerson (index 3), not the old "blank" default: a first project that
@@ -565,7 +654,15 @@ void on_create(HWND hwnd) {
     std::string perr;
     if (!nf::project::scaffold_project(so, perr)) {
         NF_LOG_ERROR(LogCategory::Editor, "launcher scaffold error: {}", perr);
-        set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + perr);
+        // Access denied under Low integrity is not a generic permission bug:
+        // Windows is enforcing the download label, and the remedy is the
+        // repository's FixPermissions.cmd, not "pick another folder" alone.
+        if (st->low_integrity && perr.find("(code 5)") != std::string::npos) {
+            set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + perr + "\n" +
+                                 shell_tr("sh_st_low_integrity_hint"));
+        } else {
+            set_status(hwnd, shell_tr("sh_st_create_fail") + "\n" + perr);
+        }
         return;
     }
 
@@ -2458,9 +2555,10 @@ void layout_children(HWND hwnd, LauncherState* st) {
         }
     }
     if (HWND status = ::GetDlgItem(hwnd, kIdStatus)) {
-        // Two lines: "Could not create the project:" plus the detail. The old
-        // 22 px box clipped the second line to an unreadable sliver.
-        ::MoveWindow(status, content_x(st), H - S(st, 58), content_w(st, W), S(st, 44), TRUE);
+        // Three lines fit here: prefix, error detail, and (under Low
+        // integrity) the repair hint. The old 22 px box clipped the second
+        // line to an unreadable sliver.
+        ::MoveWindow(status, content_x(st), H - S(st, 72), content_w(st, W), S(st, 58), TRUE);
     }
 }
 
@@ -2625,7 +2723,8 @@ void do_action(HWND hwnd, LauncherState* st, const Hit& h) {
         case Hit::Kind::OpenFile: {
             std::string picked;
             // Native dialog: LOGICAL title (the OS shapes its own chrome).
-            if (pick_project_file_dialog(shell_tr("sh_dialog_open_project"), st->new_dir, picked)) {
+            if (pick_project_file_dialog(shell_tr("sh_dialog_open_project"), st->new_dir, picked,
+                                          hwnd)) {
                 accept_project(hwnd, picked);
             }
             return;
@@ -2673,7 +2772,8 @@ void do_action(HWND hwnd, LauncherState* st, const Hit& h) {
             return;
         case Hit::Kind::Browse: {
             std::string picked;
-            if (pick_folder_dialog(shell_tr("sh_dialog_choose_loc"), st->new_dir, picked)) {
+            if (pick_folder_dialog(shell_tr("sh_dialog_choose_loc"), st->new_dir, picked,
+                                    hwnd)) {
                 st->new_dir = picked;
                 ::SetDlgItemTextW(hwnd, kIdNewDir, widen(picked).c_str());
             }
@@ -3229,6 +3329,17 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
         state.page = ShellPage::NewProject;
     }
     state.new_dir = known_documents_dir();
+    // A downloaded-and-extracted ZIP is marked Low integrity by the browser,
+    // and Windows then denies writes to Desktop/Documents. Keep the launcher
+    // usable by pointing the form at a directory the process can really write,
+    // and surface the exact repair steps in the status line.
+    state.low_integrity = process_is_low_integrity();
+    if (state.low_integrity && !directory_is_writable(state.new_dir)) {
+        state.fallback_dir = fallback_project_dir();
+        if (!state.fallback_dir.empty()) {
+            state.new_dir = state.fallback_dir;
+        }
+    }
     state.status_color = theme::text_dim;
 
     // Restored choice: the shell reopens in the saved language, and the RTL
@@ -3429,8 +3540,8 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
         // bidi path instead). Alignment flips inside draw_status with
         // g_shell_rtl, so no per-language style flip is applied here.
         add_control(hwnd, L"STATIC", L"", SS_OWNERDRAW,
-                    shell::content_x(&state), cH - scale_dpi(&state, 34),
-                    shell::content_w(&state, cW), scale_dpi(&state, 22), kIdStatus,
+                    shell::content_x(&state), cH - scale_dpi(&state, 72),
+                    shell::content_w(&state, cW), scale_dpi(&state, 58), kIdStatus,
                     state.font_small);
     }
 
@@ -3438,6 +3549,15 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
     // when the recent list is empty, and this reset was silently overriding it
     // (the empty library still landed on a Projects page with nothing to open).
     shell::layout_children(hwnd, &state);
+    if (state.low_integrity) {
+        // A silent read-only Documents folder made Create look like a dead
+        // button. Say what Windows did and the one command that repairs it.
+        std::string warning = shell_tr("sh_st_low_integrity");
+        if (!state.fallback_dir.empty()) {
+            warning += "\n" + shell_tr("sh_st_low_integrity_dir") + " " + state.fallback_dir;
+        }
+        set_status(hwnd, warning, theme::error);
+    }
     if (HWND focus = ::GetDlgItem(hwnd, state.page == ShellPage::Projects ? kIdSearch
                                                                          : kIdNewName)) {
         ::SetFocus(focus);
@@ -3655,8 +3775,15 @@ void save_language(bool arabic) {
 // --- native pickers ----------------------------------------------------------
 
 bool pick_folder_dialog(const std::string& title, const std::string& start_dir,
-                        std::string& out_dir) {
+                        std::string& out_dir, void* owner) {
 #ifdef _WIN32
+    // Own the modal dialog explicitly: GetActiveWindow() can return null while
+    // the launcher's worker thread is repainting, which used to let the picker
+    // open behind the launcher (the window then looked frozen).
+    HWND owner_wnd = static_cast<HWND>(owner);
+    if (owner_wnd == nullptr) {
+        owner_wnd = ::GetActiveWindow();
+    }
     IFileDialog* dlg = nullptr;
     if (FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                                   IID_PPV_ARGS(&dlg)))) {
@@ -3677,7 +3804,7 @@ bool pick_folder_dialog(const std::string& title, const std::string& start_dir,
         }
     }
     bool ok = false;
-    if (SUCCEEDED(dlg->Show(::GetActiveWindow()))) {
+    if (SUCCEEDED(dlg->Show(owner_wnd))) {
         IShellItem* item = nullptr;
         if (SUCCEEDED(dlg->GetResult(&item))) {
             PWSTR raw = nullptr;
@@ -3695,13 +3822,18 @@ bool pick_folder_dialog(const std::string& title, const std::string& start_dir,
     (void)title;
     (void)start_dir;
     (void)out_dir;
+    (void)owner;
     return false;
 #endif
 }
 
 bool pick_project_file_dialog(const std::string& title, const std::string& start_dir,
-                              std::string& out_file) {
+                              std::string& out_file, void* owner) {
 #ifdef _WIN32
+    HWND owner_wnd = static_cast<HWND>(owner);
+    if (owner_wnd == nullptr) {
+        owner_wnd = ::GetActiveWindow();
+    }
     IFileDialog* dlg = nullptr;
     if (FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                                   IID_PPV_ARGS(&dlg)))) {
@@ -3726,7 +3858,7 @@ bool pick_project_file_dialog(const std::string& title, const std::string& start
         }
     }
     bool ok = false;
-    if (SUCCEEDED(dlg->Show(::GetActiveWindow()))) {
+    if (SUCCEEDED(dlg->Show(owner_wnd))) {
         IShellItem* item = nullptr;
         if (SUCCEEDED(dlg->GetResult(&item))) {
             PWSTR raw = nullptr;
@@ -3744,6 +3876,7 @@ bool pick_project_file_dialog(const std::string& title, const std::string& start
     (void)title;
     (void)start_dir;
     (void)out_file;
+    (void)owner;
     return false;
 #endif
 }
