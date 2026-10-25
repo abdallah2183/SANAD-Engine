@@ -76,6 +76,56 @@ NF_TEST(procedural_impact_is_shorter_than_the_gunshot_and_bounded) {
     NF_CHECK(peak <= 0.9f);
 }
 
+NF_TEST(procedural_impact_default_is_the_ballistic_click) {
+    // The Phase 56 call site is `make_impact_buffer(rate)` with no kind. The
+    // default parameter is what keeps that source-compatible, and it has to mean
+    // the same audio: lead on a wall is the ballistic channel.
+    const AudioBuffer implicit = make_impact_buffer(44100u);
+    const AudioBuffer explicit_ballistic = make_impact_buffer(44100u, ImpactSound::Ballistic);
+    NF_CHECK(implicit.samples == explicit_ballistic.samples);
+    NF_CHECK_EQ(implicit.sample_rate, explicit_ballistic.sample_rate);
+}
+
+NF_TEST(procedural_impact_variants_are_distinct_bounded_and_deterministic) {
+    const AudioBuffer ballistic = make_impact_buffer(44100u, ImpactSound::Ballistic);
+    const AudioBuffer explosive = make_impact_buffer(44100u, ImpactSound::Explosive);
+    const AudioBuffer fire = make_impact_buffer(44100u, ImpactSound::Fire);
+
+    for (const AudioBuffer* buffer : {&ballistic, &explosive, &fire}) {
+        NF_CHECK_EQ(buffer->sample_rate, 44100u);
+        NF_CHECK_EQ(buffer->channels, 1u);
+        NF_CHECK(buffer->frame_count() > 0u);
+        const float peak = peak_of(*buffer);
+        // Non-silent but never clipping on its own: the bus owns the ceiling.
+        NF_CHECK(peak > 0.2f);
+        NF_CHECK(peak <= 0.95f);
+        for (const float sample : buffer->samples) {
+            NF_CHECK(std::isfinite(sample));
+        }
+    }
+
+    // A blast is a longer event than a bullet on a wall, and fire sits between
+    // the two. If these ever collapse to one length, the three channels have
+    // silently become one sound again.
+    NF_CHECK(explosive.duration_seconds() > ballistic.duration_seconds());
+    NF_CHECK(fire.duration_seconds() > ballistic.duration_seconds());
+    NF_CHECK(explosive.duration_seconds() > fire.duration_seconds());
+
+    // Different waveforms, not one buffer at three speeds.
+    NF_CHECK(ballistic.samples != explosive.samples);
+    NF_CHECK(explosive.samples != fire.samples);
+
+    // Same build -> same bytes, for replay.
+    const AudioBuffer explosive_again = make_impact_buffer(44100u, ImpactSound::Explosive);
+    const AudioBuffer fire_again = make_impact_buffer(44100u, ImpactSound::Fire);
+    NF_CHECK(explosive.samples == explosive_again.samples);
+    NF_CHECK(fire.samples == fire_again.samples);
+
+    // Zero rate is refused for every variant, like the ballistic one always was.
+    NF_CHECK(make_impact_buffer(0u, ImpactSound::Explosive).samples.empty());
+    NF_CHECK(make_impact_buffer(0u, ImpactSound::Fire).samples.empty());
+}
+
 NF_TEST(procedural_one_shots_decay_and_are_deterministic) {
     const AudioBuffer first = make_gunshot_buffer(48000u);
     const AudioBuffer second = make_gunshot_buffer(48000u);

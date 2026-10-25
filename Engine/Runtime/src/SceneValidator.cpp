@@ -211,6 +211,23 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         check(fb->impact_size, 0.001f, 10.0f, "impact_size");
         check(fb->shot_volume, 0.0f, 4.0f, "shot_volume");
         check(fb->impact_volume, 0.0f, 4.0f, "impact_volume");
+        // Phase 59 additions: the blast flash, the per-channel gains and the
+        // muzzle light. Caps are checked as floats because the report prints the
+        // value; the range is the director's own 1..4096.
+        check(fb->blast_flash_seconds, 0.002f, 10.0f, "blast_time");
+        check(fb->blast_flash_size, 0.001f, 10.0f, "blast_size");
+        check(fb->impact_volume_explosive, 0.0f, 4.0f, "impact_volume_explosive");
+        check(fb->impact_volume_fire, 0.0f, 4.0f, "impact_volume_fire");
+        check(fb->flash_light_intensity, 0.0f, 1000.0f, "light_intensity");
+        check(fb->flash_light_radius, 0.01f, 1000.0f, "light_radius");
+        check(fb->flash_light_r, 0.0f, 1.0f, "light_r");
+        check(fb->flash_light_g, 0.0f, 1.0f, "light_g");
+        check(fb->flash_light_b, 0.0f, 1.0f, "light_b");
+        check(static_cast<f32>(fb->max_flashes), 1.0f, 4096.0f, "max_flashes");
+        check(static_cast<f32>(fb->max_tracers), 1.0f, 4096.0f, "max_tracers");
+        check(static_cast<f32>(fb->max_impacts), 1.0f, 4096.0f, "max_impacts");
+        check(static_cast<f32>(fb->max_sounds), 1.0f, 4096.0f, "max_sounds");
+        check(static_cast<f32>(fb->max_lights), 1.0f, 4096.0f, "max_lights");
     }
 
     // --- combat (Phase 44) ---------------------------------------------

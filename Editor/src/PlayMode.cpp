@@ -60,6 +60,13 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* pp = sw.get<runtime::PostProcessComponent>(se)) {
             dw.add<runtime::PostProcessComponent>(de, *pp);
         }
+        // Phase 59: Play was the other half of the same gap. A scene authored
+        // with a `Feedback:` line entered play mode with no feedback component,
+        // so the shots the player fired were silent in Play and audible in the
+        // packaged build — the worst possible place for a mismatch.
+        if (const auto* fb = sw.get<runtime::FeedbackComponent>(se)) {
+            dw.add<runtime::FeedbackComponent>(de, *fb);
+        }
         if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
             dw.add<scene::PrefabLinkComponent>(de, *p);
         }

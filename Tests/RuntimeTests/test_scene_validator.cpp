@@ -450,3 +450,44 @@ NF_TEST(a_combat_agent_without_a_weapon_is_a_warning) {
     NF_CHECK(has_issue(report, ValidationSeverity::Warning, "no weapon"));
     NF_CHECK_EQ(report.errors, 0);
 }
+
+// --- combat feedback (Phase 59) ----------------------------------------------
+
+NF_TEST(feedback_values_outside_the_director_range_are_warned_by_name) {
+    // The loader refuses a bad `Feedback:` line, so this catches the other two
+    // ways a value gets in: a component built in C++ and an inspector field
+    // typed past its slider. Phase 59 added the blast flash, the per-channel
+    // gains, the muzzle light and the caps to that same check.
+    CleanScene clean;
+    ecs::World& w = clean.scene.world();
+
+    const ecs::Entity fx = w.create_entity();
+    w.add<scene::NameComponent>(fx, scene::NameComponent{"Feedback"});
+    w.add<scene::Transform>(fx, scene::Transform{});
+    FeedbackComponent fb;
+    fb.blast_flash_size = 0.0f;
+    fb.impact_volume_explosive = 9.0f;
+    fb.flash_light_radius = 0.0f;
+    fb.max_lights = 0u;
+    w.add<FeedbackComponent>(fx, fb);
+
+    const ValidationReport report = validate_scene(clean.scene, "content://Scenes/x.nfscene");
+    NF_CHECK(has_issue(report, ValidationSeverity::Warning, "blast_size"));
+    NF_CHECK(has_issue(report, ValidationSeverity::Warning, "impact_volume_explosive"));
+    NF_CHECK(has_issue(report, ValidationSeverity::Warning, "light_radius"));
+    NF_CHECK(has_issue(report, ValidationSeverity::Warning, "max_lights"));
+}
+
+NF_TEST(a_sane_feedback_component_is_not_warned_about) {
+    CleanScene clean;
+    ecs::World& w = clean.scene.world();
+
+    const ecs::Entity fx = w.create_entity();
+    w.add<scene::NameComponent>(fx, scene::NameComponent{"Feedback"});
+    w.add<scene::Transform>(fx, scene::Transform{});
+    w.add<FeedbackComponent>(fx, FeedbackComponent{});
+
+    const ValidationReport report = validate_scene(clean.scene, "content://Scenes/x.nfscene");
+    NF_CHECK_EQ(report.errors, 0u);
+    NF_CHECK_EQ(report.warnings, 0u);
+}

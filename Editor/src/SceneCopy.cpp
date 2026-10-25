@@ -42,6 +42,12 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* pp = src.get<runtime::PostProcessComponent>(from)) {
         dst.add<runtime::PostProcessComponent>(to, *pp);
     }
+    // Phase 59: the feedback component was missing from this list, so a copy of
+    // an entity (duplicate, prefab) silently lost its authored combat feedback
+    // and the copy fired into the world with no flash, tracer, decal or sound.
+    if (const auto* fb = src.get<runtime::FeedbackComponent>(from)) {
+        dst.add<runtime::FeedbackComponent>(to, *fb);
+    }
     if (const auto* p = src.get<scene::PrefabLinkComponent>(from)) {
         dst.add<scene::PrefabLinkComponent>(to, *p);
     }

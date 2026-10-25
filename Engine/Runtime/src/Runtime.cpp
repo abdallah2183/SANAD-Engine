@@ -1011,7 +1011,12 @@ u32 Runtime::step_audio(float dt) {
             // New rate: old voices point at buffers built for the old clock.
             m_feedback_voices.clear();
             m_feedback_shot_buffer = audio::make_gunshot_buffer(rate);
-            m_feedback_impact_buffer = audio::make_impact_buffer(rate);
+            m_feedback_impact_buffers[static_cast<usize>(runtime::DamageType::Ballistic)] =
+                audio::make_impact_buffer(rate, audio::ImpactSound::Ballistic);
+            m_feedback_impact_buffers[static_cast<usize>(runtime::DamageType::Explosive)] =
+                audio::make_impact_buffer(rate, audio::ImpactSound::Explosive);
+            m_feedback_impact_buffers[static_cast<usize>(runtime::DamageType::Fire)] =
+                audio::make_impact_buffer(rate, audio::ImpactSound::Fire);
             m_feedback_buffer_rate = rate;
         }
         constexpr usize kMaxPendingCues = 64;
@@ -1025,9 +1030,27 @@ u32 Runtime::step_audio(float dt) {
 
         constexpr usize kMaxFeedbackVoices = 24;
         for (const runtime::FeedbackSound& cue : m_feedback_pending) {
-            const audio::AudioBuffer* buffer =
-                cue.kind == runtime::FeedbackSound::Kind::Shot ? &m_feedback_shot_buffer
-                                                               : &m_feedback_impact_buffer;
+            // Phase 59: one buffer per damage channel. The cue already chose the
+            // channel (the director maps DamageType to it); the runtime only owns
+            // the buffers, so the two never disagree about which sound a blast is.
+            const audio::AudioBuffer* buffer = &m_feedback_shot_buffer;
+            switch (cue.kind) {
+            case runtime::FeedbackSound::Kind::ImpactBallistic:
+                buffer = &m_feedback_impact_buffers[static_cast<usize>(
+                    runtime::DamageType::Ballistic)];
+                break;
+            case runtime::FeedbackSound::Kind::ImpactExplosive:
+                buffer = &m_feedback_impact_buffers[static_cast<usize>(
+                    runtime::DamageType::Explosive)];
+                break;
+            case runtime::FeedbackSound::Kind::ImpactFire:
+                buffer = &m_feedback_impact_buffers[static_cast<usize>(
+                    runtime::DamageType::Fire)];
+                break;
+            case runtime::FeedbackSound::Kind::Shot:
+            default:
+                break;
+            }
             if (buffer->samples.empty()) {
                 continue;
             }
@@ -1783,6 +1806,22 @@ void Runtime::bind_scene_feedback() {
         config.shot_volume = fb->shot_volume;
         config.impact_volume = fb->impact_volume;
         config.audio = fb->audio;
+        // Phase 59: the blast flash, the per-channel gains, the muzzle light and
+        // all five caps are scene data now.
+        config.blast_flash_seconds = fb->blast_flash_seconds;
+        config.blast_flash_size = fb->blast_flash_size;
+        config.impact_volume_explosive = fb->impact_volume_explosive;
+        config.impact_volume_fire = fb->impact_volume_fire;
+        config.flash_light = fb->flash_light;
+        config.flash_light_intensity = fb->flash_light_intensity;
+        config.flash_light_radius = fb->flash_light_radius;
+        config.flash_light_color =
+            Vec3{fb->flash_light_r, fb->flash_light_g, fb->flash_light_b};
+        config.max_flashes = static_cast<u32>(fb->max_flashes);
+        config.max_tracers = static_cast<u32>(fb->max_tracers);
+        config.max_impacts = static_cast<u32>(fb->max_impacts);
+        config.max_sounds = static_cast<u32>(fb->max_sounds);
+        config.max_lights = static_cast<u32>(fb->max_lights);
         m_feedback.configure(config);
         m_feedback_bound = true;
         break;
@@ -4418,6 +4457,37 @@ void Runtime::extract_local_lights() {
     }
 }
 
+void Runtime::apply_combat_feedback_lights() {
+    if (!m_feedback_bound || !m_renderer || !m_renderer_initialized) {
+        return;
+    }
+    const std::vector<runtime::FeedbackLight>& lights = m_feedback.lights();
+    if (lights.empty()) {
+        return;
+    }
+    // The scene's authored lights fill the slots first — extract_local_lights
+    // ran immediately before this — so a level that already uses all eight keeps
+    // the lighting its author placed. A flash that loses the race is a missing
+    // highlight on a wall, not a level that renders wrong; it is not a warning
+    // either, because a muzzle flash is a per-frame transient and a log line per
+    // shot would bury the console.
+    for (const runtime::FeedbackLight& light : lights) {
+        if (m_renderer->point_light_count() >= rendering::Renderer3D::kMaxPointLights) {
+            return;
+        }
+        rendering::PointLight point{};
+        point.position = light.position;
+        point.color = light.color;
+        point.intensity = light.intensity;
+        point.radius = light.radius;
+        // A flash that casts shadows would cost six depth renders for five
+        // hundredths of a second, and the shadow map would not even be sampled
+        // before the light is gone.
+        point.shadows_enabled = false;
+        m_renderer->add_point_light(point);
+    }
+}
+
 void Runtime::extract_sky() {
     if (!m_renderer || !m_renderer_initialized) {
         return;
@@ -4803,6 +4873,7 @@ void Runtime::render(uint32_t image_index, rhi::CommandBuffer& cmd, u32 frame_sl
     extract_camera(w, h, cam);
     extract_light();
     extract_local_lights();
+    apply_combat_feedback_lights();
     extract_sky();
     extract_post_process();
     // Reused scratch: build_render_world clears it, so the per-object storage
@@ -4884,6 +4955,7 @@ void Runtime::render_offscreen(rhi::Texture& target, rhi::CommandBuffer& cmd, u3
     extract_camera(w, h, cam);
     extract_light();
     extract_local_lights();
+    apply_combat_feedback_lights();
     extract_sky();
     extract_post_process();
     build_render_world(m_render_world);

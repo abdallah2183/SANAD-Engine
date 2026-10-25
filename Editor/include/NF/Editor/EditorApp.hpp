@@ -283,6 +283,15 @@ public:
     // undo commands. The setters take full components so the inspector can
     // forward its cached fields without the App knowing widget layout.
     bool detach_destructible(ecs::Entity e, std::string& out_err);
+
+    // --- Combat feedback (Phase 59) -----------------------------------------
+    // The `Feedback:` line is the only authoring path until now, which meant a
+    // level designer had to hand-edit the scene file to tune a muzzle flash.
+    // `set_feedback` is add-or-replace like the other full-component setters and
+    // validates every number against the loader's own ranges, so a value the
+    // inspector accepts is a value the scene file can reproduce.
+    bool set_feedback(ecs::Entity e, const runtime::FeedbackComponent& fb, std::string& out_err);
+    bool detach_feedback(ecs::Entity e, std::string& out_err);
     // Binds a VFS audio file to the entity (add-or-replace): reads and
     // decodes it now, so the waveform preview and Play work without a scene
     // reload. A file-backed buffer clears any procedural tone on the same

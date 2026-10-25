@@ -62,7 +62,8 @@ ShotEvent shot(u32 pellet = 1u, u32 pellets = 1u, f32 x = 0.0f,
     return event;
 }
 
-ImpactEvent impact(f32 x = 0.0f, bool status = false, bool splash = false) {
+ImpactEvent impact(f32 x = 0.0f, bool status = false, bool splash = false,
+                   DamageType type = DamageType::Ballistic) {
     ImpactEvent event;
     event.shooter = ecs::Entity{1u, 0u};
     event.victim = ecs::Entity{2u, 0u};
@@ -72,6 +73,7 @@ ImpactEvent impact(f32 x = 0.0f, bool status = false, bool splash = false) {
     event.applied = 10.0f;
     event.splash = splash;
     event.status = status;
+    event.damage_type = type;
     return event;
 }
 
@@ -214,6 +216,121 @@ NF_TEST(feedback_audio_off_keeps_the_visuals_and_drops_every_cue) {
     NF_CHECK(feedback.sounds().empty());
 }
 
+// --- Phase 59: the gaps 0.6.0 declared ---------------------------------------
+
+NF_TEST(feedback_impact_sound_follows_the_damage_type) {
+    CombatFeedback feedback;
+    feedback.configure(CombatFeedbackConfig{});
+
+    // One hit per channel. Before Phase 59 all three produced the same click,
+    // because the director ignored `damage_type` even though the event carried
+    // it since Phase 52.
+    std::vector<ImpactEvent> impacts{impact(0.0f, false, false, DamageType::Ballistic),
+                                     impact(1.0f, false, false, DamageType::Explosive),
+                                     impact(2.0f, false, false, DamageType::Fire)};
+    feedback.update(1.0f / 60.0f, no_shots, impacts);
+
+    NF_CHECK_EQ(feedback.impacts().size(), static_cast<size_t>(3));
+    NF_CHECK_EQ(feedback.sounds().size(), static_cast<size_t>(3));
+    if (feedback.sounds().size() == 3) {
+        NF_CHECK(feedback.sounds()[0].kind == FeedbackSound::Kind::ImpactBallistic);
+        NF_CHECK(feedback.sounds()[1].kind == FeedbackSound::Kind::ImpactExplosive);
+        NF_CHECK(feedback.sounds()[2].kind == FeedbackSound::Kind::ImpactFire);
+        NF_CHECK_NEAR(feedback.sounds()[0].volume, 0.45f, 1e-5f);
+        NF_CHECK_NEAR(feedback.sounds()[1].volume, 0.75f, 1e-5f);
+        NF_CHECK_NEAR(feedback.sounds()[2].volume, 0.55f, 1e-5f);
+    }
+
+    // Only the explosive hit spawns a blast flash, and it is bigger and slower
+    // than a muzzle flash: that is the whole point of the second flash.
+    NF_CHECK_EQ(feedback.flashes().size(), static_cast<size_t>(1));
+    if (feedback.flashes().size() == 1) {
+        const FeedbackFlash& blast = feedback.flashes()[0];
+        NF_CHECK(blast.size > feedback.config().flash_size);
+        NF_CHECK(blast.life > feedback.config().flash_seconds);
+        // It sits on the surface it hit, at the impact point, not at the muzzle.
+        NF_CHECK_NEAR(blast.position.x, 1.0f, 1e-5f);
+        NF_CHECK_NEAR(blast.direction.z, 1.0f, 1e-5f);
+    }
+}
+
+NF_TEST(feedback_blast_is_one_per_explosive_round_not_one_per_splash_victim) {
+    CombatFeedback feedback;
+    feedback.configure(CombatFeedbackConfig{});
+
+    // A grenade: the round itself, plus three victims caught in the blast. The
+    // splash victims stay excluded from decals and sounds (unchanged since
+    // 0.6.0); the blast flash is spawned once, by the direct hit.
+    std::vector<ImpactEvent> impacts{impact(0.0f, false, false, DamageType::Explosive),
+                                     impact(1.0f, false, true, DamageType::Explosive),
+                                     impact(2.0f, false, true, DamageType::Explosive),
+                                     impact(3.0f, false, true, DamageType::Explosive)};
+    feedback.update(1.0f / 60.0f, no_shots, impacts);
+
+    NF_CHECK_EQ(feedback.impacts().size(), static_cast<size_t>(1));
+    NF_CHECK_EQ(feedback.flashes().size(), static_cast<size_t>(1));
+    NF_CHECK_EQ(feedback.sounds().size(), static_cast<size_t>(1));
+    if (feedback.sounds().size() == 1) {
+        NF_CHECK(feedback.sounds()[0].kind == FeedbackSound::Kind::ImpactExplosive);
+    }
+}
+
+NF_TEST(feedback_muzzle_light_follows_the_flash_and_keeps_the_newest) {
+    CombatFeedbackConfig config;
+    config.max_lights = 2u;
+    CombatFeedback feedback;
+    feedback.configure(config);
+
+    // Three volleys in one update, so the light cap has to choose. The newest
+    // shots win: in a firefight the light the player sees is the one that just
+    // fired, not the one already fading behind it.
+    std::vector<ShotEvent> shots{shot(1u, 1u, 0.0f), shot(1u, 1u, 1.0f), shot(1u, 1u, 2.0f)};
+    feedback.update(1.0f / 60.0f, shots, no_impacts);
+
+    NF_CHECK_EQ(feedback.flashes().size(), static_cast<size_t>(3));
+    NF_CHECK_EQ(feedback.lights().size(), static_cast<size_t>(2));
+    if (feedback.lights().size() == 2) {
+        NF_CHECK_NEAR(feedback.lights()[0].position.x, 2.0f, 1e-5f);
+        NF_CHECK_NEAR(feedback.lights()[1].position.x, 1.0f, 1e-5f);
+        // Built from the config, not invented here.
+        NF_CHECK_NEAR(feedback.lights()[0].intensity, config.flash_light_intensity, 1e-5f);
+        NF_CHECK_NEAR(feedback.lights()[0].radius, config.flash_light_radius, 1e-5f);
+        NF_CHECK_NEAR(feedback.lights()[0].color.y, config.flash_light_color.y, 1e-5f);
+    }
+
+    // The light is derived from the flash, so it cannot outlive it: aging past
+    // the flash lifetime retires both in the same update.
+    feedback.update(config.flash_seconds, no_shots, no_impacts);
+    NF_CHECK(feedback.flashes().empty());
+    NF_CHECK(feedback.lights().empty());
+}
+
+NF_TEST(feedback_muzzle_light_can_be_turned_off_entirely) {
+    CombatFeedbackConfig config;
+    config.flash_light = false;
+    CombatFeedback feedback;
+    feedback.configure(config);
+
+    std::vector<ShotEvent> shots{shot()};
+    feedback.update(1.0f / 60.0f, shots, no_impacts);
+
+    // The 0.6.0 look: the cube is still drawn, nothing is lit.
+    NF_CHECK_EQ(feedback.flashes().size(), static_cast<size_t>(1));
+    NF_CHECK(feedback.lights().empty());
+}
+
+NF_TEST(feedback_a_zero_intensity_light_is_the_same_as_off) {
+    CombatFeedbackConfig config;
+    config.flash_light_intensity = 0.0f;
+    CombatFeedback feedback;
+    feedback.configure(config);
+
+    std::vector<ShotEvent> shots{shot()};
+    feedback.update(1.0f / 60.0f, shots, no_impacts);
+    NF_CHECK_EQ(feedback.flashes().size(), static_cast<size_t>(1));
+    NF_CHECK(feedback.lights().empty());
+}
+
 // --- the scene line ----------------------------------------------------------
 
 NF_TEST(feedback_line_round_trips_every_key) {
@@ -240,6 +357,24 @@ NF_TEST(feedback_line_round_trips_every_key) {
     fb.impact_size = 0.3f;
     fb.shot_volume = 0.9f;
     fb.impact_volume = 0.25f;
+    // Phase 59 keys: the blast flash, the per-channel gains, the muzzle light
+    // and all five caps. Every one of them has to survive the writer/reader pair
+    // or the inspector would edit a value the scene file cannot carry.
+    fb.blast_flash_seconds = 0.21f;
+    fb.blast_flash_size = 1.4f;
+    fb.impact_volume_explosive = 1.1f;
+    fb.impact_volume_fire = 0.35f;
+    fb.flash_light = false;
+    fb.flash_light_intensity = 5.5f;
+    fb.flash_light_radius = 12.0f;
+    fb.flash_light_r = 0.8f;
+    fb.flash_light_g = 0.5f;
+    fb.flash_light_b = 0.2f;
+    fb.max_flashes = 7u;
+    fb.max_tracers = 11u;
+    fb.max_impacts = 13u;
+    fb.max_sounds = 3u;
+    fb.max_lights = 2u;
     world.add<FeedbackComponent>(e, fb);
 
     std::string err;
@@ -268,6 +403,21 @@ NF_TEST(feedback_line_round_trips_every_key) {
         NF_CHECK_NEAR(loaded->impact_size, 0.3f, 1e-5f);
         NF_CHECK_NEAR(loaded->shot_volume, 0.9f, 1e-5f);
         NF_CHECK_NEAR(loaded->impact_volume, 0.25f, 1e-5f);
+        NF_CHECK_NEAR(loaded->blast_flash_seconds, 0.21f, 1e-5f);
+        NF_CHECK_NEAR(loaded->blast_flash_size, 1.4f, 1e-5f);
+        NF_CHECK_NEAR(loaded->impact_volume_explosive, 1.1f, 1e-5f);
+        NF_CHECK_NEAR(loaded->impact_volume_fire, 0.35f, 1e-5f);
+        NF_CHECK(!loaded->flash_light);
+        NF_CHECK_NEAR(loaded->flash_light_intensity, 5.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->flash_light_radius, 12.0f, 1e-5f);
+        NF_CHECK_NEAR(loaded->flash_light_r, 0.8f, 1e-5f);
+        NF_CHECK_NEAR(loaded->flash_light_g, 0.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->flash_light_b, 0.2f, 1e-5f);
+        NF_CHECK_EQ(loaded->max_flashes, 7u);
+        NF_CHECK_EQ(loaded->max_tracers, 11u);
+        NF_CHECK_EQ(loaded->max_impacts, 13u);
+        NF_CHECK_EQ(loaded->max_sounds, 3u);
+        NF_CHECK_EQ(loaded->max_lights, 2u);
     }
 
     std::filesystem::remove_all(tmp);
@@ -316,6 +466,58 @@ NF_TEST(feedback_line_with_an_impossible_duration_is_refused_by_name) {
         }
     }
     NF_CHECK(named);
+}
+
+NF_TEST(feedback_line_refuses_an_out_of_range_cap_by_name) {
+    // Phase 59 made the caps scene data. A cap of zero would be a director that
+    // silently drops every effect, so the loader refuses it and names the key —
+    // the same contract the durations already keep.
+    const std::string text =
+        "# SANAD Scene v1\nversion: 1\nname: BadCaps\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Player\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n"
+        "  Feedback: max_flashes=0\n";
+    auto result = load_scene_from_text(text);
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene != nullptr);
+    if (!result.scene) {
+        return;
+    }
+    NF_CHECK(result.scene->world().get<FeedbackComponent>(
+                  result.scene->world().all_entities()[0]) == nullptr);
+
+    bool named = false;
+    for (const std::string& warning : result.warnings) {
+        if (warning.find("Feedback") != std::string::npos &&
+            warning.find("max_flashes") != std::string::npos) {
+            named = true;
+            break;
+        }
+    }
+    NF_CHECK(named);
+
+    // The twin of the above: a line that only carries the new keys keeps the old
+    // defaults for everything it does not mention.
+    const std::string minimal =
+        "# SANAD Scene v1\nversion: 1\nname: Minimal\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Player\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n"
+        "  Feedback: light=false blast_size=1.25\n";
+    auto parsed = load_scene_from_text(minimal);
+    NF_CHECK(parsed.success);
+    if (parsed.scene) {
+        const auto* component = parsed.scene->world().get<FeedbackComponent>(
+            parsed.scene->world().all_entities()[0]);
+        NF_CHECK(component != nullptr);
+        if (component != nullptr) {
+            NF_CHECK(!component->flash_light);
+            NF_CHECK_NEAR(component->blast_flash_size, 1.25f, 1e-5f);
+            NF_CHECK_NEAR(component->flash_seconds, 0.055f, 1e-5f);
+            NF_CHECK_EQ(component->max_flashes, 48u);
+        }
+    }
 }
 
 // --- the runtime bridge ------------------------------------------------------
@@ -410,6 +612,15 @@ NF_TEST(runtime_turns_a_real_shot_into_flashes_tracers_scorch_and_sound) {
         NF_CHECK_EQ(feedback.flashes().size(), static_cast<size_t>(1));
         NF_CHECK_EQ(feedback.tracers().size(), static_cast<size_t>(1));
         NF_CHECK_EQ(feedback.impacts().size(), static_cast<size_t>(1));
+        // Phase 59: the shot also lights the wall it was fired at. The director
+        // derives one transient light per live flash, and the component's
+        // defaults (flash_light=true) are what turn it on — so this is the proof
+        // that the scene component reached the Config, not just the code path.
+        NF_CHECK_EQ(feedback.lights().size(), static_cast<size_t>(1));
+        if (feedback.lights().size() == 1) {
+            NF_CHECK(feedback.lights()[0].intensity > 0.0f);
+            NF_CHECK(feedback.lights()[0].radius > 0.0f);
+        }
 
         // The renderer receives a flash cube, a tracer cube and one projected
         // scorch decal. Render-only ids stay 0 so picking never reports them.
@@ -453,6 +664,8 @@ NF_TEST(runtime_turns_a_real_shot_into_flashes_tracers_scorch_and_sound) {
         NF_CHECK(rt.combat_feedback().flashes().empty());
         NF_CHECK(rt.combat_feedback().tracers().empty());
         NF_CHECK_EQ(rt.combat_feedback().impacts().size(), static_cast<size_t>(1));
+        // The light is derived from the flash, so it is gone with it.
+        NF_CHECK(rt.combat_feedback().lights().empty());
 
         rendering::RenderWorld later = rt.render_world_snapshot();
         NF_CHECK_EQ(later.decals.size(), static_cast<size_t>(1));

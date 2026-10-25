@@ -81,16 +81,32 @@ struct AudioBuffer {
 AudioBuffer make_tone_buffer(f32 frequency_hz, f32 duration_seconds,
                              u32 sample_rate, u32 channels = 1);
 
-/// Deterministic procedural one-shots for combat feedback (Phase 56).
+/// Which surface the round met (Phase 59). One buffer per damage channel, so a
+/// wall struck by a bullet, by a blast and by fire no longer sound identical —
+/// the impact event already carries `DamageType`, so nothing new has to be
+/// sampled or authored.
+enum class ImpactSound : u8 {
+    /// A short, bright click: the round itself.
+    Ballistic = 0,
+    /// A deeper, longer boom with a low rumble: the blast.
+    Explosive = 1,
+    /// A hiss with crackle over a warm body: something is burning.
+    Fire = 2,
+};
+
+/// Deterministic procedural one-shots for combat feedback (Phase 56, extended
+/// in Phase 59).
 ///
 /// A gunshot is a broadband crack plus a low thump; an impact is a shorter,
-/// brighter click. Both are built from a fixed-seed xorshift, so the same binary
-/// produces the same samples on every run and a test can assert the exact shape
-/// contract (non-silent, bounded, decaying) without a golden WAV. They are mono
-/// because the emitter spatialises them; `sample_rate` of zero returns an empty
-/// buffer, matching make_tone_buffer's refusal to invent a clock.
+/// brighter click whose character depends on `kind`. All of them are built from
+/// a fixed-seed xorshift, so the same binary produces the same samples on every
+/// run and a test can assert the exact shape contract (non-silent, bounded,
+/// decaying) without a golden WAV. They are mono because the emitter spatialises
+/// them; `sample_rate` of zero returns an empty buffer, matching
+/// make_tone_buffer's refusal to invent a clock.
 AudioBuffer make_gunshot_buffer(u32 sample_rate);
-AudioBuffer make_impact_buffer(u32 sample_rate);
+AudioBuffer make_impact_buffer(u32 sample_rate,
+                               ImpactSound kind = ImpactSound::Ballistic);
 
 /// Audio source: a buffer + playback state.
 struct AudioSource {

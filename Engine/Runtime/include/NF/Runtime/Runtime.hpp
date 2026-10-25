@@ -1682,9 +1682,10 @@ private:
     std::vector<audio::Emitter> m_feedback_voices;
     /// Procedural one-shots, built once the device rate is known. The voice
     /// emitters point into these, so the buffers must outlive them and never be
-    /// rebuilt while a voice is live.
+    /// rebuilt while a voice is live. Phase 59 added one impact buffer per
+    /// damage channel, indexed by `DamageType` (Ballistic/Explosive/Fire).
     audio::AudioBuffer m_feedback_shot_buffer;
-    audio::AudioBuffer m_feedback_impact_buffer;
+    audio::AudioBuffer m_feedback_impact_buffers[3];
     u32 m_feedback_buffer_rate = 0;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
@@ -1815,6 +1816,12 @@ private:
     /// gameplay has to stop lighting the scene this frame, and the renderer's
     /// lights are an array indexed by slot, which cannot express "removed".
     void extract_local_lights();
+    /// Adds the director's transient muzzle/blast lights (Phase 59) on top of
+    /// the scene's own point lights. Called immediately after
+    /// extract_local_lights in every render path: the scene fills the slots and
+    /// the flash takes whatever is left, so a level that already uses all eight
+    /// keeps its authored lighting and the flash is simply not lit.
+    void apply_combat_feedback_lights();
     void extract_sky();
     /// Pushes the scene's post-processing block (design §206) into the renderer.
     ///

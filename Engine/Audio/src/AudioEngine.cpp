@@ -318,12 +318,23 @@ AudioBuffer make_gunshot_buffer(u32 sample_rate) {
     return make_noise_one_shot(sample_rate, 0.24f, 0x5eed1234u);
 }
 
-AudioBuffer make_impact_buffer(u32 sample_rate) {
+namespace {
+
+/// Every impact variant shares one skeleton: a deterministic noise source, a
+/// fixed sample rate and a hard clamp below full scale. What changes is the
+/// spectral weight of the noise and the frequencies of the ringing body, which
+/// is what the ear reads as "material" rather than as volume.
+AudioBuffer make_impact_variant(u32 sample_rate, ImpactSound kind) {
     AudioBuffer buf;
     if (sample_rate == 0) {
         return buf;
     }
-    const f32 seconds = 0.12f;
+    f32 seconds = 0.12f;
+    switch (kind) {
+    case ImpactSound::Explosive: seconds = 0.38f; break;
+    case ImpactSound::Fire: seconds = 0.30f; break;
+    case ImpactSound::Ballistic: break;
+    }
     const usize frames = static_cast<usize>(seconds * static_cast<f32>(sample_rate));
     if (frames == 0) {
         return buf;
@@ -332,16 +343,66 @@ AudioBuffer make_impact_buffer(u32 sample_rate) {
     buf.channels = 1;
     buf.samples.resize(frames);
 
-    DeterministicNoise noise(0x1badd00du);
+    // Distinct seeds per variant so the three are not one waveform at three
+    // speeds; the same seed per variant keeps every run of a given build
+    // bit-identical, which is what replay needs.
+    u32 seed = 0x1badd00du;
+    switch (kind) {
+    case ImpactSound::Explosive: seed = 0x0b00d123u; break;
+    case ImpactSound::Fire: seed = 0x0f12e5a7u; break;
+    case ImpactSound::Ballistic: break;
+    }
+    DeterministicNoise noise(seed);
+
+    // A one-pole low-pass state turns white noise into rumble/hiss without a
+    // filter object or a second pass over the buffer. `lp` and `hp` are the two
+    // sides of the same split: `hp` is the noise the low-pass did not keep.
+    f32 lp = 0.0f;
     for (usize f = 0; f < frames; ++f) {
         const f32 t = static_cast<f32>(f) / static_cast<f32>(sample_rate);
-        const f32 tick = noise.next() * 0.42f * std::exp(-t * 42.0f);
-        const f32 ring = (std::sin(TWO_PI * 820.0f * t) * 0.18f +
-                          std::sin(TWO_PI * 160.0f * t) * 0.22f) *
-                         std::exp(-t * 30.0f);
-        buf.samples[f] = std::clamp(tick + ring, -0.9f, 0.9f);
+        const f32 white = noise.next();
+        f32 value = 0.0f;
+        switch (kind) {
+        case ImpactSound::Ballistic: {
+            lp += 0.55f * (white - lp); // the click is mostly the raw transient
+            const f32 tick = white * 0.42f * std::exp(-t * 42.0f);
+            const f32 ring = (std::sin(TWO_PI * 820.0f * t) * 0.18f +
+                              std::sin(TWO_PI * 160.0f * t) * 0.22f) *
+                             std::exp(-t * 30.0f);
+            value = tick + ring + lp * 0.05f * std::exp(-t * 60.0f);
+            break;
+        }
+        case ImpactSound::Explosive: {
+            // Heavy low end: most of the energy is the 52 Hz body and the
+            // low-passed noise under it, so it reads as weight, not as a click.
+            lp += 0.06f * (white - lp);
+            const f32 boom = std::sin(TWO_PI * 52.0f * t) * 0.55f * std::exp(-t * 7.0f);
+            const f32 crack = white * 0.40f * std::exp(-t * 26.0f);
+            const f32 rumble = lp * 0.85f * std::exp(-t * 5.0f);
+            value = boom + crack + rumble;
+            break;
+        }
+        case ImpactSound::Fire: {
+            // Bright hiss (the part the low-pass threw away) over a warm body,
+            // plus sparse crackle from the noise crossing a fixed threshold —
+            // a deterministic "pop", not a random event.
+            lp += 0.10f * (white - lp);
+            const f32 hiss = (white - lp) * 0.34f * std::exp(-t * 9.0f);
+            const f32 body = std::sin(TWO_PI * 120.0f * t) * 0.16f * std::exp(-t * 5.0f);
+            const f32 crackle = (white > 0.62f) ? white * 0.55f * std::exp(-t * 7.0f) : 0.0f;
+            value = hiss + body + crackle;
+            break;
+        }
+        }
+        buf.samples[f] = std::clamp(value, -0.95f, 0.95f);
     }
     return buf;
+}
+
+} // namespace
+
+AudioBuffer make_impact_buffer(u32 sample_rate, ImpactSound kind) {
+    return make_impact_variant(sample_rate, kind);
 }
 
 // ---------------------------------------------------------------------------

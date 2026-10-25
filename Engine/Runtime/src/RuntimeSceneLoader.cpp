@@ -376,8 +376,28 @@ static bool parse_feedback(const std::string& line, FeedbackComponent& out,
     if (!optional_float_in_range(line, "impact_size=", 0.001f, 10.0f, out.impact_size, out_bad)) return false;
     if (!optional_float_in_range(line, "shot_volume=", 0.0f, 4.0f, out.shot_volume, out_bad)) return false;
     if (!optional_float_in_range(line, "impact_volume=", 0.0f, 4.0f, out.impact_volume, out_bad)) return false;
+    // Phase 59. `impact_volume_explosive=` cannot shadow `impact_volume=`:
+    // field_value requires the byte before a key to be whitespace, and the
+    // longer key's prefix is `impact_volume_`, not `impact_volume=`.
+    if (!optional_float_in_range(line, "blast_time=", 0.002f, 10.0f, out.blast_flash_seconds, out_bad)) return false;
+    if (!optional_float_in_range(line, "blast_size=", 0.001f, 10.0f, out.blast_flash_size, out_bad)) return false;
+    if (!optional_float_in_range(line, "impact_volume_explosive=", 0.0f, 4.0f,
+                                 out.impact_volume_explosive, out_bad)) return false;
+    if (!optional_float_in_range(line, "impact_volume_fire=", 0.0f, 4.0f,
+                                 out.impact_volume_fire, out_bad)) return false;
+    if (!optional_float_in_range(line, "light_intensity=", 0.0f, 1000.0f, out.flash_light_intensity, out_bad)) return false;
+    if (!optional_float_in_range(line, "light_radius=", 0.01f, 1000.0f, out.flash_light_radius, out_bad)) return false;
+    if (!optional_float_in_range(line, "light_r=", 0.0f, 1.0f, out.flash_light_r, out_bad)) return false;
+    if (!optional_float_in_range(line, "light_g=", 0.0f, 1.0f, out.flash_light_g, out_bad)) return false;
+    if (!optional_float_in_range(line, "light_b=", 0.0f, 1.0f, out.flash_light_b, out_bad)) return false;
+    if (!optional_int_in_range(line, "max_flashes=", 1, 4096, out.max_flashes, out_bad)) return false;
+    if (!optional_int_in_range(line, "max_tracers=", 1, 4096, out.max_tracers, out_bad)) return false;
+    if (!optional_int_in_range(line, "max_impacts=", 1, 4096, out.max_impacts, out_bad)) return false;
+    if (!optional_int_in_range(line, "max_sounds=", 1, 4096, out.max_sounds, out_bad)) return false;
+    if (!optional_int_in_range(line, "max_lights=", 1, 4096, out.max_lights, out_bad)) return false;
     out.audio = line.find("audio=false") == std::string::npos;
     out.enabled = line.find("enabled=false") == std::string::npos;
+    out.flash_light = line.find("light=false") == std::string::npos;
     return true;
 }
 
@@ -2197,9 +2217,30 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " impact_time=" << fb->impact_seconds
                 << " impact_size=" << fb->impact_size
                 << " shot_volume=" << fb->shot_volume
-                << " impact_volume=" << fb->impact_volume;
+                << " impact_volume=" << fb->impact_volume
+                // Phase 59 additions. Written like every key above: a scene that
+                // carries the component saves back as the complete state the
+                // reader resolved, so a one-key hand-written line round-trips
+                // into something a human can still read and edit.
+                << " blast_time=" << fb->blast_flash_seconds
+                << " blast_size=" << fb->blast_flash_size
+                << " impact_volume_explosive=" << fb->impact_volume_explosive
+                << " impact_volume_fire=" << fb->impact_volume_fire
+                << " light_intensity=" << fb->flash_light_intensity
+                << " light_radius=" << fb->flash_light_radius
+                << " light_r=" << fb->flash_light_r
+                << " light_g=" << fb->flash_light_g
+                << " light_b=" << fb->flash_light_b
+                << " max_flashes=" << fb->max_flashes
+                << " max_tracers=" << fb->max_tracers
+                << " max_impacts=" << fb->max_impacts
+                << " max_sounds=" << fb->max_sounds
+                << " max_lights=" << fb->max_lights;
             if (!fb->audio) {
                 out << " audio=false";
+            }
+            if (!fb->flash_light) {
+                out << " light=false";
             }
             if (!fb->enabled) {
                 out << " enabled=false";

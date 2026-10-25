@@ -49,6 +49,14 @@ struct CombatFeedbackConfig {
     /// Edge length of the flash cube, in metres.
     f32 flash_size = 0.22f;
 
+    // Blast flash (Phase 59). An explosive round used to leave the same small
+    // spark as a bullet, so the one weapon whose whole identity is a big hit
+    // read as a pea-shooter. The direct explosive impact now also spawns a
+    // second, larger and slower flash at the point of impact — one per blast,
+    // not one per splash victim, so a crowd does not become a wall of fire.
+    f32 blast_flash_seconds = 0.16f;
+    f32 blast_flash_size = 0.9f;
+
     // Tracer. The beam is drawn from just past the origin along the traced
     // direction; `tracer_length` is its visible run, not the bullet's range.
     f32 tracer_seconds = 0.09f;
@@ -61,18 +69,35 @@ struct CombatFeedbackConfig {
     f32 impact_size = 0.14f;
 
     /// Linear volume for the procedural shot and impact one-shots. The bus and
-    /// the master volume still multiply these.
+    /// the master volume still multiply these. `impact_volume` is the ballistic
+    /// click; the other two channels have their own gain so an explosion can be
+    /// loud without making every bullet loud (Phase 59).
     f32 shot_volume = 0.7f;
     f32 impact_volume = 0.45f;
+    f32 impact_volume_explosive = 0.75f;
+    f32 impact_volume_fire = 0.55f;
     /// False keeps the visuals and drops every sound cue.
     bool audio = true;
 
+    // Muzzle/blast light (Phase 59). Until now the flash was an emissive cube
+    // and nothing else: it did not brighten the wall the player is shooting at,
+    // which is the single most visible thing a muzzle flash does. Each live
+    // flash also contributes a transient point light while `flash_light` is on.
+    // `max_lights` bounds how many are handed to the renderer per frame; the
+    // renderer's own slot count is the second, harder bound.
+    bool flash_light = true;
+    f32 flash_light_intensity = 3.0f;
+    f32 flash_light_radius = 7.0f;
+    Vec3 flash_light_color{1.0f, 0.72f, 0.35f};
+
     // Hard caps. A new effect at the cap drops the oldest, deterministically;
     // unfed static vectors are what a long fight would otherwise grow forever.
+    // Phase 59 made all four authorable from the `Feedback:` line.
     u32 max_flashes = 48u;
     u32 max_tracers = 96u;
     u32 max_impacts = 192u;
     u32 max_sounds = 16u;
+    u32 max_lights = 4u;
 };
 
 /// One muzzle flash, aged by the director. `direction` is the pellet's traced
@@ -111,12 +136,29 @@ struct FeedbackImpact {
     f32 strength = 1.0f;
 };
 
+/// A transient point light the frame should contribute (Phase 59). Derived from
+/// the live flashes, so it is bright at spawn and fades exactly as the cube
+/// does. `intensity` already includes the flash's remaining strength and is the
+/// value the renderer wants, not a 0..1 factor: the director knows the tuning
+/// and the renderer should not.
+struct FeedbackLight {
+    Vec3 position{};
+    Vec3 color{1.0f, 0.72f, 0.35f};
+    f32 intensity = 3.0f;
+    f32 radius = 7.0f;
+};
+
 /// A one-shot sound the audio layer should start. `kind` selects the procedural
 /// buffer; the position is where the player hears it come from.
 struct FeedbackSound {
     enum class Kind : u8 {
         Shot,
-        Impact,
+        /// Phase 59: one channel per damage type, because the impact event has
+        /// always carried the type and one click for lead, blast and fire made
+        /// three different events sound the same.
+        ImpactBallistic,
+        ImpactExplosive,
+        ImpactFire,
     };
 
     Kind kind = Kind::Shot;
@@ -158,6 +200,9 @@ public:
     [[nodiscard]] const std::vector<FeedbackTracer>& tracers() const { return m_tracers; }
     [[nodiscard]] const std::vector<FeedbackImpact>& impacts() const { return m_impacts; }
     [[nodiscard]] const std::vector<FeedbackSound>& sounds() const { return m_sounds; }
+    /// Transient point lights derived from the live flashes. Always at most
+    /// `config().max_lights`; empty when `flash_light` is off.
+    [[nodiscard]] const std::vector<FeedbackLight>& lights() const { return m_lights; }
 
     [[nodiscard]] bool empty() const {
         return m_flashes.empty() && m_tracers.empty() && m_impacts.empty() && m_sounds.empty();
@@ -165,15 +210,21 @@ public:
 
 private:
     void add_flash(const ShotEvent& shot);
+    void add_blast_flash(const ImpactEvent& impact);
     void add_tracer(const ShotEvent& shot);
     void add_impact(const ImpactEvent& impact);
     void add_sound(FeedbackSound cue);
+    /// Rebuilds `m_lights` from the current flashes. Called at the end of
+    /// update(), after ageing and ingest, so a light is never one frame out of
+    /// step with the cube it came from.
+    void rebuild_lights();
 
     CombatFeedbackConfig m_config;
     std::vector<FeedbackFlash> m_flashes;
     std::vector<FeedbackTracer> m_tracers;
     std::vector<FeedbackImpact> m_impacts;
     std::vector<FeedbackSound> m_sounds;
+    std::vector<FeedbackLight> m_lights;
 };
 
 } // namespace nf::runtime

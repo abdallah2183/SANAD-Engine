@@ -150,6 +150,20 @@ Games/MyGame/
   the agent prefer whoever last damaged it (the damage ledger) when that target
   is still valid. Near-miss shots suppress an agent: aim slows, the fire cone
   narrows, and above 0.75 suppression the trigger is held until it decays.
+- Shooting is invisible until a scene opts in: one `Feedback:` line turns shot and
+  impact events into a muzzle flash, a tracer per pellet, a scorch decal and a
+  procedural one-shot (Phases 56/59):
+  `Feedback: flash_time=0.055 flash_size=0.22 tracer_time=0.09 tracer_length=9
+  tracer_width=0.025 impact_time=6 impact_size=0.14 shot_volume=0.7
+  impact_volume=0.45`. Every key is optional and a scene that omits the line draws
+  and mixes exactly what it did before. Phase 59 added `blast_time=`/`blast_size=`
+  (the larger second flash an explosive impact spawns once per round), the
+  per-channel gains `impact_volume_explosive=`/`impact_volume_fire=` (the impact
+  sound follows `damage_type`), the muzzle light `light_intensity=`/`light_radius=`
+  /`light_r=`/`light_g=`/`light_b=` (`light=false` restores the 0.6.0 look, and the
+  light takes whatever point-light slots the scene leaves free), and the caps
+  `max_flashes=`/`max_tracers=`/`max_impacts=`/`max_sounds=`/`max_lights=`
+  (`[1, 4096]`). The editor has a full Combat Feedback section for all of it.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

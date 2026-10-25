@@ -227,6 +227,35 @@ struct InspectorCache {
     float dst_threshold = 8.0f;
     float dst_blast = 2.0f;
     bool dst_enabled = true;
+    // Combat feedback (Phase 59). The component was authorable only through the
+    // `Feedback:` scene line until this panel existed. Same "has" pattern as the
+    // destructible block above: absent until the author attaches one, and an
+    // absent component is what keeps the line out of the saved file.
+    bool fb_has = false;
+    bool fb_enabled = true;
+    bool fb_audio = true;
+    bool fb_light = true;
+    float fb_flash_time = 0.055f;
+    float fb_flash_size = 0.22f;
+    float fb_blast_time = 0.16f;
+    float fb_blast_size = 0.9f;
+    float fb_tracer_time = 0.09f;
+    float fb_tracer_length = 9.0f;
+    float fb_tracer_width = 0.025f;
+    float fb_impact_time = 6.0f;
+    float fb_impact_size = 0.14f;
+    float fb_shot_volume = 0.7f;
+    float fb_impact_volume = 0.45f;
+    float fb_impact_volume_explosive = 0.75f;
+    float fb_impact_volume_fire = 0.55f;
+    float fb_light_intensity = 3.0f;
+    float fb_light_radius = 7.0f;
+    float fb_light_color[3]{1.0f, 0.72f, 0.35f};
+    int fb_max_flashes = 48;
+    int fb_max_tracers = 96;
+    int fb_max_impacts = 192;
+    int fb_max_sounds = 16;
+    int fb_max_lights = 4;
     // Animation
     int anim_clip = 0;     // index into the component's clip table
     float anim_speed = 1.0f;
@@ -2124,6 +2153,37 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.dst_blast = dst->blast_radius;
                     ic.dst_enabled = dst->enabled;
                 }
+                if (const auto* fb = w->get<runtime::FeedbackComponent>(sel)) {
+                    ic.fb_has = true;
+                    ic.fb_enabled = fb->enabled;
+                    ic.fb_audio = fb->audio;
+                    ic.fb_light = fb->flash_light;
+                    ic.fb_flash_time = fb->flash_seconds;
+                    ic.fb_flash_size = fb->flash_size;
+                    ic.fb_blast_time = fb->blast_flash_seconds;
+                    ic.fb_blast_size = fb->blast_flash_size;
+                    ic.fb_tracer_time = fb->tracer_seconds;
+                    ic.fb_tracer_length = fb->tracer_length;
+                    ic.fb_tracer_width = fb->tracer_width;
+                    ic.fb_impact_time = fb->impact_seconds;
+                    ic.fb_impact_size = fb->impact_size;
+                    ic.fb_shot_volume = fb->shot_volume;
+                    ic.fb_impact_volume = fb->impact_volume;
+                    ic.fb_impact_volume_explosive = fb->impact_volume_explosive;
+                    ic.fb_impact_volume_fire = fb->impact_volume_fire;
+                    ic.fb_light_intensity = fb->flash_light_intensity;
+                    ic.fb_light_radius = fb->flash_light_radius;
+                    ic.fb_light_color[0] = fb->flash_light_r;
+                    ic.fb_light_color[1] = fb->flash_light_g;
+                    ic.fb_light_color[2] = fb->flash_light_b;
+                    ic.fb_max_flashes = static_cast<int>(fb->max_flashes);
+                    ic.fb_max_tracers = static_cast<int>(fb->max_tracers);
+                    ic.fb_max_impacts = static_cast<int>(fb->max_impacts);
+                    ic.fb_max_sounds = static_cast<int>(fb->max_sounds);
+                    ic.fb_max_lights = static_cast<int>(fb->max_lights);
+                } else {
+                    ic.fb_has = false;
+                }
                 if (const auto* sc = w->get<scripting::ScriptComponent>(sel)) {
                     std::strncpy(ic.script_path, sc->path.c_str(), sizeof(ic.script_path) - 1);
                     ic.script_path[sizeof(ic.script_path) - 1] = '\0';
@@ -3687,6 +3747,129 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_destructible(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach destructible failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Combat feedback (Phase 59 authoring) ---
+            // The last component that was authorable only by hand-editing the
+            // scene file. Always visible like Destruction: Attach authors a
+            // default spec, Apply forwards the cached fields through the
+            // validated setter, Detach removes the component (and with it the
+            // `Feedback:` line the saver writes).
+            if (ImGui::CollapsingHeader((AV("feedback") + "###Feedback").c_str())) {
+                if (!ic.fb_has) {
+                    ImGui::TextDisabled("%s", AV("no_feedback").c_str());
+                    if (ImGui::Button((AV("add_feedback") + "##feedback").c_str())) {
+                        std::string err;
+                        if (!app.set_feedback(sel, runtime::FeedbackComponent{}, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach feedback failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##fb_enabled").c_str(), &ic.fb_enabled);
+                    ImGui::SameLine();
+                    ImGui::Checkbox((AV("audio") + "##fb_audio").c_str(), &ic.fb_audio);
+                    ImGui::SameLine();
+                    ImGui::Checkbox((AV("muzzle_light") + "##fb_light").c_str(), &ic.fb_light);
+
+                    ImGui::DragFloat((AV("flash_time") + "##fb").c_str(), &ic.fb_flash_time,
+                                     0.002f, 0.002f, 10.0f, "%.3f s");
+                    ImGui::DragFloat((AV("flash_size") + "##fb").c_str(), &ic.fb_flash_size,
+                                     0.01f, 0.001f, 10.0f, "%.3f m");
+                    ImGui::DragFloat((AV("blast_time") + "##fb").c_str(), &ic.fb_blast_time,
+                                     0.005f, 0.002f, 10.0f, "%.3f s");
+                    ImGui::DragFloat((AV("blast_size") + "##fb").c_str(), &ic.fb_blast_size,
+                                     0.02f, 0.001f, 10.0f, "%.3f m");
+                    ImGui::DragFloat((AV("tracer_time") + "##fb").c_str(), &ic.fb_tracer_time,
+                                     0.005f, 0.002f, 10.0f, "%.3f s");
+                    ImGui::DragFloat((AV("tracer_length") + "##fb").c_str(), &ic.fb_tracer_length,
+                                     0.1f, 0.01f, 1000.0f, "%.2f m");
+                    ImGui::DragFloat((AV("tracer_width") + "##fb").c_str(), &ic.fb_tracer_width,
+                                     0.001f, 0.0005f, 1.0f, "%.4f m");
+                    ImGui::DragFloat((AV("impact_time") + "##fb").c_str(), &ic.fb_impact_time,
+                                     0.05f, 0.01f, 600.0f, "%.2f s");
+                    ImGui::DragFloat((AV("impact_size") + "##fb").c_str(), &ic.fb_impact_size,
+                                     0.005f, 0.001f, 10.0f, "%.3f m");
+
+                    ImGui::DragFloat((AV("shot_volume") + "##fb").c_str(), &ic.fb_shot_volume,
+                                     0.01f, 0.0f, 4.0f, "%.2f");
+                    ImGui::DragFloat((AV("impact_volume") + "##fb").c_str(), &ic.fb_impact_volume,
+                                     0.01f, 0.0f, 4.0f, "%.2f");
+                    ImGui::DragFloat((AV("impact_volume_explosive") + "##fb").c_str(),
+                                     &ic.fb_impact_volume_explosive, 0.01f, 0.0f, 4.0f, "%.2f");
+                    ImGui::DragFloat((AV("impact_volume_fire") + "##fb").c_str(),
+                                     &ic.fb_impact_volume_fire, 0.01f, 0.0f, 4.0f, "%.2f");
+
+                    ImGui::DragFloat((AV("light_intensity") + "##fb").c_str(),
+                                     &ic.fb_light_intensity, 0.05f, 0.0f, 1000.0f, "%.2f");
+                    ImGui::DragFloat((AV("light_radius") + "##fb").c_str(), &ic.fb_light_radius,
+                                     0.1f, 0.01f, 1000.0f, "%.2f m");
+                    ImGui::ColorEdit3((AV("light_color") + "##fb").c_str(), ic.fb_light_color);
+
+                    // Caps. The director clamps to 1..4096; DragInt's own range
+                    // is the same, so a typed value cannot reach the setter out
+                    // of range and be rejected on Apply.
+                    ImGui::DragInt((AV("max_flashes") + "##fb").c_str(), &ic.fb_max_flashes,
+                                   0.5f, 1, 4096);
+                    ImGui::DragInt((AV("max_tracers") + "##fb").c_str(), &ic.fb_max_tracers,
+                                   0.5f, 1, 4096);
+                    ImGui::DragInt((AV("max_impacts") + "##fb").c_str(), &ic.fb_max_impacts,
+                                   0.5f, 1, 4096);
+                    ImGui::DragInt((AV("max_sounds") + "##fb").c_str(), &ic.fb_max_sounds,
+                                   0.5f, 1, 4096);
+                    ImGui::DragInt((AV("max_lights") + "##fb").c_str(), &ic.fb_max_lights,
+                                   0.5f, 1, 4096);
+
+                    if (ImGui::Button((AV("apply") + "##feedback").c_str())) {
+                        runtime::FeedbackComponent edited;
+                        edited.enabled = ic.fb_enabled;
+                        edited.audio = ic.fb_audio;
+                        edited.flash_light = ic.fb_light;
+                        edited.flash_seconds = ic.fb_flash_time;
+                        edited.flash_size = ic.fb_flash_size;
+                        edited.blast_flash_seconds = ic.fb_blast_time;
+                        edited.blast_flash_size = ic.fb_blast_size;
+                        edited.tracer_seconds = ic.fb_tracer_time;
+                        edited.tracer_length = ic.fb_tracer_length;
+                        edited.tracer_width = ic.fb_tracer_width;
+                        edited.impact_seconds = ic.fb_impact_time;
+                        edited.impact_size = ic.fb_impact_size;
+                        edited.shot_volume = ic.fb_shot_volume;
+                        edited.impact_volume = ic.fb_impact_volume;
+                        edited.impact_volume_explosive = ic.fb_impact_volume_explosive;
+                        edited.impact_volume_fire = ic.fb_impact_volume_fire;
+                        edited.flash_light_intensity = ic.fb_light_intensity;
+                        edited.flash_light_radius = ic.fb_light_radius;
+                        edited.flash_light_r = ic.fb_light_color[0];
+                        edited.flash_light_g = ic.fb_light_color[1];
+                        edited.flash_light_b = ic.fb_light_color[2];
+                        edited.max_flashes = static_cast<unsigned>(ic.fb_max_flashes);
+                        edited.max_tracers = static_cast<unsigned>(ic.fb_max_tracers);
+                        edited.max_impacts = static_cast<unsigned>(ic.fb_max_impacts);
+                        edited.max_sounds = static_cast<unsigned>(ic.fb_max_sounds);
+                        edited.max_lights = static_cast<unsigned>(ic.fb_max_lights);
+                        std::string err;
+                        if (!app.set_feedback(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Feedback edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##feedback").c_str())) {
+                        std::string err;
+                        if (!app.detach_feedback(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach feedback failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

@@ -314,6 +314,12 @@ struct FeedbackComponent {
     float flash_seconds = 0.055f;
     float flash_size = 0.22f;
 
+    /// Blast flash (Phase 59): the larger, slower flash an explosive impact
+    /// spawns at the point of impact. One per blast, never one per splash
+    /// victim.
+    float blast_flash_seconds = 0.16f;
+    float blast_flash_size = 0.9f;
+
     /// Per-pellet tracer beam lifetime, visible run and thickness.
     float tracer_seconds = 0.09f;
     float tracer_length = 9.0f;
@@ -323,9 +329,32 @@ struct FeedbackComponent {
     float impact_seconds = 6.0f;
     float impact_size = 0.14f;
 
-    /// One-shot gains, before the SFX bus and master volume.
+    /// One-shot gains, before the SFX bus and master volume. `impact_volume` is
+    /// the ballistic click; Phase 59 gave the explosive and fire channels their
+    /// own gain so a blast can be loud without making every bullet loud.
     float shot_volume = 0.7f;
     float impact_volume = 0.45f;
+    float impact_volume_explosive = 0.75f;
+    float impact_volume_fire = 0.55f;
+
+    /// Muzzle/blast light (Phase 59). Each live flash also contributes a
+    /// transient point light, so a shot actually brightens the wall it is fired
+    /// at instead of only adding an emissive cube. `flash_light=false` restores
+    /// the 0.6.0 look exactly.
+    bool flash_light = true;
+    float flash_light_intensity = 3.0f;
+    float flash_light_radius = 7.0f;
+    float flash_light_r = 1.0f;
+    float flash_light_g = 0.72f;
+    float flash_light_b = 0.35f;
+
+    /// Hard per-frame caps (Phase 59 made them scene data). The director drops
+    /// the oldest effect when a list is full, deterministically.
+    unsigned max_flashes = 48u;
+    unsigned max_tracers = 96u;
+    unsigned max_impacts = 192u;
+    unsigned max_sounds = 16u;
+    unsigned max_lights = 4u;
 };
 
 // Local lights (Phase 26). A scene until now could only carry one directional

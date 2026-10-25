@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <vector>
 
@@ -1868,6 +1869,97 @@ bool EditorApp::detach_destructible(ecs::Entity e, std::string& out_err) {
         return false;
     }
     w->remove<runtime::DestructibleComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_feedback(ecs::Entity e, const runtime::FeedbackComponent& fb,
+                             std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    // The bounds are the loader's own, so a value the inspector accepts is a
+    // value the `Feedback:` line can carry and the director will not re-clamp.
+    // A rejected number NAMES itself: "invalid feedback" would leave the artist
+    // hunting fifteen widgets for the one the setter refused.
+    struct Range {
+        const char* name;
+        float value;
+        float lo;
+        float hi;
+    };
+    const Range ranges[] = {
+        {"flash_time", fb.flash_seconds, 0.002f, 10.0f},
+        {"flash_size", fb.flash_size, 0.001f, 10.0f},
+        {"tracer_time", fb.tracer_seconds, 0.002f, 10.0f},
+        {"tracer_length", fb.tracer_length, 0.01f, 1000.0f},
+        {"tracer_width", fb.tracer_width, 0.0005f, 1.0f},
+        {"impact_time", fb.impact_seconds, 0.01f, 600.0f},
+        {"impact_size", fb.impact_size, 0.001f, 10.0f},
+        {"shot_volume", fb.shot_volume, 0.0f, 4.0f},
+        {"impact_volume", fb.impact_volume, 0.0f, 4.0f},
+        {"blast_time", fb.blast_flash_seconds, 0.002f, 10.0f},
+        {"blast_size", fb.blast_flash_size, 0.001f, 10.0f},
+        {"impact_volume_explosive", fb.impact_volume_explosive, 0.0f, 4.0f},
+        {"impact_volume_fire", fb.impact_volume_fire, 0.0f, 4.0f},
+        {"light_intensity", fb.flash_light_intensity, 0.0f, 1000.0f},
+        {"light_radius", fb.flash_light_radius, 0.01f, 1000.0f},
+        {"light_r", fb.flash_light_r, 0.0f, 1.0f},
+        {"light_g", fb.flash_light_g, 0.0f, 1.0f},
+        {"light_b", fb.flash_light_b, 0.0f, 1.0f},
+    };
+    for (const Range& r : ranges) {
+        if (!std::isfinite(r.value) || r.value < r.lo || r.value > r.hi) {
+            char message[160];
+            std::snprintf(message, sizeof(message), "%s must be within [%g, %g]", r.name,
+                          static_cast<double>(r.lo), static_cast<double>(r.hi));
+            out_err = message;
+            return false;
+        }
+    }
+    struct CapRange {
+        const char* name;
+        unsigned value;
+    };
+    const CapRange caps[] = {
+        {"max_flashes", fb.max_flashes}, {"max_tracers", fb.max_tracers},
+        {"max_impacts", fb.max_impacts}, {"max_sounds", fb.max_sounds},
+        {"max_lights", fb.max_lights},
+    };
+    for (const CapRange& c : caps) {
+        if (c.value < 1u || c.value > 4096u) {
+            out_err = std::string(c.name) + " must be within [1, 4096]";
+            return false;
+        }
+    }
+    if (auto* existing = w->get<runtime::FeedbackComponent>(e)) {
+        *existing = fb;
+    } else {
+        w->add<runtime::FeedbackComponent>(e, fb);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_feedback(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::FeedbackComponent>(e)) {
+        out_err = "Entity has no FeedbackComponent";
+        return false;
+    }
+    w->remove<runtime::FeedbackComponent>(e);
     after_mutation(e);
     return true;
 }

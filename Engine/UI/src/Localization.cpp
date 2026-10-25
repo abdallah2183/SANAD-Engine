@@ -1114,6 +1114,39 @@ constexpr Entry kEntries[] = {
     {"add_faction", "Add faction", "إضافة فصيل"},
     {"team", "Team", "الفريق"},
     {"friendly_fire", "Friendly fire", "النيران الصديقة"},
+    // --- Combat feedback authoring (Phase 59) -------------------------------
+    // The Feedback panel was the one component in 0.6.0 with no inspector
+    // section, so tuning a muzzle flash meant hand-editing the scene file. The
+    // keys below name every field the line carries. Keys that already exist
+    // ("enabled", "audio", "color", "intensity", "radius", "apply", "attach",
+    // "detach") are deliberately NOT repeated: a second row would trip the
+    // duplicate audit for no change in behaviour.
+    {"feedback", "Combat Feedback", "تغذية القتال"},
+    {"no_feedback", "No combat feedback on this entity.",
+     "لا توجد تغذية قتال لهذا الكيان۔"},
+    {"add_feedback", "Add combat feedback", "إضافة تغذية قتال"},
+    {"flash_time", "Muzzle flash time", "زمن وميض الفوهة"},
+    {"flash_size", "Muzzle flash size", "حجم وميض الفوهة"},
+    {"tracer_time", "Tracer time", "زمن أثر الرصاصة"},
+    {"tracer_length", "Tracer length", "طول أثر الرصاصة"},
+    {"tracer_width", "Tracer width", "عرض أثر الرصاصة"},
+    {"impact_time", "Scorch time", "زمن علامة الإصابة"},
+    {"impact_size", "Scorch size", "حجم علامة الإصابة"},
+    {"shot_volume", "Shot volume", "جهارة الطلقة"},
+    {"impact_volume", "Impact volume", "جهارة الإصابة"},
+    {"blast_time", "Blast flash time", "زمن وميض الانفجار"},
+    {"blast_size", "Blast flash size", "حجم وميض الانفجار"},
+    {"impact_volume_explosive", "Explosive impact volume", "جهارة إصابة الانفجار"},
+    {"impact_volume_fire", "Fire impact volume", "جهارة إصابة النار"},
+    {"muzzle_light", "Muzzle light", "ضوء الفوهة"},
+    {"light_intensity", "Light intensity", "شدة الضوء"},
+    {"light_radius", "Light radius", "نطاق الضوء"},
+    {"light_color", "Light color", "لون الضوء"},
+    {"max_flashes", "Max flashes", "أقصى الومضات"},
+    {"max_tracers", "Max tracers", "أقصى آثار الرصاص"},
+    {"max_impacts", "Max scorch marks", "أقصى علامات الإصابة"},
+    {"max_sounds", "Max sounds", "أقصى الأصوات"},
+    {"max_lights", "Max lights", "أقصى الأضواء"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread

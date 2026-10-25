@@ -146,6 +146,69 @@ NF_TEST(editor_destructible_attach_edit_detach) {
     std::filesystem::remove_all(tmp);
 }
 
+NF_TEST(editor_feedback_attach_edit_detach) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+
+    const auto tmp = wiring_temp_dir("nf_ed_wiring_feedback");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    std::string err;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+    ecs::World& world = runtime.edit_scene()->world();
+    const ecs::Entity e = world.all_entities().front();
+
+    // Phase 59: the inspector is the second way into this component, so it has
+    // to keep the same door the loader keeps. A zero lifetime would be an effect
+    // that is never seen, and the rejection NAMES the field.
+    runtime::FeedbackComponent bad;
+    bad.flash_seconds = 0.0f;
+    err.clear();
+    NF_CHECK(!app.set_feedback(e, bad, err));
+    NF_CHECK(err.find("flash_time") != std::string::npos);
+    NF_CHECK(!world.has<runtime::FeedbackComponent>(e));
+
+    runtime::FeedbackComponent spec;
+    spec.blast_flash_size = 1.5f;
+    spec.impact_volume_fire = 0.2f;
+    spec.flash_light = false;
+    spec.max_lights = 2u;
+    NF_CHECK(app.set_feedback(e, spec, err));
+    const auto* comp = world.get<runtime::FeedbackComponent>(e);
+    NF_CHECK(comp != nullptr);
+    if (comp != nullptr) {
+        NF_CHECK_NEAR(comp->blast_flash_size, 1.5f, 1e-6f);
+        NF_CHECK_NEAR(comp->impact_volume_fire, 0.2f, 1e-6f);
+        NF_CHECK(!comp->flash_light);
+        NF_CHECK_EQ(comp->max_lights, 2u);
+    }
+
+    // The cap range is the director's own, and it is checked too.
+    runtime::FeedbackComponent zero_cap;
+    zero_cap.max_flashes = 0u;
+    err.clear();
+    NF_CHECK(!app.set_feedback(e, zero_cap, err));
+    NF_CHECK(err.find("max_flashes") != std::string::npos);
+
+    NF_CHECK(app.detach_feedback(e, err));
+    NF_CHECK(!world.has<runtime::FeedbackComponent>(e));
+    err.clear();
+    NF_CHECK(!app.detach_feedback(e, err));
+    NF_CHECK(!err.empty());
+
+    std::filesystem::remove_all(tmp);
+}
+
 NF_TEST(editor_audio_buffer_attach_decodes_and_round_trips) {
     const GpuFixture& f = require_gpu();
     auto& device = *f.device;

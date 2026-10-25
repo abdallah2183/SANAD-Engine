@@ -269,7 +269,7 @@ Weapon: mode=semi rpm=60 magazine=1 damage=20 range=120
         blast_radius=4 blast_damage=45 blast_min=0.2
 ```
 
-### Combat feedback (`Feedback:`, Phase 56)
+### Combat feedback (`Feedback:`, Phases 56 & 59)
 
 Events are only data until something draws them. The `Feedback:` line opts a
 scene into the visible and audible half: one muzzle flash and one gunshot per
@@ -281,11 +281,37 @@ not a new round landing.
 Feedback: flash_time=0.06 flash_size=0.26 tracer_time=0.1 tracer_length=7
           tracer_width=0.03 impact_time=8 impact_size=0.18
           shot_volume=0.6 impact_volume=0.4
+          blast_time=0.16 blast_size=0.9
+          impact_volume_explosive=0.75 impact_volume_fire=0.55
+          light_intensity=3 light_radius=7 light_r=1 light_g=0.72 light_b=0.35
+          max_flashes=48 max_tracers=96 max_impacts=192 max_sounds=16 max_lights=4
 ```
+
+Phase 59 closed the five gaps 0.6.0 declared:
+
+- **The flash lights the world.** Every live muzzle or blast flash also
+  contributes a transient point light, so a shot brightens the wall it is fired
+  at instead of only adding an emissive cube. `light=false` restores the 0.6.0
+  look exactly; the light takes whatever renderer slots the scene's own point
+  lights leave free and dies with the cube it came from.
+- **An explosion looks like one.** An explosive impact spawns a second, larger
+  and slower blast flash at the point of impact — once per round, never once per
+  splash victim, so a grenade in a crowd is one fireball.
+- **Impact sound follows the damage type.** Lead on a wall, a blast and fire are
+  three different procedural one-shots with their own gain, because the impact
+  event has carried `damage_type` since Phase 52 and one click for all three
+  made them sound identical.
+- **The caps are scene keys.** 48 flashes / 96 tracers / 192 marks / 16 sounds
+  were literals; they are now authorable, with `max_lights` for the muzzle light.
+- **There is an inspector section.** Combat feedback was the last component
+  authorable only by hand-editing the scene file. The panel attaches, edits,
+  validates against the loader's own ranges and detaches it. Play mode and
+  entity copies carry the component too, so a scene no longer loses its feedback
+  when it enters Play.
 
 There is no new render pass and no audio asset. Flashes and tracers are
 render-only objects on a shared procedural cube, the scorch is a projected
-decal, and the two sounds are generated one-shots with a fixed seed. The runtime
+decal, and the sounds are generated one-shots with a fixed seed. The runtime
 keeps the live voices across audio blocks, applies the scene's occlusion and bus
 volumes, and retires a voice when it finishes. A scene with no `Feedback:` line
 draws and mixes exactly what it did before, and the validator names a key whose
@@ -313,10 +339,11 @@ value is out of range. `Ballistics.nfscene` ships opted in.
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On a machine whose Smart App Control blocks a freshly
-  signed binary, a suite can be reported as "process not started" until the
-  reputation service catches up - that is an environment policy, not a test
-  failure.
+  (`ctest -j 4`: 100%). On the development tree after Phase 59 the counts are
+  `RuntimeTests` 372/372, `EditorTests` 290/290 and `AudioTests` 138/138. On a
+  machine whose Smart App Control blocks a freshly signed binary, a suite can be
+  reported as "process not started" until the reputation service catches up -
+  that is an environment policy, not a test failure.
 - 0 Vulkan validation errors and 0 leaked RHI objects in the editor acceptance run.
 - End-to-end check: create a project with `nf`, build it, package it, and run the
   shipped player without the dev-tree shaders. The portable zip is extracted
