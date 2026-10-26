@@ -199,6 +199,10 @@ struct ScriptInput {
     /// brain or nothing has been decided yet, which makes `nf.decision()` return
     /// nil rather than a name nobody chose.
     std::function<bool(u32, u32, std::string&, f32&)> decision;
+
+    /// State machines (Phase 62): the state this entity is in, or false when it
+    /// has no machine. `nf.state()` returns nil in that case.
+    std::function<bool(u32, u32, std::string&)> state;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

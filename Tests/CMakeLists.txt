@@ -282,6 +282,11 @@ add_executable(RuntimeTests
     # validator's list-level rules, the frame's own inputs, and the choices they
     # produce — including the one effect the engine applies (`hold_fire`).
     RuntimeTests/test_brain_runtime.cpp
+    # Phase 62: the state machine half of the same trio. The `States:` / `State:`
+    # / `Transition:` lines, the cross-reference rules only the whole machine can
+    # check, and the frame's side: authored order decides a tie, the rate holds a
+    # transition, and a `hold_fire` state vetoes the trigger.
+    RuntimeTests/test_state_machine_runtime.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)

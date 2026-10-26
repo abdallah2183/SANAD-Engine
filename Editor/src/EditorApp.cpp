@@ -2108,6 +2108,90 @@ bool EditorApp::detach_brain(ecs::Entity e, std::string& out_err) {
     return true;
 }
 
+bool EditorApp::set_state_machine(ecs::Entity e, const runtime::StateMachineComponent& machine,
+                                  std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!std::isfinite(machine.rate) || machine.rate < 0.0f || machine.rate > 60.0f) {
+        out_err = "rate must be within [0, 60] seconds";
+        return false;
+    }
+    for (usize i = 0; i < machine.states.size(); ++i) {
+        const runtime::StateSpec& state = machine.states[i];
+        if (state.name.empty()) {
+            out_err = "every state needs a name";
+            return false;
+        }
+        if (state.name.find(' ') != std::string::npos) {
+            out_err = "a state name cannot contain a space (the scene line delimits on it)";
+            return false;
+        }
+        for (usize j = i + 1; j < machine.states.size(); ++j) {
+            if (machine.states[j].name == state.name) {
+                out_err = "two states are both named '" + state.name + "'";
+                return false;
+            }
+        }
+    }
+    const auto declared = [&machine](const std::string& name) {
+        for (const runtime::StateSpec& state : machine.states) {
+            if (state.name == name) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!machine.initial.empty() && !declared(machine.initial)) {
+        out_err = "initial='" + machine.initial + "' is not one of the declared states";
+        return false;
+    }
+    for (const runtime::TransitionSpec& transition : machine.transitions) {
+        if (!declared(transition.from)) {
+            out_err = "Transition from='" + transition.from + "' is not a declared state";
+            return false;
+        }
+        if (!declared(transition.to)) {
+            out_err = "Transition to='" + transition.to + "' is not a declared state";
+            return false;
+        }
+        if (!std::isfinite(transition.at) || std::fabs(transition.at) > 1.0e6f) {
+            out_err = "a Transition threshold must be a finite number";
+            return false;
+        }
+    }
+    if (auto* existing = w->get<runtime::StateMachineComponent>(e)) {
+        *existing = machine;
+    } else {
+        w->add<runtime::StateMachineComponent>(e, machine);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_state_machine(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::StateMachineComponent>(e)) {
+        out_err = "Entity has no StateMachineComponent";
+        return false;
+    }
+    w->remove<runtime::StateMachineComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::set_audio_buffer(ecs::Entity e, const std::string& logical_path, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;

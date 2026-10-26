@@ -56,6 +56,7 @@
 #include <NF/AI/NavMesh.hpp>
 #include <NF/AI/Perception.hpp>
 #include <NF/AI/UtilityAI.hpp>
+#include <NF/AI/StateMachine.hpp>
 
 #include <array>
 #include <cmath>
@@ -357,6 +358,19 @@ public:
     /// True while the winning action asks the combat agent to hold its trigger.
     [[nodiscard]] bool brain_holds_fire(ecs::Entity entity) const;
 
+    // --- State machines (Phase 62) -------------------------------------------
+    //
+    // The same inputs, the same publication policy: the engine reports which
+    // state the entity is in and applies the authored `hold_fire`. It does not
+    // invent what "patrol" means.
+    [[nodiscard]] size_t state_machine_count() const { return m_machines.size(); }
+    /// The state `entity` is currently in. False when it has no machine or the
+    /// machine has not ticked yet.
+    [[nodiscard]] bool entity_state(ecs::Entity entity, std::string& out_state) const;
+    /// How many transitions the machine has fired. A replay asserts this with the
+    /// state: the pair is the cheapest proof that two runs took the same path.
+    [[nodiscard]] u32 entity_transition_count(ecs::Entity entity) const;
+
     // --- Gameplay modules (Phase 10) ----------------------------------------
     //
     // Modules come from GameplayModuleRegistry, so the Runtime only ever sees
@@ -529,6 +543,11 @@ public:
     /// and allocation-free: it reads what the frame already computed.
     void fill_brain_inputs(const ecs::World& world, ecs::Entity entity,
                            std::array<f32, kBrainInputCount>& out) const;
+    /// Builds one live machine per entity that authored a `States:` line.
+    void bind_scene_state_machines();
+    /// Ticks the machines for this frame, feeding them the same inputs the brains
+    /// get. A no-op when the scene declared none.
+    void step_state_machines(f32 dt);
 
     // --- Navigation (Phase 28 — the voxel NavMesh, in the frame and the scene)
     //
@@ -1873,6 +1892,27 @@ private:
         std::array<f32, kBrainInputCount> inputs{};        bool holds_fire = false;
     };
     std::vector<BrainBinding> m_brains;
+
+    /// One live machine per entity with a `States:` line. Parallel to the brain
+    /// binding in shape, and deliberately separate: an entity may carry either,
+    /// and the two are different questions ("what do I want" and "what am I
+    /// doing"), not two implementations of one.
+    struct MachineBinding {
+        ecs::Entity entity{};
+        /// Held by pointer because `ai::StateMachine` owns its states through
+        /// `unique_ptr` and is therefore not copyable; a binding that had to be
+        /// movable would otherwise have to copy one.
+        std::unique_ptr<ai::StateMachine> machine;
+        ai::Blackboard board;
+        /// State id -> name, and state id -> effect. Ids are insertion order.
+        std::vector<std::string> state_names;
+        std::vector<bool> state_holds_fire;
+        f32 clock = 0.0f;
+        std::string current_name;
+        u32 transitions_fired = 0;
+        bool holds_fire = false;
+    };
+    std::vector<MachineBinding> m_machines;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;

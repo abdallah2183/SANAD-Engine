@@ -1195,6 +1195,20 @@ constexpr Entry kEntries[] = {
     {"brain_in_ammo", "ammo", "الذخيرة"},
     {"brain_in_threat", "threat", "التهديد"},
     {"brain_in_enemies", "enemies", "الأعداء"},
+    // --- State machine authoring (Phase 62) ---------------------------------
+    {"states", "State machine", "آلة الحالة"},
+    {"no_states", "No state machine on this entity.", "لا توجد آلة حالة لهذا الكيان۔"},
+    {"add_states", "Add state machine", "إضافة آلة حالة"},
+    {"states_rate", "Tick every (s)", "خطوة كل (ث)"},
+    {"state_name", "State", "الحالة"},
+    {"add_state", "Add state", "إضافة حالة"},
+    {"remove_last", "Remove last", "حذف الأخير"},
+    {"transition", "Transition", "انتقال"},
+    {"from_state", "From", "من"},
+    {"to_state", "To", "إلى"},
+    {"guard_when", "When", "عندما"},
+    {"guard_at", "At", "القيمة"},
+    {"guard_below", "Below", "أدنى من"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread

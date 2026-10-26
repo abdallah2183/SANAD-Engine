@@ -324,6 +324,94 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- state machines (Phase 62) ---------------------------------------
+    // The edges are cross-references, so this is where they are checked: the
+    // loader parses one line at a time and cannot know whether the state a
+    // transition names is declared further down the entity. A transition to
+    // nowhere is an ERROR — the machine would drop the edge at bind time and the
+    // NPC would never leave that state, which reads as "the AI is broken" rather
+    // than as a typo.
+    for (const ecs::Entity e : entities) {
+        const auto* machine = world.get<StateMachineComponent>(e);
+        if (machine == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (machine->states.empty()) {
+            if (machine->enabled) {
+                report.add(ValidationSeverity::Warning, label,
+                           "States has no states: this entity's machine does nothing");
+            }
+            continue;
+        }
+        if (!sane(machine->rate, 0.0f, 60.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("rate ") + std::to_string(machine->rate) +
+                           " is outside [0, 60]; the machine will clamp it");
+        }
+
+        const auto state_index = [&machine](const std::string& name) -> long long {
+            for (usize i = 0; i < machine->states.size(); ++i) {
+                if (machine->states[i].name == name) {
+                    return static_cast<long long>(i);
+                }
+            }
+            return -1;
+        };
+
+        if (!machine->initial.empty() && state_index(machine->initial) < 0) {
+            report.add(ValidationSeverity::Error, label,
+                       "States initial='" + machine->initial +
+                           "' is not one of the declared states");
+        }
+
+        // Duplicate names make every edge that mentions them ambiguous.
+        for (usize i = 0; i < machine->states.size(); ++i) {
+            for (usize j = i + 1; j < machine->states.size(); ++j) {
+                if (machine->states[j].name == machine->states[i].name) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "two states are both named '" + machine->states[i].name + "'");
+                }
+            }
+        }
+
+        // Reachability: a state that is neither the start nor the destination of
+        // an edge can never run. `incoming` counts edges, so the start is added
+        // explicitly.
+        std::vector<bool> reachable(machine->states.size(), false);
+        const long long start = machine->initial.empty()
+                                    ? 0
+                                    : state_index(machine->initial);
+        if (start >= 0 && static_cast<usize>(start) < reachable.size()) {
+            reachable[static_cast<usize>(start)] = true;
+        }
+        for (const TransitionSpec& transition : machine->transitions) {
+            const long long from = state_index(transition.from);
+            const long long to = state_index(transition.to);
+            if (from < 0) {
+                report.add(ValidationSeverity::Error, label,
+                           "Transition from='" + transition.from +
+                               "' is not a declared state");
+                continue;
+            }
+            if (to < 0) {
+                report.add(ValidationSeverity::Error, label,
+                           "Transition to='" + transition.to +
+                               "' is not a declared state");
+                continue;
+            }
+            reachable[static_cast<usize>(to)] = true;
+        }
+        for (usize i = 0; i < machine->states.size(); ++i) {
+            if (!reachable[i]) {
+                report.add(ValidationSeverity::Warning, label,
+                           "state '" + machine->states[i].name +
+                               "' has no incoming transition and is not the start: it can "
+                               "never run");
+            }
+        }
+    }
+
     // --- combat (Phase 44) ---------------------------------------------
     //
     // A `Weapon:` line the loader refused never reaches here, so these rules

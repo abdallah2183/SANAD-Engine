@@ -78,6 +78,9 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* brain = sw.get<runtime::BrainComponent>(se)) {
             dw.add<runtime::BrainComponent>(de, *brain);
         }
+        if (const auto* machine = sw.get<runtime::StateMachineComponent>(se)) {
+            dw.add<runtime::StateMachineComponent>(de, *machine);
+        }
         if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
             dw.add<scene::PrefabLinkComponent>(de, *p);
         }

@@ -567,6 +567,9 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // perception so a consideration reads this frame's senses, and before the
     // combat step so a `hold_fire` decision is honoured in the same frame.
     bind_scene_brains();
+    // State machines (Phase 62): the third member of the trio, bound and dropped
+    // on the same terms.
+    bind_scene_state_machines();
     // AI population is game-registered per scene; a previous scene's crowd
     // must not govern the next one.
     if (m_ai_world) {
@@ -777,6 +780,7 @@ void Runtime::update(float dt) {
     // The brain decides from those senses, and its winner is what the combat
     // step below honours (or vetoes the trigger on).
     step_brains(dt);
+    step_state_machines(dt);
     step_combat_ai(dt);
     step_weapons(dt);
     // Rounds in flight advance immediately after the trigger that spawned
@@ -1651,6 +1655,11 @@ u32 Runtime::step_script(float dt) {
         // Decision layer (Phase 61): what this entity currently wants to do.
         input.decision = [self](u32 id, u32 gen, std::string& name, f32& score) {
             return self->brain_decision(ecs::Entity{id, gen}, name, score);
+        };
+        // State machines (Phase 62): which part of the authored machine is
+        // running for this entity.
+        input.state = [self](u32 id, u32 gen, std::string& name) {
+            return self->entity_state(ecs::Entity{id, gen}, name);
         };
     }
     m_scripts->set_input_source(input);

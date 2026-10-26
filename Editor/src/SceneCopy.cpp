@@ -56,6 +56,9 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* brain = src.get<runtime::BrainComponent>(from)) {
         dst.add<runtime::BrainComponent>(to, *brain);
     }
+    if (const auto* machine = src.get<runtime::StateMachineComponent>(from)) {
+        dst.add<runtime::StateMachineComponent>(to, *machine);
+    }
     if (const auto* p = src.get<scene::PrefabLinkComponent>(from)) {
         dst.add<scene::PrefabLinkComponent>(to, *p);
     }

@@ -343,6 +343,35 @@ BrainAction: name=hold    input=threat   curve=threshold hold_fire=true
 - **المدقق** يسمّي أخطاء القائمة: لا شيء لتفكيره، واسمان متطابقان، وقائمة كل أوزانها
   صفر، وأرقام خارج المدى. وللمحرر قسم **العقل** كامل بصف لكل اعتبار.
 
+### NPC بآلة حالة (`States:` / `State:` / `Transition:`، المرحلة 62)
+
+ذكاء الفائدة يجيب «أي اعتبار يشدّ أكثر الآن»، والآلة تجيب «ماذا أفعل» حيث يكون
+**التسلسل** هو السلوك: دورية ← اشتباه ← مطاردة ← بحث ← عودة. و`ai::StateMachine`
+مكتوبة ومختبرة منذ المرحلة 22، ومثل أختيها لا يصل إليها شيء:
+
+```text
+States: rate=0.1 initial=patrol
+State: name=patrol hold_fire=true
+State: name=alert
+State: name=return
+Transition: from=patrol to=alert  when=aware
+Transition: from=alert  to=return when=health below=true at=0.3
+Transition: from=return to=patrol when=distance at=4 below=true
+```
+
+- **الحارس جملة واحدة لا لغة تعبيرات**: أحد مدخلات العقل السبعة مقارَنًا بـ`at`.
+  و`when=aware` و`when=health below=true at=0.3` و`when=distance at=6 below=true`
+  هي الجمل التي تحتاجها دورية فعلًا؛ وصيغة تحسب أكثر من ذلك تحتاج محلّلًا ونطاقًا
+  ونموذج أخطاء.
+- **الترتيب هو القرار**: الانتقالات تُقيَّم بترتيب أسطرها وأول حارس يتحقق يفوز —
+  وهي قاعدة الوحدة الموثّقة، واختبار يحرسها.
+- **المدقق هو مكان فحص المراجع** (المحمّل يقرأ سطرًا واحدًا في المرة): حدّ إلى
+  حالة غير معلنة **خطأ** — الآلة ستُسقطه ولن يخرج NPC من حالته أبدًا — وحالة لا
+  تصل إليها الطريق و`initial` مجهول واسمان مكرّران تُبلَّغ كلها.
+- **`hold_fire` على حالة** تحبس الزناد كما تفعل على اعتبار في العقل؛ و`nf.state()`
+  يعيد الحالة التي يعمل فيها السكربت، وللمحرر قسم **آلة الحالة** كامل بصف لكل حالة
+  وصفّ لكل حدّ.
+
 ## 🧱 المزايا
 
 | المجال | ما يقدّمه |
@@ -364,7 +393,7 @@ BrainAction: name=hold    input=threat   curve=threshold hold_fire=true
 - **26 حزمة اختبار.** حزم 0.6.0 نجحت على ويندوز x64 (Release): `RHITests`
   345/345، `RuntimeTests` 364/364، `EditorTests` 289/289، `UITests` 46/46،
   `ToolTests` 55/55، `AudioTests` 136/136، و`ctest -j 4` يمرّ 26/26. وعلى شجرة
-  التطوير بعد المرحلة 61 صارت الأرقام `RuntimeTests` 396/396 و`EditorTests`
+  التطوير بعد المرحلة 62 صارت الأرقام `RuntimeTests` 405/405 و`EditorTests`
   290/290 و`AITests` 129/129 و`AudioTests` 138/138. على جهاز يمنع Smart App Control تشغيل ثنائي
   موقّع حديثًا قد تُسجَّل حزمة كعملية لم تبدأ حتى تحدّث خدمة السمعة رأيها - سياسة
   بيئة لا فشل اختبار.

@@ -392,6 +392,39 @@ BrainAction: name=hold    input=threat   curve=threshold hold_fire=true
   numbers outside the module's range. The editor has a full **Brain** section
   with one row per consideration.
 
+### NPCs with a state machine (`States:` / `State:` / `Transition:`, Phase 62)
+
+Utility scoring answers "which consideration pulls hardest right now"; a machine
+answers "what am I doing", where the *sequence* is the behaviour — patrol,
+suspicious, chase, search, return. `ai::StateMachine` has been unit-tested since
+Phase 22 and, like the other two, reachable from nothing:
+
+```text
+States: rate=0.1 initial=patrol
+State: name=patrol hold_fire=true
+State: name=alert
+State: name=return
+Transition: from=patrol to=alert  when=aware
+Transition: from=alert  to=return when=health below=true at=0.3
+Transition: from=return to=patrol when=distance at=4 below=true
+```
+
+- **A guard is one sentence, not an expression language**: one of the same seven
+  inputs the brain reads, compared against `at`. `when=aware`,
+  `when=health below=true at=0.3` and `when=distance at=6 below=true` are the
+  four sentences a patrol actually needs, and a format that could compute more
+  would need a parser, a scope and an error model.
+- **The order is the decision**: transitions are evaluated in line order and the
+  first guard that holds wins — the module's documented tie-break, and a test
+  pins it.
+- **The validator is where the cross-references are checked** (the loader reads
+  one line at a time): an edge to a state nothing declares is an *error* — the
+  machine would drop it and the NPC would never leave a state — and an
+  unreachable state, a bad `initial` and duplicate names are reported.
+- **`hold_fire` on a state** vetoes the trigger, exactly as it does on a brain
+  action; `nf.state()` returns the state a script is running in, and the editor
+  has a full **State machine** section with a row per state and per edge.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -414,8 +447,8 @@ BrainAction: name=hold    input=threat   curve=threshold hold_fire=true
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 61 the counts are
-  `RuntimeTests` 396/396, `EditorTests` 290/290, `AITests` 129/129 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 62 the counts are
+  `RuntimeTests` 405/405, `EditorTests` 290/290, `AITests` 129/129 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

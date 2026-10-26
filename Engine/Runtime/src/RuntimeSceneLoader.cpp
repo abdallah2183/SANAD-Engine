@@ -504,6 +504,52 @@ static bool parse_brain_action(const std::string& line, BrainAction& out, std::s
     return true;
 }
 
+// `States:`, `State:` and `Transition:` (Phase 62). The machine's declaration,
+// its states and its guarded edges, each on its own line so a patrol reads like
+// the shape it is. Same contract as the brain lines: an absent key keeps the
+// default, and a value that cannot be read is refused by name.
+static bool parse_states(const std::string& line, StateMachineComponent& out,
+                         std::string& out_bad) {
+    if (!optional_float_in_range(line, "rate=", 0.0f, 60.0f, out.rate, out_bad)) return false;
+    out.initial = field_value(line, "initial=");
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+static bool parse_state(const std::string& line, StateSpec& out, std::string& out_bad) {
+    const std::string name = field_value(line, "name=");
+    if (name.empty()) {
+        out_bad = "name";
+        return false;
+    }
+    out.name = name;
+    out.hold_fire = line.find("hold_fire=true") != std::string::npos;
+    return true;
+}
+
+static bool parse_transition(const std::string& line, TransitionSpec& out, std::string& out_bad) {
+    out.from = field_value(line, "from=");
+    if (out.from.empty()) {
+        out_bad = "from";
+        return false;
+    }
+    out.to = field_value(line, "to=");
+    if (out.to.empty()) {
+        out_bad = "to";
+        return false;
+    }
+    const std::string when = field_value(line, "when=");
+    if (when.empty() || !brain_input_from_name(when, out.when)) {
+        out_bad = "when";
+        return false;
+    }
+    if (!optional_float_in_range(line, "at=", -1000000.0f, 1000000.0f, out.at, out_bad)) {
+        return false;
+    }
+    out.below = line.find("below=true") != std::string::npos;
+    return true;
+}
+
 static bool parse_point_light(const std::string& line, PointLightComponent& out,
                               std::string& out_bad) {
     if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
@@ -1368,6 +1414,58 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     }
                 } else {
                     result.warnings.push_back("BrainAction line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  States:",0)==0) {
+                // The machine (Phase 62). Like the brain line, it updates in
+                // place when its states were already declared above it: the line
+                // order must not drop a list of states.
+                StateMachineComponent machine;
+                std::string bad;
+                if (parse_states(line, machine, bad)) {
+                    if (auto* existing = scene->world().get<StateMachineComponent>(e)) {
+                        existing->rate = machine.rate;
+                        existing->enabled = machine.enabled;
+                        if (!machine.initial.empty()) {
+                            existing->initial = machine.initial;
+                        }
+                    } else {
+                        scene->world().add<StateMachineComponent>(e, std::move(machine));
+                    }
+                } else {
+                    result.warnings.push_back("States line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  State:",0)==0) {
+                StateSpec state;
+                std::string bad;
+                if (parse_state(line, state, bad)) {
+                    auto* machine = scene->world().get<StateMachineComponent>(e);
+                    if (machine == nullptr) {
+                        scene->world().add<StateMachineComponent>(e, StateMachineComponent{});
+                        machine = scene->world().get<StateMachineComponent>(e);
+                    }
+                    if (machine != nullptr) {
+                        machine->states.push_back(std::move(state));
+                    }
+                } else {
+                    result.warnings.push_back("State line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  Transition:",0)==0) {
+                TransitionSpec transition;
+                std::string bad;
+                if (parse_transition(line, transition, bad)) {
+                    auto* machine = scene->world().get<StateMachineComponent>(e);
+                    if (machine == nullptr) {
+                        scene->world().add<StateMachineComponent>(e, StateMachineComponent{});
+                        machine = scene->world().get<StateMachineComponent>(e);
+                    }
+                    if (machine != nullptr) {
+                        machine->transitions.push_back(std::move(transition));
+                    }
+                } else {
+                    result.warnings.push_back("Transition line with invalid " + bad +
                                               " was ignored: " + line);
                 }
             } else if (line.rfind("  Camera:",0)==0) {
@@ -2682,6 +2780,35 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 out << "\n";
             }
         }
+        // The state machine (Phase 62): the declaration, then one line per state
+        // and one per guarded edge, in the authored order that decides ties.
+        const auto* machine = scene_obj.world().get<StateMachineComponent>(e);
+        if (machine) {
+            out << "  States: rate=" << machine->rate;
+            if (!machine->initial.empty()) {
+                out << " initial=" << machine->initial;
+            }
+            if (!machine->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+            for (const StateSpec& state : machine->states) {
+                out << "  State: name=" << state.name;
+                if (state.hold_fire) {
+                    out << " hold_fire=true";
+                }
+                out << "\n";
+            }
+            for (const TransitionSpec& transition : machine->transitions) {
+                out << "  Transition: from=" << transition.from << " to=" << transition.to
+                    << " when=" << brain_input_name(transition.when)
+                    << " at=" << transition.at;
+                if (transition.below) {
+                    out << " below=true";
+                }
+                out << "\n";
+            }
+        }
         // Physics. The runtime body handle is deliberately NOT written: it is a
         // per-session identity (generation-checked), and a stale one from a
         // previous run is meaningless — reloading rebuilds it from the scene.
@@ -3042,6 +3169,10 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         // Considerations are authored data; the live decision lives in the
         // Runtime, so a copy is a full copy.
         dst.add<BrainComponent>(de, *brain);
+    }
+    if (const auto* machine = src.get<StateMachineComponent>(se)) {
+        // States and edges are authored data on the same terms.
+        dst.add<StateMachineComponent>(de, *machine);
     }
     if (const auto* rb = src.get<physics::RigidBodyComponent>(se)) {
         physics::RigidBodyComponent fresh = *rb;

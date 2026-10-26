@@ -28,10 +28,12 @@
 #include <NF/Runtime/Runtime.hpp>
 
 #include <NF/Core/Logger.hpp>
+#include <NF/AI/StateMachine.hpp>
 #include <NF/Scene/Transform.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 namespace nf::runtime {
 
@@ -149,7 +151,167 @@ bool Runtime::brain_holds_fire(ecs::Entity entity) const {
             return binding.holds_fire;
         }
     }
+    for (const MachineBinding& binding : m_machines) {
+        if (binding.entity == entity) {
+            return binding.holds_fire;
+        }
+    }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// State machines (Phase 62)
+// ---------------------------------------------------------------------------
+
+void Runtime::bind_scene_state_machines() {
+    // A scene change takes the machines with it, like the decisions: which state
+    // an NPC was in belongs to the level that was just replaced.
+    m_machines.clear();
+
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+
+    for (const ecs::Entity e : world.all_entities()) {
+        const auto* component = world.get<StateMachineComponent>(e);
+        if (component == nullptr || !component->enabled || component->states.empty()) {
+            continue;
+        }
+
+        MachineBinding binding;
+        binding.entity = e;
+        binding.machine = std::make_unique<ai::StateMachine>();
+        for (const StateSpec& state : component->states) {
+            // A state is a marker: the machine's shape lives in the transitions,
+            // and the state's own effect is read from the parallel table.
+            binding.machine->add_state(std::make_unique<ai::SMState>());
+            binding.state_names.push_back(state.name);
+            binding.state_holds_fire.push_back(state.hold_fire);
+        }
+
+        // The edges. A transition naming a state that does not exist is dropped
+        // with a log rather than wired to id 0 — the validator calls it an error,
+        // and pointing it at the first state would invent a route the author
+        // never drew.
+        for (const TransitionSpec& transition : component->transitions) {
+            u32 from = ai::StateMachine::kNotStarted;
+            u32 to = ai::StateMachine::kNotStarted;
+            for (usize i = 0; i < binding.state_names.size(); ++i) {
+                if (binding.state_names[i] == transition.from) {
+                    from = static_cast<u32>(i);
+                }
+                if (binding.state_names[i] == transition.to) {
+                    to = static_cast<u32>(i);
+                }
+            }
+            if (from == ai::StateMachine::kNotStarted || to == ai::StateMachine::kNotStarted) {
+                NF_LOG_WARN(LogCategory::Core,
+                            "Runtime: Transition {} -> {} names a state the machine does not "
+                            "declare; the edge was dropped",
+                            transition.from, transition.to);
+                continue;
+            }
+            const std::string key = brain_input_name(transition.when);
+            const f32 at = transition.at;
+            const bool below = transition.below;
+            binding.machine->add_transition(from, to,
+                                           [key, at, below](const ai::Blackboard& board) {
+                                               const f32 value = static_cast<f32>(
+                                                   board.get_number(key, 0.0));
+                                               return below ? value <= at : value >= at;
+                                           });
+        }
+
+        // The start state: the authored one, or the first declared. A machine
+        // that is never started ticks nothing, so this is not optional.
+        u32 start = 0u;
+        if (!component->initial.empty()) {
+            for (usize i = 0; i < binding.state_names.size(); ++i) {
+                if (binding.state_names[i] == component->initial) {
+                    start = static_cast<u32>(i);
+                }
+            }
+        }
+        binding.machine->set_start(start);
+        m_machines.push_back(std::move(binding));
+    }
+
+    if (!m_machines.empty()) {
+        NF_LOG_INFO(LogCategory::Core, "Runtime: {} state machine(s) bound from the scene",
+                    m_machines.size());
+    }
+}
+
+bool Runtime::entity_state(ecs::Entity entity, std::string& out_state) const {
+    for (const MachineBinding& binding : m_machines) {
+        if (binding.entity == entity) {
+            if (binding.current_name.empty()) {
+                return false;
+            }
+            out_state = binding.current_name;
+            return true;
+        }
+    }
+    return false;
+}
+
+u32 Runtime::entity_transition_count(ecs::Entity entity) const {
+    for (const MachineBinding& binding : m_machines) {
+        if (binding.entity == entity) {
+            return binding.transitions_fired;
+        }
+    }
+    return 0u;
+}
+
+void Runtime::step_state_machines(f32 dt) {
+    if (m_machines.empty() || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    if (!(dt > 0.0f) || !std::isfinite(dt)) {
+        dt = 0.0f;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+
+    for (MachineBinding& binding : m_machines) {
+        const auto* component = world.get<StateMachineComponent>(binding.entity);
+        if (component == nullptr || !component->enabled || binding.state_names.empty()) {
+            binding.holds_fire = false;
+            continue;
+        }
+
+        // The same seven inputs the brains read, from the same function: one
+        // vocabulary, one place it is computed.
+        std::array<f32, kBrainInputCount> inputs{};
+        fill_brain_inputs(world, binding.entity, inputs);
+        for (u32 i = 0; i < kBrainInputCount; ++i) {
+            binding.board.set_number(brain_input_name(static_cast<BrainInput>(i)),
+                                    static_cast<double>(inputs[i]));
+        }
+
+        // The rate, on the same terms as the brain's, except that a machine's
+        // default is every frame: one comparison per edge is nothing, and a
+        // patrol that hesitates a quarter second on every transition reads as
+        // lag rather than as deliberation.
+        binding.clock += dt;
+        const f32 period = std::max(0.0f, component->rate);
+        if (period > 0.0f && binding.clock < period && !binding.current_name.empty()) {
+            continue;
+        }
+        binding.clock = 0.0f;
+
+        binding.machine->tick(binding.board, dt);
+        binding.transitions_fired = binding.machine->transition_count();
+        const u32 current = binding.machine->current();
+        if (current < binding.state_names.size()) {
+            binding.current_name = binding.state_names[current];
+            binding.holds_fire = binding.state_holds_fire[current];
+        } else {
+            binding.current_name.clear();
+            binding.holds_fire = false;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

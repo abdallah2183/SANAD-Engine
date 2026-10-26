@@ -989,6 +989,63 @@ struct BrainAction {
     bool hold_fire = false;
 };
 
+/// One state of a scene machine (Phase 62). A state is a marker with an effect:
+/// the engine does not invent what "patrol" does, it publishes the current state
+/// and applies the one thing a level needs from it — `hold_fire`.
+struct StateSpec {
+    /// Free text, one token, and what Lua and the editor read back.
+    std::string name;
+    /// While this state is current, the entity's combat agent holds its trigger.
+    bool hold_fire = false;
+};
+
+/// "When in `from` and `when` holds, go to `to`."
+///
+/// The guard is one of the brain's inputs compared against `at`, rather than an
+/// expression language: a scene format that could compute anything would need a
+/// parser, a scope and an error model, and every one of those is a place for a
+/// level to be subtly wrong. `when=aware` (at 0.5), `when=health below=true
+/// at=0.3` and `when=distance at=6 below=true` are the four sentences a patrol
+/// actually needs.
+struct TransitionSpec {
+    std::string from;
+    std::string to;
+    BrainInput when = BrainInput::Aware;
+    /// The threshold the input is compared against.
+    f32 at = 0.5f;
+    /// "value <= at" instead of "value >= at". Distance and hit points read
+    /// better this way round; awareness and enemy count read better the other.
+    bool below = false;
+};
+
+/// A finite state machine as scene data (Phase 62, design §45 "AI Core: state
+/// machines").
+///
+/// The third and last member of the trio this engine kept writing and never
+/// wiring: `ai::StateMachine` has been unit-tested since Phase 22 (16 cases) and
+/// reachable from nothing. Utility scoring answers "which consideration pulls
+/// hardest right now"; a machine answers "what am I doing", where the SEQUENCE
+/// is the behaviour — patrol, suspicious, chase, search, return.
+///
+/// The inputs are the same seven the brain uses, computed by the same function,
+/// so the two layers read one world through one vocabulary.
+struct StateMachineComponent {
+    bool enabled = true;
+
+    /// Seconds between ticks. 0 ticks every frame, which a machine can afford:
+    /// one comparison per transition.
+    f32 rate = 0.0f;
+
+    /// The state the machine starts in. Empty means the first declared one, so a
+    /// scene that lists its states in order does not have to name it twice.
+    std::string initial;
+
+    std::vector<StateSpec> states;
+    /// Evaluated in line order, and the FIRST guard that holds wins — the module
+    /// documents authoring order as the tie-break, so the order is behaviour.
+    std::vector<TransitionSpec> transitions;
+};
+
 /// The decision layer (Phase 61, design §45 "AI Core: utility AI").
 ///
 /// Perception (Phase 60) answers "what do I know"; this answers "what do I want

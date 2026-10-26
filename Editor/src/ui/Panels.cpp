@@ -281,6 +281,13 @@ struct InspectorCache {
     bool brain_enabled = true;
     float brain_rate = 0.25f;
     std::vector<runtime::BrainAction> brain_actions;
+    // State machines (Phase 62), cached on the same terms: the states and the
+    // edges are the components' own structs.
+    bool sm_has = false;
+    bool sm_enabled = true;
+    float sm_rate = 0.0f;
+    std::vector<runtime::StateSpec> sm_states;
+    std::vector<runtime::TransitionSpec> sm_transitions;
     // Animation
     int anim_clip = 0;     // index into the component's clip table
     float anim_speed = 1.0f;
@@ -2237,6 +2244,17 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.brain_has = false;
                     ic.brain_actions.clear();
                 }
+                if (const auto* machine = w->get<runtime::StateMachineComponent>(sel)) {
+                    ic.sm_has = true;
+                    ic.sm_enabled = machine->enabled;
+                    ic.sm_rate = machine->rate;
+                    ic.sm_states = machine->states;
+                    ic.sm_transitions = machine->transitions;
+                } else {
+                    ic.sm_has = false;
+                    ic.sm_states.clear();
+                    ic.sm_transitions.clear();
+                }
                 if (const auto* sc = w->get<scripting::ScriptComponent>(sel)) {
                     std::strncpy(ic.script_path, sc->path.c_str(), sizeof(ic.script_path) - 1);
                     ic.script_path[sizeof(ic.script_path) - 1] = '\0';
@@ -4142,6 +4160,177 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_brain(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach brain failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- State machine (Phase 62) ---
+            // States and guarded edges: the machine's shape is the list of edges,
+            // so they are edited in order and the order is what breaks a tie.
+            if (ImGui::CollapsingHeader((AV("states") + "###States").c_str())) {
+                if (!ic.sm_has) {
+                    ImGui::TextDisabled("%s", AV("no_states").c_str());
+                    if (ImGui::Button((AV("add_states") + "##sm").c_str())) {
+                        runtime::StateMachineComponent fresh;
+                        // A machine with one state and no edges ticks and does
+                        // nothing, which is a visible starting point; an empty
+                        // list would be a panel with no rows.
+                        runtime::StateSpec idle;
+                        idle.name = "idle";
+                        fresh.states.push_back(std::move(idle));
+                        fresh.initial = "idle";
+                        std::string err;
+                        if (!app.set_state_machine(sel, fresh, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach state machine failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##sm_enabled").c_str(), &ic.sm_enabled);
+                    ImGui::SameLine();
+                    ImGui::DragFloat((AV("states_rate") + "##sm").c_str(), &ic.sm_rate, 0.01f,
+                                     0.0f, 60.0f, "%.2f s");
+
+                    // The same input vocabulary the brain uses, translated on the
+                    // same terms so the Arabic UI shows no Latin.
+                    const std::string sm_input_labels[runtime::kBrainInputCount] = {
+                        AV("brain_in_aware"), AV("brain_in_sensing"), AV("brain_in_distance"),
+                        AV("brain_in_health"), AV("brain_in_ammo"), AV("brain_in_threat"),
+                        AV("brain_in_enemies")};
+                    const char* input_items[runtime::kBrainInputCount] = {
+                        sm_input_labels[0].c_str(), sm_input_labels[1].c_str(),
+                        sm_input_labels[2].c_str(), sm_input_labels[3].c_str(),
+                        sm_input_labels[4].c_str(), sm_input_labels[5].c_str(),
+                        sm_input_labels[6].c_str()};
+
+                    // The state names as combo items: built once per frame, and
+                    // owned for the whole of it so the pointers live.
+                    std::vector<std::string> state_labels;
+                    state_labels.reserve(ic.sm_states.size());
+                    for (const runtime::StateSpec& state : ic.sm_states) {
+                        state_labels.push_back(state.name);
+                    }
+                    std::vector<const char*> state_items;
+                    state_items.reserve(state_labels.size());
+                    for (const std::string& label : state_labels) {
+                        state_items.push_back(label.c_str());
+                    }
+
+                    for (usize i = 0; i < ic.sm_states.size(); ++i) {
+                        runtime::StateSpec& state = ic.sm_states[i];
+                        ImGui::PushID(static_cast<int>(1000 + i));
+                        char name_buffer[64];
+                        std::snprintf(name_buffer, sizeof(name_buffer), "%s", state.name.c_str());
+                        ImGui::SetNextItemWidth(160.0f);
+                        if (ImGui::InputText((AV("state_name") + "##name").c_str(), name_buffer,
+                                             sizeof(name_buffer))) {
+                            state.name = name_buffer;
+                        }
+                        ImGui::SameLine();
+                        ImGui::Checkbox((AV("hold_fire") + "##state").c_str(), &state.hold_fire);
+                        ImGui::PopID();
+                    }
+                    if (ImGui::Button((AV("add_state") + "##sm").c_str())) {
+                        runtime::StateSpec extra;
+                        extra.name = "state" + std::to_string(ic.sm_states.size() + 1u);
+                        ic.sm_states.push_back(std::move(extra));
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("remove_last") + "##state").c_str()) &&
+                        !ic.sm_states.empty()) {
+                        ic.sm_states.pop_back();
+                    }
+
+                    ImGui::Separator();
+                    if (state_items.size() >= 2) {
+                        for (usize i = 0; i < ic.sm_transitions.size(); ++i) {
+                            runtime::TransitionSpec& transition = ic.sm_transitions[i];
+                            ImGui::PushID(static_cast<int>(2000 + i));
+                            int from = 0;
+                            int to = 0;
+                            for (usize s = 0; s < ic.sm_states.size(); ++s) {
+                                if (ic.sm_states[s].name == transition.from) {
+                                    from = static_cast<int>(s);
+                                }
+                                if (ic.sm_states[s].name == transition.to) {
+                                    to = static_cast<int>(s);
+                                }
+                            }
+                            ImGui::SetNextItemWidth(140.0f);
+                            if (ImGui::Combo((AV("from_state") + "##t").c_str(), &from,
+                                             state_items.data(),
+                                             static_cast<int>(state_items.size()))) {
+                                transition.from = ic.sm_states[static_cast<usize>(from)].name;
+                            }
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(140.0f);
+                            if (ImGui::Combo((AV("to_state") + "##t").c_str(), &to,
+                                             state_items.data(),
+                                             static_cast<int>(state_items.size()))) {
+                                transition.to = ic.sm_states[static_cast<usize>(to)].name;
+                            }
+                            ImGui::SameLine();
+                            int when_index = static_cast<int>(transition.when);
+                            ImGui::SetNextItemWidth(120.0f);
+                            if (ImGui::Combo((AV("guard_when") + "##t").c_str(), &when_index,
+                                             input_items,
+                                             static_cast<int>(runtime::kBrainInputCount))) {
+                                transition.when = static_cast<runtime::BrainInput>(when_index);
+                            }
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(90.0f);
+                            ImGui::DragFloat((AV("guard_at") + "##t").c_str(), &transition.at, 0.1f,
+                                             -1.0e6f, 1.0e6f, "%.2f");
+                            ImGui::SameLine();
+                            ImGui::Checkbox((AV("guard_below") + "##t").c_str(),
+                                            &transition.below);
+                            ImGui::PopID();
+                        }
+                        if (ImGui::Button((AV("transition") + "##add").c_str())) {
+                            runtime::TransitionSpec extra;
+                            extra.from = ic.sm_states.front().name;
+                            extra.to = ic.sm_states.back().name;
+                            extra.when = runtime::BrainInput::Aware;
+                            extra.at = 0.5f;
+                            ic.sm_transitions.push_back(std::move(extra));
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button((AV("remove_last") + "##transition").c_str()) &&
+                            !ic.sm_transitions.empty()) {
+                            ic.sm_transitions.pop_back();
+                        }
+                    } else {
+                        ImGui::TextDisabled("%s", AV("add_state").c_str());
+                    }
+
+                    if (ImGui::Button((AV("apply") + "##sm").c_str())) {
+                        runtime::StateMachineComponent edited;
+                        edited.enabled = ic.sm_enabled;
+                        edited.rate = ic.sm_rate;
+                        edited.initial = ic.sm_states.empty() ? std::string{}
+                                                              : ic.sm_states.front().name;
+                        edited.states = ic.sm_states;
+                        edited.transitions = ic.sm_transitions;
+                        std::string err;
+                        if (!app.set_state_machine(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "State machine edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##sm").c_str())) {
+                        std::string err;
+                        if (!app.detach_state_machine(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach state machine failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

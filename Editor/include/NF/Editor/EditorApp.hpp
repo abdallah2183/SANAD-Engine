@@ -307,6 +307,14 @@ public:
     // because a decision nobody can name is a decision nobody can act on.
     bool set_brain(ecs::Entity e, const runtime::BrainComponent& brain, std::string& out_err);
     bool detach_brain(ecs::Entity e, std::string& out_err);
+
+    // --- State machines (Phase 62) ------------------------------------------
+    // States and guarded edges. The setter refuses what the validator calls an
+    // error — an edge to a state nothing declares — because a machine that drops
+    // an edge is an NPC that never leaves a state.
+    bool set_state_machine(ecs::Entity e, const runtime::StateMachineComponent& machine,
+                           std::string& out_err);
+    bool detach_state_machine(ecs::Entity e, std::string& out_err);
     // Binds a VFS audio file to the entity (add-or-replace): reads and
     // decodes it now, so the waveform preview and Play work without a scene
     // reload. A file-backed buffer clears any procedural tone on the same

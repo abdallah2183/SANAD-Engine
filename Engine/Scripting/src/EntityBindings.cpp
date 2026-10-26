@@ -660,6 +660,25 @@ int l_decision(lua_State* L) {
     return 2;
 }
 
+// nf.state() -> the name of the state this entity is in, or nil when it has no
+// state machine (Phase 62). The machine's own shape is data; this is how a game
+// reads which part of it is running.
+int l_state(lua_State* L) {
+    ecs::Entity self;
+    if (!self_entity(L, self)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    std::string name;
+    if (input == nullptr || !input->state || !input->state(self.id, self.generation, name)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushlstring(L, name.c_str(), name.size());
+    return 1;
+}
+
 // nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.
 int l_health(lua_State* L) {
     ecs::Entity e;
@@ -826,6 +845,8 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "forget");
     lua_pushcfunction(L, l_decision);
     lua_setfield(L, -2, "decision");
+    lua_pushcfunction(L, l_state);
+    lua_setfield(L, -2, "state");
     lua_pop(L, 1);
 }
 

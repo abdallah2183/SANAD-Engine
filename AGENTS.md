@@ -190,6 +190,16 @@ Games/MyGame/
   "advance" means — read it with `nf.decision()`; the one effect it applies is the
   authored `hold_fire`, which vetoes the trigger while that action wins. A brain
   re-decides when `rate` elapses (`rate=0` every frame).
+- An NPC can run a state machine instead (Phase 62): `States: rate=0.1
+  initial=patrol` declares it, one `State: name=<token> [hold_fire=true]` per
+  state, and one `Transition: from=<state> to=<state> when=<input> [at=]
+  [below=true]` per edge. The guard is one of the SAME seven inputs compared
+  against `at` (`below=true` flips it to "value <= at"), edges are evaluated in
+  line order and the first that holds wins, and `rate` holds the machine between
+  ticks. An edge to a state nothing declares is a validation ERROR — the machine
+  drops it and the NPC never leaves that state. A `hold_fire` state vetoes the
+  trigger like a brain action does, and scripts read the current state with
+  `nf.state()`.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -244,6 +254,7 @@ nf.sensing(id, gen)               -- is a sense reading it THIS frame?
 nf.last_known(id, gen)            -- x, y, z where I last knew it, or nil
 nf.forget(id, gen)                -- drop one memory; false if there was none
 nf.decision()                     -- name, score of what this entity wants to do
+nf.state()                        -- the state this entity's machine is in, or nil
 print(...)                        -- engine log
 ```
 
