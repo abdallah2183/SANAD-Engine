@@ -1,0 +1,44 @@
+# SANAD Scene v1
+version: 1
+name: Terrain
+entity_count: 8
+---
+entity: 1:0
+  Name: Camera
+  Transform: local(10,15,30) world(10,15,30) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Camera: fov=50 aspect=1.7777778 near=0.1 far=600 active=true follow=Focus pivot=0,0,0 distance=35 yaw=200 pitch=-18 align=90 mouse=0
+---
+entity: 2:0
+  Name: Sun
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Light: type=Directional dir(-0.45,-1,-0.35) color(1,0.96,0.9) intensity=1.1
+---
+entity: 3:0
+  Name: Sky
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Sky: zenith(0.28,0.44,0.66) horizon(0.72,0.78,0.82) ground(0.09,0.1,0.09) clear(0.03,0.04,0.06) sun_disk=0.9 sun_glow=1 enabled=true
+---
+entity: 4:0
+  Name: Focus
+  Transform: local(0,12.5,0) world(0,12.5,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+---
+entity: 5:0
+  Name: Ground
+  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Terrain: res=128 area=90 height=24 freq=0.01 octaves=4 seed=3 material=content://Materials/Grass.nfmat
+---
+entity: 6:0
+  Name: Navigation
+  Transform: local(-20,0,-20) world(-20,0,-20) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  NavMesh: area(40,18,40) cell=0.6 cell_height=0.3 slope=50 climb=0.7 headroom=2 min_area=3 agent_radius=0.35 jump_distance=4 jump_height=1.6 max_verts=6 enabled=true
+  NavLink: from=-14,14.15,14 to=12,12.16,10
+---
+entity: 7:0
+  Name: WalkerA
+  Transform: local(-14,12,14) world(-14,12,14) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  NavAgent: speed=3.2 goal_x=13 goal_y=12 goal_z=-13 arrive=0.4 enabled=true
+---
+entity: 8:0
+  Name: WalkerB
+  Transform: local(12,12,10) world(12,12,10) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  NavAgent: speed=2.4 goal_x=-12 goal_y=12 goal_z=-12 arrive=0.4 enabled=true

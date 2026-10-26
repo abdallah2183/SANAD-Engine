@@ -341,6 +341,14 @@ public:
     bool attach_navmesh(ecs::Entity e, std::string& out_err);
     bool set_navmesh(ecs::Entity e, const runtime::NavMeshComponent& nm, std::string& out_err);
     bool detach_navmesh(ecs::Entity e, std::string& out_err);
+    /// Terrain (Phase 63): the ground the navigation mesh walks on. Editing it
+    /// re-runs the terrain build AND the bake, because the mesh the author sees
+    /// and the surface the agents path on are the same field — a rebuild that
+    /// touched only one of them would be a lie.
+    bool attach_terrain(ecs::Entity e, std::string& out_err);
+    bool set_terrain(ecs::Entity e, const runtime::TerrainComponent& terrain,
+                     std::string& out_err);
+    bool detach_terrain(ecs::Entity e, std::string& out_err);
     bool attach_nav_agent(ecs::Entity e, std::string& out_err);
     bool set_nav_agent(ecs::Entity e, const runtime::NavAgentComponent& na, std::string& out_err);
     bool detach_nav_agent(ecs::Entity e, std::string& out_err);
@@ -668,6 +676,10 @@ private:
     bool require_editable(std::string& out_err) const;
     bool require_materials(std::string& out_err) const;
     void after_mutation(ecs::Entity touched);
+    /// Re-runs the terrain build and the navigation bake (Phase 63). The mesh
+    /// the author sees and the surface the agents path on come from one field,
+    /// so an edit that rebuilt only one of them would be a lie.
+    void rebuild_terrain();
     void watch_imported(const ImportJob& job);
     // Moves the pivot to (x,y,z) and carries the active camera eye by the same
     // delta, so a framing action changes WHERE the user is looking without

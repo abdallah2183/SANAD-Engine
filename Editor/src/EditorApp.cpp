@@ -2732,6 +2732,74 @@ bool EditorApp::detach_navmesh(ecs::Entity e, std::string& out_err) {
     return true;
 }
 
+void EditorApp::rebuild_terrain() {
+    if (m_runtime == nullptr) {
+        return;
+    }
+    // Terrain first: the bake below samples the field the build just resolved,
+    // so the mesh the author sees and the mesh the agents path on are the same
+    // surface. This is the same order adopt_scene uses.
+    m_runtime->build_scene_terrain();
+    m_runtime->build_scene_navmesh();
+}
+
+bool EditorApp::attach_terrain(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<runtime::TerrainComponent>(e)) {
+        return true;
+    }
+    w->add<runtime::TerrainComponent>(e, runtime::TerrainComponent{});
+    after_mutation(e);
+    rebuild_terrain();
+    return true;
+}
+
+bool EditorApp::set_terrain(ecs::Entity e, const runtime::TerrainComponent& terrain,
+                            std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (auto* existing = w->get<runtime::TerrainComponent>(e)) {
+        *existing = terrain;
+    } else {
+        w->add<runtime::TerrainComponent>(e, terrain);
+    }
+    after_mutation(e);
+    rebuild_terrain();
+    return true;
+}
+
+bool EditorApp::detach_terrain(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::TerrainComponent>(e)) {
+        out_err = "Entity has no TerrainComponent";
+        return false;
+    }
+    w->remove<runtime::TerrainComponent>(e);
+    after_mutation(e);
+    rebuild_terrain();
+    return true;
+}
+
 bool EditorApp::attach_nav_agent(ecs::Entity e, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;

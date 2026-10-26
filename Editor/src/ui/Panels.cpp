@@ -367,6 +367,21 @@ struct InspectorCache {
     float navm_jump_height = 1.5f;
     int navm_max_verts = 6;
     bool navm_enabled = true;
+    int navm_link_count = 0;
+    // Terrain (Phase 63). The height source is a field, not a mesh, so the
+    // section edits the generator: resolution, extent and the noise/heightmap
+    // that produce the surface. Heightmap and material are text because they
+    // are project paths, and the paths live in the scene file either way.
+    bool terr_has = false;
+    bool terr_enabled = true;
+    int terr_res = 64;
+    float terr_area = 100.0f;
+    float terr_height = 10.0f;
+    float terr_freq = 0.03f;
+    int terr_octaves = 4;
+    int terr_seed = 1;
+    char terr_heightmap[256]{};
+    char terr_material[128]{};
     bool nava_has = false;
     float nava_speed = 4.0f;
     float nava_goal[3]{};
@@ -2353,8 +2368,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.navm_jump_height = navm_comp->jump_height;
                     ic.navm_max_verts = static_cast<int>(navm_comp->max_verts_per_poly);
                     ic.navm_enabled = navm_comp->enabled;
+                    ic.navm_link_count = static_cast<int>(navm_comp->links.size());
                 } else {
                     ic.navm_has = false;
+                }
+                if (const auto* terr = w->get<runtime::TerrainComponent>(sel)) {
+                    ic.terr_has = true;
+                    ic.terr_enabled = terr->enabled;
+                    ic.terr_res = static_cast<int>(terr->resolution);
+                    ic.terr_area = terr->area;
+                    ic.terr_height = terr->height_scale;
+                    ic.terr_freq = terr->noise_frequency;
+                    ic.terr_octaves = static_cast<int>(terr->octaves);
+                    ic.terr_seed = static_cast<int>(terr->seed);
+                    std::snprintf(ic.terr_heightmap, sizeof(ic.terr_heightmap), "%s",
+                                  terr->heightmap.c_str());
+                    std::snprintf(ic.terr_material, sizeof(ic.terr_material), "%s",
+                                  terr->material.c_str());
+                } else {
+                    ic.terr_has = false;
                 }
                 if (const auto* nava_comp = w->get<runtime::NavAgentComponent>(sel)) {
                     ic.nava_has = true;
@@ -2457,6 +2489,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<runtime::NavAgentComponent>(sel) &&
                            ImGui::MenuItem(AV("nav_agent").c_str())) {
                     added = app.attach_nav_agent(sel, add_err);
+                } else if (!w->has<runtime::TerrainComponent>(sel) &&
+                           ImGui::MenuItem(AV("terrain").c_str())) {
+                    added = app.attach_terrain(sel, add_err);
                 } else if (!w->has<physics::VehicleComponent>(sel) &&
                            ImGui::MenuItem(AV("vehicle").c_str())) {
                     added = app.attach_vehicle(sel, add_err);
@@ -4784,6 +4819,81 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_navmesh(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach navmesh failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                    // Authored links (Phase 63) are read here, written in the
+                    // scene file: the list is geometry (two points per row) and
+                    // a widget that added one in place would be a gizmo task,
+                    // not an inspector one. What the author needs from this
+                    // panel is the count the bake will use.
+                    ImGui::TextDisabled("%s: %d", AV("nav_links").c_str(), ic.navm_link_count);
+                }
+            }
+            // --- Terrain (Phase 63) ---
+            //
+            // The ground the bake samples and the mesh the viewport draws, from
+            // one field. Apply re-runs the build and the bake together, which
+            // is why the button says "apply" and not "save": nothing is
+            // persisted until the scene is saved, and what changes immediately
+            // is what the viewport shows.
+            if (ImGui::CollapsingHeader((AV("terrain") + "###Terrain").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.terr_has) {
+                    ImGui::TextDisabled("%s", AV("no_terrain").c_str());
+                    if (ImGui::Button((AV("attach") + "##terrain").c_str())) {
+                        std::string err;
+                        if (!app.attach_terrain(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach terrain failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##terr_enabled").c_str(), &ic.terr_enabled);
+                    ImGui::DragInt(AV("terrain_res").c_str(), &ic.terr_res, 1.0f, 2, 1024);
+                    ImGui::DragFloat(AV("terrain_area").c_str(), &ic.terr_area, 1.0f, 0.1f,
+                                     100000.0f);
+                    ImGui::DragFloat(AV("terrain_height").c_str(), &ic.terr_height, 0.1f, 0.0f,
+                                     100000.0f);
+                    ImGui::DragFloat(AV("terrain_freq").c_str(), &ic.terr_freq, 0.001f, 0.0001f,
+                                     10.0f);
+                    ImGui::DragInt(AV("terrain_octaves").c_str(), &ic.terr_octaves, 1.0f, 0, 12);
+                    ImGui::DragInt(AV("terrain_seed").c_str(), &ic.terr_seed, 1.0f, 0,
+                                   0x7FFFFFFF);
+                    ImGui::InputText(AV("terrain_heightmap").c_str(), ic.terr_heightmap,
+                                     sizeof(ic.terr_heightmap));
+                    ImGui::InputText(AV("terrain_material").c_str(), ic.terr_material,
+                                     sizeof(ic.terr_material));
+                    if (ImGui::Button((AV("apply") + "##terrain").c_str())) {
+                        runtime::TerrainComponent edited;
+                        edited.enabled = ic.terr_enabled;
+                        edited.resolution = static_cast<unsigned>(ic.terr_res);
+                        edited.area = ic.terr_area;
+                        edited.height_scale = ic.terr_height;
+                        edited.noise_frequency = ic.terr_freq;
+                        edited.octaves = static_cast<unsigned>(ic.terr_octaves);
+                        edited.seed = static_cast<unsigned>(ic.terr_seed);
+                        edited.heightmap = ic.terr_heightmap;
+                        edited.material = ic.terr_material;
+                        std::string err;
+                        if (!app.set_terrain(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Terrain edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##terrain").c_str())) {
+                        std::string err;
+                        if (!app.detach_terrain(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach terrain failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

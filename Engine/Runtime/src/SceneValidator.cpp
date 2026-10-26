@@ -412,6 +412,74 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- terrain and its links (Phase 63) --------------------------------
+    //
+    // The loader refuses a value outside its range, so these rules are for the
+    // CROSS-FIELD mistakes: a field that multiplies nothing, a link the bake
+    // will drop because one end is off the volume, a link that goes nowhere.
+    // All of them are things an author cannot see by reading one line.
+    for (const ecs::Entity e : entities) {
+        const auto* terrain = world.get<TerrainComponent>(e);
+        if (terrain == nullptr || !terrain->enabled) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (terrain->resolution < 2u) {
+            report.add(ValidationSeverity::Error, label,
+                       "terrain resolution " + std::to_string(terrain->resolution) +
+                           " cannot form a grid (2 vertices per side is the minimum)");
+        }
+        if (!(terrain->area > 0.0f)) {
+            report.add(ValidationSeverity::Error, label,
+                       "terrain area must be positive; a zero extent is a line, not ground");
+        }
+        // height_scale multiplies the field, and the field is flat when it has
+        // no octaves and no heightmap. The mesh still draws (a plane), which is
+        // exactly why this is worth saying out loud.
+        if (terrain->height_scale > 0.0f && terrain->octaves == 0u &&
+            terrain->heightmap.empty()) {
+            report.add(ValidationSeverity::Warning, label,
+                       "terrain has height=" + std::to_string(terrain->height_scale) +
+                           " but octaves=0 and no heightmap: the ground will be flat");
+        }
+    }
+
+    // Links belong to a volume, so the pair is what gets checked. A link whose
+    // endpoint falls outside the volume's own box is dropped by the bake (and
+    // counted); saying so here turns a silent drop into a line in the report.
+    for (const ecs::Entity e : entities) {
+        const auto* navmesh = world.get<NavMeshComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (navmesh == nullptr || t == nullptr || !navmesh->enabled) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        for (usize i = 0; i < navmesh->links.size(); ++i) {
+            const NavLinkSpec& link = navmesh->links[i];
+            const std::string which = "link " + std::to_string(i + 1);
+            const auto inside = [&](f32 x, f32 y, f32 z) {
+                return x >= t->local_x && x <= t->local_x + navmesh->area_x &&
+                       y >= t->local_y && y <= t->local_y + navmesh->area_y &&
+                       z >= t->local_z && z <= t->local_z + navmesh->area_z;
+            };
+            if (!inside(link.start_x, link.start_y, link.start_z)) {
+                report.add(ValidationSeverity::Warning, label,
+                           which + " starts outside the volume: the bake will drop it");
+            }
+            if (!inside(link.end_x, link.end_y, link.end_z)) {
+                report.add(ValidationSeverity::Warning, label,
+                           which + " ends outside the volume: the bake will drop it");
+            }
+            const f32 dx = link.end_x - link.start_x;
+            const f32 dy = link.end_y - link.start_y;
+            const f32 dz = link.end_z - link.start_z;
+            if (dx * dx + dy * dy + dz * dz < 1e-6f) {
+                report.add(ValidationSeverity::Warning, label,
+                           which + " starts and ends at the same point: it connects nothing");
+            }
+        }
+    }
+
     // --- combat (Phase 44) ---------------------------------------------
     //
     // A `Weapon:` line the loader refused never reaches here, so these rules
@@ -565,6 +633,10 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                     report.add(ValidationSeverity::Warning, label,
                                "script component is enabled but has neither a path nor source");
                 }
+            }
+            if (const auto* terrain = world.get<TerrainComponent>(e); terrain != nullptr) {
+                check_path(label, "terrain heightmap", terrain->heightmap);
+                check_path(label, "terrain material", terrain->material);
             }
         }
     }

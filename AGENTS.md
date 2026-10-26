@@ -200,6 +200,22 @@ Games/MyGame/
   drops it and the NPC never leaves that state. A `hold_fire` state vetoes the
   trigger like a brain action does, and scripts read the current state with
   `nf.state()`.
+- The ground the AI walks on is one line (Phase 63):
+  `Terrain: res=128 area=90 height=24 freq=0.01 octaves=4 seed=3
+  material=content://Materials/Ground.nfmat`. It is centred on the entity's
+  Transform, so dragging the entity moves the hills, the mesh the player sees
+  and the field the navigation bake samples together. `heightmap=` replaces the
+  noise with a decodable image (a missing or unreadable file falls back to noise
+  with a log line, never a failed scene). A scene with no `Terrain:` line bakes
+  the flat floor it always did, so nothing that existed before changes. The
+  terrain is drawn with `material=` (default material when absent); it has no
+  collider yet, so pair it with a `Collider:` on a separate entity if the
+  physics world has to hold something up.
+- A jump, a climb or a ladder is one line on the navigation volume (Phase 63):
+  `NavLink: from=-6,12.42,14 to=4,13.46,-12` (`one_way=true` for a drop you
+  cannot climb back up). Endpoints are world space and are snapped onto the
+  baked mesh; a link whose end is off the mesh is dropped and counted, and the
+  validator warns about it before the bake ever runs.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

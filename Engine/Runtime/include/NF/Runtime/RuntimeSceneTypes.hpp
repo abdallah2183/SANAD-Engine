@@ -589,6 +589,61 @@ struct CameraComponent {
     float shake_decay = 1.4f;
 };
 
+/// Ground the navigation mesh can actually walk on (Phase 63).
+///
+/// Until this existed the bake's height sampler was a FLAT floor at the volume's
+/// own height, and the comment above said why: "terrain is not scene-authorable
+/// (there is no Terrain component in .nfscene), so a sampler that invented hills
+/// would describe a world the physics does not simulate". This is that
+/// component. The same `rendering::HeightField` and `rendering::terrain_height`
+/// that answer the navmesh's queries also build the mesh the player sees, so the
+/// surface an NPC walks on is the surface on screen.
+///
+/// The height source is authored data: a `heightmap=` image when it decodes,
+/// deterministic value noise otherwise. A `heightmap=` that cannot be read falls
+/// back with a log line rather than failing the scene — the contract the
+/// `--heightmap` flag keeps in the Basic3D sample.
+struct TerrainComponent {
+    bool enabled = true;
+
+    /// Vertices per side of the mesh, and the world extent in X and Z. The
+    /// terrain is centred on the entity's own Transform, so dragging the entity
+    /// in the editor moves the ground with it.
+    unsigned resolution = 64u;
+    f32 area = 100.0f;
+
+    /// Multiplies the 0..1 field. 0 is flat ground, which is the honest way to
+    /// author a plane that still participates in navigation.
+    f32 height_scale = 10.0f;
+    f32 noise_frequency = 0.03f;
+    unsigned octaves = 4u;
+    unsigned seed = 1u;
+
+    /// `content://Textures/*.png` (or any decodable image) when authored; empty
+    /// means procedural noise.
+    std::string heightmap;
+
+    /// The material the ground is drawn with. Empty means the renderer's
+    /// default, which is what a scene that only wanted collision-free hills
+    /// gets. It is a path, not a handle, for the same reason `MeshComponent`
+    /// stores one: the runtime resolves it once and the scene file stays text.
+    std::string material;
+};
+
+/// One authored off-mesh link (Phase 63): a jump, a climb, a ladder, a teleport
+/// pad. Stored on the navigation volume because it belongs to the mesh that
+/// volume bakes, and consumed by `ai::NavMesh::build`, which drops a link whose
+/// endpoint is not on the mesh and counts it rather than teleporting an agent
+/// into the void.
+struct NavLinkSpec {
+    f32 start_x = 0.0f, start_y = 0.0f, start_z = 0.0f;
+    f32 end_x = 0.0f, end_y = 0.0f, end_z = 0.0f;
+    /// Both directions when true. A one-way link is a drop-down or a
+    /// jump-up-only ledge: A* honours the direction, so an agent does not path
+    /// back up a pit it jumped into.
+    bool bidirectional = true;
+};
+
 /// The navigation volume: where the walkable mesh is baked, and how (design doc
 /// §45 "Navigation" — NavMesh, off-mesh links, dynamic obstacles).
 ///
@@ -630,6 +685,11 @@ struct NavMeshComponent {
     f32 jump_distance = 4.0f;
     f32 jump_height = 1.5f;
     u32 max_verts_per_poly = 6;
+
+    /// Authored off-mesh links (Phase 63): a jump, a climb, a ladder, a
+    /// teleport pad. They belong to the mesh this volume bakes, which is why
+    /// they live here rather than in a component of their own.
+    std::vector<NavLinkSpec> links;
 
     /// Off: the component survives (the author keeps the volume placed) but no
     /// mesh is baked and no agent moves. The same "switch it off, keep it

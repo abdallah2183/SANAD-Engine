@@ -550,6 +550,61 @@ static bool parse_transition(const std::string& line, TransitionSpec& out, std::
     return true;
 }
 
+/// `key=x,y,z`. The comma form, like the camera's `pivot=`, because a link is a
+/// pair of positions and `from(x,y,z) to(x,y,z)` would nest parentheses twice on
+/// one line.
+static bool field_vec3_commas(const std::string& line, const char* key, f32& x, f32& y, f32& z) {
+    const std::string v = field_value(line, key);
+    if (v.empty()) {
+        return false;
+    }
+    f32 vx = 0.0f;
+    f32 vy = 0.0f;
+    f32 vz = 0.0f;
+    if (sscanf(v.c_str(), "%f,%f,%f", &vx, &vy, &vz) != 3) {
+        return false;
+    }
+    if (!finite3(vx, vy, vz)) {
+        return false;
+    }
+    x = vx;
+    y = vy;
+    z = vz;
+    return true;
+}
+
+// `Terrain:` (Phase 63). The ground the navigation mesh walks on, built from a
+// heightmap image when one is authored and from deterministic value noise
+// otherwise. Same contract as every other optional line.
+static bool parse_terrain(const std::string& line, TerrainComponent& out, std::string& out_bad) {
+    if (!optional_int_in_range(line, "res=", 2, 1024, out.resolution, out_bad)) return false;
+    if (!optional_int_in_range(line, "octaves=", 0, 12, out.octaves, out_bad)) return false;
+    if (!optional_int_in_range(line, "seed=", 0, 0x7FFFFFFF, out.seed, out_bad)) return false;
+    if (!optional_float_in_range(line, "area=", 0.1f, 100000.0f, out.area, out_bad)) return false;
+    if (!optional_float_in_range(line, "height=", 0.0f, 100000.0f, out.height_scale, out_bad)) return false;
+    if (!optional_float_in_range(line, "freq=", 0.0001f, 10.0f, out.noise_frequency, out_bad)) return false;
+    out.heightmap = field_value(line, "heightmap=");
+    out.material = field_value(line, "material=");
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+// `NavLink:` (Phase 63): one authored off-mesh connection on the navigation
+// volume's entity. Both endpoints are required; an endpoint that is not on the
+// baked mesh is dropped by the module and counted, which the validator can see.
+static bool parse_nav_link(const std::string& line, NavLinkSpec& out, std::string& out_bad) {
+    if (!field_vec3_commas(line, "from=", out.start_x, out.start_y, out.start_z)) {
+        out_bad = "from";
+        return false;
+    }
+    if (!field_vec3_commas(line, "to=", out.end_x, out.end_y, out.end_z)) {
+        out_bad = "to";
+        return false;
+    }
+    out.bidirectional = line.find("one_way=true") == std::string::npos;
+    return true;
+}
+
 static bool parse_point_light(const std::string& line, PointLightComponent& out,
                               std::string& out_bad) {
     if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
@@ -2081,6 +2136,38 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 } else {
                     scene->world().add<NavMeshComponent>(e, std::move(comp));
                 }
+            } else if (line.rfind("  NavLink:",0)==0) {
+                // One authored off-mesh link on the navigation volume's entity
+                // (Phase 63). Like `BrainAction:`, the line appends to the
+                // component its neighbours declare, creating it when the author
+                // wrote the links first.
+                NavLinkSpec link;
+                std::string bad;
+                if (!parse_nav_link(line, link, bad)) {
+                    result.warnings.push_back("NavLink line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    auto* navmesh = scene->world().get<NavMeshComponent>(e);
+                    if (navmesh == nullptr) {
+                        scene->world().add<NavMeshComponent>(e, NavMeshComponent{});
+                        navmesh = scene->world().get<NavMeshComponent>(e);
+                    }
+                    if (navmesh != nullptr) {
+                        navmesh->links.push_back(link);
+                    }
+                }
+            } else if (line.rfind("  Terrain:",0)==0) {
+                // The ground the navmesh walks on (Phase 63). Absent means the
+                // flat floor the bake has always used, so a scene that never
+                // heard of terrain keeps the mesh it had.
+                TerrainComponent terrain;
+                std::string bad;
+                if (!parse_terrain(line, terrain, bad)) {
+                    result.warnings.push_back("Terrain line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    scene->world().add<TerrainComponent>(e, std::move(terrain));
+                }
             } else if (line.rfind("  NavAgent:",0)==0) {
                 // A walker: config plus the authored goal. The live path is a
                 // runtime artefact and is never parsed or written.
@@ -3013,6 +3100,40 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " jump_height=" << nm->jump_height
                 << " max_verts=" << nm->max_verts_per_poly
                 << " enabled=" << (nm->enabled ? "true" : "false") << "\n";
+            // The authored off-mesh links (Phase 63), one line each, in order —
+            // the order is the order A* considers them.
+            if (nm != nullptr) {
+                for (const NavLinkSpec& link : nm->links) {
+                    out << "  NavLink: from=" << link.start_x << "," << link.start_y << ","
+                        << link.start_z << " to=" << link.end_x << "," << link.end_y << ","
+                        << link.end_z;
+                    if (!link.bidirectional) {
+                        out << " one_way=true";
+                    }
+                    out << "\n";
+                }
+            }
+        }
+        // The terrain (Phase 63): every field is written, because the component
+        // exists only when the author asked for it.
+        const auto* terrain = scene_obj.world().get<TerrainComponent>(e);
+        if (terrain) {
+            out << "  Terrain: res=" << terrain->resolution
+                << " area=" << terrain->area
+                << " height=" << terrain->height_scale
+                << " freq=" << terrain->noise_frequency
+                << " octaves=" << terrain->octaves
+                << " seed=" << terrain->seed;
+            if (!terrain->heightmap.empty()) {
+                out << " heightmap=" << terrain->heightmap;
+            }
+            if (!terrain->material.empty()) {
+                out << " material=" << terrain->material;
+            }
+            if (!terrain->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
         }
         const auto* agent = scene_obj.world().get<NavAgentComponent>(e);
         if (agent) {

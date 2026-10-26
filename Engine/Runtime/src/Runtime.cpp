@@ -16,6 +16,7 @@
 #include <NF/Rendering/Culling.hpp>
 #include <NF/Rendering/RenderWorld.hpp>
 #include <NF/Rendering/TimeOfDay.hpp>
+#include <NF/Rendering/Terrain.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -579,6 +580,10 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // mesh and its walkers are dropped with it, and the new one bakes its own
     // (a no-op for a scene with no NavMesh line).
     m_nav_agents.clear();
+    // Terrain first (Phase 63): the bake below samples the same height field,
+    // and the mesh it draws is built from it, so both have to exist before the
+    // volume is voxelized.
+    build_scene_terrain();
     build_scene_navmesh();
     // Vehicles are a per-scene artefact on the same terms: the previous
     // scene's Jolt world, statics and cars die with it, and the new one binds
@@ -1966,16 +1971,138 @@ u32 Runtime::step_ai_world(float dt) {
     return ticking;
 }
 
+// --- Terrain (Phase 63) ------------------------------------------------------
+//
+// One authored field, three readers: the mesh drawn on screen, the sampler the
+// navigation bake walks on, and the height the physics world is told about.
+// They all go through `terrain_state_for` + `rendering::terrain_height`, so
+// they cannot disagree about where the surface is.
+
+namespace {
+
+/// A terrain's resolved height source. `field` OWNS the decoded raster that
+/// `options.heightmap` points into, so the two must travel together: the state
+/// is handed to callers as a `shared_ptr`, and the navigation mesh stores its
+/// sampler for `rebuild()`, which means the field has to outlive this function
+/// — a stack local would leave `rebuild()` reading freed memory.
+struct TerrainState {
+    rendering::TerrainOptions options{};
+    rendering::HeightField field{};
+    /// The entity's world origin: the terrain is centred on its Transform, so a
+    /// height query is a query in the terrain's own frame.
+    Vec3 origin{};
+};
+
+/// Resolves one terrain entity into a height source. A `heightmap=` that does
+/// not decode falls back to the noise field with a log line rather than failing
+/// the scene — the same contract the Basic3D sample's `--heightmap` keeps.
+std::shared_ptr<TerrainState> terrain_state_for(const TerrainComponent& tc,
+                                                const scene::Transform& t,
+                                                const assets::VirtualFileSystem& vfs) {
+    auto state = std::make_shared<TerrainState>();
+    state->origin = Vec3{t.world_x, t.world_y, t.world_z};
+    state->options.resolution = tc.resolution;
+    state->options.size = tc.area;
+    state->options.height_scale = tc.height_scale;
+    state->options.noise_frequency = tc.noise_frequency;
+    state->options.octaves = tc.octaves;
+    state->options.seed = tc.seed;
+    state->options.heightmap = nullptr;
+
+    if (tc.heightmap.empty()) {
+        return state;
+    }
+    const auto resolved = vfs.resolve(tc.heightmap);
+    if (!resolved.ok) {
+        NF_LOG_WARN(LogCategory::Core,
+                    "Runtime: terrain heightmap '{}' was not found ({}); using noise",
+                    tc.heightmap, resolved.error);
+        return state;
+    }
+    std::string error;
+    state->field = rendering::build_heightfield_from_image(resolved.value.string(), error);
+    if (state->field.ok()) {
+        state->options.heightmap = &state->field;
+    } else {
+        NF_LOG_WARN(LogCategory::Core,
+                    "Runtime: terrain heightmap '{}' did not decode ({}); using noise",
+                    tc.heightmap, error);
+    }
+    return state;
+}
+
+/// The world-space height of a terrain at (x, z). Pure given the state, which
+/// is what lets the bake, the mesh and the test all agree.
+f32 terrain_world_height(const TerrainState& state, f32 x, f32 z) {
+    return state.origin.y +
+           rendering::terrain_height(x - state.origin.x, z - state.origin.z, state.options);
+}
+
+} // namespace
+
+void Runtime::build_scene_terrain() {
+    m_terrain_meshes.clear();
+    m_terrain_materials.clear();
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    auto& world = m_scene_data_ptr->scene->world();
+    size_t built = 0;
+    size_t skipped = 0;
+    for (auto e : world.query<TerrainComponent>()) {
+        const auto* tc = world.get<TerrainComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (tc == nullptr || t == nullptr || !tc->enabled) {
+            continue;
+        }
+        const auto state = terrain_state_for(*tc, *t, m_vfs);
+        // A headless run has no device to upload to: the mesh is built and the
+        // upload refuses, which is the same path the wheel and shard meshes
+        // take. Nothing downstream needs the mesh — the bake samples the field
+        // directly — so a headless run still navigates the hills.
+        if (!m_mesh_library) {
+            ++skipped;
+            continue;
+        }
+        auto mesh = rendering::build_terrain_mesh(state->options);
+        if (mesh == nullptr || !mesh->upload(m_device)) {
+            NF_LOG_TRACE(LogCategory::Core,
+                         "Runtime: terrain at ({}, {}, {}) has no drawable mesh "
+                         "(resolution {} is degenerate, or there is no device)",
+                         t->world_x, t->world_y, t->world_z, tc->resolution);
+            ++skipped;
+            continue;
+        }
+        const rendering::StaticMeshHandle handle = m_mesh_library->add(std::move(mesh));
+        if (!handle.valid()) {
+            ++skipped;
+            continue;
+        }
+        m_terrain_meshes[e.id] = handle;
+        if (!tc->material.empty()) {
+            m_terrain_materials[e.id] = material_for_path(tc->material);
+        }
+        ++built;
+    }
+    if (built > 0 || skipped > 0) {
+        NF_LOG_INFO(LogCategory::Core,
+                    "Runtime: terrain meshes built {} ({} without a drawable mesh)",
+                    built, skipped);
+    }
+}
+
+
 // --- Navigation (Phase 28) ---------------------------------------------------
 //
 // The bake reads three things from the scene and invents nothing else:
 //   * the volume's own Transform origin as the area's minimum corner,
-//   * a FLAT floor sampler at the volume's floor height — terrain is not
-//     scene-authorable, so a sampler that invented hills would describe a
-//     world the physics does not simulate, and
+//   * the height field of the scene's `Terrain:` entity when it has one — the
+//     flat floor at the volume's own height otherwise, which is what every
+//     scene baked before Phase 63 and still gets when it authors no terrain —
+//     and
 //   * the scene's static box colliders as obstacles.
-// A richer sampler is a caller's extension through ai::NavMesh::build (it takes
-// any callable); this is the honest v1 a scene can author.
+// The authored `NavLink:` lines ride along with the volume, so a jump the
+// designer marked is a jump the agents can take.
 
 void Runtime::build_scene_navmesh() {
     // The scene owns its navigation: dropping the previous scene's mesh and
@@ -2063,10 +2190,43 @@ void Runtime::build_scene_navmesh() {
     cfg.max_verts_per_poly = spec->max_verts_per_poly;
 
     const f32 floor_y = area_min.y;
-    auto sampler = [floor_y](f32, f32) { return floor_y; };
+
+    // The height source (Phase 63): the scene's first enabled terrain when it
+    // has one, the flat floor when it does not. `state` is held by the sampler
+    // below, so a later `NavMesh::rebuild()` re-samples the same field instead
+    // of a stack frame that is long gone.
+    std::shared_ptr<TerrainState> ground;
+    for (auto e : world.query<TerrainComponent>()) {
+        const auto* tc = world.get<TerrainComponent>(e);
+        const auto* t = world.get<scene::Transform>(e);
+        if (tc != nullptr && t != nullptr && tc->enabled) {
+            ground = terrain_state_for(*tc, *t, m_vfs);
+            break;
+        }
+    }
+    ai::NavMesh::HeightSampler sampler;
+    if (ground) {
+        sampler = [ground](f32 x, f32 z) { return terrain_world_height(*ground, x, z); };
+    } else {
+        sampler = [floor_y](f32, f32) { return floor_y; };
+    }
+
+    // Authored off-mesh links (Phase 63): a jump, a climb, a ladder, a teleport
+    // pad. The bake snaps each endpoint onto the mesh and drops (and counts)
+    // the ones that land nowhere, so a link the author misplaced is a number in
+    // the log rather than an agent walking into the void.
+    std::vector<ai::NavLink> links;
+    links.reserve(spec->links.size());
+    for (const NavLinkSpec& authored : spec->links) {
+        ai::NavLink link;
+        link.start = Vec3{authored.start_x, authored.start_y, authored.start_z};
+        link.end = Vec3{authored.end_x, authored.end_y, authored.end_z};
+        link.bidirectional = authored.bidirectional;
+        links.push_back(link);
+    }
 
     auto mesh = std::make_unique<ai::NavMesh>();
-    if (!mesh->build(cfg, area_min, area_max, sampler, obstacles)) {
+    if (!mesh->build(cfg, area_min, area_max, sampler, obstacles, links)) {
         NF_LOG_ERROR(LogCategory::Core,
                      "Runtime: navigation bake failed for the volume at ({}, {}, {}) "
                      "with extents ({}, {}, {}) — check the area, the cell size and the floor",
@@ -2093,9 +2253,13 @@ void Runtime::build_scene_navmesh() {
 
     NF_LOG_INFO(LogCategory::Core,
                 "Runtime: navigation baked {} polygons / {} regions from {} obstacles "
-                "({} agents bound)",
+                "({} agents bound, {} links of {} authored{}, ground: {})",
                 m_navmesh->polygon_count(), m_navmesh->region_count(), obstacles.size(),
-                m_nav_agents.size());
+                m_nav_agents.size(), m_navmesh->link_count(), links.size(),
+                m_navmesh->dropped_link_count() > 0
+                    ? ", " + std::to_string(m_navmesh->dropped_link_count()) + " dropped"
+                    : std::string{},
+                ground ? "terrain" : "flat floor");
 }
 
 u32 Runtime::step_navmesh(float dt) {
@@ -4843,6 +5007,44 @@ void Runtime::build_render_world(rendering::RenderWorld& out) {
     build_debris_render_world(out);
     build_vehicle_wheels_render_world(out);
     build_combat_feedback_render_world(out);
+
+    // Terrain (Phase 63). One object per terrain entity, posed by its own
+    // Transform — so dragging the entity in the editor moves the hills, the
+    // mesh the player stands on and the field the bake samples together. The
+    // object keeps the entity's id, which means a click in the viewport selects
+    // the terrain instead of reporting nothing.
+    for (auto e : world.query<TerrainComponent>()) {
+        const auto* tr = world.get<scene::Transform>(e);
+        const auto* tc = world.get<TerrainComponent>(e);
+        if (tr == nullptr || tc == nullptr || !tc->enabled) {
+            continue;
+        }
+        const auto it = m_terrain_meshes.find(e.id);
+        if (it == m_terrain_meshes.end()) {
+            continue; // headless, or the upload failed and said so once
+        }
+        const rendering::StaticMesh* mesh = m_mesh_library->get(it->second);
+        if (mesh == nullptr || !mesh->is_uploaded()) {
+            continue;
+        }
+        rendering::RenderObject ro{};
+        ro.id = e.id;
+        ro.visible = true;
+        ro.transform.x = tr->world_x;
+        ro.transform.y = tr->world_y;
+        ro.transform.z = tr->world_z;
+        ro.world = scene::world_matrix(*tr);
+        ro.mesh_handle = it->second;
+        ro.material_handle = m_default_material;
+        if (const auto mit = m_terrain_materials.find(e.id);
+            mit != m_terrain_materials.end() && mit->second.valid()) {
+            ro.material_handle = mit->second;
+        }
+        ro.lod = 0;
+        ro.bounds = rendering::transform_aabb(mesh->bounds(), ro.world);
+        ro.sphere = rendering::transform_sphere(mesh->bounding_sphere(), ro.world);
+        out.objects.push_back(std::move(ro));
+    }
 
     // Projected decals (Phase 36). Placement and facing come from the entity
     // Transform; the authored size is baked into the matrix here so the GPU's

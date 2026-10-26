@@ -320,3 +320,31 @@ NF_TEST(navmesh_clear_resets_state) {
     NF_CHECK_EQ(mesh.region_count(), 0u);
     NF_CHECK(!mesh.rebuild());
 }
+
+NF_TEST(a_sloped_surface_is_patches_not_one_quad) {
+    // Regression (Phase 63): the rectangle cover merged purely on GEOMETRY, so
+    // a hill collapsed into ONE bilinear quad — 1600 columns of a 20x20 slope
+    // reported a single polygon whose interior could be half a metre off the
+    // surface an agent is supposed to stand on. The cover now carries a height
+    // budget (`cell_height`), and this pins it: more than one patch, every
+    // corner on the sampled surface, and the same mesh on a second build.
+    NavMesh mesh;
+    auto ramp = [](f32 x, f32 z) { return 2.0f + 0.06f * x + 0.03f * z; };
+    NF_CHECK(mesh.build(small_cfg(), Vec3{0, 0, 0}, Vec3{20, 12, 20}, ramp, {}, {}));
+    NF_CHECK(mesh.polygon_count() > 4u);
+
+    // A corner takes its height from the nearest column CENTRE, so the error is
+    // bounded by half a cell of the slope, not zero.
+    f32 worst = 0.0f;
+    for (u32 p = 0; p < mesh.polygon_count(); ++p) {
+        for (const Vec3& v : mesh.polygon(p).verts) {
+            worst = std::max(worst, std::fabs(v.y - ramp(v.x, v.z)));
+        }
+    }
+    NF_CHECK(worst < 0.05f);
+
+    NavMesh again;
+    NF_CHECK(again.build(small_cfg(), Vec3{0, 0, 0}, Vec3{20, 12, 20}, ramp, {}, {}));
+    NF_CHECK(mesh.same_as(again));
+}
+

@@ -201,6 +201,10 @@ add_executable(RuntimeTests
     # miss does to aim and trigger discipline. Pure arithmetic.
     RuntimeTests/test_damage_ledger.cpp
     RuntimeTests/test_suppression.cpp
+    # Terrain and its links (Phase 63): the `Terrain:`/`NavLink:` lines round
+    # trip, the validator names the links the bake would drop, and a scene that
+    # declares a terrain gets a navigation mesh that follows it.
+    RuntimeTests/test_terrain.cpp
     RuntimeTests/test_input_bindings.cpp
     RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp

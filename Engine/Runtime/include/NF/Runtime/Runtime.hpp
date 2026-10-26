@@ -575,6 +575,26 @@ public:
     /// per-scene artefact here.
     void build_scene_navmesh();
 
+    // --- Terrain (Phase 63) ------------------------------------------------
+    //
+    // The scene's `Terrain:` entities are one height source with three readers:
+    // the mesh drawn on screen, the sampler the navigation bake walks on, and
+    // the ground the physics world is told about. They all call
+    // `terrain_height` with the same options, so they cannot disagree about
+    // where the surface is — the whole point of authoring the field instead of
+    // modelling it twice.
+
+    /// Builds and uploads one mesh per enabled `Terrain:` entity. Called when a
+    /// scene is adopted, before the navigation bake, because the bake samples
+    /// the same field. A run with no device (headless, `--validate`) builds
+    /// nothing and says so; the bake still follows the terrain, because the
+    /// height source does not need a GPU.
+    void build_scene_terrain();
+
+    /// Terrains that produced a drawable mesh. Zero in a headless run, and zero
+    /// for a scene that never authored one.
+    [[nodiscard]] size_t terrain_mesh_count() const { return m_terrain_meshes.size(); }
+
     /// Steps every bound agent along its path, writing the result into its
     /// Transform. Returns the number of agents that moved this frame. Only
     /// advances on dt > 0 (callers go through update(), which enforces it).
@@ -1726,6 +1746,12 @@ private:
     /// without the agents knowing anything about the bake.
     u64 m_nav_generation = 0;
     size_t m_nav_obstacle_count = 0;
+    /// Terrain (Phase 63): the meshes built for the scene's `Terrain:` entities,
+    /// keyed by entity id. Render-only state — the height source itself is
+    /// rebuilt on demand by `terrain_state_for`, so a scene edit never has to
+    /// invalidate a cache it cannot see.
+    std::unordered_map<u32, rendering::StaticMeshHandle> m_terrain_meshes;
+    std::unordered_map<u32, rendering::MaterialHandle> m_terrain_materials;
     /// Edit-vs-play mode, mirrored into GameplayContext::playing (see
     /// set_playing). Defaults to editing so a harness that never sets it gets
     /// the editor-safe behaviour, not gameplay driving the scene.

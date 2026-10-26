@@ -10,6 +10,7 @@
 #include <NF/AI/NavMesh.hpp>
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -462,8 +463,61 @@ void NavMesh::build_polygons() {
             }
         }
 
+        // A polygon is a BILINEAR PATCH between its four corners, so a
+        // rectangle is only a faithful stand-in for the surface while those
+        // corners are close to each other. Without this budget the cover folds
+        // a whole hill into one quad: the mesh reports a single polygon, and an
+        // agent in the middle of it stands on the patch's interpolation instead
+        // of on the ground the player can see (measured: 1 polygon over 1600
+        // columns of a 20x20 slope, up to half a metre off the surface).
+        // `cell_height` is the quantum the rest of the pipeline already uses
+        // for "the same solid volume", so it is the natural budget here too.
+        const f32 height_budget = std::max(m_cell_height, 0.05f);
+        const auto spread = [&](const Rect& r) {
+            const f32 a = top_at(r.x0, r.z0);
+            const f32 b = top_at(r.x1, r.z0);
+            const f32 c = top_at(r.x1, r.z1);
+            const f32 d = top_at(r.x0, r.z1);
+            const f32 lo = std::min(std::min(a, b), std::min(c, d));
+            const f32 hi = std::max(std::max(a, b), std::max(c, d));
+            return hi - lo;
+        };
+
+        // Split, deterministically, until every rectangle fits the budget or is
+        // one cell wide (one cell carries one height by construction).
+        std::vector<Rect> split_rects;
+        split_rects.reserve(rects.size());
+        std::vector<Rect> pending(rects.rbegin(), rects.rend());
+        while (!pending.empty()) {
+            const Rect r = pending.back();
+            pending.pop_back();
+            const i32 span_x = r.x1 - r.x0;
+            const i32 span_z = r.z1 - r.z0;
+            if (spread(r) <= height_budget || (span_x <= 1 && span_z <= 1)) {
+                split_rects.push_back(r);
+                continue;
+            }
+            if (span_x >= span_z) {
+                const i32 mid = r.x0 + span_x / 2;
+                pending.push_back(Rect{mid, r.x1, r.z0, r.z1});
+                pending.push_back(Rect{r.x0, mid, r.z0, r.z1});
+            } else {
+                const i32 mid = r.z0 + span_z / 2;
+                pending.push_back(Rect{r.x0, r.x1, mid, r.z1});
+                pending.push_back(Rect{r.x0, r.x1, r.z0, mid});
+            }
+        }
+        // Raster order, so polygon ids stay reproducible across runs.
+        std::sort(split_rects.begin(), split_rects.end(), [](const Rect& a, const Rect& b) {
+            if (a.z0 != b.z0) return a.z0 < b.z0;
+            return a.x0 < b.x0;
+        });
+        rects = std::move(split_rects);
+
         // Convex merge: fold two rectangles sharing a full edge when the union
-        // is still an axis-aligned rectangle (stays 4 verts, under the cap).
+        // is still an axis-aligned rectangle (stays 4 verts, under the cap) AND
+        // still fits the height budget — a merge that folds a slope back into
+        // one quad would only be split again on the next bake.
         bool merged_any = true;
         while (merged_any) {
             merged_any = false;
@@ -471,15 +525,20 @@ void NavMesh::build_polygons() {
                 for (usize b = a + 1; b < rects.size() && !merged_any; ++b) {
                     const Rect& ra = rects[a];
                     const Rect& rb = rects[b];
+                    Rect united{};
+                    bool candidate = false;
                     if (ra.z0 == rb.z0 && ra.z1 == rb.z1 && ra.x1 == rb.x0) {
-                        rects[a].x1 = rb.x1;
-                        rects.erase(rects.begin() + static_cast<isize>(b));
-                        merged_any = true;
+                        united = Rect{ra.x0, rb.x1, ra.z0, ra.z1};
+                        candidate = true;
                     } else if (ra.x0 == rb.x0 && ra.x1 == rb.x1 && ra.z1 == rb.z0) {
-                        rects[a].z1 = rb.z1;
-                        rects.erase(rects.begin() + static_cast<isize>(b));
-                        merged_any = true;
+                        united = Rect{ra.x0, ra.x1, ra.z0, rb.z1};
+                        candidate = true;
                     }
+                    if (!candidate) continue;
+                    if (spread(united) > height_budget) continue;
+                    rects[a] = united;
+                    rects.erase(rects.begin() + static_cast<isize>(b));
+                    merged_any = true;
                 }
             }
         }
@@ -515,39 +574,69 @@ void NavMesh::link_polygon_neighbours() {
         return std::pair<i32, i32>{gx, gz};
     };
 
-    struct Key { i32 ax, az, bx, bz; };
-    auto key_of = [&](usize p, u32 e) {
+    // One axis-aligned boundary segment: the polygon and edge it belongs to,
+    // which grid line it lies on, and the span along that line.
+    //
+    // WHY overlap and not equality: the cover used to be a set of rectangles
+    // whose edges always matched end to end, so an edge key (a→b) identified its
+    // neighbour exactly. The height budget that makes terrain walkable splits
+    // rectangles, which produces T-junctions — one long edge facing two short
+    // ones — and an exact-key match leaves BOTH sides with no neighbour. The
+    // mesh then has polygons and no graph, and `find_path` fails with "no route"
+    // on a surface that is obviously connected. Overlap is the honest relation
+    // between two segments on the same grid line.
+    struct Segment {
+        u32 poly = 0;
+        u32 edge = 0;
+        i32 lo = 0;
+        i32 hi = 0;
+    };
+    // Key: (axis, fixed coordinate). axis 0 = edge runs along X at a fixed Z;
+    // axis 1 = edge runs along Z at a fixed X.
+    std::map<std::pair<i32, i32>, std::vector<Segment>> by_line;
+    for (u32 p = 0; p < n; ++p) {
         const NavPoly& poly = m_polys[p];
         const usize vc = poly.verts.size();
-        auto a = to_grid(poly.verts[e]);
-        auto b = to_grid(poly.verts[(e + 1) % vc]);
-        i32 ax = a.first, az = a.second, bx = b.first, bz = b.second;
-        if (ax > bx || (ax == bx && az > bz)) { std::swap(ax, bx); std::swap(az, bz); }
-        return Key{ax, az, bx, bz};
-    };
-    auto same_key = [](const Key& a, const Key& b) {
-        return a.ax == b.ax && a.az == b.az && a.bx == b.bx && a.bz == b.bz;
-    };
-
-    std::vector<std::pair<Key, std::pair<u32, u32>>> boundary;
-    boundary.reserve(n * 4);
-    for (u32 p = 0; p < n; ++p) {
-        const usize vc = m_polys[p].verts.size();
-        for (u32 e = 0; e < vc; ++e) boundary.push_back({key_of(p, e), {p, e}});
-    }
-    for (u32 p = 0; p < n; ++p) {
-        NavPoly& poly = m_polys[p];
-        const usize vc = poly.verts.size();
         for (u32 e = 0; e < vc; ++e) {
-            const Key k = key_of(p, e);
-            u32 nb = kNone;
-            for (const auto& entry : boundary) {
-                if (!same_key(entry.first, k)) continue;
-                if (entry.second.first == p) continue;
-                nb = entry.second.first;
-                break; // disjoint cover => at most one other polygon per edge
+            const auto a = to_grid(poly.verts[e]);
+            const auto b = to_grid(poly.verts[(e + 1) % vc]);
+            Segment seg;
+            seg.poly = p;
+            seg.edge = e;
+            if (a.second == b.second) {
+                seg.lo = std::min(a.first, b.first);
+                seg.hi = std::max(a.first, b.first);
+                by_line[{0, a.second}].push_back(seg);
+            } else if (a.first == b.first) {
+                seg.lo = std::min(a.second, b.second);
+                seg.hi = std::max(a.second, b.second);
+                by_line[{1, a.first}].push_back(seg);
             }
-            if (e < poly.neighbours.size()) poly.neighbours[e] = nb;
+            // A diagonal edge cannot come out of an axis-aligned cover; it is
+            // skipped rather than guessed at.
+        }
+    }
+
+    for (auto& [line, segments] : by_line) {
+        (void)line;
+        for (const Segment& seg : segments) {
+            NavPoly& poly = m_polys[seg.poly];
+            if (seg.edge >= poly.neighbours.size()) continue;
+            u32 best = kNone;
+            i32 best_overlap = 0;
+            for (const Segment& other : segments) {
+                if (other.poly == seg.poly) continue;
+                const i32 overlap = std::min(seg.hi, other.hi) - std::max(seg.lo, other.lo);
+                if (overlap <= 0) continue;
+                // Largest overlap wins, ties go to the lower polygon id: the
+                // same total order every bake, so the mesh stays reproducible.
+                if (overlap > best_overlap ||
+                    (overlap == best_overlap && best != kNone && other.poly < best)) {
+                    best_overlap = overlap;
+                    best = other.poly;
+                }
+            }
+            poly.neighbours[seg.edge] = best;
         }
     }
 }
@@ -617,6 +706,13 @@ void NavMesh::build_links() {
             }
             if (best_h > m_cfg.jump_distance + 1e-4f) continue;
             if (best_dy > m_cfg.jump_height + 1e-4f) continue;
+            // A gap, not a diagonal. Two polygons that share only a corner are
+            // already reachable by walking around their common neighbour, and
+            // linking them made a 353-polygon terrain bake report 7473 links —
+            // a number that then hides the two links a designer actually
+            // authored. Requiring a full cell of horizontal separation keeps
+            // the auto links for real jumps (a hole, a ledge, a chasm).
+            if (best_h < m_cell_size - 1e-4f) continue;
             bool dup = false;
             for (const auto& rec : m_links) {
                 const bool fwd = (rec.start_poly == a && rec.end_poly == b);
