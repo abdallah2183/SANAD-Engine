@@ -357,6 +357,41 @@ Perception: sight=30 fov=60 gain=2 loss=0.6 linger=3
 There is no new render pass and no new asset: the whole phase is the seam between
 code that already existed and the frame that feeds it.
 
+### NPCs that decide (`Brain:` / `BrainAction:`, Phase 61)
+
+Perception answers "what do I know"; this answers "what do I want to do about
+it". `ai::UtilitySystem` and its response curves have been unit-tested since
+Phase 22 and were reachable from nothing — no scene could name a consideration,
+no frame turned the world into the numbers a consideration is a function of:
+
+```text
+Brain: rate=0.25
+BrainAction: name=engage  input=aware    curve=linear weight=2
+BrainAction: name=flee    input=health   curve=inverse weight=1
+BrainAction: name=advance input=distance curve=quadratic slope=-1 output_offset=1
+BrainAction: name=hold    input=threat   curve=threshold hold_fire=true
+```
+
+- **Seven inputs, computed by the frame**: `aware`, `sensing` (from the senses),
+  `distance` to the current target, `health` and `ammo` as fractions, `threat`
+  (suppression) and `enemies` (how many actors it is aware of). A name the frame
+  has no number for is refused by name — a consideration that can never win is a
+  typo, not a strategy.
+- **The engine does not invent what an action means.** It scores the authored
+  considerations in insertion order (ties to the earlier one), publishes the
+  winner's name, and stops there: "advance", "flank" and "call for help" are a
+  game's vocabulary. Read it from Lua with `nf.decision()` → name, score.
+- **The one effect it does apply is the authored `hold_fire`**: the combat agent
+  holds its trigger while that action wins and keeps tracking — a guard that has
+  decided not to shoot still watches what it is looking at.
+- **The clock is the only state.** A brain re-decides when its authored period
+  elapses (`rate=0` every frame) and the decision holds in between; a brain that
+  re-decides every frame flickers between two nearly equal utilities.
+- The **validator** names the list-level mistakes: nothing to consider, two
+  considerations with the same name, a list where every weight is zero, and
+  numbers outside the module's range. The editor has a full **Brain** section
+  with one row per consideration.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -379,8 +414,8 @@ code that already existed and the frame that feeds it.
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 60 the counts are
-  `RuntimeTests` 385/385, `EditorTests` 290/290, `AITests` 129/129 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 61 the counts are
+  `RuntimeTests` 396/396, `EditorTests` 290/290, `AITests` 129/129 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

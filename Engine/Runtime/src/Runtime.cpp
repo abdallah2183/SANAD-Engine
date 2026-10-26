@@ -562,6 +562,11 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // longer exist — are dropped with it, like every other per-scene artefact
     // above.
     bind_scene_perception();
+    // Decision layer (Phase 61): one utility system per authored `Brain:` line,
+    // dropped with the scene like every other per-scene artefact. It runs after
+    // perception so a consideration reads this frame's senses, and before the
+    // combat step so a `hold_fire` decision is honoured in the same frame.
+    bind_scene_brains();
     // AI population is game-registered per scene; a previous scene's crowd
     // must not govern the next one.
     if (m_ai_world) {
@@ -769,6 +774,9 @@ void Runtime::update(float dt) {
     // the same completed frame the feedback director reads, so a shot is heard
     // exactly once and by the same frame that drew its flash.
     step_perception(dt);
+    // The brain decides from those senses, and its winner is what the combat
+    // step below honours (or vetoes the trigger on).
+    step_brains(dt);
     step_combat_ai(dt);
     step_weapons(dt);
     // Rounds in flight advance immediately after the trigger that spawned
@@ -1639,6 +1647,10 @@ u32 Runtime::step_script(float dt) {
         input.forget = [self](u32 sensor_id, u32 sensor_gen, u32 target_id, u32 target_gen) {
             return self->entity_forget(ecs::Entity{sensor_id, sensor_gen},
                                        ecs::Entity{target_id, target_gen});
+        };
+        // Decision layer (Phase 61): what this entity currently wants to do.
+        input.decision = [self](u32 id, u32 gen, std::string& name, f32& score) {
+            return self->brain_decision(ecs::Entity{id, gen}, name, score);
         };
     }
     m_scripts->set_input_source(input);

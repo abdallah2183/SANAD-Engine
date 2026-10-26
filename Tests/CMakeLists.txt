@@ -278,6 +278,10 @@ add_executable(RuntimeTests
     # waking only the victim, a sensor never detecting itself, and an agent that
     # only engages what it has actually noticed.
     RuntimeTests/test_perception_runtime.cpp
+    # Phase 61: the decision layer. The `Brain:` and `BrainAction:` lines, the
+    # validator's list-level rules, the frame's own inputs, and the choices they
+    # produce — including the one effect the engine applies (`hold_fire`).
+    RuntimeTests/test_brain_runtime.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)

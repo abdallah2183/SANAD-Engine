@@ -425,6 +425,85 @@ static bool parse_perception(const std::string& line, PerceptionComponent& out,
     return true;
 }
 
+// `Brain:` and `BrainAction:` (Phase 61). The brain line declares the decision
+// maker, and each action line is one consideration appended to it. The contract
+// is the same as every other optional line: an absent key keeps the default, and
+// a present value the module would have had to re-clamp is refused by name.
+//
+// `name=` is a single token, like `Faction: team=`: it is what Lua and the
+// editor read back, and a name with a space in it would be read as two fields.
+static bool parse_brain(const std::string& line, BrainComponent& out, std::string& out_bad) {
+    if (!optional_float_in_range(line, "rate=", 0.0f, 60.0f, out.rate, out_bad)) return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+/// The four curve presets, which the explicit fields then override. Named
+/// because "shaped like a step at the breakpoint" is what an author is thinking,
+/// and `slope=10 exponent=1 input_offset=0.5` is what they would have to type.
+static void apply_curve_preset(std::string_view preset, BrainAction& out) {
+    if (preset == "linear") {
+        out.slope = 1.0f;
+        out.exponent = 1.0f;
+        out.input_offset = 0.0f;
+        out.output_offset = 0.0f;
+    } else if (preset == "quadratic") {
+        out.slope = 1.0f;
+        out.exponent = 2.0f;
+        out.input_offset = 0.0f;
+        out.output_offset = 0.0f;
+    } else if (preset == "inverse") {
+        out.slope = -1.0f;
+        out.exponent = 1.0f;
+        out.input_offset = 0.0f;
+        out.output_offset = 1.0f;
+    } else if (preset == "threshold") {
+        out.slope = 10.0f;
+        out.exponent = 1.0f;
+        out.input_offset = 0.5f;
+        out.output_offset = 0.0f;
+    }
+}
+
+static bool parse_brain_action(const std::string& line, BrainAction& out, std::string& out_bad) {
+    const std::string name = field_value(line, "name=");
+    if (name.empty()) {
+        out_bad = "name";
+        return false;
+    }
+    out.name = name;
+
+    const std::string input = field_value(line, "input=");
+    if (input.empty()) {
+        out_bad = "input";
+        return false;
+    }
+    if (!brain_input_from_name(input, out.input)) {
+        out_bad = "input"; // the name is what the warning prints
+        return false;
+    }
+
+    // The preset first, then the explicit fields, so a line may say
+    // `curve=inverse slope=-2` and mean it.
+    const std::string preset = field_value(line, "curve=");
+    if (!preset.empty()) {
+        if (preset != "linear" && preset != "quadratic" && preset != "inverse" &&
+            preset != "threshold") {
+            out_bad = "curve";
+            return false;
+        }
+        apply_curve_preset(preset, out);
+    }
+
+    if (!optional_float_in_range(line, "slope=", -1000.0f, 1000.0f, out.slope, out_bad)) return false;
+    if (!optional_float_in_range(line, "exponent=", 0.0f, 16.0f, out.exponent, out_bad)) return false;
+    if (!optional_float_in_range(line, "input_offset=", -1000000.0f, 1000000.0f, out.input_offset, out_bad)) return false;
+    if (!optional_float_in_range(line, "output_offset=", -1000.0f, 1000.0f, out.output_offset, out_bad)) return false;
+    if (!optional_float_in_range(line, "weight=", 0.0f, 1000.0f, out.weight, out_bad)) return false;
+    out.hold_fire = line.find("hold_fire=true") != std::string::npos;
+    return true;
+}
+
 static bool parse_point_light(const std::string& line, PointLightComponent& out,
                               std::string& out_bad) {
     if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
@@ -1252,6 +1331,43 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     scene->world().add<PerceptionComponent>(e, perc);
                 } else {
                     result.warnings.push_back("Perception line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  Brain:",0)==0) {
+                // The decision maker (Phase 61). If actions were already added by
+                // `BrainAction:` lines above this one, the declared rate and
+                // enabled flag update in place: the line order must not silently
+                // drop a list of considerations.
+                BrainComponent brain;
+                std::string bad;
+                if (parse_brain(line, brain, bad)) {
+                    if (auto* existing = scene->world().get<BrainComponent>(e)) {
+                        existing->rate = brain.rate;
+                        existing->enabled = brain.enabled;
+                    } else {
+                        scene->world().add<BrainComponent>(e, std::move(brain));
+                    }
+                } else {
+                    result.warnings.push_back("Brain line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  BrainAction:",0)==0) {
+                BrainAction action;
+                std::string bad;
+                if (parse_brain_action(line, action, bad)) {
+                    auto* brain = scene->world().get<BrainComponent>(e);
+                    if (brain == nullptr) {
+                        // A consideration without a brain: the line IS the brain's
+                        // action list, so it creates one with the defaults rather
+                        // than dropping the author's work on line order.
+                        scene->world().add<BrainComponent>(e, BrainComponent{});
+                        brain = scene->world().get<BrainComponent>(e);
+                    }
+                    if (brain != nullptr) {
+                        brain->actions.push_back(std::move(action));
+                    }
+                } else {
+                    result.warnings.push_back("BrainAction line with invalid " + bad +
                                               " was ignored: " + line);
                 }
             } else if (line.rfind("  Camera:",0)==0) {
@@ -2542,6 +2658,30 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             out << "\n";
         }
+        // The decision layer (Phase 61). The brain line carries the clock, and
+        // every action is its own line so the list reads like the considerations
+        // it is; the order is what breaks a tie, so it is written in order.
+        const auto* brain = scene_obj.world().get<BrainComponent>(e);
+        if (brain) {
+            out << "  Brain: rate=" << brain->rate;
+            if (!brain->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+            for (const BrainAction& action : brain->actions) {
+                out << "  BrainAction: name=" << action.name
+                    << " input=" << brain_input_name(action.input)
+                    << " slope=" << action.slope
+                    << " exponent=" << action.exponent
+                    << " input_offset=" << action.input_offset
+                    << " output_offset=" << action.output_offset
+                    << " weight=" << action.weight;
+                if (action.hold_fire) {
+                    out << " hold_fire=true";
+                }
+                out << "\n";
+            }
+        }
         // Physics. The runtime body handle is deliberately NOT written: it is a
         // per-session identity (generation-checked), and a stale one from a
         // previous run is meaningless — reloading rebuilds it from the scene.
@@ -2897,6 +3037,11 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         // Senses are authored data, and the live meter lives in the Runtime, not
         // in the component — so a copy is a full copy.
         dst.add<PerceptionComponent>(de, *pc);
+    }
+    if (const auto* brain = src.get<BrainComponent>(se)) {
+        // Considerations are authored data; the live decision lives in the
+        // Runtime, so a copy is a full copy.
+        dst.add<BrainComponent>(de, *brain);
     }
     if (const auto* rb = src.get<physics::RigidBodyComponent>(se)) {
         physics::RigidBodyComponent fresh = *rb;

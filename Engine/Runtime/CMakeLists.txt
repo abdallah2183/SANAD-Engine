@@ -35,6 +35,7 @@ set(NFRUNTIME_SOURCES
     src/WeaponRuntime.cpp
     src/CombatAI.cpp
     src/PerceptionRuntime.cpp
+    src/BrainRuntime.cpp
 )
 
 nf_engine_library(NFRuntime

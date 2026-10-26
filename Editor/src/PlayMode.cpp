@@ -74,6 +74,10 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* pc = sw.get<runtime::PerceptionComponent>(se)) {
             dw.add<runtime::PerceptionComponent>(de, *pc);
         }
+        // The decision layer (Phase 61) is authored data on the same terms.
+        if (const auto* brain = sw.get<runtime::BrainComponent>(se)) {
+            dw.add<runtime::BrainComponent>(de, *brain);
+        }
         if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
             dw.add<scene::PrefabLinkComponent>(de, *p);
         }

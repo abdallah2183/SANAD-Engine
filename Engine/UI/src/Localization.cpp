@@ -1170,6 +1170,31 @@ constexpr Entry kEntries[] = {
     {"perception_no_senses",
      "Every sense is off: this entity can never notice anything.",
      "كل الحواس مطفأة: هذا الكيان لن يلاحظ شيئًا أبدًا۔"},
+    // --- Decision layer authoring (Phase 61) --------------------------------
+    // The considerations an NPC weighs. The input names are scene-format tokens
+    // and they are translated here too, so the Arabic UI shows no Latin in a
+    // value a designer reads.
+    {"brain", "Brain", "العقل"},
+    {"no_brain", "No decision maker on this entity.", "لا يوجد عقل لهذا الكيان۔"},
+    {"add_brain", "Add decision maker", "إضافة عقل"},
+    {"brain_rate", "Decide every (s)", "قرار كل (ث)"},
+    {"brain_action", "Consideration", "اعتبار"},
+    {"add_brain_action", "Add consideration", "إضافة اعتبار"},
+    {"remove_brain_action", "Remove last", "حذف الأخير"},
+    {"brain_input", "Input", "المُدخل"},
+    {"brain_weight", "Weight", "الوزن"},
+    {"brain_slope", "Slope", "الميل"},
+    {"brain_exponent", "Exponent", "الأُس"},
+    {"brain_input_offset", "Input offset", "إزاحة المُدخل"},
+    {"brain_output_offset", "Output offset", "إزاحة الخرج"},
+    {"hold_fire", "Hold fire", "حبس الزناد"},
+    {"brain_in_aware", "aware", "واعٍ"},
+    {"brain_in_sensing", "sensing", "يحسّ"},
+    {"brain_in_distance", "distance", "المسافة"},
+    {"brain_in_health", "health", "الصحة"},
+    {"brain_in_ammo", "ammo", "الذخيرة"},
+    {"brain_in_threat", "threat", "التهديد"},
+    {"brain_in_enemies", "enemies", "الأعداء"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread

@@ -55,6 +55,7 @@
 #include <NF/AI/AIWorld.hpp>
 #include <NF/AI/NavMesh.hpp>
 #include <NF/AI/Perception.hpp>
+#include <NF/AI/UtilityAI.hpp>
 
 #include <array>
 #include <cmath>
@@ -336,6 +337,26 @@ public:
     /// forget, or the entity has no perception.
     bool entity_forget(ecs::Entity sensor, ecs::Entity target);
 
+    // --- Decision layer (Phase 61) ------------------------------------------
+    //
+    // Perception answers "what do I know"; the brain answers "what do I want to
+    // do about it". The engine does not invent what "advance" means: it scores
+    // the authored considerations, publishes the winner, and lets the game (or
+    // Lua) act on the name. The one effect the engine does apply is the
+    // authored `hold_fire`, because a decision the combat agent ignores is not
+    // a decision.
+    [[nodiscard]] size_t brain_count() const { return m_brains.size(); }
+    /// The action that currently wins for `entity`: false when it has no brain
+    /// or nothing has been decided yet.
+    [[nodiscard]] bool brain_decision(ecs::Entity entity, std::string& out_name,
+                                      f32& out_score) const;
+    /// The value the frame computed for one input of one entity's brain. What a
+    /// test (or a debug overlay) reads to prove the numbers are the world's and
+    /// not the author's.
+    [[nodiscard]] f32 brain_input_value(ecs::Entity entity, BrainInput input) const;
+    /// True while the winning action asks the combat agent to hold its trigger.
+    [[nodiscard]] bool brain_holds_fire(ecs::Entity entity) const;
+
     // --- Gameplay modules (Phase 10) ----------------------------------------
     //
     // Modules come from GameplayModuleRegistry, so the Runtime only ever sees
@@ -496,6 +517,18 @@ public:
     /// otherwise report the sensor as its own wall.
     [[nodiscard]] bool perception_sight_blocked(ecs::Entity sensor, const Vec3& from,
                                                 const Vec3& to);
+
+    // --- Decision layer (Phase 61) ------------------------------------------
+    /// Builds one live utility system per entity that authored a `Brain:` line.
+    /// Called from adopt_scene: a decision belongs to the level that produced it.
+    void bind_scene_brains();
+    /// Feeds and ticks the brains for this frame. A no-op when the scene
+    /// declared none.
+    void step_brains(f32 dt);
+    /// The inputs, filled from the world for one entity's brain. Deterministic
+    /// and allocation-free: it reads what the frame already computed.
+    void fill_brain_inputs(const ecs::World& world, ecs::Entity entity,
+                           std::array<f32, kBrainInputCount>& out) const;
 
     // --- Navigation (Phase 28 — the voxel NavMesh, in the frame and the scene)
     //
@@ -1816,6 +1849,30 @@ private:
     /// `m_hitscan_targets`: perception runs before the combat step, and filling
     /// the weapon's list here would leave that step testing a stale cast.
     std::vector<runtime::HitscanTarget> m_perception_sight_targets;
+
+    // --- Decision state (Phase 61) -------------------------------------------
+    //
+    // One live utility system per entity with a `Brain:` line, plus the memory of
+    // what it decided. The considerations are authored data and round-trip
+    // through the file; the score, the inputs and the winner are this frame's.
+    struct BrainBinding {
+        ecs::Entity entity{};
+        ai::UtilitySystem system;
+        ai::Blackboard board;
+        /// Action id is insertion order starting at 1, so this is indexed by id-1.
+        /// It is how a winning id becomes the name the game reads.
+        std::vector<std::string> action_names;
+        std::vector<bool> action_holds_fire;
+        /// Seconds since the last evaluation; the brain re-decides when it
+        /// reaches the authored rate.
+        f32 clock = 0.0f;
+        std::string decision_name;
+        f32 decision_score = 0.0f;
+        u32 decision_duration = 0;
+        /// The input values as the frame computed them, indexed by BrainInput.
+        std::array<f32, kBrainInputCount> inputs{};        bool holds_fire = false;
+    };
+    std::vector<BrainBinding> m_brains;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;

@@ -193,6 +193,12 @@ struct ScriptInput {
     /// Last known position of (target) as remembered by (sensor).
     std::function<bool(u32, u32, u32, u32, f32&, f32&, f32&)> last_known_of;
     std::function<bool(u32, u32, u32, u32)> forget;
+
+    /// Decision layer (Phase 61). The action that currently wins this entity's
+    /// utility system, with the score it posted. False when the entity has no
+    /// brain or nothing has been decided yet, which makes `nf.decision()` return
+    /// nil rather than a name nobody chose.
+    std::function<bool(u32, u32, std::string&, f32&)> decision;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

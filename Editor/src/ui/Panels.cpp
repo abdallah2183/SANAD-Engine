@@ -274,6 +274,13 @@ struct InspectorCache {
     float perc_visible = 1.0f;
     float perc_radius = 0.5f;
     float perc_eye = 1.5f;
+    // Decision layer (Phase 61). The action list is cached as the components'
+    // own structs: it is a variable-length list of seven-field records, and
+    // mirroring it into parallel arrays would be seven places to keep in step.
+    bool brain_has = false;
+    bool brain_enabled = true;
+    float brain_rate = 0.25f;
+    std::vector<runtime::BrainAction> brain_actions;
     // Animation
     int anim_clip = 0;     // index into the component's clip table
     float anim_speed = 1.0f;
@@ -2221,6 +2228,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.perc_has = false;
                 }
+                if (const auto* brain = w->get<runtime::BrainComponent>(sel)) {
+                    ic.brain_has = true;
+                    ic.brain_enabled = brain->enabled;
+                    ic.brain_rate = brain->rate;
+                    ic.brain_actions = brain->actions;
+                } else {
+                    ic.brain_has = false;
+                    ic.brain_actions.clear();
+                }
                 if (const auto* sc = w->get<scripting::ScriptComponent>(sel)) {
                     std::strncpy(ic.script_path, sc->path.c_str(), sizeof(ic.script_path) - 1);
                     ic.script_path[sizeof(ic.script_path) - 1] = '\0';
@@ -4001,6 +4017,131 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_perception(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach perception failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Decision layer (Phase 61) ---
+            // The considerations an NPC weighs. Always visible like Destruction,
+            // Feedback and Perception: Attach authors a default brain, Apply
+            // forwards the list through the validated setter, Detach removes it.
+            if (ImGui::CollapsingHeader((AV("brain") + "###Brain").c_str())) {
+                if (!ic.brain_has) {
+                    ImGui::TextDisabled("%s", AV("no_brain").c_str());
+                    if (ImGui::Button((AV("add_brain") + "##brain").c_str())) {
+                        runtime::BrainComponent fresh;
+                        // One consideration to start from, because a brain with an
+                        // empty list decides nothing and the author would be
+                        // editing a panel with no rows in it.
+                        runtime::BrainAction first;
+                        first.name = "advance";
+                        first.input = runtime::BrainInput::Distance;
+                        first.slope = -1.0f;
+                        first.output_offset = 1.0f;
+                        fresh.actions.push_back(std::move(first));
+                        std::string err;
+                        if (!app.set_brain(sel, fresh, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach brain failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##brain_enabled").c_str(),
+                                    &ic.brain_enabled);
+                    ImGui::SameLine();
+                    ImGui::DragFloat((AV("brain_rate") + "##brain").c_str(), &ic.brain_rate,
+                                     0.01f, 0.0f, 60.0f, "%.2f s");
+
+                    // Combo items are widget labels, and the tokens ARE the scene
+                    // format — so they are translated like every other label and
+                    // the Arabic UI still shows no Latin.
+                    const std::string input_labels[runtime::kBrainInputCount] = {
+                        AV("brain_in_aware"), AV("brain_in_sensing"), AV("brain_in_distance"),
+                        AV("brain_in_health"), AV("brain_in_ammo"), AV("brain_in_threat"),
+                        AV("brain_in_enemies")};
+                    const char* input_items[runtime::kBrainInputCount] = {
+                        input_labels[0].c_str(), input_labels[1].c_str(), input_labels[2].c_str(),
+                        input_labels[3].c_str(), input_labels[4].c_str(), input_labels[5].c_str(),
+                        input_labels[6].c_str()};
+
+                    for (usize i = 0; i < ic.brain_actions.size(); ++i) {
+                        runtime::BrainAction& action = ic.brain_actions[i];
+                        ImGui::PushID(static_cast<int>(i));
+                        char name_buffer[64];
+                        std::snprintf(name_buffer, sizeof(name_buffer), "%s", action.name.c_str());
+                        ImGui::SetNextItemWidth(160.0f);
+                        if (ImGui::InputText((AV("brain_action") + "##name").c_str(), name_buffer,
+                                             sizeof(name_buffer))) {
+                            action.name = name_buffer;
+                        }
+                        ImGui::SameLine();
+                        int input_index = static_cast<int>(action.input);
+                        ImGui::SetNextItemWidth(120.0f);
+                        if (ImGui::Combo((AV("brain_input") + "##input").c_str(), &input_index,
+                                         input_items, static_cast<int>(runtime::kBrainInputCount))) {
+                            action.input = static_cast<runtime::BrainInput>(input_index);
+                        }
+                        ImGui::SameLine();
+                        ImGui::Checkbox((AV("hold_fire") + "##hold").c_str(), &action.hold_fire);
+
+                        ImGui::SetNextItemWidth(110.0f);
+                        ImGui::DragFloat((AV("brain_weight") + "##w").c_str(), &action.weight,
+                                         0.05f, 0.0f, 1000.0f, "%.2f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(110.0f);
+                        ImGui::DragFloat((AV("brain_slope") + "##s").c_str(), &action.slope, 0.05f,
+                                         -1000.0f, 1000.0f, "%.2f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(110.0f);
+                        ImGui::DragFloat((AV("brain_exponent") + "##e").c_str(), &action.exponent,
+                                         0.05f, 0.0f, 16.0f, "%.2f");
+                        ImGui::SetNextItemWidth(110.0f);
+                        ImGui::DragFloat((AV("brain_input_offset") + "##io").c_str(),
+                                         &action.input_offset, 0.05f, -1.0e6f, 1.0e6f, "%.2f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(110.0f);
+                        ImGui::DragFloat((AV("brain_output_offset") + "##oo").c_str(),
+                                         &action.output_offset, 0.05f, -1000.0f, 1000.0f, "%.2f");
+                        ImGui::PopID();
+                    }
+
+                    if (ImGui::Button((AV("add_brain_action") + "##brain").c_str())) {
+                        runtime::BrainAction extra;
+                        extra.name = "action" + std::to_string(ic.brain_actions.size() + 1u);
+                        extra.input = runtime::BrainInput::Aware;
+                        ic.brain_actions.push_back(std::move(extra));
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("remove_brain_action") + "##brain").c_str()) &&
+                        !ic.brain_actions.empty()) {
+                        ic.brain_actions.pop_back();
+                    }
+
+                    if (ImGui::Button((AV("apply") + "##brain").c_str())) {
+                        runtime::BrainComponent edited;
+                        edited.enabled = ic.brain_enabled;
+                        edited.rate = ic.brain_rate;
+                        edited.actions = ic.brain_actions;
+                        std::string err;
+                        if (!app.set_brain(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Brain edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##brain").c_str())) {
+                        std::string err;
+                        if (!app.detach_brain(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach brain failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

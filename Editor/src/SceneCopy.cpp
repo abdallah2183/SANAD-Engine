@@ -52,6 +52,10 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* pc = src.get<runtime::PerceptionComponent>(from)) {
         dst.add<runtime::PerceptionComponent>(to, *pc);
     }
+    // Phase 61: the considerations travel with the entity too.
+    if (const auto* brain = src.get<runtime::BrainComponent>(from)) {
+        dst.add<runtime::BrainComponent>(to, *brain);
+    }
     if (const auto* p = src.get<scene::PrefabLinkComponent>(from)) {
         dst.add<scene::PrefabLinkComponent>(to, *p);
     }

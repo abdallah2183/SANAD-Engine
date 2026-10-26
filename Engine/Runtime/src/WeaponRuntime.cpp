@@ -1113,6 +1113,13 @@ void Runtime::step_combat_ai(f32 dt) {
         }
 
         const CombatAimOutput out = combat_aim_step(agent->state, agent->config, in);
+        // Decision layer (Phase 61): a brain whose winner asks for `hold_fire`
+        // vetoes the trigger. Aiming keeps tracking on purpose — a guard that has
+        // decided not to shoot still watches what it is looking at, which is what
+        // makes "hold" read as discipline rather than as a freeze.
+        if (brain_holds_fire(e)) {
+            agent->state.trigger = false;
+        }
         (void)out;
     }
 }

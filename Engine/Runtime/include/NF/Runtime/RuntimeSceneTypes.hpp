@@ -922,5 +922,98 @@ struct PerceptionComponent {
     bool governs_combat = true;
 };
 
+/// What a brain action reads (Phase 61).
+///
+/// The frame fills one number per input from the world it already has — the
+/// entity's own senses, hit points, magazine and suppression, and the distance
+/// to whoever it is dealing with. A name this enum does not cover is refused by
+/// the loader rather than scored as a zero forever: an action that can never win
+/// is a typo, not a strategy.
+enum class BrainInput : u8 {
+    /// 1 when the entity's perception knows its current target, else 0.
+    Aware = 0,
+    /// 1 when a sense is reading that target THIS frame, else 0.
+    Sensing = 1,
+    /// Metres to the target; 0 when there is none.
+    Distance = 2,
+    /// Hit points as a fraction of the maximum, 0..1.
+    Health = 3,
+    /// Rounds in the magazine as a fraction of its capacity, 0..1.
+    Ammo = 4,
+    /// Suppression from near misses, 0..1.
+    Threat = 5,
+    /// How many actors the entity is currently aware of, 0..N.
+    Enemies = 6,
+};
+
+/// Stable technical name for the scene format and the logs.
+[[nodiscard]] const char* brain_input_name(BrainInput input) noexcept;
+/// Parses the name the `BrainAction:` line carries. False when it is not one.
+[[nodiscard]] bool brain_input_from_name(std::string_view name, BrainInput& out) noexcept;
+
+/// How many inputs the vocabulary has. The frame's per-entity input vector is
+/// indexed by BrainInput, so this is the array bound.
+inline constexpr u32 kBrainInputCount = 7u;
+
+/// One consideration: "I want to <name> this much".
+///
+/// The desirability is the module's own arithmetic —
+/// `weight * clamp(output_offset + slope * (input - input_offset)^exponent)` —
+/// so `ai::UtilitySystem` is doing the choosing and this struct is only the
+/// scene's copy of it. The four curve fields are what a designer turns; the
+/// `curve=` preset on the line is a shorthand that sets them, and an explicit
+/// field always wins over the preset.
+struct BrainAction {
+    /// What the decision is called. Free text; what Lua and the editor read, and
+    /// what the log says. Not interpreted by the engine.
+    std::string name;
+
+    BrainInput input = BrainInput::Health;
+
+    /// ResponseCurve, field for field. `slope` negative inverts the curve
+    /// (distance becomes "closer is worse", which is what fleeing wants);
+    /// `exponent` 2 is "distance barely matters until it does"; a large slope
+    /// with an input offset is a step.
+    f32 slope = 1.0f;
+    f32 exponent = 1.0f;
+    f32 input_offset = 0.0f;
+    f32 output_offset = 0.0f;
+
+    /// Flat multiplier on the shaped value, so "this creature cares twice as
+    /// much about food" stays separable from the curve's shape.
+    f32 weight = 1.0f;
+
+    /// While this action is the winner, the entity's combat agent holds its
+    /// trigger. Aiming continues — a guard that has decided not to shoot still
+    /// tracks what it is looking at.
+    bool hold_fire = false;
+};
+
+/// The decision layer (Phase 61, design §45 "AI Core: utility AI").
+///
+/// Perception (Phase 60) answers "what do I know"; this answers "what do I want
+/// to do about it". `ai::UtilitySystem` and its response curves have been
+/// unit-tested since Phase 22 and reachable from nothing, the same gap the
+/// perception half had: no scene could name a consideration, and no frame turned
+/// the world into the numbers a consideration is a function of.
+///
+/// A `Brain:` line declares the entity's decision maker and one `BrainAction:`
+/// line per consideration. The frame computes the inputs, scores every action in
+/// insertion order (ties to the earlier one) and remembers the winner, which the
+/// game reads through Lua or the runtime — the engine does not invent what
+/// "advance" means, it publishes the choice.
+struct BrainComponent {
+    bool enabled = true;
+
+    /// Seconds between evaluations. 0 evaluates every frame. A brain that
+    /// re-decides every frame is a brain that flickers between two nearly equal
+    /// utilities, and the rate is the cheapest cure there is.
+    f32 rate = 0.25f;
+
+    /// The considerations, in insertion order — which is also the tie-break
+    /// order, so the list is part of the behaviour and not a set.
+    std::vector<BrainAction> actions;
+};
+
 } // namespace runtime
 } // namespace nf

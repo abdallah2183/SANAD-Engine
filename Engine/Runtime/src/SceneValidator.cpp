@@ -276,6 +276,54 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- decision layer (Phase 61) ---------------------------------------
+    // The loader refuses a bad line, so this is for the other two paths in and
+    // for the mistakes only the WHOLE list can show: a brain with nothing to
+    // consider, two considerations with the same name (the log and Lua would be
+    // ambiguous), and a list where every weight is zero, which means the first
+    // action always wins whatever the world looks like.
+    for (const ecs::Entity e : entities) {
+        const auto* brain = world.get<BrainComponent>(e);
+        if (brain == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (brain->enabled && brain->actions.empty()) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Brain has no actions: this entity never decides anything");
+        }
+        if (!sane(brain->rate, 0.0f, 60.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("rate ") + std::to_string(brain->rate) +
+                           " is outside [0, 60]; the brain will clamp it");
+        }
+        bool all_zero_weight = !brain->actions.empty();
+        for (usize i = 0; i < brain->actions.size(); ++i) {
+            const BrainAction& action = brain->actions[i];
+            if (action.weight > 0.0f) {
+                all_zero_weight = false;
+            }
+            if (!sane(action.weight, 0.0f, 1000.0f) || !sane(action.slope, -1000.0f, 1000.0f) ||
+                !sane(action.exponent, 0.0f, 16.0f) || !sane(action.input_offset, -1.0e6f, 1.0e6f) ||
+                !sane(action.output_offset, -1000.0f, 1000.0f)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "BrainAction '" + action.name +
+                               "' has a non-finite or out-of-range number; the brain will clamp it");
+            }
+            for (usize j = i + 1; j < brain->actions.size(); ++j) {
+                if (brain->actions[j].name == action.name) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "two BrainActions are both named '" + action.name +
+                                   "'; the decision log cannot tell them apart");
+                }
+            }
+        }
+        if (all_zero_weight) {
+            report.add(ValidationSeverity::Warning, label,
+                       "every BrainAction has weight 0: the first action always wins");
+        }
+    }
+
     // --- combat (Phase 44) ---------------------------------------------
     //
     // A `Weapon:` line the loader refused never reaches here, so these rules

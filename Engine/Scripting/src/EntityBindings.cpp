@@ -637,6 +637,29 @@ int l_forget(lua_State* L) {
     return 1;
 }
 
+// nf.decision() -> name, score, or nil when this entity has no brain (or has not
+// decided anything yet). Phase 61: the engine publishes the choice and the game
+// decides what "advance" means, which is why this returns a string and not an
+// effect.
+int l_decision(lua_State* L) {
+    ecs::Entity self;
+    if (!self_entity(L, self)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    std::string name;
+    f32 score = 0.0f;
+    if (input == nullptr || !input->decision ||
+        !input->decision(self.id, self.generation, name, score)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushlstring(L, name.c_str(), name.size());
+    lua_pushnumber(L, static_cast<lua_Number>(score));
+    return 2;
+}
+
 // nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.
 int l_health(lua_State* L) {
     ecs::Entity e;
@@ -801,6 +824,8 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "last_known");
     lua_pushcfunction(L, l_forget);
     lua_setfield(L, -2, "forget");
+    lua_pushcfunction(L, l_decision);
+    lua_setfield(L, -2, "decision");
     lua_pop(L, 1);
 }
 

@@ -300,6 +300,13 @@ public:
     bool set_perception(ecs::Entity e, const runtime::PerceptionComponent& pc,
                         std::string& out_err);
     bool detach_perception(ecs::Entity e, std::string& out_err);
+
+    // --- Decision layer (Phase 61) ------------------------------------------
+    // The considerations an NPC weighs, with the same ranges the loader and the
+    // validator enforce. The setter refuses an empty name and a duplicate one,
+    // because a decision nobody can name is a decision nobody can act on.
+    bool set_brain(ecs::Entity e, const runtime::BrainComponent& brain, std::string& out_err);
+    bool detach_brain(ecs::Entity e, std::string& out_err);
     // Binds a VFS audio file to the entity (add-or-replace): reads and
     // decodes it now, so the waveform preview and Play work without a scene
     // reload. A file-backed buffer clears any procedural tone on the same

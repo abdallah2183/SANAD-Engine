@@ -179,6 +179,17 @@ Games/MyGame/
   the cast, shot and impact events are the noises, and pain is addressed to the
   victim alone. Scripts ask their own memory with `nf.aware`/`nf.sensing`/
   `nf.last_known`/`nf.forget`, and the editor has a full Perception section.
+- An NPC can decide instead of following a script (Phase 61): `Brain: rate=0.25`
+  plus one `BrainAction: name=<token> input=<name> [curve=linear|quadratic|
+  inverse|threshold] [slope=] [exponent=] [input_offset=] [output_offset=]
+  [weight=] [hold_fire=true]` per consideration. The inputs are the world's, not
+  the author's: `aware`, `sensing` (from the senses), `distance` to the current
+  target, `health` and `ammo` as fractions, `threat` (suppression) and `enemies`.
+  Actions are scored in line order and ties go to the earlier one, so the order is
+  part of the behaviour. The engine publishes the winner rather than guessing what
+  "advance" means — read it with `nf.decision()`; the one effect it applies is the
+  authored `hold_fire`, which vetoes the trigger while that action wins. A brain
+  re-decides when `rate` elapses (`rate=0` every frame).
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -232,6 +243,7 @@ nf.aware(id, gen)                 -- does MY perception know that entity?
 nf.sensing(id, gen)               -- is a sense reading it THIS frame?
 nf.last_known(id, gen)            -- x, y, z where I last knew it, or nil
 nf.forget(id, gen)                -- drop one memory; false if there was none
+nf.decision()                     -- name, score of what this entity wants to do
 print(...)                        -- engine log
 ```
 
@@ -265,7 +277,17 @@ A complete collect-the-crates example is in
      policy. A public code-signing certificate is what a public release needs.
    - **Retry**: the machine's cloud reputation service answers a few minutes
      after a file is first seen, and a blocked binary becomes runnable on its
-     own. Re-run it later instead of concluding that the test failed.
+     own. Re-run it later instead of concluding that the test failed. A child
+     process blocked this way makes the suite that spawns it look like a test
+     failure: `nf new` / `nf run` refusing to start with Windows error **4551**
+     is `STATUS_DEVICE_GUARD_BLOCKED`, not a bug in `nf`.
+   - **Try the other certificate**: this machine refused a freshly signed
+     `RuntimeTests.exe` under `SANAD Dev Build` and ran the same file signed by
+     `NF Local Build`, while `UITests`, `AITests` and the tool-spawning tests
+     needed `SANAD Dev Build`. Both certificates live in
+     `Cert:\CurrentUser\My`; `Set-AuthenticodeSignature -FilePath <exe>
+     -Certificate $cert -HashAlgorithm SHA256` re-signs one file without
+     touching the others, and the binary that runs is the one to keep.
 7. Do not commit `Cache/`, `dist/`, or generated binaries.
 8. Launcher text goes through `draw_text_ext` (`ExtTextOutW`). `DrawTextW` can
    return a line height while drawing nothing on some Windows sessions; do not

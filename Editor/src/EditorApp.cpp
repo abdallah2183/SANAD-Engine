@@ -2042,6 +2042,72 @@ bool EditorApp::detach_perception(ecs::Entity e, std::string& out_err) {
     return true;
 }
 
+bool EditorApp::set_brain(ecs::Entity e, const runtime::BrainComponent& brain,
+                          std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!std::isfinite(brain.rate) || brain.rate < 0.0f || brain.rate > 60.0f) {
+        out_err = "rate must be within [0, 60] seconds";
+        return false;
+    }
+    for (usize i = 0; i < brain.actions.size(); ++i) {
+        const runtime::BrainAction& action = brain.actions[i];
+        if (action.name.empty()) {
+            out_err = "every consideration needs a name";
+            return false;
+        }
+        if (action.name.find(' ') != std::string::npos) {
+            out_err = "a consideration name cannot contain a space (the scene line delimits on it)";
+            return false;
+        }
+        for (usize j = i + 1; j < brain.actions.size(); ++j) {
+            if (brain.actions[j].name == action.name) {
+                out_err = "two considerations are both named '" + action.name + "'";
+                return false;
+            }
+        }
+        if (!std::isfinite(action.weight) || action.weight < 0.0f || action.weight > 1000.0f ||
+            !std::isfinite(action.slope) || action.slope < -1000.0f || action.slope > 1000.0f ||
+            !std::isfinite(action.exponent) || action.exponent < 0.0f || action.exponent > 16.0f ||
+            !std::isfinite(action.input_offset) || std::fabs(action.input_offset) > 1.0e6f ||
+            !std::isfinite(action.output_offset) || std::fabs(action.output_offset) > 1000.0f) {
+            out_err = "'" + action.name + "' has a non-finite or out-of-range number";
+            return false;
+        }
+    }
+    if (auto* existing = w->get<runtime::BrainComponent>(e)) {
+        *existing = brain;
+    } else {
+        w->add<runtime::BrainComponent>(e, brain);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_brain(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::BrainComponent>(e)) {
+        out_err = "Entity has no BrainComponent";
+        return false;
+    }
+    w->remove<runtime::BrainComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::set_audio_buffer(ecs::Entity e, const std::string& logical_path, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;
