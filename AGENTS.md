@@ -164,6 +164,21 @@ Games/MyGame/
   light takes whatever point-light slots the scene leaves free), and the caps
   `max_flashes=`/`max_tracers=`/`max_impacts=`/`max_sounds=`/`max_lights=`
   (`[1, 4096]`). The editor has a full Combat Feedback section for all of it.
+- An NPC can have senses instead of omniscience (Phase 60):
+  `Perception: sight=30 fov=60 gain=2 loss=0.6 linger=3 hearing=18 touch=1.5
+  pain=true noise=0 visible=1 radius=0.5 eye=1.5 combat=true`. Sight is the
+  authored sense (range, cone half-angle in degrees, how fast attention builds,
+  how fast it fades, and how long a target stays KNOWN after everything goes
+  quiet — that is the search window); `hearing`/`touch` are ranges on the AI
+  module's defaults, and `pain` ignores distance: being shot tells you someone is
+  out there. A range of 0 switches that sense off. With `combat=true` (the
+  default) a `CombatAgent` on the same entity may only engage what its senses
+  have ACCUMULATED, aims at the last known position once it loses sight, and
+  holds fire while it cannot sense — `combat=false` keeps the old
+  ray-finds-you rule exactly. The frame feeds all of this: the scene's actors are
+  the cast, shot and impact events are the noises, and pain is addressed to the
+  victim alone. Scripts ask their own memory with `nf.aware`/`nf.sensing`/
+  `nf.last_known`/`nf.forget`, and the editor has a full Perception section.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -213,6 +228,10 @@ nf.last_attacker(id, gen)         -- id, gen, or nil
 nf.killer(id, gen)                -- id, gen, or nil
 nf.damage_taken(id, gen)          -- health, armor, hits, seconds_since_damage
 nf.suppression(id, gen)           -- 0..1 from near misses
+nf.aware(id, gen)                 -- does MY perception know that entity?
+nf.sensing(id, gen)               -- is a sense reading it THIS frame?
+nf.last_known(id, gen)            -- x, y, z where I last knew it, or nil
+nf.forget(id, gen)                -- drop one memory; false if there was none
 print(...)                        -- engine log
 ```
 

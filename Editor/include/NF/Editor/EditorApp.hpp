@@ -292,6 +292,14 @@ public:
     // inspector accepts is a value the scene file can reproduce.
     bool set_feedback(ecs::Entity e, const runtime::FeedbackComponent& fb, std::string& out_err);
     bool detach_feedback(ecs::Entity e, std::string& out_err);
+
+    // --- Perception (Phase 60) ----------------------------------------------
+    // An NPC's senses were authorable only by hand-editing the scene file. The
+    // setter validates against the loader's own ranges, so a value the inspector
+    // accepts is a value the `Perception:` line can carry back.
+    bool set_perception(ecs::Entity e, const runtime::PerceptionComponent& pc,
+                        std::string& out_err);
+    bool detach_perception(ecs::Entity e, std::string& out_err);
     // Binds a VFS audio file to the entity (add-or-replace): reads and
     // decodes it now, so the waveform preview and Play work without a scene
     // reload. A file-backed buffer clears any procedural tone on the same

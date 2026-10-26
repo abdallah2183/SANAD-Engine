@@ -536,6 +536,107 @@ int l_suppression(lua_State* L) {
     return 1;
 }
 
+// The entity running this script, from the registry fields ScriptSystem sets
+// before each update(). False when the script is running outside an entity
+// (a test calling a chunk directly), which makes every perception query below
+// answer "no" instead of reading whatever the last entity happened to be.
+bool self_entity(lua_State* L, ecs::Entity& out) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "nf_self_id");
+    lua_getfield(L, LUA_REGISTRYINDEX, "nf_self_gen");
+    const lua_Integer id = lua_tointeger(L, -2);
+    const lua_Integer gen = lua_tointeger(L, -1);
+    lua_pop(L, 2);
+    if (id <= 0) {
+        return false;
+    }
+    out = ecs::Entity{static_cast<u32>(id), static_cast<u32>(gen)};
+    return true;
+}
+
+// --- Perception (Phase 60) ---------------------------------------------------
+//
+// The SENSOR is always the entity running the script. A guard's update() asks
+// "do I know where the player is", which is a question about its own memory and
+// not about the world — so there is no sensor argument to get wrong.
+
+// nf.aware(id, gen) -> bool. True once a sense has been sure of the target, and
+// for the linger window after it went quiet.
+int l_aware(lua_State* L) {
+    ecs::Entity target;
+    ecs::Entity self;
+    if (!check_entity(L, 1, target) || !self_entity(L, self)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    const bool aware =
+        input != nullptr && input->aware_of &&
+        input->aware_of(self.id, self.generation, target.id, target.generation);
+    lua_pushboolean(L, aware ? 1 : 0);
+    return 1;
+}
+
+// nf.sensing(id, gen) -> bool. A stimulus from the target arrived THIS frame,
+// which is strictly stronger than nf.aware: a half-seen or merely remembered
+// target is aware but not sensed, and that is the difference between "shoot" and
+// "go and look".
+int l_sensing(lua_State* L) {
+    ecs::Entity target;
+    ecs::Entity self;
+    if (!check_entity(L, 1, target) || !self_entity(L, self)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    const bool sensing =
+        input != nullptr && input->sensing_of &&
+        input->sensing_of(self.id, self.generation, target.id, target.generation);
+    lua_pushboolean(L, sensing ? 1 : 0);
+    return 1;
+}
+
+// nf.last_known(id, gen) -> x, y, z, or nil when this entity has no memory of
+// it. This is the search target: where the target was when it was last seen,
+// which is what a patrol walks to.
+int l_last_known(lua_State* L) {
+    ecs::Entity target;
+    ecs::Entity self;
+    if (!check_entity(L, 1, target) || !self_entity(L, self)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+    if (input == nullptr || !input->last_known_of ||
+        !input->last_known_of(self.id, self.generation, target.id, target.generation, x, y, z)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(x));
+    lua_pushnumber(L, static_cast<lua_Number>(y));
+    lua_pushnumber(L, static_cast<lua_Number>(z));
+    return 3;
+}
+
+// nf.forget(id, gen) -> bool. Drops one target's memory: a body that has been
+// searched, a decoy that was seen through, a target the game knows is gone.
+int l_forget(lua_State* L) {
+    ecs::Entity target;
+    ecs::Entity self;
+    if (!check_entity(L, 1, target) || !self_entity(L, self)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    const bool forgotten =
+        input != nullptr && input->forget &&
+        input->forget(self.id, self.generation, target.id, target.generation);
+    lua_pushboolean(L, forgotten ? 1 : 0);
+    return 1;
+}
+
 // nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.
 int l_health(lua_State* L) {
     ecs::Entity e;
@@ -692,6 +793,14 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "damage_taken");
     lua_pushcfunction(L, l_suppression);
     lua_setfield(L, -2, "suppression");
+    lua_pushcfunction(L, l_aware);
+    lua_setfield(L, -2, "aware");
+    lua_pushcfunction(L, l_sensing);
+    lua_setfield(L, -2, "sensing");
+    lua_pushcfunction(L, l_last_known);
+    lua_setfield(L, -2, "last_known");
+    lua_pushcfunction(L, l_forget);
+    lua_setfield(L, -2, "forget");
     lua_pop(L, 1);
 }
 

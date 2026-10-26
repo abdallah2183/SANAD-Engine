@@ -54,6 +54,7 @@
 #include <NF/Vfx/Components.hpp>
 #include <NF/AI/AIWorld.hpp>
 #include <NF/AI/NavMesh.hpp>
+#include <NF/AI/Perception.hpp>
 
 #include <array>
 #include <cmath>
@@ -309,6 +310,32 @@ public:
     /// True when the loaded scene carries an enabled FeedbackComponent.
     [[nodiscard]] bool combat_feedback_bound() const { return m_feedback_bound; }
 
+    // --- Perception (Phase 60) ----------------------------------------------
+    //
+    // The AI core's senses, bound to scene entities. `PerceptionComponent`
+    // declares a sensor; the frame feeds it the scene's cast and its own shot and
+    // impact events. Everything here is read-only from the outside: the state is
+    // the sensor's memory, and a caller that could write it would be able to
+    // forge awareness.
+    //
+    // `perception_of` is what the combat agent consults, and what a test reads to
+    // tell "the event reached the sensor" from "the agent acted on it".
+    [[nodiscard]] const ai::Perception* perception_of(ecs::Entity entity) const;
+    /// Number of live sensors bound from the scene.
+    [[nodiscard]] size_t perception_count() const { return m_perceptions.size(); }
+    /// True when `sensor` currently knows about `target` (including the linger
+    /// window after it went out of sight). False when either has no perception.
+    [[nodiscard]] bool entity_aware_of(ecs::Entity sensor, ecs::Entity target) const;
+    /// True when a sense received a stimulus from `target` THIS frame — strictly
+    /// stronger than `entity_aware_of`.
+    [[nodiscard]] bool entity_sensing(ecs::Entity sensor, ecs::Entity target) const;
+    /// Where `sensor` last knew `target` to be. False when it never noticed it.
+    [[nodiscard]] bool entity_last_known(ecs::Entity sensor, ecs::Entity target,
+                                         Vec3& out_position) const;
+    /// Drops one target from a sensor's memory. False when there was nothing to
+    /// forget, or the entity has no perception.
+    bool entity_forget(ecs::Entity sensor, ecs::Entity target);
+
     // --- Gameplay modules (Phase 10) ----------------------------------------
     //
     // Modules come from GameplayModuleRegistry, so the Runtime only ever sees
@@ -431,6 +458,44 @@ public:
     /// the effect layer for this scene. Called from adopt_scene, so the
     /// previous scene's flashes, tracers, marks and voices never carry over.
     void bind_scene_feedback();
+
+    // --- Perception (Phase 60) ----------------------------------------------
+    //
+    // `ai::Perception` has been CPU-only, deterministic and unit-tested since
+    // Phase 22, and reachable from nothing: no scene could declare a sensor, no
+    // frame fed it a cast or an event, no editor authored one. These four
+    // methods are that connection. The same gap-closing shape Phase 25 used for
+    // particles and cloth and Phase 19 used for destruction.
+    //
+    /// Binds every enabled PerceptionComponent into a live sensor. Called from
+    /// adopt_scene: a scene change starts every NPC's memory empty, because the
+    /// actors it remembered belong to the level that has just been replaced.
+    void bind_scene_perception();
+    /// Feeds the sensors for this frame: rebuilds the cast, ages the noises
+    /// still audible, routes this frame's pain to its victims, and steps every
+    /// sensor. A no-op when the scene declared no sensor.
+    void step_perception(f32 dt);
+    /// True when the entity is something a sensor can notice: it has a Transform
+    /// and something alive about it (hit points, a weapon, a brain or a side).
+    /// Static scenery is deliberately not a target — being "aware of a wall" is
+    /// a state with no meaning and every extra target costs every sensor a pass.
+    [[nodiscard]] bool is_perception_target(const ecs::World& world, ecs::Entity entity) const;
+    /// The scene-target id `entity` has this frame, or 0 when it is not one.
+    [[nodiscard]] u32 perception_target_id(ecs::Entity entity) const;
+    /// The id `target` has in SENSOR's own cast, or 0 when it is not in it.
+    ///
+    /// A sensor's cast is the shared cast minus the sensor itself, so every actor
+    /// after it is numbered one lower. That shift is a property of the design
+    /// (see the binding comment) and it is needed in four places — the queries,
+    /// the stimulus attribution and the agent bridge — so it lives in exactly one
+    /// function rather than in a table each caller rebuilds.
+    [[nodiscard]] u32 perception_local_target_id(ecs::Entity sensor, ecs::Entity target) const;
+    /// True when something solid stands between the two points. Only sight asks;
+    /// hearing goes around corners and touch is contact by definition. `sensor`
+    /// is skipped, because a ray that starts inside its own collider would
+    /// otherwise report the sensor as its own wall.
+    [[nodiscard]] bool perception_sight_blocked(ecs::Entity sensor, const Vec3& from,
+                                                const Vec3& to);
 
     // --- Navigation (Phase 28 — the voxel NavMesh, in the frame and the scene)
     //
@@ -1687,6 +1752,70 @@ private:
     audio::AudioBuffer m_feedback_shot_buffer;
     audio::AudioBuffer m_feedback_impact_buffers[3];
     u32 m_feedback_buffer_rate = 0;
+
+    // --- Perception state (Phase 60) -----------------------------------------
+    //
+    // One live sensor per entity that authored a `Perception:` line. The
+    // component is authored data and round-trips through the file; the memory
+    // below is session state, keyed to the scene and dropped with it, exactly
+    // like a baked navmesh or a cloth piece.
+    struct PerceptionBinding {
+        ecs::Entity entity{};
+        ai::Perception perception{};
+        /// This sensor's own cast: the shared cast MINUS the sensor itself,
+        /// plus the pain addressed to it. Built per frame, and the reason ids
+        /// stay stable is that the entity order does: the same actors are added
+        /// in the same order every frame, and the one entity that is dropped is
+        /// always this sensor.
+        ///
+        /// A sensor is deliberately not in its own cast. `sight_strength` has no
+        /// "skip self" rule, and at zero distance it reports a full-strength
+        /// stimulus — a guard would spend half a second detecting itself and
+        /// `most_threatening()` would answer "me".
+        ai::PerceptionScene cast;
+    };
+    std::vector<PerceptionBinding> m_perceptions;
+
+    /// The cast for THIS frame. Rebuilt every frame so the target ids a sensor's
+    /// memory is keyed on stay stable: `PerceptionScene::add_target` hands out
+    /// 1, 2, 3... in insertion order, and the insertion order is
+    /// `all_entities()`, which is ECS insertion order. Reusing one scene and
+    /// clearing it would NOT work — `clear()` deliberately keeps the id counter,
+    /// so every frame would issue fresh ids and no sensor would ever recognise
+    /// the actor it has been watching.
+    ai::PerceptionScene m_perception_scene;
+    /// Parallel to `m_perception_scene.targets()`: index i is the entity whose
+    /// scene id is i+1. What turns an entity into the id a sensor remembers.
+    std::vector<ecs::Entity> m_perception_target_entities;
+
+    /// A noise still audible this frame. A gunshot is a *moment*, but a stimulus
+    /// that existed for one frame would deliver one tick of detection
+    /// (`gain * stim * dt`, 0.03 s at 60 Hz) and no NPC could ever act on it, so
+    /// the noise is held for a lifetime and re-emitted while it lasts — the same
+    /// job `PerceptionScene::age` does for a scene that is not rebuilt.
+    struct PerceptionNoise {
+        Vec3 position{};
+        f32 strength = 1.0f;
+        u32 source_target = 0; // 0 = unattributed (nobody to blame)
+        f32 remaining = 0.0f;
+    };
+    std::vector<PerceptionNoise> m_perception_noises;
+
+    /// One frame's worth of pain, addressed to a single victim. The damage sense
+    /// is neither attenuated nor gradual, so a shared stimulus would make every
+    /// sensor in the level aware of whoever punched one of them — the victim's
+    /// own copy is the only honest place for it.
+    struct PerceptionPain {
+        ecs::Entity victim{};
+        u32 source_target = 0;
+        Vec3 position{};
+    };
+    std::vector<PerceptionPain> m_perception_pain;
+
+    /// World boxes for the sight ray. Deliberately NOT the weapon's
+    /// `m_hitscan_targets`: perception runs before the combat step, and filling
+    /// the weapon's list here would leave that step testing a stale cast.
+    std::vector<runtime::HitscanTarget> m_perception_sight_targets;
     std::unique_ptr<rendering::MeshLibrary> m_mesh_library;
     std::unique_ptr<rendering::MaterialLibrary> m_material_library;
     std::unique_ptr<rendering::PipelineCache> m_pipeline_cache;

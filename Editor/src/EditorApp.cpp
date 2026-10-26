@@ -1964,6 +1964,84 @@ bool EditorApp::detach_feedback(ecs::Entity e, std::string& out_err) {
     return true;
 }
 
+bool EditorApp::set_perception(ecs::Entity e, const runtime::PerceptionComponent& pc,
+                               std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    // The bounds are the loader's own, so an accepted value round-trips.
+    struct Range {
+        const char* name;
+        float value;
+        float lo;
+        float hi;
+    };
+    const Range ranges[] = {
+        {"sight", pc.sight_range, 0.0f, 10000.0f},
+        {"fov", pc.sight_half_fov_deg, 0.0f, 180.0f},
+        {"gain", pc.sight_gain, 0.0f, 1000.0f},
+        {"loss", pc.sight_loss, 0.0f, 1000.0f},
+        {"linger", pc.sight_linger, 0.0f, 3600.0f},
+        {"hearing", pc.hearing_range, 0.0f, 10000.0f},
+        {"touch", pc.touch_range, 0.0f, 1000.0f},
+        {"noise", pc.noise, 0.0f, 1.0f},
+        {"visible", pc.visibility, 0.0f, 1.0f},
+        {"radius", pc.radius, 0.0f, 100.0f},
+        {"eye", pc.eye_height, 0.0f, 100.0f},
+    };
+    for (const Range& r : ranges) {
+        if (!std::isfinite(r.value) || r.value < r.lo || r.value > r.hi) {
+            char message[160];
+            std::snprintf(message, sizeof(message), "%s must be within [%g, %g]", r.name,
+                          static_cast<double>(r.lo), static_cast<double>(r.hi));
+            out_err = message;
+            return false;
+        }
+    }
+    // A sensor with every sense switched off is legal (a prop with a Perception
+    // line it never uses) but an agent whose brain governs combat with no
+    // working sense can never fire; the scene validator calls that an error, and
+    // refusing it here turns a silently still enemy into a message.
+    const bool senses_anything = pc.sight_range > 0.0f || pc.hearing_range > 0.0f ||
+                                 pc.touch_range > 0.0f || pc.pain;
+    if (pc.enabled && pc.governs_combat && !senses_anything &&
+        w->has<runtime::CombatAgentComponent>(e)) {
+        out_err = "combat=true with every sense disabled would leave this agent unable to "
+                  "acquire a target";
+        return false;
+    }
+    if (auto* existing = w->get<runtime::PerceptionComponent>(e)) {
+        *existing = pc;
+    } else {
+        w->add<runtime::PerceptionComponent>(e, pc);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_perception(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::PerceptionComponent>(e)) {
+        out_err = "Entity has no PerceptionComponent";
+        return false;
+    }
+    w->remove<runtime::PerceptionComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::set_audio_buffer(ecs::Entity e, const std::string& logical_path, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;

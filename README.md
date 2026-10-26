@@ -317,6 +317,46 @@ volumes, and retires a voice when it finishes. A scene with no `Feedback:` line
 draws and mixes exactly what it did before, and the validator names a key whose
 value is out of range. `Ballistics.nfscene` ships opted in.
 
+### NPCs that see and hear (`Perception:`, Phase 60)
+
+`ai::Perception` — four senses, a detection meter per sense, a linger window, a
+last known position — has been unit-tested since Phase 22 and was reachable from
+nothing: no scene could declare a sensor, and no frame fed it a cast or an event.
+One optional line binds it to an entity:
+
+```text
+Perception: sight=30 fov=60 gain=2 loss=0.6 linger=3
+            hearing=18 touch=1.5 pain=true
+            noise=0 visible=1 radius=0.5 eye=1.5 combat=true
+```
+
+- **Sight** is the authored sense: range, cone half-angle, how fast the meter
+  fills, how fast it drains, and how long a target stays *known* after every
+  sense goes quiet — that last one is the search window.
+- **Hearing** goes around corners; a gunshot is a noise the frame publishes from
+  its own shot events, held for a lifetime so a single report can actually be
+  noticed. **Touch** is contact. **Pain** ignores distance entirely: being shot
+  tells you someone is out there.
+- **Pain is addressed, not broadcast.** A wound is routed to the victim's own
+  cast only, because the damage sense is neither attenuated nor gradual — a
+  shared stimulus would make every NPC in the level know who shot one of them.
+- **A sensor is never in its own cast**, so `most_threatening()` cannot answer
+  "me".
+- **An agent with `combat=true` (the default) only engages what it has
+  accumulated**, aims at the last known position after losing sight, and holds
+  fire while it cannot sense. `combat=false` keeps the pre-Phase-60 rule exactly:
+  a clear ray is enough.
+- **Scripts read their own memory**: `nf.aware(id, gen)`, `nf.sensing(id, gen)`,
+  `nf.last_known(id, gen)` and `nf.forget(id, gen)`. The sensor is always the
+  entity the script runs on.
+- The editor has a full **Perception** section, and the validator calls a
+  `combat=true` agent with every sense switched off an *error* — that agent can
+  never acquire a target, which is a level that does not work rather than one
+  that merely looks off.
+
+There is no new render pass and no new asset: the whole phase is the seam between
+code that already existed and the frame that feeds it.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -339,8 +379,9 @@ value is out of range. `Ballistics.nfscene` ships opted in.
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 59 the counts are
-  `RuntimeTests` 372/372, `EditorTests` 290/290 and `AudioTests` 138/138. On a
+  (`ctest -j 4`: 100%). On the development tree after Phase 60 the counts are
+  `RuntimeTests` 385/385, `EditorTests` 290/290, `AITests` 129/129 and
+  `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -
   that is an environment policy, not a test failure.

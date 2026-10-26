@@ -1147,6 +1147,29 @@ constexpr Entry kEntries[] = {
     {"max_impacts", "Max scorch marks", "أقصى علامات الإصابة"},
     {"max_sounds", "Max sounds", "أقصى الأصوات"},
     {"max_lights", "Max lights", "أقصى الأضواء"},
+    // --- Perception authoring (Phase 60) ------------------------------------
+    // The senses an NPC fights with. Sight carries its own five knobs because
+    // that is the one an author tunes; the other senses are ranges, on the AI
+    // module's documented defaults.
+    {"perception", "Perception", "الإدراك"},
+    {"no_perception", "No perception on this entity.", "لا يوجد إدراك لهذا الكيان۔"},
+    {"add_perception", "Add perception", "إضافة إدراك"},
+    {"sight_range", "Sight range", "مدى البصر"},
+    {"sight_fov", "Sight cone (half angle)", "زاوية البصر (نصف)"},
+    {"sight_gain", "Detect speed", "سرعة الانتباه"},
+    {"sight_loss", "Forget speed", "سرعة النسيان"},
+    {"sight_linger", "Search window", "نافذة البحث"},
+    {"hearing_range", "Hearing range", "مدى السمع"},
+    {"touch_range", "Touch range", "مدى اللمس"},
+    {"pain_sense", "Feel pain", "الإحساس بالألم"},
+    {"emit_noise", "Noise emitted", "الضجيج المنبعث"},
+    {"visibility", "Visibility", "الظهور"},
+    {"body_radius", "Body radius", "نصف قطر الجسم"},
+    {"eye_height", "Eye height", "ارتفاع العين"},
+    {"combat_senses", "Senses govern combat", "الحواس تحكم القتال"},
+    {"perception_no_senses",
+     "Every sense is off: this entity can never notice anything.",
+     "كل الحواس مطفأة: هذا الكيان لن يلاحظ شيئًا أبدًا۔"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread

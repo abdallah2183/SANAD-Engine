@@ -401,6 +401,30 @@ static bool parse_feedback(const std::string& line, FeedbackComponent& out,
     return true;
 }
 
+// `Perception:` (Phase 60). Same contract as the feedback line above: every key
+// optional, an absent key keeps the component default, and a present value the
+// perception module would have had to re-clamp is refused by name. The bounds
+// are the module's own working ranges — a sight range of zero is legal (a blind
+// NPC is authored, not a bug), a negative one is not.
+static bool parse_perception(const std::string& line, PerceptionComponent& out,
+                             std::string& out_bad) {
+    if (!optional_float_in_range(line, "sight=", 0.0f, 10000.0f, out.sight_range, out_bad)) return false;
+    if (!optional_float_in_range(line, "fov=", 0.0f, 180.0f, out.sight_half_fov_deg, out_bad)) return false;
+    if (!optional_float_in_range(line, "gain=", 0.0f, 1000.0f, out.sight_gain, out_bad)) return false;
+    if (!optional_float_in_range(line, "loss=", 0.0f, 1000.0f, out.sight_loss, out_bad)) return false;
+    if (!optional_float_in_range(line, "linger=", 0.0f, 3600.0f, out.sight_linger, out_bad)) return false;
+    if (!optional_float_in_range(line, "hearing=", 0.0f, 10000.0f, out.hearing_range, out_bad)) return false;
+    if (!optional_float_in_range(line, "touch=", 0.0f, 1000.0f, out.touch_range, out_bad)) return false;
+    if (!optional_float_in_range(line, "noise=", 0.0f, 1.0f, out.noise, out_bad)) return false;
+    if (!optional_float_in_range(line, "visible=", 0.0f, 1.0f, out.visibility, out_bad)) return false;
+    if (!optional_float_in_range(line, "radius=", 0.0f, 100.0f, out.radius, out_bad)) return false;
+    if (!optional_float_in_range(line, "eye=", 0.0f, 100.0f, out.eye_height, out_bad)) return false;
+    out.pain = line.find("pain=false") == std::string::npos;
+    out.governs_combat = line.find("combat=false") == std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
 static bool parse_point_light(const std::string& line, PointLightComponent& out,
                               std::string& out_bad) {
     if (!light_color(line, out.color_r, out.color_g, out.color_b, out_bad)) return false;
@@ -1215,6 +1239,19 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     scene->world().add<FeedbackComponent>(e, fb);
                 } else {
                     result.warnings.push_back("Feedback line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  Perception:",0)==0) {
+                // Perception (Phase 60). Absent means "this entity has no
+                // senses", so every scene written before this line existed keeps
+                // exactly the combat behaviour it had. A bad value rejects the
+                // line by name.
+                PerceptionComponent perc;
+                std::string bad;
+                if (parse_perception(line, perc, bad)) {
+                    scene->world().add<PerceptionComponent>(e, perc);
+                } else {
+                    result.warnings.push_back("Perception line with invalid " + bad +
                                               " was ignored: " + line);
                 }
             } else if (line.rfind("  Camera:",0)==0) {
@@ -2477,6 +2514,34 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             out << "\n";
         }
+        // Perception (Phase 60). Written like the feedback line: numbers always,
+        // booleans only when they differ from the default, so a hand-written
+        // one-key line saves back as the complete state the reader resolved
+        // without growing keys nobody set.
+        const auto* pc = scene_obj.world().get<PerceptionComponent>(e);
+        if (pc) {
+            out << "  Perception: sight=" << pc->sight_range
+                << " fov=" << pc->sight_half_fov_deg
+                << " gain=" << pc->sight_gain
+                << " loss=" << pc->sight_loss
+                << " linger=" << pc->sight_linger
+                << " hearing=" << pc->hearing_range
+                << " touch=" << pc->touch_range
+                << " noise=" << pc->noise
+                << " visible=" << pc->visibility
+                << " radius=" << pc->radius
+                << " eye=" << pc->eye_height;
+            if (!pc->pain) {
+                out << " pain=false";
+            }
+            if (!pc->governs_combat) {
+                out << " combat=false";
+            }
+            if (!pc->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
         // Physics. The runtime body handle is deliberately NOT written: it is a
         // per-session identity (generation-checked), and a stale one from a
         // previous run is meaningless — reloading rebuilds it from the scene.
@@ -2827,6 +2892,11 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     if (const auto* fc = src.get<FactionComponent>(se)) {
         // Affiliation is entirely authored data: copying it copies the side.
         dst.add<FactionComponent>(de, *fc);
+    }
+    if (const auto* pc = src.get<PerceptionComponent>(se)) {
+        // Senses are authored data, and the live meter lives in the Runtime, not
+        // in the component — so a copy is a full copy.
+        dst.add<PerceptionComponent>(de, *pc);
     }
     if (const auto* rb = src.get<physics::RigidBodyComponent>(se)) {
         physics::RigidBodyComponent fresh = *rb;

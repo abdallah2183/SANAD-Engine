@@ -67,6 +67,13 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* fb = sw.get<runtime::FeedbackComponent>(se)) {
             dw.add<runtime::FeedbackComponent>(de, *fb);
         }
+        // Perception (Phase 60): the senses are authored data and the component
+        // carries no session state — the live memory belongs to the Runtime — so
+        // a copy is a full copy. Without this, a guard authored to hear would
+        // enter Play blind and deaf while the packaged build heard everything.
+        if (const auto* pc = sw.get<runtime::PerceptionComponent>(se)) {
+            dw.add<runtime::PerceptionComponent>(de, *pc);
+        }
         if (const auto* p = sw.get<scene::PrefabLinkComponent>(se)) {
             dw.add<scene::PrefabLinkComponent>(de, *p);
         }

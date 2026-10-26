@@ -256,6 +256,24 @@ struct InspectorCache {
     int fb_max_impacts = 192;
     int fb_max_sounds = 16;
     int fb_max_lights = 4;
+    // Perception (Phase 60). Same "has" pattern as the two blocks above: the
+    // component is absent until the author attaches one, and the absent
+    // component is what keeps the `Perception:` line out of the saved file.
+    bool perc_has = false;
+    bool perc_enabled = true;
+    bool perc_pain = true;
+    bool perc_governs = true;
+    float perc_sight = 30.0f;
+    float perc_fov = 60.0f;
+    float perc_gain = 2.0f;
+    float perc_loss = 0.6f;
+    float perc_linger = 3.0f;
+    float perc_hearing = 18.0f;
+    float perc_touch = 1.5f;
+    float perc_noise = 0.0f;
+    float perc_visible = 1.0f;
+    float perc_radius = 0.5f;
+    float perc_eye = 1.5f;
     // Animation
     int anim_clip = 0;     // index into the component's clip table
     float anim_speed = 1.0f;
@@ -2184,6 +2202,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.fb_has = false;
                 }
+                if (const auto* pc = w->get<runtime::PerceptionComponent>(sel)) {
+                    ic.perc_has = true;
+                    ic.perc_enabled = pc->enabled;
+                    ic.perc_pain = pc->pain;
+                    ic.perc_governs = pc->governs_combat;
+                    ic.perc_sight = pc->sight_range;
+                    ic.perc_fov = pc->sight_half_fov_deg;
+                    ic.perc_gain = pc->sight_gain;
+                    ic.perc_loss = pc->sight_loss;
+                    ic.perc_linger = pc->sight_linger;
+                    ic.perc_hearing = pc->hearing_range;
+                    ic.perc_touch = pc->touch_range;
+                    ic.perc_noise = pc->noise;
+                    ic.perc_visible = pc->visibility;
+                    ic.perc_radius = pc->radius;
+                    ic.perc_eye = pc->eye_height;
+                } else {
+                    ic.perc_has = false;
+                }
                 if (const auto* sc = w->get<scripting::ScriptComponent>(sel)) {
                     std::strncpy(ic.script_path, sc->path.c_str(), sizeof(ic.script_path) - 1);
                     ic.script_path[sizeof(ic.script_path) - 1] = '\0';
@@ -3870,6 +3907,100 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_feedback(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach feedback failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Perception (Phase 60) ---
+            // The senses an NPC fights with. Always visible like Destruction and
+            // Feedback: Attach authors a default sensor, Apply forwards the
+            // cached fields through the validated setter, Detach removes the
+            // component (and with it the `Perception:` line the saver writes).
+            if (ImGui::CollapsingHeader((AV("perception") + "###Perception").c_str())) {
+                if (!ic.perc_has) {
+                    ImGui::TextDisabled("%s", AV("no_perception").c_str());
+                    if (ImGui::Button((AV("add_perception") + "##perception").c_str())) {
+                        std::string err;
+                        if (!app.set_perception(sel, runtime::PerceptionComponent{}, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach perception failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##perc_enabled").c_str(), &ic.perc_enabled);
+                    ImGui::SameLine();
+                    ImGui::Checkbox((AV("pain_sense") + "##perc").c_str(), &ic.perc_pain);
+                    ImGui::SameLine();
+                    ImGui::Checkbox((AV("combat_senses") + "##perc").c_str(), &ic.perc_governs);
+
+                    ImGui::DragFloat((AV("sight_range") + "##perc").c_str(), &ic.perc_sight, 0.2f,
+                                     0.0f, 10000.0f, "%.1f m");
+                    ImGui::DragFloat((AV("sight_fov") + "##perc").c_str(), &ic.perc_fov, 0.5f, 0.0f,
+                                     180.0f, "%.0f deg");
+                    ImGui::DragFloat((AV("sight_gain") + "##perc").c_str(), &ic.perc_gain, 0.05f,
+                                     0.0f, 1000.0f, "%.2f");
+                    ImGui::DragFloat((AV("sight_loss") + "##perc").c_str(), &ic.perc_loss, 0.05f,
+                                     0.0f, 1000.0f, "%.2f");
+                    ImGui::DragFloat((AV("sight_linger") + "##perc").c_str(), &ic.perc_linger, 0.1f,
+                                     0.0f, 3600.0f, "%.1f s");
+                    ImGui::DragFloat((AV("hearing_range") + "##perc").c_str(), &ic.perc_hearing,
+                                     0.2f, 0.0f, 10000.0f, "%.1f m");
+                    ImGui::DragFloat((AV("touch_range") + "##perc").c_str(), &ic.perc_touch, 0.05f,
+                                     0.0f, 1000.0f, "%.2f m");
+                    ImGui::DragFloat((AV("emit_noise") + "##perc").c_str(), &ic.perc_noise, 0.01f,
+                                     0.0f, 1.0f, "%.2f");
+                    ImGui::DragFloat((AV("visibility") + "##perc").c_str(), &ic.perc_visible, 0.01f,
+                                     0.0f, 1.0f, "%.2f");
+                    ImGui::DragFloat((AV("body_radius") + "##perc").c_str(), &ic.perc_radius, 0.02f,
+                                     0.0f, 100.0f, "%.2f m");
+                    ImGui::DragFloat((AV("eye_height") + "##perc").c_str(), &ic.perc_eye, 0.02f,
+                                     0.0f, 100.0f, "%.2f m");
+
+                    // The same cross-field rule the validator calls an error: an
+                    // agent whose senses govern its combat with all of them off
+                    // can never acquire a target, so the panel says so before
+                    // Apply refuses it.
+                    if (ic.perc_enabled && ic.perc_governs && ic.perc_pain == false &&
+                        ic.perc_sight <= 0.0f && ic.perc_hearing <= 0.0f && ic.perc_touch <= 0.0f) {
+                        rt_colored_str(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), AV("perception_no_senses"));
+                    }
+
+                    if (ImGui::Button((AV("apply") + "##perception").c_str())) {
+                        runtime::PerceptionComponent edited;
+                        edited.enabled = ic.perc_enabled;
+                        edited.pain = ic.perc_pain;
+                        edited.governs_combat = ic.perc_governs;
+                        edited.sight_range = ic.perc_sight;
+                        edited.sight_half_fov_deg = ic.perc_fov;
+                        edited.sight_gain = ic.perc_gain;
+                        edited.sight_loss = ic.perc_loss;
+                        edited.sight_linger = ic.perc_linger;
+                        edited.hearing_range = ic.perc_hearing;
+                        edited.touch_range = ic.perc_touch;
+                        edited.noise = ic.perc_noise;
+                        edited.visibility = ic.perc_visible;
+                        edited.radius = ic.perc_radius;
+                        edited.eye_height = ic.perc_eye;
+                        std::string err;
+                        if (!app.set_perception(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Perception edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##perception").c_str())) {
+                        std::string err;
+                        if (!app.detach_perception(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach perception failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

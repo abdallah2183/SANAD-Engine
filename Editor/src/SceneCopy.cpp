@@ -48,6 +48,10 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* fb = src.get<runtime::FeedbackComponent>(from)) {
         dst.add<runtime::FeedbackComponent>(to, *fb);
     }
+    // Phase 60: senses travel with the entity, like a faction or a weapon does.
+    if (const auto* pc = src.get<runtime::PerceptionComponent>(from)) {
+        dst.add<runtime::PerceptionComponent>(to, *pc);
+    }
     if (const auto* p = src.get<scene::PrefabLinkComponent>(from)) {
         dst.add<scene::PrefabLinkComponent>(to, *p);
     }

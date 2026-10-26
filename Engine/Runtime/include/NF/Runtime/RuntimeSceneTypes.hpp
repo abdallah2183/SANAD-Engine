@@ -851,5 +851,76 @@ struct FactionComponent {
     bool enabled = true;
 };
 
+/// What an entity can notice (Phase 60, design §45 "AI Core: perception").
+///
+/// `ai::Perception` was written and tested in Phase 22 — four senses, a
+/// time-integrated detection meter per sense, a linger window, a last known
+/// position — and no scene could reach any of it. The audit that produced
+/// Phase 25 named the reason and left it open: "individual AI (perception,
+/// machines, utility) stayed outside the frame on purpose: it needs boards
+/// bound to entities, which is a design, not a wiring job". This component is
+/// that design's first half. The second half is the frame, which now feeds it
+/// the scene's cast and its own combat events.
+///
+/// The component declares a SENSOR. What there is to sense is not authored here:
+/// every entity with a Transform and something alive about it (hit points, a
+/// weapon, a brain or a faction) becomes a target, and the frame's shot and
+/// impact events become the noises and the pain.
+///
+/// Sight is what an author tunes, so it carries its own five fields. The other
+/// senses are ranges only, on the module's documented defaults: hearing and
+/// touch are omnidirectional, damage is neither attenuated nor gradual (a hit
+/// from a sniper you never saw still tells you someone is out there), and all
+/// three share sight's gain and loss. A range of 0 disables a sense outright — a
+/// deaf NPC is `hearing=0`, not a flag on every sound in the world.
+struct PerceptionComponent {
+    bool enabled = true;
+
+    /// Sight: how far it reaches, how wide the cone is (half angle, in degrees),
+    /// how fast the meter fills, how fast it drains once the target is gone, and
+    /// how many seconds a target stays KNOWN after every sense has gone quiet.
+    /// The linger is the search window: "it went behind that wall" is knowledge
+    /// for `linger` seconds, not for one frame.
+    f32 sight_range = 30.0f;
+    f32 sight_half_fov_deg = 60.0f;
+    f32 sight_gain = 2.0f;
+    f32 sight_loss = 0.6f;
+    f32 sight_linger = 3.0f;
+
+    /// Range of the other senses, in metres. 0 disables one outright.
+    f32 hearing_range = 18.0f;
+    f32 touch_range = 1.5f;
+
+    /// The damage sense: notice whoever hurt you, from anywhere, with no
+    /// attenuation. On by default because being shot is not something an NPC
+    /// should have to roll for.
+    bool pain = true;
+
+    /// Continuous noise this entity emits, in 0..1 — footsteps, an engine, a
+    /// fire. Discrete noises are the frame's own shot events, which is why this
+    /// is a rate and not a flag.
+    f32 noise = 0.0f;
+
+    /// Multiplier on how easily this entity is SEEN, 0..1. Camouflage slows
+    /// detection rather than preventing it: a staring guard still fills the
+    /// meter, which is the behaviour a partially concealed flank should have.
+    f32 visibility = 1.0f;
+
+    /// Body radius, in metres, added to a sensor's own for the range tests — a
+    /// tall actor is visible a little before its centre clears a corner.
+    f32 radius = 0.5f;
+
+    /// Where the eyes are, in metres above the entity's origin. The sensor looks
+    /// FROM here, and a sight ray starts here: a guard whose origin is at its
+    /// feet sees over the crate its body is behind.
+    f32 eye_height = 1.5f;
+
+    /// When true and the entity also carries a `CombatAgent:`, the agent may
+    /// only engage entities its own senses are aware of, and aims at the last
+    /// known position while it knows of a target it can no longer see. False
+    /// keeps the pre-Phase-60 rule exactly: an agent with a clear ray fires.
+    bool governs_combat = true;
+};
+
 } // namespace runtime
 } // namespace nf

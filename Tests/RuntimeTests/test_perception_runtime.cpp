@@ -1,0 +1,1048 @@
+// Tests/RuntimeTests/test_perception_runtime.cpp — Phase 60: the senses, bound
+// to entities and fed by the frame.
+//
+// `ai::Perception` has had its own suite since Phase 22 (30 cases in AITests),
+// and it was reachable from nothing: no scene could declare a sensor, and no
+// frame fed it a cast or an event. That is the gap these cases close, and they
+// are deliberately about the BRIDGE rather than about the module:
+//
+//   1. the scene line: `Perception:` round-trips through the real writer/reader,
+//      an absent line stays absent, an impossible value is refused by name;
+//   2. the validator: a value outside the module's range is warned about by
+//      name, and an agent whose senses govern its combat with every sense
+//      switched off is an ERROR — it can never acquire a target, which is a
+//      level that does not work rather than one that looks a little off;
+//   3. the frame: a blind NPC hears a gunshot, sight needs the cone and a clear
+//      line, a wall stops sight but not hearing, pain wakes the victim and
+//      nobody else, and a sensor never detects itself;
+//   4. the bridge: an agent with senses only engages what it has ACCUMULATED,
+//      keeps aiming at the last known position after it loses sight, and holds
+//      fire while it cannot sense — while `combat=false` keeps the pre-Phase-60
+//      rule exactly.
+//
+// The pure half needs no device. The integration half skips without Vulkan, the
+// same contract every other extraction test keeps.
+
+#include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
+#include <NF/Assets/AssetManager.hpp>
+#include <NF/Assets/AssetRegistry.hpp>
+#include <NF/Assets/VirtualFileSystem.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/RHI/RHI.hpp>
+#include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Runtime/RuntimeSceneTypes.hpp>
+#include <NF/Runtime/SceneValidator.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Scene/NameComponent.hpp>
+#include <NF/Scene/Scene.hpp>
+#include <NF/Scene/Transform.hpp>
+
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+using namespace nf;
+using namespace nf::assets;
+using namespace nf::runtime;
+
+namespace {
+
+/// The lip of the barrel: a weapon the agent can fire with, with no spread and
+/// no recoil so the cases are about perception and not about luck.
+WeaponProfile straight_gun() {
+    WeaponProfile gun;
+    gun.mode = FireMode::Auto;
+    gun.rounds_per_minute = 600.0f;
+    gun.magazine = 30u;
+    gun.reserve = 300u;
+    gun.damage = 10.0f;
+    gun.range = 60.0f;
+    gun.spread_deg = 0.0f;
+    gun.spread_max_deg = 1.0f;
+    gun.spread_bloom_deg = 0.0f;
+    gun.recoil_pitch = 0.0f;
+    gun.recoil_yaw = 0.0f;
+    gun.shake = 0.0f;
+    return gun;
+}
+
+/// A sensor that only hears: blindness and deafness are authored as a range of
+/// zero, which is the module's own contract, not a flag invented here.
+PerceptionComponent ears_only(f32 range) {
+    PerceptionComponent pc;
+    pc.sight_range = 0.0f;
+    pc.hearing_range = range;
+    pc.pain = false;
+    pc.eye_height = 0.0f;
+    return pc;
+}
+
+/// A camera that follows the named entity, which is what makes it "the player"
+/// to the runtime.
+void add_follow_camera(scene::Scene& scene, const char* target, f32 distance, f32 pivot_y) {
+    const ecs::Entity camera = scene.world().create_entity();
+    scene.world().add<scene::NameComponent>(camera, scene::NameComponent{"Camera"});
+    scene.world().add<scene::Transform>(camera, scene::Transform{});
+    CameraComponent cam;
+    cam.is_active = true;
+    cam.follow_target = target;
+    cam.pivot_y = pivot_y;
+    cam.distance = distance;
+    cam.mouse_look = false;
+    // Yaw and pitch EXPLICITLY zero. The camera's defaults aim slightly down
+    // (the third-person default view), and a shot fired along that camera at a
+    // target ten metres away passes two metres over its head — which reads as
+    // "the perception bridge does not work" for a whole afternoon.
+    cam.yaw = 0.0f;
+    cam.pitch = 0.0f;
+    scene.world().add<CameraComponent>(camera, cam);
+}
+
+ecs::Entity add_world_entity(scene::Scene& scene, const char* name, f32 x, f32 y, f32 z,
+                             bool with_collider = true) {
+    const ecs::Entity e = scene.world().create_entity();
+    scene.world().add<scene::NameComponent>(e, scene::NameComponent{name});
+    auto& t = scene.world().add<scene::Transform>(e);
+    t.local_x = x;
+    t.local_y = y;
+    t.local_z = z;
+    if (with_collider) {
+        scene.world().add<physics::ColliderComponent>(
+            e, physics::ColliderComponent{physics::Shape::make_box(Vec3{0.4f, 0.4f, 0.4f})});
+    }
+    return e;
+}
+
+void add_health(scene::Scene& scene, ecs::Entity e, f32 hp) {
+    HealthComponent health;
+    health.max_health = hp;
+    health.health = hp;
+    scene.world().add<HealthComponent>(e, health);
+}
+
+/// A scene with no camera is a validation ERROR of its own (Phase 43), so a case
+/// about perception warnings has to carry one or it is testing two things.
+void add_bare_camera(scene::Scene& scene) {
+    const ecs::Entity camera = scene.world().create_entity();
+    scene.world().add<scene::NameComponent>(camera, scene::NameComponent{"Camera"});
+    scene.world().add<scene::Transform>(camera, scene::Transform{});
+    CameraComponent cam;
+    cam.is_active = true;
+    scene.world().add<CameraComponent>(camera, cam);
+}
+
+/// The smallest input source there is.
+///
+/// A Runtime with NO input source leaves the whole `ScriptInput` empty — not
+/// just the input callbacks but every world query the script API carries — so a
+/// script test that wants `nf.*` to answer anything must hand one over. This one
+/// answers "nothing is pressed" to everything.
+struct NoInput final : gameplay::IInputSource {
+    [[nodiscard]] bool action_pressed(std::string_view) const override { return false; }
+    [[nodiscard]] f32 action_axis(std::string_view) const override { return 0.0f; }
+};
+
+} // namespace
+
+// --- the scene line ----------------------------------------------------------
+
+NF_TEST(perception_line_round_trips_every_key) {
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_perception_round_trip";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    scene::Scene scene("PerceptionScene");
+    auto& world = scene.world();
+    const ecs::Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+
+    PerceptionComponent pc;
+    pc.enabled = false;
+    pc.pain = false;
+    pc.governs_combat = false;
+    pc.sight_range = 12.5f;
+    pc.sight_half_fov_deg = 45.0f;
+    pc.sight_gain = 3.5f;
+    pc.sight_loss = 0.25f;
+    pc.sight_linger = 7.5f;
+    pc.hearing_range = 22.0f;
+    pc.touch_range = 2.5f;
+    pc.noise = 0.3f;
+    pc.visibility = 0.6f;
+    pc.radius = 0.8f;
+    pc.eye_height = 1.8f;
+    world.add<PerceptionComponent>(e, pc);
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/perception.nfscene", scene, err));
+    NF_CHECK(err.empty());
+
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/perception.nfscene");
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene != nullptr);
+    if (!result.scene) {
+        std::filesystem::remove_all(tmp);
+        return;
+    }
+    const auto* loaded = result.scene->world().get<PerceptionComponent>(
+        result.scene->world().all_entities()[0]);
+    NF_CHECK(loaded != nullptr);
+    if (loaded != nullptr) {
+        NF_CHECK(!loaded->enabled);
+        NF_CHECK(!loaded->pain);
+        NF_CHECK(!loaded->governs_combat);
+        NF_CHECK_NEAR(loaded->sight_range, 12.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->sight_half_fov_deg, 45.0f, 1e-5f);
+        NF_CHECK_NEAR(loaded->sight_gain, 3.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->sight_loss, 0.25f, 1e-5f);
+        NF_CHECK_NEAR(loaded->sight_linger, 7.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->hearing_range, 22.0f, 1e-5f);
+        NF_CHECK_NEAR(loaded->touch_range, 2.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->noise, 0.3f, 1e-5f);
+        NF_CHECK_NEAR(loaded->visibility, 0.6f, 1e-5f);
+        NF_CHECK_NEAR(loaded->radius, 0.8f, 1e-5f);
+        NF_CHECK_NEAR(loaded->eye_height, 1.8f, 1e-5f);
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(perception_absent_from_a_scene_stays_absent_when_saved) {
+    scene::Scene scene("PlainScene");
+    auto& world = scene.world();
+    const ecs::Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+
+    const std::string text = serialize_scene_to_text(scene);
+    NF_CHECK(text.find("Perception:") == std::string::npos);
+
+    auto parsed = load_scene_from_text(text);
+    NF_CHECK(parsed.success);
+    if (parsed.scene) {
+        NF_CHECK(parsed.scene->world().get<PerceptionComponent>(
+                      parsed.scene->world().all_entities()[0]) == nullptr);
+    }
+}
+
+NF_TEST(perception_line_with_an_impossible_value_is_refused_by_name) {
+    // A half-angle of 200 degrees is not a cone; the loader refuses the whole
+    // line rather than clamping it, and names the key.
+    const std::string text =
+        "# SANAD Scene v1\nversion: 1\nname: BadPerception\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Guard\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n"
+        "  Perception: sight=30 fov=200\n";
+    auto result = load_scene_from_text(text);
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene != nullptr);
+    if (!result.scene) {
+        return;
+    }
+    NF_CHECK(result.scene->world().get<PerceptionComponent>(
+                  result.scene->world().all_entities()[0]) == nullptr);
+    bool named = false;
+    for (const std::string& warning : result.warnings) {
+        if (warning.find("Perception") != std::string::npos &&
+            warning.find("fov") != std::string::npos) {
+            named = true;
+            break;
+        }
+    }
+    NF_CHECK(named);
+
+    // A one-key line keeps every other default, which is the contract every
+    // optional scene line in this engine keeps.
+    const std::string minimal =
+        "# SANAD Scene v1\nversion: 1\nname: Minimal\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Guard\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n"
+        "  Perception: hearing=0\n";
+    auto parsed = load_scene_from_text(minimal);
+    NF_CHECK(parsed.success);
+    if (parsed.scene) {
+        const auto* component = parsed.scene->world().get<PerceptionComponent>(
+            parsed.scene->world().all_entities()[0]);
+        NF_CHECK(component != nullptr);
+        if (component != nullptr) {
+            NF_CHECK_NEAR(component->hearing_range, 0.0f, 1e-6f);
+            NF_CHECK_NEAR(component->sight_range, 30.0f, 1e-6f);
+            NF_CHECK(component->pain);
+            NF_CHECK(component->governs_combat);
+        }
+    }
+}
+
+// --- the validator -----------------------------------------------------------
+
+NF_TEST(perception_values_outside_the_module_range_are_warned_by_name) {
+    scene::Scene scene("Warn");
+    auto& world = scene.world();
+    add_bare_camera(scene);
+    const ecs::Entity e = add_world_entity(scene, "Guard", 0.0f, 0.0f, 0.0f, false);
+    PerceptionComponent pc;
+    pc.sight_gain = -1.0f;
+    pc.visibility = 4.0f;
+    pc.eye_height = 1000.0f;
+    world.add<PerceptionComponent>(e, pc);
+
+    const ValidationReport report = validate_scene(scene, "content://Scenes/warn.nfscene");
+    bool gain = false;
+    bool visible = false;
+    bool eye = false;
+    for (const ValidationIssue& issue : report.issues) {
+        if (issue.message.find("gain") != std::string::npos) gain = true;
+        if (issue.message.find("visible") != std::string::npos) visible = true;
+        if (issue.message.find("eye") != std::string::npos) eye = true;
+    }
+    NF_CHECK(gain);
+    NF_CHECK(visible);
+    NF_CHECK(eye);
+}
+
+NF_TEST(an_agent_governing_combat_with_no_working_sense_is_an_error) {
+    // The wiring trap: `combat=true` makes the senses the gate on engagement, so
+    // an agent whose senses are all off can never fire. The validator calls it an
+    // error because that level does not work, not because it looks slightly off.
+    scene::Scene scene("Broken");
+    auto& world = scene.world();
+    add_bare_camera(scene);
+    const ecs::Entity e = add_world_entity(scene, "Guard", 0.0f, 0.0f, 0.0f, false);
+    world.add<WeaponComponent>(e, WeaponComponent{straight_gun()});
+    world.add<CombatAgentComponent>(e, CombatAgentComponent{});
+    PerceptionComponent pc;
+    pc.sight_range = 0.0f;
+    pc.hearing_range = 0.0f;
+    pc.touch_range = 0.0f;
+    pc.pain = false;
+    world.add<PerceptionComponent>(e, pc);
+
+    const ValidationReport report = validate_scene(scene, "content://Scenes/broken.nfscene");
+    NF_CHECK(!report.ok());
+    bool named = false;
+    for (const ValidationIssue& issue : report.issues) {
+        if (issue.severity == ValidationSeverity::Error &&
+            issue.message.find("never acquire") != std::string::npos) {
+            named = true;
+            break;
+        }
+    }
+    NF_CHECK(named);
+
+    // The same sensor with the brain NOT governed by it is only a warning-free
+    // curiosity: the agent keeps the old ray rule, so nothing is broken.
+    scene::Scene other("Fine");
+    auto& ow = other.world();
+    add_bare_camera(other);
+    const ecs::Entity o = add_world_entity(other, "Guard", 0.0f, 0.0f, 0.0f, false);
+    ow.add<WeaponComponent>(o, WeaponComponent{straight_gun()});
+    ow.add<CombatAgentComponent>(o, CombatAgentComponent{});
+    PerceptionComponent off = pc;
+    off.governs_combat = false;
+    ow.add<PerceptionComponent>(o, off);
+    NF_CHECK(validate_scene(other, "content://Scenes/fine.nfscene").ok());
+}
+
+// --- the frame ---------------------------------------------------------------
+
+NF_TEST(a_sensor_never_detects_itself) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_self";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("Lonely");
+        const ecs::Entity guard = add_world_entity(*game, "Guard", 0.0f, 0.0f, 0.0f);
+        add_health(*game, guard, 100.0f);
+        // Everything on: if a sensor could detect itself, this one would fill its
+        // own meter in half a second (sight at zero distance is a full-strength
+        // stimulus) and touch would report instantly.
+        PerceptionComponent pc;
+        pc.eye_height = 0.0f;
+        pc.pain = true;
+        game->world().add<PerceptionComponent>(guard, pc);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/Lonely.nfscene");
+        for (int frame = 0; frame < 120; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK_EQ(rt.perception_count(), static_cast<size_t>(1));
+        NF_CHECK(!rt.entity_aware_of(guard, guard));
+        const ai::Perception* senses = rt.perception_of(guard);
+        NF_CHECK(senses != nullptr);
+        if (senses != nullptr) {
+            NF_CHECK(senses->perceived().empty());
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(a_blind_npc_hears_a_gunshot_and_becomes_aware) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_hearing";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("Alley");
+        const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+        add_health(*game, player, 100.0f);
+        game->world().add<WeaponComponent>(player, WeaponComponent{straight_gun()});
+        add_follow_camera(*game, "Player", 4.0f, 0.0f);
+
+        // Ten metres away, deaf to nothing but blind: the only way this NPC can
+        // learn about the player is the noise the gun makes.
+        const ecs::Entity guard = add_world_entity(*game, "Guard", 0.0f, 1.5f, -10.0f);
+        add_health(*game, guard, 100.0f);
+        game->world().add<PerceptionComponent>(guard, ears_only(40.0f));
+
+        rt.adopt_scene(std::move(game), "content://Scenes/Alley.nfscene");
+        NF_CHECK(rt.perception_count() == 1u);
+        NF_CHECK(!rt.entity_aware_of(guard, player)); // nothing has happened yet
+
+        NF_CHECK_EQ(rt.fire_weapon(), 1u);
+        for (int frame = 0; frame < 30; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK(rt.entity_aware_of(guard, player));
+        // Heard is not seen: the memory holds the position the NOISE came from —
+        // the muzzle, a few metres behind the player — and the sense that
+        // reported it was hearing, not sight.
+        Vec3 known{};
+        NF_CHECK(rt.entity_last_known(guard, player, known));
+        NF_CHECK(known.z > -5.0f);
+        NF_CHECK(known.z < 8.0f);
+        const ai::Perception* senses = rt.perception_of(guard);
+        NF_CHECK(senses != nullptr);
+        if (senses != nullptr) {
+            const ai::PerceivedTarget* memory = senses->most_threatening();
+            NF_CHECK(memory != nullptr);
+            if (memory != nullptr) {
+                NF_CHECK(memory->detection_of(ai::StimulusKind::Sound) > 0.0f);
+                NF_CHECK_NEAR(memory->detection_of(ai::StimulusKind::Sight), 0.0f, 1e-6f);
+            }
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(sight_needs_the_cone_and_a_clear_line) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_sight";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("Corridor");
+        // The observer stands at the origin and looks down -Z (yaw 0). The
+        // target is ten metres down -Z, so it starts inside the cone.
+        const ecs::Entity target = add_world_entity(*game, "Target", 0.0f, 0.0f, -10.0f);
+        add_health(*game, target, 100.0f);
+
+        const ecs::Entity guard = add_world_entity(*game, "Guard", 0.0f, 0.0f, 0.0f);
+        add_health(*game, guard, 100.0f);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 45.0f;
+        eyes.sight_gain = 4.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        eyes.eye_height = 0.0f;
+        game->world().add<PerceptionComponent>(guard, eyes);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/Corridor.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        NF_CHECK(rt.entity_aware_of(guard, target));
+
+        // A wall between them: sight is the only sense that consults occlusion,
+        // and the guard now sees the wall instead of the target. The cast is
+        // rebuilt every frame, so a new collider needs no rebind — only a new
+        // SENSOR does.
+        scene::Scene* live = rt.edit_scene();
+        NF_CHECK(live != nullptr);
+        if (live != nullptr) {
+            add_world_entity(*live, "Wall", 0.0f, 0.0f, -5.0f);
+        }
+        for (int frame = 0; frame < 120; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        NF_CHECK(!rt.entity_sensing(guard, target));
+        // Awareness lingers: the guard does not forget the moment it looks away.
+        NF_CHECK(rt.entity_aware_of(guard, target));
+
+        // Look away and the cone does the rest — even with a clear line, a target
+        // behind the guard is not seen. After the linger window (3 s) the memory
+        // is gone entirely, which is the search window closing.
+        scene::Transform* guard_transform = live != nullptr
+                                                ? live->world().get<scene::Transform>(guard)
+                                                : nullptr;
+        NF_CHECK(guard_transform != nullptr);
+        if (guard_transform != nullptr) {
+            guard_transform->rot_y = 90.0f; // now looking down -X
+        }
+        for (int frame = 0; frame < 240; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        NF_CHECK(!rt.entity_sensing(guard, target));
+        NF_CHECK(!rt.entity_aware_of(guard, target));
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(pain_wakes_the_victim_and_nobody_else) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_pain";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("PainRange");
+        const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+        add_health(*game, player, 100.0f);
+        game->world().add<WeaponComponent>(player, WeaponComponent{straight_gun()});
+        add_follow_camera(*game, "Player", 4.0f, 0.0f);
+
+        // The victim, straight down the barrel.
+        const ecs::Entity victim = add_world_entity(*game, "Victim", 0.0f, 1.5f, -10.0f);
+        add_health(*game, victim, 100.0f);
+        PerceptionComponent feeling;
+        feeling.sight_range = 0.0f;
+        feeling.hearing_range = 0.0f;
+        feeling.pain = true;
+        feeling.eye_height = 0.0f;
+        game->world().add<PerceptionComponent>(victim, feeling);
+
+        // The bystander, out of the line of fire and stone deaf with no sight.
+        // If pain were broadcast through the shared cast, the damage sense
+        // (which ignores distance entirely) would wake this one too.
+        const ecs::Entity bystander = add_world_entity(*game, "Bystander", 9.0f, 1.5f, -10.0f);
+        add_health(*game, bystander, 100.0f);
+        game->world().add<PerceptionComponent>(bystander, feeling);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/PainRange.nfscene");
+        NF_CHECK_EQ(rt.fire_weapon(), 1u);
+        for (int frame = 0; frame < 30; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK(rt.entity_aware_of(victim, player)); // the positive control
+        NF_CHECK(!rt.entity_aware_of(bystander, player));
+        NF_CHECK(rt.perception_of(bystander) != nullptr);
+        if (rt.perception_of(bystander) != nullptr) {
+            NF_CHECK(rt.perception_of(bystander)->perceived().empty());
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(pain_names_the_attacker_and_not_its_neighbour_in_the_cast) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_ordering";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("Ordering");
+        // The victim is created FIRST, so it heads the cast. A sensor's own cast
+        // drops the sensor, which shifts the id of every actor after it — so
+        // without the shared-id to local-id table the wound would be attributed
+        // to whichever actor sits at the shooter's old number, and the victim
+        // would "know" the wrong entity was shooting at it.
+        const ecs::Entity victim = add_world_entity(*game, "Victim", 0.0f, 1.5f, -10.0f);
+        add_health(*game, victim, 100.0f);
+        PerceptionComponent feeling;
+        feeling.sight_range = 0.0f;
+        feeling.hearing_range = 0.0f;
+        feeling.pain = true;
+        feeling.eye_height = 0.0f;
+        game->world().add<PerceptionComponent>(victim, feeling);
+
+        const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+        add_health(*game, player, 100.0f);
+        game->world().add<WeaponComponent>(player, WeaponComponent{straight_gun()});
+        add_follow_camera(*game, "Player", 4.0f, 0.0f);
+
+        // The third actor: what a shifted lookup would blame instead.
+        const ecs::Entity other = add_world_entity(*game, "Other", 6.0f, 1.5f, -10.0f);
+        add_health(*game, other, 100.0f);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/Ordering.nfscene");
+        NF_CHECK_EQ(rt.fire_weapon(), 1u);
+        for (int frame = 0; frame < 30; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK(rt.last_weapon_hit().hit);
+        NF_CHECK(rt.last_weapon_hit().name == "Victim");
+        NF_CHECK(rt.entity_aware_of(victim, player));
+        NF_CHECK(!rt.entity_aware_of(victim, other));
+        const ai::Perception* senses = rt.perception_of(victim);
+        NF_CHECK(senses != nullptr);
+        if (senses != nullptr) {
+            NF_CHECK_EQ(senses->perceived().size(), static_cast<size_t>(1));
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+// --- the bridge ---------------------------------------------------------------
+NF_TEST(an_agent_with_senses_only_engages_what_it_knows) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_bridge";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+
+        // --- with senses governing combat: the agent cannot shoot what it has
+        // --- not noticed yet.
+        {
+            Runtime rt(vfs, registry, manager, *device, nullptr);
+            auto game = std::make_unique<scene::Scene>("Governed");
+
+            const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+            add_health(*game, player, 100.0f);
+            add_follow_camera(*game, "Player", 4.0f, 0.0f);
+
+            const ecs::Entity bandit = add_world_entity(*game, "Bandit", 0.0f, 1.5f, -10.0f);
+            game->world().get<scene::Transform>(bandit)->rot_y = 180.0f; // facing +Z
+            game->world().add<WeaponComponent>(bandit, WeaponComponent{straight_gun()});
+            CombatAgentComponent agent;
+            agent.target = "Player";
+            agent.eye_height = 0.0f;
+            agent.target_height = 0.0f;
+            agent.config.reaction_seconds = 0.2f;
+            agent.config.aim_speed_deg_per_s = 720.0f;
+            agent.config.fire_cone_deg = 5.0f;
+            agent.config.max_range = 60.0f;
+            agent.config.burst_on_seconds = 1.0f;
+            agent.config.burst_off_seconds = 0.2f;
+            game->world().add<CombatAgentComponent>(bandit, agent);
+
+            PerceptionComponent eyes;
+            eyes.sight_range = 30.0f;
+            eyes.sight_half_fov_deg = 90.0f;
+            eyes.sight_gain = 4.0f;
+            eyes.hearing_range = 0.0f;
+            eyes.touch_range = 0.0f;
+            eyes.pain = false;
+            eyes.eye_height = 0.0f;
+            eyes.governs_combat = true;
+            game->world().add<PerceptionComponent>(bandit, eyes);
+
+            rt.adopt_scene(std::move(game), "content://Scenes/Governed.nfscene");
+
+            // Half a second: the guard has a clear line and a wide cone, but the
+            // meter needs time to fill, so nothing is fired yet.
+            for (int frame = 0; frame < 30; ++frame) {
+                rt.update(1.0f / 60.0f);
+            }
+            const HealthComponent* early = rt.health_of(player);
+            NF_CHECK(early != nullptr);
+            if (early != nullptr) {
+                NF_CHECK_NEAR(early->health, 100.0f, 1e-3f);
+            }
+
+            // Three more seconds: noticed, then aimed, then fired.
+            for (int frame = 0; frame < 180; ++frame) {
+                rt.update(1.0f / 60.0f);
+            }
+            NF_CHECK(rt.entity_aware_of(bandit, player));
+            const HealthComponent* late = rt.health_of(player);
+            NF_CHECK(late != nullptr);
+            if (late != nullptr) {
+                NF_CHECK(late->health < 100.0f);
+            }
+        }
+
+        // --- the compatibility half: `combat=false` keeps the pre-Phase-60 rule
+        // --- exactly, so the component can be added without changing a fight.
+        {
+            Runtime rt(vfs, registry, manager, *device, nullptr);
+            auto game = std::make_unique<scene::Scene>("Ungoverned");
+
+            const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+            add_health(*game, player, 100.0f);
+            add_follow_camera(*game, "Player", 4.0f, 0.0f);
+
+            const ecs::Entity bandit = add_world_entity(*game, "Bandit", 0.0f, 1.5f, -10.0f);
+            game->world().get<scene::Transform>(bandit)->rot_y = 180.0f;
+            game->world().add<WeaponComponent>(bandit, WeaponComponent{straight_gun()});
+            CombatAgentComponent agent;
+            agent.target = "Player";
+            agent.eye_height = 0.0f;
+            agent.target_height = 0.0f;
+            agent.config.reaction_seconds = 0.2f;
+            agent.config.aim_speed_deg_per_s = 720.0f;
+            agent.config.fire_cone_deg = 5.0f;
+            agent.config.max_range = 60.0f;
+            agent.config.burst_on_seconds = 1.0f;
+            agent.config.burst_off_seconds = 0.2f;
+            game->world().add<CombatAgentComponent>(bandit, agent);
+
+            PerceptionComponent eyes;
+            // Every sense off AND combat off: the sensor exists, does nothing,
+            // and must not gate the trigger.
+            eyes.sight_range = 0.0f;
+            eyes.hearing_range = 0.0f;
+            eyes.touch_range = 0.0f;
+            eyes.pain = false;
+            eyes.governs_combat = false;
+            game->world().add<PerceptionComponent>(bandit, eyes);
+
+            rt.adopt_scene(std::move(game), "content://Scenes/Ungoverned.nfscene");
+            for (int frame = 0; frame < 30; ++frame) {
+                rt.update(1.0f / 60.0f);
+            }
+            const HealthComponent* hurt = rt.health_of(player);
+            NF_CHECK(hurt != nullptr);
+            if (hurt != nullptr) {
+                NF_CHECK(hurt->health < 100.0f);
+            }
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(an_agent_lost_sight_tracks_the_memory_and_holds_fire) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_memory";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("LostAndFound");
+        const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+        add_health(*game, player, 100.0f);
+        add_follow_camera(*game, "Player", 4.0f, 0.0f);
+
+        const ecs::Entity bandit = add_world_entity(*game, "Bandit", 0.0f, 1.5f, -10.0f);
+        game->world().get<scene::Transform>(bandit)->rot_y = 180.0f;
+        game->world().add<WeaponComponent>(bandit, WeaponComponent{straight_gun()});
+        CombatAgentComponent agent;
+        agent.target = "Player";
+        agent.eye_height = 0.0f;
+        agent.target_height = 0.0f;
+        agent.config.reaction_seconds = 0.0f;
+        agent.config.aim_speed_deg_per_s = 1800.0f;
+        agent.config.fire_cone_deg = 10.0f;
+        agent.config.max_range = 60.0f;
+        agent.config.burst_on_seconds = 5.0f;
+        agent.config.burst_off_seconds = 0.0f;
+        game->world().add<CombatAgentComponent>(bandit, agent);
+
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 90.0f;
+        eyes.sight_gain = 8.0f;
+        eyes.sight_linger = 5.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        eyes.eye_height = 0.0f;
+        game->world().add<PerceptionComponent>(bandit, eyes);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/LostAndFound.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        const HealthComponent* hit = rt.health_of(player);
+        NF_CHECK(hit != nullptr);
+        if (hit != nullptr) {
+            NF_CHECK(hit->health < 100.0f); // it was fighting
+        }
+        const f32 before = hit != nullptr ? hit->health : 0.0f;
+
+        // Teleport the player far out of sight. The memory keeps where it was,
+        // and the agent must stop FIRING (a shot needs a sense) while it keeps
+        // knowing (the linger window is the search behaviour).
+        scene::Transform* player_transform =
+            rt.edit_scene()->world().get<scene::Transform>(player);
+        NF_CHECK(player_transform != nullptr);
+        if (player_transform != nullptr) {
+            player_transform->local_z = 500.0f;
+        }
+        for (int frame = 0; frame < 90; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        const HealthComponent* after = rt.health_of(player);
+        NF_CHECK(after != nullptr);
+        if (after != nullptr) {
+            NF_CHECK_NEAR(after->health, before, 1e-3f); // not a scratch more
+        }
+        NF_CHECK(!rt.entity_sensing(bandit, player));
+        // The remembered position is where the player WAS, not where it is.
+        Vec3 known{};
+        NF_CHECK(rt.entity_last_known(bandit, player, known));
+        NF_CHECK(std::fabs(known.z) < 15.0f);
+
+        // And a script can make it forget: the memory is not a permanent record.
+        NF_CHECK(rt.entity_forget(bandit, player));
+        NF_CHECK(!rt.entity_aware_of(bandit, player));
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+// --- the script half ----------------------------------------------------------
+
+NF_TEST(a_script_reads_its_own_senses) {
+    // The bridge a game actually touches: a guard's update(dt) asking its own
+    // memory. These four functions are the whole script-visible surface of the
+    // phase, and the observable is the guard's own height -- the only thing a
+    // test can read back out of a Lua script.
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_perception_script";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    // 3 = I can sense it now, 2 = I know where it was, 4 = I made myself forget.
+    const std::string script =
+        "local frames = 0\n"
+        "local forgot = false\n"
+        "function update(dt)\n"
+        "  frames = frames + 1\n"
+        "  local id, gen = nf.self()\n"
+        "  local x, y, z = nf.entity_pos(id, gen)\n"
+        "  local pid, pgen = nf.find_entity('Player')\n"
+        "  if not pid then return end\n"
+        "  if forgot then\n"
+        "    nf.set_entity_pos(id, gen, x, 4.0, z)\n"
+        "  elseif nf.sensing(pid, pgen) then\n"
+        "    nf.set_entity_pos(id, gen, x, 3.0, z)\n"
+        "  elseif nf.aware(pid, pgen) then\n"
+        "    if frames > 90 then\n"
+        "      forgot = nf.forget(pid, pgen)\n"
+        "    end\n"
+        "    if forgot then\n"
+        "      nf.set_entity_pos(id, gen, x, 4.0, z)\n"
+        "    else\n"
+        "      local kx, ky, kz = nf.last_known(pid, pgen)\n"
+        "      if kx then nf.set_entity_pos(id, gen, kx, 2.0, kz) end\n"
+        "    end\n"
+        "  else\n"
+        "    nf.set_entity_pos(id, gen, x, 1.0, z)\n"
+        "  end\n"
+        "end\n";
+    NF_CHECK(vfs.write_text("content://Scripts/watch.lua", script).ok);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+        NoInput no_input;
+        rt.set_input_source(&no_input);
+
+        auto game = std::make_unique<scene::Scene>("Watchtower");
+        const ecs::Entity player = add_world_entity(*game, "Player", 0.0f, 1.5f, 0.0f);
+        add_health(*game, player, 100.0f);
+        add_follow_camera(*game, "Player", 0.0f, 0.0f);
+
+        const ecs::Entity guard = add_world_entity(*game, "Guard", 0.0f, 1.5f, -10.0f);
+        add_health(*game, guard, 100.0f);
+        game->world().get<scene::Transform>(guard)->rot_y = 180.0f; // facing +Z
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 90.0f;
+        eyes.sight_gain = 8.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        eyes.eye_height = 0.0f;
+        game->world().add<PerceptionComponent>(guard, eyes);
+        scripting::ScriptComponent script_component;
+        script_component.path = "content://Scripts/watch.lua";
+        game->world().add<scripting::ScriptComponent>(guard, script_component);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/Watchtower.nfscene");
+
+        const auto guard_y = [&]() -> f32 {
+            const scene::Scene* live = rt.scene();
+            if (live == nullptr) {
+                return -1.0f;
+            }
+            const auto* t = live->world().get<scene::Transform>(guard);
+            return t != nullptr ? t->local_y : -1.0f;
+        };
+
+        for (int frame = 0; frame < 30; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        NF_CHECK(rt.entity_sensing(guard, player));
+        NF_CHECK_NEAR(guard_y(), 3.0f, 1e-3f); // nf.sensing
+
+        // Out of sight: aware, tracking where it was.
+        scene::Transform* player_transform =
+            rt.edit_scene()->world().get<scene::Transform>(player);
+        NF_CHECK(player_transform != nullptr);
+        if (player_transform != nullptr) {
+            player_transform->local_z = 500.0f;
+        }
+        for (int frame = 0; frame < 15; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        NF_CHECK(!rt.entity_sensing(guard, player));
+        NF_CHECK(rt.entity_aware_of(guard, player));
+        NF_CHECK_NEAR(guard_y(), 2.0f, 1e-3f); // nf.aware + nf.last_known
+
+        // Past its own frame 90 the script makes itself forget, and says so.
+        for (int frame = 0; frame < 90; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+        NF_CHECK(!rt.entity_aware_of(guard, player));
+        NF_CHECK_NEAR(guard_y(), 4.0f, 1e-3f); // nf.forget returned true
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}

@@ -182,6 +182,17 @@ struct ScriptInput {
     std::function<bool(u32, u32, u32&, u32&)> killer;
     std::function<void(u32, u32, f32&, f32&, u32&, f32&)> damage_taken;
     std::function<f32(u32, u32)> suppression;
+
+    /// Perception (Phase 60). `sensor` is the entity running the script, so a
+    /// guard's own `update()` asks "do I know where the player is" rather than a
+    /// game keeping a parallel board. All four are no-ops when either entity has
+    /// no `Perception:` line, which is what keeps a script written before this
+    /// existing unchanged.
+    std::function<bool(u32, u32, u32, u32)> aware_of;
+    std::function<bool(u32, u32, u32, u32)> sensing_of;
+    /// Last known position of (target) as remembered by (sensor).
+    std::function<bool(u32, u32, u32, u32, f32&, f32&, f32&)> last_known_of;
+    std::function<bool(u32, u32, u32, u32)> forget;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

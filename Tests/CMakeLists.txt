@@ -272,6 +272,12 @@ add_executable(RuntimeTests
     # arithmetic, the `Feedback:` scene line, and one real fired shot through
     # the Runtime into RenderWorld objects, a decal and the mixer.
     RuntimeTests/test_combat_feedback.cpp
+    # Phase 60: the AI core's senses bound to entities and fed by the frame.
+    # The `Perception:` line, the validator's cross-field rule, and the frame
+    # itself: hearing a gunshot, sight needing the cone and a clear line, pain
+    # waking only the victim, a sensor never detecting itself, and an agent that
+    # only engages what it has actually noticed.
+    RuntimeTests/test_perception_runtime.cpp
 )
 target_include_directories(RuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFEcs NFRendering NFRHI NFPhysics NFAnimation NFAudio NFScripting NFVfx NFAI NFNetworking)

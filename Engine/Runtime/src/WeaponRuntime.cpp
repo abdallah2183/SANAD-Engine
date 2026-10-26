@@ -922,6 +922,18 @@ void Runtime::step_combat_ai(f32 dt) {
         // a linear scan, not a scene walk per enemy.
         collect_hitscan_targets(world, e);
 
+        // Phase 60: a `Perception:` line on the agent makes its OWN senses the
+        // gate on engagement. The pre-Phase-60 rule — an instantaneous ray finds
+        // the target, so the agent fires — is kept exactly for an agent with no
+        // perception component or with `combat=false`, which is why adding the
+        // component is what changes the behaviour and nothing else does.
+        const PerceptionComponent* perception_component = world.get<PerceptionComponent>(e);
+        const bool governed_by_perception =
+            perception_component != nullptr && perception_component->enabled &&
+            perception_component->governs_combat;
+        const ai::Perception* agent_perception =
+            governed_by_perception ? perception_of(e) : nullptr;
+
         // A target is engageable when it is alive, inside range, allowed by the
         // social rules and actually visible. `auto_mode` is the difference
         // between "the name the author wrote" (neutral entities allowed) and
@@ -949,6 +961,20 @@ void Runtime::step_combat_ai(f32 dt) {
             const f32 distance = delta.length();
             if (!(distance > 1e-4f) || distance > agent->config.max_range) {
                 return false;
+            }
+            // Perception (Phase 60). What makes a target engageable is what the
+            // agent has ACCUMULATED: half a second inside the cone, unblocked,
+            // and it is known. Id 0 means the candidate is not part of the cast
+            // at all, which no sense can ever report.
+            if (governed_by_perception) {
+                const u32 target_id = perception_local_target_id(e, candidate);
+                if (target_id == 0u || agent_perception == nullptr ||
+                    !agent_perception->is_aware_of(target_id)) {
+                    return false;
+                }
+                out_aim = aim;
+                out_distance = distance;
+                return true;
             }
             // Visibility is a ray from the eye to the aim point: the first
             // thing it hits must be the target. A ray that hits nothing means
@@ -1041,6 +1067,21 @@ void Runtime::step_combat_ai(f32 dt) {
             // previous aim point; the first frame after acquiring a target has
             // no history, so it aims at the target and starts learning.
             Vec3 aim = target_aim;
+            bool visible = true;
+            if (agent_perception != nullptr) {
+                // Aware but no longer sensing: the agent turns to where the
+                // target last WAS and holds fire until a sense reports it again.
+                // The memory stores the body's origin, so the same aim height a
+                // direct shot uses is added back.
+                const u32 memory_id = perception_local_target_id(e, target);
+                const ai::PerceivedTarget* memory =
+                    memory_id != 0u ? agent_perception->find(memory_id) : nullptr;
+                if (memory != nullptr && !memory->sensed) {
+                    aim = memory->last_known_position +
+                          Vec3{0.0f, agent->target_height, 0.0f};
+                    visible = false;
+                }
+            }
             if (agent->has_target_history && dt > 0.0f) {
                 const Vec3 raw_velocity = (target_aim - agent->last_target_position) / dt;
                 const f32 speed_of_target = raw_velocity.length();
@@ -1065,7 +1106,7 @@ void Runtime::step_combat_ai(f32 dt) {
 
             in.has_target = true;
             in.target = aim;
-            in.visible = true;
+            in.visible = visible;
         } else {
             agent->has_target_history = false;
             agent->target_velocity = Vec3{0.0f, 0.0f, 0.0f};

@@ -230,6 +230,52 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         check(static_cast<f32>(fb->max_lights), 1.0f, 4096.0f, "max_lights");
     }
 
+    // --- perception (Phase 60) -------------------------------------------
+    // The loader refuses a bad line, so this is for the other two paths in (a
+    // component built in C++, an inspector field typed past its slider) and for
+    // the CROSS-FIELD mistake a key-by-key check cannot see: a brain that
+    // governs combat while every sense is switched off can never fire, and the
+    // only symptom would be an enemy that stands still.
+    for (const ecs::Entity e : entities) {
+        const auto* pc = world.get<PerceptionComponent>(e);
+        if (pc == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        auto check = [&report, &label](f32 value, f32 lo, f32 hi, const char* name) {
+            if (!sane(value, lo, hi)) {
+                report.add(ValidationSeverity::Warning, label,
+                           std::string(name) + " " + std::to_string(value) + " is outside [" +
+                               std::to_string(lo) + ", " + std::to_string(hi) +
+                               "]; perception will clamp it");
+            }
+        };
+        check(pc->sight_range, 0.0f, 10000.0f, "sight");
+        check(pc->sight_half_fov_deg, 0.0f, 180.0f, "fov");
+        check(pc->sight_gain, 0.0f, 1000.0f, "gain");
+        check(pc->sight_loss, 0.0f, 1000.0f, "loss");
+        check(pc->sight_linger, 0.0f, 3600.0f, "linger");
+        check(pc->hearing_range, 0.0f, 10000.0f, "hearing");
+        check(pc->touch_range, 0.0f, 1000.0f, "touch");
+        check(pc->noise, 0.0f, 1.0f, "noise");
+        check(pc->visibility, 0.0f, 1.0f, "visible");
+        check(pc->radius, 0.0f, 100.0f, "radius");
+        check(pc->eye_height, 0.0f, 100.0f, "eye");
+
+        const bool governs = pc->enabled && pc->governs_combat &&
+                             world.get<CombatAgentComponent>(e) != nullptr;
+        const bool senses_anything = pc->sight_range > 0.0f || pc->hearing_range > 0.0f ||
+                                     pc->touch_range > 0.0f || pc->pain;
+        if (governs && !senses_anything) {
+            // An error rather than a warning: the agent is wired to senses that
+            // cannot report anything, so it will never fire. That is a level
+            // that does not work, not one that looks a little off.
+            report.add(ValidationSeverity::Error, label,
+                       "CombatAgent with combat=true and every sense disabled: this agent "
+                       "can never acquire a target");
+        }
+    }
+
     // --- combat (Phase 44) ---------------------------------------------
     //
     // A `Weapon:` line the loader refused never reaches here, so these rules

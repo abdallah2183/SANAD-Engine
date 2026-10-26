@@ -557,6 +557,11 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     // Combat feedback: the first enabled FeedbackComponent owns the level's
     // tuning, and a scene without one draws and mixes nothing new.
     bind_scene_feedback();
+    // Perception (Phase 60): every entity that authored a `Perception:` line
+    // gets a live sensor, and the previous scene's memories — of actors that no
+    // longer exist — are dropped with it, like every other per-scene artefact
+    // above.
+    bind_scene_perception();
     // AI population is game-registered per scene; a previous scene's crowd
     // must not govern the next one.
     if (m_ai_world) {
@@ -757,6 +762,13 @@ void Runtime::update(float dt) {
     // is stepped exactly once per frame.
     // No-op unless an entity carries a WeaponComponent and an active camera
     // follows it.
+    // Perception runs immediately before the decisions that consume it, and
+    // after everything that moved the cast this frame (scripts, world AI,
+    // navigation, characters) — so a guard sees this frame's positions, not the
+    // previous frame's. It also consumes the events `begin_frame` just published,
+    // the same completed frame the feedback director reads, so a shot is heard
+    // exactly once and by the same frame that drew its flash.
+    step_perception(dt);
     step_combat_ai(dt);
     step_weapons(dt);
     // Rounds in flight advance immediately after the trigger that spawned
@@ -1600,6 +1612,33 @@ u32 Runtime::step_script(float dt) {
         };
         input.suppression = [self](u32 id, u32 gen) {
             return self->suppression_of(ecs::Entity{id, gen});
+        };
+        // Perception (Phase 60). The script's own entity is the sensor, so a
+        // guard's update() reads its own memory rather than a parallel board the
+        // game has to keep in sync with the frame.
+        input.aware_of = [self](u32 sensor_id, u32 sensor_gen, u32 target_id, u32 target_gen) {
+            return self->entity_aware_of(ecs::Entity{sensor_id, sensor_gen},
+                                         ecs::Entity{target_id, target_gen});
+        };
+        input.sensing_of = [self](u32 sensor_id, u32 sensor_gen, u32 target_id, u32 target_gen) {
+            return self->entity_sensing(ecs::Entity{sensor_id, sensor_gen},
+                                        ecs::Entity{target_id, target_gen});
+        };
+        input.last_known_of = [self](u32 sensor_id, u32 sensor_gen, u32 target_id, u32 target_gen,
+                                     f32& x, f32& y, f32& z) {
+            Vec3 position{0.0f, 0.0f, 0.0f};
+            if (!self->entity_last_known(ecs::Entity{sensor_id, sensor_gen},
+                                         ecs::Entity{target_id, target_gen}, position)) {
+                return false;
+            }
+            x = position.x;
+            y = position.y;
+            z = position.z;
+            return true;
+        };
+        input.forget = [self](u32 sensor_id, u32 sensor_gen, u32 target_id, u32 target_gen) {
+            return self->entity_forget(ecs::Entity{sensor_id, sensor_gen},
+                                       ecs::Entity{target_id, target_gen});
         };
     }
     m_scripts->set_input_source(input);
