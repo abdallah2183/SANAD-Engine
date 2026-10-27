@@ -34,6 +34,7 @@
 #include <NF/Runtime/Runtime.hpp>
 
 #include <NF/Core/Logger.hpp>
+#include <NF/Runtime/Factions.hpp>
 #include <NF/Scene/Transform.hpp>
 
 #include <algorithm>
@@ -176,6 +177,166 @@ void Runtime::bind_scene_perception() {
     if (!m_perceptions.empty()) {
         NF_LOG_INFO(LogCategory::Core, "Runtime: {} perception sensor(s) bound from the scene",
                     m_perceptions.size());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Squad radio (Phase 68)
+// ---------------------------------------------------------------------------
+
+void Runtime::exchange_squad_radio() {
+    if (m_perceptions.size() < 2 || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+
+    // The inverse of `perception_local_target_id`: a sensor's memory is keyed on
+    // its OWN cast id, and the radio has to translate that back to the shared id
+    // before another sensor can translate it into ITS own id.
+    const auto local_to_shared = [this](ecs::Entity sensor, u32 local) -> u32 {
+        if (local == 0u) {
+            return 0u;
+        }
+        for (usize i = 0; i < m_perception_target_entities.size(); ++i) {
+            if (m_perception_target_entities[i] == sensor) {
+                const u32 sensor_shared = static_cast<u32>(i) + 1u;
+                const u32 shared = local >= sensor_shared ? local + 1u : local;
+                return shared <= m_perception_target_entities.size() ? shared : 0u;
+            }
+        }
+        // A sensor outside the shared cast (authored without a Transform when
+        // the cast was built) has no shift.
+        return local <= m_perception_target_entities.size() ? local : 0u;
+    };
+
+    // One contact, snapshotted from the reporter before anything is delivered.
+    // The token and range are copied by value: delivery writes memories, never
+    // components, and a snapshot is what makes same-frame relays impossible.
+    struct Report {
+        ecs::Entity reporter{};
+        std::string token;
+        f32 radio = 0.0f;
+        Vec3 origin{};
+        u32 target_shared_id = 0;
+        Vec3 position{};
+    };
+    std::vector<Report> reports;
+    reports.reserve(m_perceptions.size());
+
+    for (const PerceptionBinding& binding : m_perceptions) {
+        const auto* squad = world.get<SquadComponent>(binding.entity);
+        if (squad == nullptr || !squad->enabled || squad->token.empty() ||
+            !(squad->radio > 0.0f) || !std::isfinite(squad->radio)) {
+            continue;
+        }
+        const auto* transform = world.get<scene::Transform>(binding.entity);
+        if (transform == nullptr) {
+            continue;
+        }
+        const FactionComponent* own = world.get<FactionComponent>(binding.entity);
+        const bool reporter_has_team = own != nullptr && own->enabled && !own->team.empty();
+
+        for (const ai::PerceivedTarget& memory : binding.perception.perceived()) {
+            // Only a contact this member is reading PERSONALLY this tick. A
+            // radio-born memory is aware and never sensed, so it can never be
+            // relayed; `personally_perceived` is the history half of the rule.
+            if (!memory.sensed || !memory.personally_perceived) {
+                continue;
+            }
+            const u32 shared = local_to_shared(binding.entity, memory.target_id);
+            if (shared == 0u) {
+                continue;
+            }
+            const ecs::Entity target = m_perception_target_entities[shared - 1u];
+            if (target == binding.entity || !world.is_alive(target)) {
+                continue;
+            }
+            // A corpse is not a contact, the same rule the nav gate uses. An
+            // entity with no Health is still alive (a deciding NPC, a turret).
+            if (const auto* health = world.get<HealthComponent>(target);
+                health != nullptr && !health_alive(*health)) {
+                continue;
+            }
+            // A same-token squadmate is never a contact, even on a scene that
+            // forgot to author factions. Reporting one would turn the squad
+            // into a circle of ghosts chasing each other.
+            if (const auto* target_squad = world.get<SquadComponent>(target);
+                target_squad != nullptr && target_squad->enabled &&
+                target_squad->token == squad->token) {
+                continue;
+            }
+            // Faction is the same social filter the hold uses: a member on a
+            // real team reports only enemies; one with no team cannot tell
+            // friend from foe and reports anyone it notices.
+            if (reporter_has_team) {
+                const auto* other = world.get<FactionComponent>(target);
+                if (other == nullptr || !other->enabled || other->team.empty() ||
+                    team_relation(own->team, other->team) != TeamRelation::Hostile) {
+                    continue;
+                }
+            }
+            Report report;
+            report.reporter = binding.entity;
+            report.token = squad->token;
+            report.radio = squad->radio;
+            report.origin = Vec3{transform->world_x, transform->world_y, transform->world_z};
+            report.target_shared_id = shared;
+            report.position = memory.last_known_position;
+            reports.push_back(std::move(report));
+        }
+    }
+    if (reports.empty()) {
+        return;
+    }
+
+    // Deliver the snapshot. Receivers are visited in the same bind order as
+    // reporters, so two runs with the same scene and the same dt produce the
+    // same memories.
+    for (const Report& report : reports) {
+        const ecs::Entity target = m_perception_target_entities[report.target_shared_id - 1u];
+        const auto* target_faction = world.get<FactionComponent>(target);
+        for (PerceptionBinding& receiver : m_perceptions) {
+            if (receiver.entity == report.reporter) {
+                continue;
+            }
+            const auto* squad = world.get<SquadComponent>(receiver.entity);
+            if (squad == nullptr || !squad->enabled || !(squad->radio > 0.0f) ||
+                !std::isfinite(squad->radio) || squad->token != report.token) {
+                continue;
+            }
+            const auto* transform = world.get<scene::Transform>(receiver.entity);
+            if (transform == nullptr) {
+                continue;
+            }
+            const Vec3 origin{transform->world_x, transform->world_y, transform->world_z};
+            const Vec3 delta = origin - report.origin;
+            // A link needs BOTH radios to reach: a scout with a short antenna
+            // cannot shout past it even when the listener could hear farther.
+            const f32 reach = std::min(report.radio, squad->radio);
+            if (delta.length_sq() > reach * reach) {
+                continue;
+            }
+            if (receiver.entity == target) {
+                continue;
+            }
+            const FactionComponent* own = world.get<FactionComponent>(receiver.entity);
+            if (own != nullptr && own->enabled && !own->team.empty()) {
+                if (target_faction == nullptr || !target_faction->enabled ||
+                    target_faction->team.empty() ||
+                    team_relation(own->team, target_faction->team) != TeamRelation::Hostile) {
+                    continue;
+                }
+            }
+            const u32 local = perception_local_target_id(receiver.entity, target);
+            if (local == 0u) {
+                continue;
+            }
+            // The receiver keeps a rumour for its own search window. A sensor
+            // with no linger has no memory to give the report, by design.
+            const f32 linger =
+                receiver.perception.sense(ai::StimulusKind::Sight).linger;
+            receiver.perception.receive_report(local, report.position, linger);
+        }
     }
 }
 
@@ -326,6 +487,15 @@ void Runtime::step_perception(f32 dt) {
         m_perception_scene.add_target(target);
         m_perception_target_entities.push_back(e);
     }
+
+    // --- 1b. the squad radios --------------------------------------------------
+    // Reports are read from the memories the PREVIOUS step left behind and
+    // delivered as awareness only, before any sensor integrates. That ordering
+    // is the anti-relay rule: every receiver sees the same snapshot, so a
+    // report cannot spread through a squad within one frame. Navigation also
+    // runs before this step, so a radio hold or investigation has the same
+    // documented one-frame latency as a sighting.
+    exchange_squad_radio();
 
     // --- 2. the noises still audible ----------------------------------------
     // Aged first, so a noise emitted below gets its whole lifetime rather than

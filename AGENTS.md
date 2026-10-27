@@ -264,6 +264,22 @@ Games/MyGame/
   and the validator warns about `squad=` without `investigate=`. Navigation runs
   before perception, so recruitment has the same documented one-frame latency as
   a hold.
+- A squad can also share its contacts over a radio (Phase 68). Add one more line,
+  `Squad: token=<token> radio=<metres>`, to any entity with a `Perception:`.
+  Every frame each enabled member reports the live targets its OWN senses are
+  reading this frame, with the last position it knows; a same-token mate inside
+  BOTH radios' reach (`distance <= min(reporter, receiver)`) learns the contact
+  and can hold, turn or investigate it. A report is knowledge, not a sense: it
+  never fills detection, never counts as personal perception, and is never
+  relayed onward, so a chain of radios cannot amplify one glimpse. A
+  radio-born search is silent on the Phase 67 board, and a report never restarts
+  or replaces a personal investigation already running. The token is required,
+  one case-sensitive word of at most 64 characters; empty is inert and writes no
+  line, `radio` defaults to 30 and is `[0, 10000]`, `hold=sensing` ignores
+  reports, and the exchange has the same one-frame latency as a hold because
+  navigation runs first. The validator warns about a bad token, a range outside
+  the bounds, `radio=0`, and a radio with no enabled `Perception:`; the editor
+  has a Squad radio section.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

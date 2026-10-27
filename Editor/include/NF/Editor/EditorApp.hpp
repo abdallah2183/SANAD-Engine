@@ -360,6 +360,14 @@ public:
     bool set_nav_route(ecs::Entity e, const runtime::NavRouteComponent& route,
                        std::string& out_err);
     bool detach_nav_route(ecs::Entity e, std::string& out_err);
+    /// Squad radio (Phase 68): the optional `Squad:` line that shares personally
+    /// sensed contacts with same-token members. Attaching authors a default
+    /// token and range so the component round-trips instead of saving as an
+    /// inert, empty line. Applying validates the token and range against the
+    /// loader's own rules.
+    bool attach_squad(ecs::Entity e, std::string& out_err);
+    bool set_squad(ecs::Entity e, const runtime::SquadComponent& squad, std::string& out_err);
+    bool detach_squad(ecs::Entity e, std::string& out_err);
     // --- Vehicles (Step 11) ----------------------------------------------------
     // Same direct-edit shape as navigation: validated at the door, add-or-replace,
     // and a synchronous vehicle re-bind so the authored car simulates without a

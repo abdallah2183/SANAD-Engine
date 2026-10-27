@@ -2241,3 +2241,273 @@ NF_TEST(squad_mates_answer_a_shared_search_and_strangers_do_not) {
     NF_CHECK(!investigating);
     NF_CHECK(z_of(originator) > 0.5f);
 }
+
+// Phase 68: a radio report is knowledge, not a sense. These cases pin the two
+// navigation consequences: a `hold=sensing` gate ignores a rumour (the walker
+// never reads anything itself), and a search born from a rumour runs silently
+// (it is not a Phase 67 call, so a second mate never joins it).
+
+NF_TEST(squad_radio_report_does_not_satisfy_a_sensing_hold) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto s = std::make_unique<Scene>("RadioSensingHold");
+    add_nav_scene(*s);
+    ecs::Entity walker = find_walker(*s);
+    NF_CHECK(walker.valid());
+    if (auto* t = s->world().get<Transform>(walker); t != nullptr) {
+        t->local_x = 6.0f;
+        t->local_z = 1.0f;
+    }
+    if (auto* agent = s->world().get<NavAgentComponent>(walker); agent != nullptr) {
+        agent->speed = 8.0f;
+    }
+    FactionComponent blue;
+    blue.team = "Blue";
+    s->world().add<FactionComponent>(walker, blue);
+    PerceptionComponent blind;
+    blind.sight_range = 0.0f;
+    blind.hearing_range = 0.0f;
+    blind.touch_range = 0.0f;
+    blind.pain = false;
+    blind.sight_linger = 1.0f;
+    s->world().add<PerceptionComponent>(walker, blind);
+    SquadComponent walker_radio;
+    walker_radio.token = "guards";
+    walker_radio.radio = 8.0f;
+    s->world().add<SquadComponent>(walker, walker_radio);
+
+    NavRouteComponent route;
+    route.loop = true;
+    route.hold = NavRouteHoldPolicy::Sensing;
+    route.investigate = 2.0f;
+    route.squad = "guards";
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 10.0f, -1.0f});
+    s->world().add<NavRouteComponent>(walker, route);
+
+    // The only radio with working eyes: it sees the contact and reports it. The
+    // walker receives the report, but hold=sensing asks its OWN senses, and it
+    // has none.
+    ecs::Entity observer = s->world().create_entity();
+    Transform ot{};
+    ot.local_x = 1.0f;
+    ot.local_z = 1.0f;
+    ot.rot_y = 180.0f; // the default forward is -Z; the contact is at +Z
+    s->world().add<Transform>(observer, ot);
+    s->world().add<FactionComponent>(observer, blue);
+    PerceptionComponent eyes;
+    eyes.sight_range = 30.0f;
+    eyes.sight_half_fov_deg = 60.0f;
+    eyes.hearing_range = 0.0f;
+    eyes.touch_range = 0.0f;
+    eyes.pain = false;
+    s->world().add<PerceptionComponent>(observer, eyes);
+    SquadComponent observer_radio;
+    observer_radio.token = "guards";
+    observer_radio.radio = 8.0f;
+    s->world().add<SquadComponent>(observer, observer_radio);
+
+    ecs::Entity target = s->world().create_entity();
+    Transform tt{};
+    tt.local_x = 1.0f;
+    tt.local_z = 6.0f;
+    s->world().add<Transform>(target, tt);
+    FactionComponent red;
+    red.team = "Red";
+    s->world().add<FactionComponent>(target, red);
+    s->world().add<HealthComponent>(target, HealthComponent{});
+
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/RadioSensingHold.nfscene");
+
+    bool ever_held = false;
+    bool ever_investigating = false;
+    for (int frame = 0; frame < 180; ++frame) {
+        env.runtime->update(kDt);
+        u32 index = 0;
+        u32 count = 0;
+        f32 wait = 0.0f;
+        bool finished = false;
+        bool held = false;
+        bool investigating = false;
+        if (!env.runtime->nav_route_state(walker, index, count, wait, finished, &held,
+                                          &investigating)) {
+            break;
+        }
+        ever_held = ever_held || held;
+        ever_investigating = ever_investigating || investigating;
+    }
+
+    NF_CHECK(env.runtime->entity_aware_of(walker, target));
+    NF_CHECK(!env.runtime->entity_sensing(walker, target));
+    NF_CHECK(!ever_held);
+    NF_CHECK(!ever_investigating);
+    const auto* t = env.runtime->edit_scene()->world().get<Transform>(walker);
+    NF_CHECK(t != nullptr);
+    if (t != nullptr) {
+        NF_CHECK(t->local_z > 1.5f); // it kept patrolling instead of freezing
+    }
+}
+
+NF_TEST(squad_radio_born_search_is_silent) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto s = std::make_unique<Scene>("RadioSearch");
+    add_nav_scene(*s);
+    ecs::Entity searcher = find_walker(*s);
+    NF_CHECK(searcher.valid());
+
+    const auto make_patrol = [&](ecs::Entity e, f32 x, f32 z) {
+        if (auto* t = s->world().get<Transform>(e); t != nullptr) {
+            t->local_x = x;
+            t->local_z = z;
+            t->local_y = 0.0f;
+        }
+        if (auto* agent = s->world().get<NavAgentComponent>(e); agent != nullptr) {
+            agent->speed = 8.0f;
+        }
+        FactionComponent faction;
+        faction.team = "Blue";
+        s->world().add<FactionComponent>(e, faction);
+        PerceptionComponent blind;
+        blind.sight_range = 0.0f;
+        blind.hearing_range = 0.0f;
+        blind.touch_range = 0.0f;
+        blind.pain = false;
+        blind.sight_linger = 1.0f; // the rumour's own search window
+        s->world().add<PerceptionComponent>(e, blind);
+        SquadComponent radio;
+        radio.token = "guards";
+        radio.radio = 8.0f;
+        s->world().add<SquadComponent>(e, radio);
+        NavRouteComponent route;
+        route.loop = true;
+        route.hold = NavRouteHoldPolicy::Aware;
+        route.investigate = 0.5f;
+        route.squad = "guards";
+        route.points.push_back(NavPointSpec{x, 0.0f, 2.0f, -1.0f});
+        route.points.push_back(NavPointSpec{x, 0.0f, 10.0f, -1.0f});
+        s->world().add<NavRouteComponent>(e, route);
+    };
+    make_patrol(searcher, 6.0f, 1.0f);
+
+    // The second mate is inside the searcher's radio reach but outside the
+    // observer's, so only a relay could ever reach it.
+    ecs::Entity mate = s->world().create_entity();
+    s->world().add<Transform>(mate, Transform{});
+    s->world().add<NavAgentComponent>(mate, NavAgentComponent{});
+    make_patrol(mate, 11.0f, 1.0f);
+
+    // The scout: eyes and a radio, no route. It never opens a search of its own,
+    // so every search in this scene is either radio-born or absent.
+    ecs::Entity observer = s->world().create_entity();
+    Transform ot{};
+    ot.local_x = 1.0f;
+    ot.local_z = 1.0f;
+    ot.rot_y = 180.0f; // the default forward is -Z; the contact is at +Z
+    s->world().add<Transform>(observer, ot);
+    FactionComponent blue;
+    blue.team = "Blue";
+    s->world().add<FactionComponent>(observer, blue);
+    PerceptionComponent eyes;
+    eyes.sight_range = 30.0f;
+    eyes.sight_half_fov_deg = 60.0f;
+    eyes.hearing_range = 0.0f;
+    eyes.touch_range = 0.0f;
+    eyes.pain = false;
+    s->world().add<PerceptionComponent>(observer, eyes);
+    SquadComponent observer_radio;
+    observer_radio.token = "guards";
+    observer_radio.radio = 8.0f;
+    s->world().add<SquadComponent>(observer, observer_radio);
+
+    ecs::Entity target = s->world().create_entity();
+    Transform tt{};
+    tt.local_x = 1.0f;
+    tt.local_z = 6.0f;
+    s->world().add<Transform>(target, tt);
+    FactionComponent red;
+    red.team = "Red";
+    s->world().add<FactionComponent>(target, red);
+    s->world().add<HealthComponent>(target, HealthComponent{});
+
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/RadioSearch.nfscene");
+
+    const auto query = [&](ecs::Entity e, bool& held, bool& investigating) {
+        u32 index = 0;
+        u32 count = 0;
+        f32 wait = 0.0f;
+        bool finished = false;
+        return env.runtime->nav_route_state(e, index, count, wait, finished, &held,
+                                            &investigating);
+    };
+
+    // The scout sees; the searcher holds on the rumour. The second mate is out
+    // of the scout's reach and stays on its route.
+    bool held = false;
+    bool investigating = false;
+    bool mate_held = false;
+    bool mate_investigating = false;
+    for (int frame = 0; frame < 30; ++frame) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(query(searcher, held, investigating));
+    NF_CHECK(held);
+    NF_CHECK(!investigating);
+    NF_CHECK(query(mate, mate_held, mate_investigating));
+    NF_CHECK(!mate_held);
+
+    // The contact vanishes. The searcher's own window (1 s) runs out, then it
+    // leaves the route for the position the RADIO gave it.
+    env.runtime->edit_scene()->world().destroy_entity(target);
+    int start_frames = 0;
+    while (!investigating && start_frames < 240) {
+        env.runtime->update(kDt);
+        ++start_frames;
+        if (!query(searcher, held, investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(investigating);
+    NF_CHECK(start_frames < 240);
+
+    // Watch the whole search. The second mate must never join: the radio-born
+    // search has no Phase 67 id, so there is no call on the board.
+    int frames = 0;
+    f32 searcher_min_x = std::numeric_limits<float>::max();
+    f32 searcher_max_z = -std::numeric_limits<float>::max();
+    f32 mate_min_x = std::numeric_limits<float>::max();
+    bool mate_ever_held = false;
+    bool mate_ever_investigated = false;
+    while (investigating && frames < 400) {
+        env.runtime->update(kDt);
+        ++frames;
+        if (!query(searcher, held, investigating)) {
+            break;
+        }
+        query(mate, mate_held, mate_investigating);
+        mate_ever_held = mate_ever_held || mate_held;
+        mate_ever_investigated = mate_ever_investigated || mate_investigating;
+        if (const auto* t = env.runtime->edit_scene()->world().get<Transform>(searcher);
+            t != nullptr) {
+            searcher_min_x = std::min(searcher_min_x, t->local_x);
+            searcher_max_z = std::max(searcher_max_z, t->local_z);
+        }
+        if (const auto* t = env.runtime->edit_scene()->world().get<Transform>(mate);
+            t != nullptr) {
+            mate_min_x = std::min(mate_min_x, t->local_x);
+        }
+    }
+    NF_CHECK(!investigating);
+    NF_CHECK(frames < 400);
+    NF_CHECK(searcher_min_x < 3.0f);  // it really walked to the reported x
+    NF_CHECK(searcher_max_z > 4.0f);  // and to the reported z
+    NF_CHECK(!mate_ever_held);
+    NF_CHECK(!mate_ever_investigated);
+    NF_CHECK(mate_min_x > 9.0f); // the second mate never left its own x
+}

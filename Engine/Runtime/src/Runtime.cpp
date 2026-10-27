@@ -2313,7 +2313,8 @@ bool nav_route_hold_from_name(std::string_view name, NavRouteHoldPolicy& out) no
 
 bool Runtime::nav_route_threat_perceived(ecs::Entity walker,
                                          NavRouteHoldPolicy policy,
-                                         Vec3* out_last_known) const {
+                                         Vec3* out_last_known,
+                                         bool* out_personally_perceived) const {
     if (policy == NavRouteHoldPolicy::Off || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return false;
     }
@@ -2368,6 +2369,9 @@ bool Runtime::nav_route_threat_perceived(ecs::Entity walker,
     }
     if (out_last_known != nullptr) {
         *out_last_known = best->last_known_position;
+    }
+    if (out_personally_perceived != nullptr) {
+        *out_personally_perceived = best->personally_perceived;
     }
     return true;
 }
@@ -2435,6 +2439,7 @@ u32 Runtime::step_navmesh(float dt) {
             st.route_investigating = false;
             st.route_investigate_pending = false;
             st.route_investigate_pending_shared = false;
+            st.route_investigate_pending_personal = false;
             st.route_investigate_advance_after = false;
             st.route_investigate_arrived = false;
             st.route_investigate_remaining = 0.0f;
@@ -2535,14 +2540,31 @@ u32 Runtime::step_navmesh(float dt) {
                 // was last known; the point is captured while the gate is
                 // still held, before the memory can expire.
                 Vec3 last_known{};
+                bool personally_perceived = false;
                 const bool noticed = nav_route_threat_perceived(
-                    e, route->hold, route->investigate > 0.0f ? &last_known : nullptr);
+                    e, route->hold, route->investigate > 0.0f ? &last_known : nullptr,
+                    route->investigate > 0.0f ? &personally_perceived : nullptr);
                 if (noticed) {
                     st.route_hold_remaining = std::max(route->resume, 0.0f);
                     st.route_held = true;
                     if (route->investigate > 0.0f) {
-                        st.route_investigate_point = last_known;
-                        st.route_investigate_pending = true;
+                        // Phase 68: a radio report is a reason to look, not a
+                        // reason to restart a search already under way. Only a
+                        // contact this walker sensed itself follows the Phase 66
+                        // rule and re-arms the detour mid-scan; a radio-born
+                        // point may arm the next search but never replaces a
+                        // personal one.
+                        if (personally_perceived) {
+                            st.route_investigate_point = last_known;
+                            st.route_investigate_pending = true;
+                            st.route_investigate_pending_personal = true;
+                        } else if (!st.route_investigating &&
+                                   !(st.route_investigate_pending &&
+                                     st.route_investigate_pending_personal)) {
+                            st.route_investigate_point = last_known;
+                            st.route_investigate_pending = true;
+                            st.route_investigate_pending_personal = false;
+                        }
                     }
                 } else if (st.route_hold_remaining > 0.0f) {
                     st.route_hold_remaining = std::max(0.0f, st.route_hold_remaining - dt);
@@ -2602,10 +2624,17 @@ u32 Runtime::step_navmesh(float dt) {
                     st.route_investigate_shared = st.route_investigate_pending_shared;
                     st.route_investigate_pending_shared = false;
                     // An own sighting opens a new call for the squad; a search
-                    // that answered one keeps its id and stays silent.
+                    // that answered one keeps its id and stays silent. A search
+                    // born from a radio report is silent too: `search_id == 0`
+                    // keeps it off the Phase 67 board, so a relayed contact is
+                    // never broadcast onward.
                     if (!st.route_investigate_shared) {
-                        st.route_investigate_search_id = ++m_squad_search_serial;
+                        st.route_investigate_search_id =
+                            st.route_investigate_pending_personal
+                                ? ++m_squad_search_serial
+                                : 0;
                     }
+                    st.route_investigate_pending_personal = false;
                     // A hold that interrupted a waypoint pause replaces that
                     // pause; a hold mid-leg returns to the same destination. This
                     // is why the delay is remembered rather than the point.
@@ -2635,6 +2664,7 @@ u32 Runtime::step_navmesh(float dt) {
                     st.route_investigating = false;
                     st.route_investigate_arrived = false;
                     st.route_investigate_pending_shared = false;
+                    st.route_investigate_pending_personal = false;
                     st.route_investigate_shared = false;
                     st.route_investigate_search_id = 0;
                     st.at_goal = false;

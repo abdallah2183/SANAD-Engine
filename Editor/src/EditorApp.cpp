@@ -2459,6 +2459,33 @@ bool valid_nav_route_config(const runtime::NavRouteComponent& route, std::string
     return true;
 }
 
+// Squad radios (Phase 68). The loader reads `token=` as one word and refuses an
+// empty, over-long or spaced token; the setter applies the same three rules, so
+// a component the inspector accepts is a `Squad:` line the loader accepts. The
+// range bounds are the loader's [0, 10000]; zero is legal and means "shares
+// nothing", which the validator warns about rather than refusing.
+bool valid_squad_config(const runtime::SquadComponent& squad, std::string& out_err) {
+    if (squad.token.empty()) {
+        out_err = "Squad token is required";
+        return false;
+    }
+    if (squad.token.size() > 64u) {
+        out_err = "Squad token must be at most 64 characters";
+        return false;
+    }
+    for (const char c : squad.token) {
+        if (std::isspace(static_cast<unsigned char>(c)) != 0) {
+            out_err = "Squad token must be one token with no spaces";
+            return false;
+        }
+    }
+    if (!std::isfinite(squad.radio) || squad.radio < 0.0f || squad.radio > 10000.0f) {
+        out_err = "Squad radio must be within [0, 10000] metres";
+        return false;
+    }
+    return true;
+}
+
 // Vehicles (Step 11). The bounds mirror the scene loader's parse_vehicle, so
 // a tune the inspector accepts is a tune the file round-trips — a range that
 // differed between the two would let the UI write a component the loader then
@@ -2996,6 +3023,70 @@ bool EditorApp::detach_nav_route(ecs::Entity e, std::string& out_err) {
     after_mutation(e);
     // Removing the route returns the agent to its authored goal on the next
     // step; nothing has to be rebuilt.
+    return true;
+}
+
+bool EditorApp::attach_squad(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<runtime::SquadComponent>(e)) {
+        return true;
+    }
+    // A fresh radio needs a token to be a radio at all: the saver omits an
+    // empty token, and a component that disappears on save is not an attachment.
+    // The author can rename it in the inspector; "squad" is a usable default.
+    runtime::SquadComponent squad;
+    squad.token = "squad";
+    w->add<runtime::SquadComponent>(e, std::move(squad));
+    after_mutation(e);
+    // The radio reads the component live each perception step, so no rebind is
+    // needed — unlike the navmesh, nothing was baked against it.
+    return true;
+}
+
+bool EditorApp::set_squad(ecs::Entity e, const runtime::SquadComponent& squad,
+                          std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_squad_config(squad, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<runtime::SquadComponent>(e)) {
+        *existing = squad;
+    } else {
+        w->add<runtime::SquadComponent>(e, squad);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_squad(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::SquadComponent>(e)) {
+        out_err = "Entity has no SquadComponent";
+        return false;
+    }
+    w->remove<runtime::SquadComponent>(e);
+    after_mutation(e);
     return true;
 }
 

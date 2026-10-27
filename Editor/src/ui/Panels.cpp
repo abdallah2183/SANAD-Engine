@@ -274,6 +274,12 @@ struct InspectorCache {
     float perc_visible = 1.0f;
     float perc_radius = 0.5f;
     float perc_eye = 1.5f;
+    // Squad radio (Phase 68). The token buffer matches the loader's 64-character
+    // cap plus the terminator; the radio is the authored link range.
+    bool squad_has = false;
+    bool squad_enabled = true;
+    float squad_radio = 30.0f;
+    char squad_token[65]{};
     // Decision layer (Phase 61). The action list is cached as the components'
     // own structs: it is a variable-length list of seven-field records, and
     // mirroring it into parallel arrays would be seven places to keep in step.
@@ -2274,6 +2280,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.perc_has = false;
                 }
+                if (const auto* squad = w->get<runtime::SquadComponent>(sel)) {
+                    ic.squad_has = true;
+                    ic.squad_enabled = squad->enabled;
+                    ic.squad_radio = squad->radio;
+                    std::strncpy(ic.squad_token, squad->token.c_str(),
+                                 sizeof(ic.squad_token) - 1);
+                    ic.squad_token[sizeof(ic.squad_token) - 1] = '\0';
+                } else {
+                    ic.squad_has = false;
+                }
                 if (const auto* brain = w->get<runtime::BrainComponent>(sel)) {
                     ic.brain_has = true;
                     ic.brain_enabled = brain->enabled;
@@ -2536,6 +2552,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<runtime::TerrainComponent>(sel) &&
                            ImGui::MenuItem(AV("terrain").c_str())) {
                     added = app.attach_terrain(sel, add_err);
+                } else if (!w->has<runtime::SquadComponent>(sel) &&
+                           ImGui::MenuItem(AV("squad").c_str())) {
+                    added = app.attach_squad(sel, add_err);
                 } else if (!w->has<physics::VehicleComponent>(sel) &&
                            ImGui::MenuItem(AV("vehicle").c_str())) {
                     added = app.attach_vehicle(sel, add_err);
@@ -4114,6 +4133,64 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_perception(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach perception failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Squad radio (Phase 68) ---
+            // The radio shares the contacts this entity personally senses with
+            // same-token members inside range. Always visible like Perception:
+            // Attach authors a default token and range, Apply validates through
+            // the loader's own rules, Detach removes the `Squad:` line.
+            if (ImGui::CollapsingHeader((AV("squad") + "###Squad").c_str())) {
+                if (!ic.squad_has) {
+                    ImGui::TextDisabled("%s", AV("no_squad").c_str());
+                    if (ImGui::Button((AV("add_squad") + "##squad").c_str())) {
+                        std::string err;
+                        if (!app.attach_squad(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach squad radio failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##squad_enabled").c_str(),
+                                    &ic.squad_enabled);
+                    ImGui::SetNextItemWidth(170.0f);
+                    ImGui::InputText(AV("squad_token").c_str(), ic.squad_token,
+                                     sizeof(ic.squad_token));
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("squad_token_hint").c_str());
+                    }
+                    ImGui::DragFloat((AV("squad_range") + "##squad").c_str(), &ic.squad_radio,
+                                     0.5f, 0.0f, 10000.0f, "%.1f m");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("squad_range_hint").c_str());
+                    }
+                    if (ImGui::Button((AV("apply") + "##squad").c_str())) {
+                        runtime::SquadComponent edited;
+                        edited.enabled = ic.squad_enabled;
+                        edited.radio = ic.squad_radio;
+                        edited.token = std::string{ic.squad_token};
+                        std::string err;
+                        if (!app.set_squad(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Squad radio edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##squad").c_str())) {
+                        std::string err;
+                        if (!app.detach_squad(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach squad radio failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

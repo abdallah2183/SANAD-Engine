@@ -9,6 +9,7 @@
 #include <NF/Test/TestFramework.hpp>
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace nf;
@@ -462,6 +463,134 @@ NF_TEST(perception_forget_drops_one_target_reset_drops_all) {
     // Sense configs survive a reset.
     perc.update(scene, 3.0f);
     NF_CHECK(perc.is_aware_of(b));
+}
+
+// --- squad reports (Phase 68) ------------------------------------------------
+//
+// `receive_report` is the radio's write into a sensor's memory. These cases pin
+// the two halves of the contract that make a radio safe: the receiver KNOWS and
+// can investigate, but it never SENSES (so it cannot shoot) and never claims the
+// contact as its own (so it cannot relay it onward).
+
+NF_TEST(perception_report_is_knowledge_without_a_sense) {
+    Perception perc = default_sensor();
+    const u32 mate = 42u;
+    const Vec3 where{4.0f, 1.0f, -7.0f};
+    perc.receive_report(mate, where, 2.0f);
+
+    const PerceivedTarget* memory = perc.find(mate);
+    NF_CHECK(memory != nullptr);
+    if (memory == nullptr) {
+        return;
+    }
+    NF_CHECK(memory->aware);
+    NF_CHECK(!memory->sensed);
+    NF_CHECK(!memory->personally_perceived);
+    NF_CHECK(memory->last_known_position.nearly_equals(where, 1e-6f));
+    NF_CHECK_NEAR(memory->silence, 0.0f, 1e-6f);
+    NF_CHECK_NEAR(memory->linger_deadline, 2.0f, 1e-6f);
+
+    // A rumour is not a reading: every meter stays empty, so a CombatAgent
+    // turns towards the report and holds fire.
+    for (u32 k = 0; k < kStimulusKindCount; ++k) {
+        NF_CHECK_NEAR(memory->detection[k], 0.0f, 1e-6f);
+    }
+    NF_CHECK(!perc.is_sensing(mate));
+    NF_CHECK(perc.is_aware_of(mate));
+    // No sense ever reached it, so it is not the strongest *sighting* — but it
+    // is the only known target, which is what navigation reads.
+    NF_CHECK(perc.most_threatening() != nullptr);
+    NF_CHECK(perc.most_threatening()->target_id == mate);
+}
+
+NF_TEST(perception_report_expires_after_its_linger_and_refreshes) {
+    PerceptionScene empty; // no cast: only the clock ages the rumour
+    Perception perc = default_sensor();
+    const u32 enemy = 7u;
+
+    perc.receive_report(enemy, Vec3{1.0f, 2.0f, 3.0f}, 2.0f);
+    perc.update(empty, 1.5f);
+    NF_CHECK(perc.is_aware_of(enemy));
+
+    perc.update(empty, 1.0f); // 2.5 s of silence > the 2 s window
+    NF_CHECK(!perc.is_aware_of(enemy));
+    NF_CHECK(perc.perceived().empty());
+
+    // Every fresh report restarts the window and moves the remembered point,
+    // which is what keeps a squad's picture current while the scout watches.
+    perc.receive_report(enemy, Vec3{1.0f, 2.0f, 3.0f}, 2.0f);
+    perc.update(empty, 1.5f);
+    perc.receive_report(enemy, Vec3{4.0f, 5.0f, 6.0f}, 2.0f);
+    perc.update(empty, 1.5f);
+    NF_CHECK(perc.is_aware_of(enemy));
+    const PerceivedTarget* memory = perc.find(enemy);
+    NF_CHECK(memory != nullptr);
+    if (memory != nullptr) {
+        NF_CHECK(memory->last_known_position.nearly_equals(Vec3{4.0f, 5.0f, 6.0f}, 1e-6f));
+        NF_CHECK(!memory->personally_perceived);
+    }
+}
+
+NF_TEST(perception_report_never_claims_personal_history) {
+    PerceptionScene scene;
+    const u32 enemy = scene.add_target(make_target({10.0f, 0.0f, 0.0f}));
+
+    Perception perc = default_sensor();
+    perc.update(scene, 3.0f);
+    const PerceivedTarget* seen = perc.find(enemy);
+    NF_CHECK(seen != nullptr);
+    if (seen == nullptr) {
+        return;
+    }
+    NF_CHECK(seen->personally_perceived);
+    const float sight_detection = seen->detection_of(StimulusKind::Sight);
+    NF_CHECK(sight_detection > 0.0f);
+
+    // A report updates knowledge in place. It must not clear the personal bit
+    // (which would silence this sensor's own Phase 67 call) and must not touch
+    // the meter the sight sense filled.
+    perc.receive_report(enemy, Vec3{-20.0f, 0.0f, -20.0f}, 5.0f);
+    const PerceivedTarget* memory = perc.find(enemy);
+    NF_CHECK(memory != nullptr);
+    if (memory != nullptr) {
+        NF_CHECK(memory->personally_perceived);
+        NF_CHECK(memory->aware);
+        NF_CHECK_NEAR(memory->detection_of(StimulusKind::Sight), sight_detection, 1e-6f);
+        NF_CHECK(memory->last_known_position.nearly_equals(Vec3{-20.0f, 0.0f, -20.0f}, 1e-6f));
+    }
+
+    // A report's linger is a floor, never a cut: the longer personal window the
+    // sight sense already established survives a shorter report.
+    perc.receive_report(enemy, Vec3{1.0f, 0.0f, 1.0f}, 0.5f);
+    memory = perc.find(enemy);
+    NF_CHECK(memory != nullptr);
+    if (memory != nullptr) {
+        NF_CHECK(memory->linger_deadline >= 3.0f);
+    }
+}
+
+NF_TEST(perception_report_rejects_invalid_input) {
+    Perception perc = default_sensor();
+
+    perc.receive_report(0u, Vec3{1.0f, 0.0f, 0.0f}, 2.0f); // id 0 is "unattributed"
+    NF_CHECK(perc.perceived().empty());
+
+    perc.receive_report(1u, Vec3{std::nanf(""), 0.0f, 0.0f}, 2.0f);
+    NF_CHECK(perc.perceived().empty());
+
+    perc.receive_report(1u, Vec3{1.0f, 0.0f, 0.0f}, std::nanf(""));
+    NF_CHECK(perc.perceived().empty());
+
+    perc.receive_report(1u, Vec3{1.0f, std::numeric_limits<float>::infinity(), 0.0f}, 2.0f);
+    NF_CHECK(perc.perceived().empty());
+
+    // A zero linger is legal: a same-tick rumour. It is known right now and
+    // gone on the next update, with no special case in the caller.
+    perc.receive_report(2u, Vec3{3.0f, 0.0f, 0.0f}, 0.0f);
+    NF_CHECK(perc.is_aware_of(2u));
+    PerceptionScene empty;
+    perc.update(empty, 1.0f / 60.0f);
+    NF_CHECK(perc.perceived().empty());
 }
 
 NF_TEST(perception_target_sizes_extend_the_sense_reach) {

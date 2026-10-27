@@ -1226,6 +1226,24 @@ constexpr Entry kEntries[] = {
     {"perception_no_senses",
      "Every sense is off: this entity can never notice anything.",
      "كل الحواس مطفأة: هذا الكيان لن يلاحظ شيئًا أبدًا۔"},
+    // --- Squad radio authoring (Phase 68) -----------------------------------
+    // A radio shares the contacts its owner personally senses. The token is the
+    // whole addressing scheme, so the field and its hint are the important ones.
+    {"squad", "Squad radio", "راديو الفصيل"},
+    {"no_squad", "No squad radio on this entity.", "لا يوجد راديو فصيل لهذا الكيان۔"},
+    {"add_squad", "Add squad radio", "إضافة راديو فصيل"},
+    {"squad_token", "Token", "الرمز"},
+    {"squad_token_hint",
+     "One case-sensitive word, at most 64 characters. Radios with the same token "
+     "talk to each other.",
+     "كلمة واحدة حساسة لحالة الأحرف، بطول 64 حرفًا كحد أقصى. الراديوات ذات الرمز "
+     "نفسه تتخاطب."},
+    {"squad_range", "Radio range (m)", "مدى الراديو (م)"},
+    {"squad_range_hint",
+     "A report is delivered only when BOTH radios reach: the distance must fit "
+     "the reporter's range and the receiver's.",
+     "لا يُسلَّم التقرير إلا عندما يبلغه الراديان معًا: يجب أن تقع المسافة داخل مدى "
+     "المُبلِّغ والمستقبل."},
     // --- Decision layer authoring (Phase 61) --------------------------------
     // The considerations an NPC weighs. The input names are scene-format tokens
     // and they are translated here too, so the Arabic UI shows no Latin in a

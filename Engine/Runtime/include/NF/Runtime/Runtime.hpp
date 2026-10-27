@@ -506,6 +506,14 @@ public:
     /// adopt_scene: a scene change starts every NPC's memory empty, because the
     /// actors it remembered belong to the level that has just been replaced.
     void bind_scene_perception();
+    /// Phase 68: shares the contacts each squad member personally senses with
+    /// same-token members inside radio range. Runs at the top of the perception
+    /// step, before any sensor integrates, so it reads the PREVIOUS frame's
+    /// contacts and every receiver sees one snapshot (no same-frame relay).
+    /// A report only sets awareness and the last known position — never a sense
+    /// and never detection — so a receiver can hold/investigate but cannot fire
+    /// at it and cannot pass it on.
+    void exchange_squad_radio();
     /// Feeds the sensors for this frame: rebuilds the cast, ages the noises
     /// still audible, routes this frame's pain to its victims, and steps every
     /// sensor. A no-op when the scene declared no sensor.
@@ -584,9 +592,13 @@ public:
     ///
     /// When `out_last_known` is non-null, it receives the strongest noticed
     /// threat's last known position (Phase 66's investigation destination).
+    /// When `out_personally_perceived` is non-null, it reports whether that
+    /// threat has ever been sensed by this walker itself (Phase 68): a search
+    /// born only from a radio report must not open a squad call of its own.
     [[nodiscard]] bool nav_route_threat_perceived(ecs::Entity walker,
                                                   NavRouteHoldPolicy policy,
-                                                  Vec3* out_last_known = nullptr) const;
+                                                  Vec3* out_last_known = nullptr,
+                                                  bool* out_personally_perceived = nullptr) const;
 
     // --- Terrain (Phase 63) ------------------------------------------------
     //
@@ -1803,6 +1815,10 @@ private:
         u64 route_investigate_answered_id = 0;
         bool route_investigate_shared = false;
         bool route_investigate_pending_shared = false;
+        /// Phase 68: the pending search was armed by this walker's OWN senses,
+        /// not by a radio report. Only a personal sighting opens a new call; a
+        /// radio-born search runs silently (search_id stays 0).
+        bool route_investigate_pending_personal = false;
         // The route shape the live cursor belongs to. A shape change restarts
         // the patrol at the first point instead of indexing a point that moved.
         usize route_point_count = 0;

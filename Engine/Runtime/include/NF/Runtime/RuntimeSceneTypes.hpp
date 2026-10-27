@@ -1084,6 +1084,34 @@ struct PerceptionComponent {
     bool governs_combat = true;
 };
 
+/// Squad radio (Phase 68): share the contacts this entity personally senses
+/// with same-token members inside range.
+///
+/// A radio is deliberately narrower than the Phase 67 squad search board: it
+/// carries **contacts**, not searches. Every frame each enabled member reports
+/// the live targets its own senses are reading, with the last position it knows.
+/// A receiver gets awareness and that position — never a sense, never detection
+/// — so it can hold a patrol, investigate, or turn towards the report, but it
+/// cannot fire at what it has not sensed and it cannot relay the report onward.
+/// That anti-amplification rule is what keeps a chain of radios from spreading
+/// one glimpse across the whole level.
+///
+/// The token is one case-sensitive word of at most 64 characters. An empty
+/// token is inert and writes no scene line, exactly like an empty `Faction:`
+/// team. `radio=0` keeps the component authored but shares nothing.
+struct SquadComponent {
+    /// Who hears whom. Two radios talk when the token matches exactly.
+    std::string token;
+
+    /// Link range in metres. A delivery needs the distance to fit **both**
+    /// radios, so a short-range scout cannot shout past its own antenna.
+    f32 radio = 30.0f;
+
+    /// Off keeps the component authored and inert, the same contract every
+    /// other component's enabled flag keeps.
+    bool enabled = true;
+};
+
 /// What a brain action reads (Phase 61).
 ///
 /// The frame fills one number per input from the world it already has — the

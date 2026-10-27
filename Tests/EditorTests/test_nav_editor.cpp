@@ -494,4 +494,105 @@ NF_TEST(editor_nav_debug_overlay_reads_the_live_bake) {
     NF_CHECK(!app.runtime()->nav_debug_snapshot().has_mesh);
 
     std::filesystem::remove_all(tmp);
-}
+}
+// Phase 68: the squad radio is authorable. The section is one attach + validated
+// set + detach path over the same rules the loader enforces, and the round trip
+// is what makes an authored radio survive a reopen instead of disappearing with
+// the session that created it.
+
+NF_TEST(editor_squad_attach_edit_detach_and_round_trip) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+
+    const auto tmp = nav_temp_dir("nf_ed_squad_rt");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    std::string err;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+    ecs::World& world = runtime.edit_scene()->world();
+    const ecs::Entity e = world.all_entities().front();
+    NF_CHECK(!world.has<runtime::SquadComponent>(e));
+
+    // Attaching authors a usable token and range: a component that saved as an
+    // inert empty line would not be an attachment.
+    NF_CHECK(app.attach_squad(e, err));
+    const auto* attached = world.get<runtime::SquadComponent>(e);
+    NF_CHECK(attached != nullptr);
+    if (attached != nullptr) {
+        NF_CHECK(attached->token == "squad");
+        NF_CHECK_NEAR(attached->radio, 30.0f, 1e-6f);
+        NF_CHECK(attached->enabled);
+    }
+
+    // The setter's rules are the loader's: a token is one non-empty word of at
+    // most 64 characters and the range is [0, 10000]. A refused edit leaves the
+    // component exactly as it was.
+    runtime::SquadComponent bad;
+    bad.token = "";
+    NF_CHECK(!app.set_squad(e, bad, err));
+    NF_CHECK(!err.empty());
+    bad.token = "two words";
+    NF_CHECK(!app.set_squad(e, bad, err));
+    bad.token = std::string(65, 'a');
+    NF_CHECK(!app.set_squad(e, bad, err));
+    bad.token = "guards";
+    bad.radio = -1.0f;
+    NF_CHECK(!app.set_squad(e, bad, err));
+    bad.radio = 10001.0f;
+    NF_CHECK(!app.set_squad(e, bad, err));
+    bad.radio = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(!app.set_squad(e, bad, err));
+    const auto* unchanged = world.get<runtime::SquadComponent>(e);
+    NF_CHECK(unchanged != nullptr);
+    if (unchanged != nullptr) {
+        NF_CHECK(unchanged->token == "squad");
+        NF_CHECK_NEAR(unchanged->radio, 30.0f, 1e-6f);
+        NF_CHECK(unchanged->enabled);
+    }
+
+    runtime::SquadComponent edited;
+    edited.token = "guards";
+    edited.radio = 45.5f;
+    edited.enabled = false;
+    err.clear(); // a rejected edit left its message here; success is not required to clear it
+    NF_CHECK(app.set_squad(e, edited, err));
+    NF_CHECK(err.empty());
+    err.clear();
+    NF_CHECK(app.save(err));
+    NF_CHECK(err.empty());
+
+    AssetRegistry reg2;
+    AssetManager manager2(vfs, reg2);
+    runtime::Runtime runtime2(vfs, reg2, manager2, device, nullptr);
+    editor::ConsoleBuffer console2;
+    editor::EditorApp app2(vfs, reg2, manager2, console2);
+    app2.attach_runtime(&runtime2);
+    NF_CHECK(app2.open_scene("content://Scenes/Work.nfscene", err));
+    const ecs::Entity e2 = runtime2.edit_scene()->world().all_entities().front();
+    const auto* loaded =
+        runtime2.edit_scene()->world().get<runtime::SquadComponent>(e2);
+    NF_CHECK(loaded != nullptr);
+    if (loaded != nullptr) {
+        NF_CHECK(loaded->token == "guards");
+        NF_CHECK_NEAR(loaded->radio, 45.5f, 1e-5f);
+        NF_CHECK(!loaded->enabled);
+    }
+
+    // Detach removes the line the saver would write. A second detach is an
+    // error, the same contract every other detach keeps.
+    NF_CHECK(app2.detach_squad(e2, err));
+    NF_CHECK(!runtime2.edit_scene()->world().has<runtime::SquadComponent>(e2));
+    NF_CHECK(!app2.detach_squad(e2, err));
+
+    std::filesystem::remove_all(tmp);
+}

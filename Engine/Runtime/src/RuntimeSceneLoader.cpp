@@ -425,6 +425,27 @@ static bool parse_perception(const std::string& line, PerceptionComponent& out,
     return true;
 }
 
+// `Squad:` (Phase 68). The radio that shares personally sensed contacts. The
+// token is required and is one word, parsed like `Faction: team=`: it is the
+// key two radios compare, and a token with a space in it would be read as two
+// fields. The range bounds are the same ones the editor enforces.
+static bool parse_squad(const std::string& line, SquadComponent& out, std::string& out_bad) {
+    out.token = field_value(line, "token=");
+    if (out.token.empty() || out.token.size() > 64u) {
+        out_bad = "token";
+        return false;
+    }
+    for (const char c : out.token) {
+        if (std::isspace(static_cast<unsigned char>(c)) != 0) {
+            out_bad = "token";
+            return false;
+        }
+    }
+    if (!optional_float_in_range(line, "radio=", 0.0f, 10000.0f, out.radio, out_bad)) return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
 // `Brain:` and `BrainAction:` (Phase 61). The brain line declares the decision
 // maker, and each action line is one consideration appended to it. The contract
 // is the same as every other optional line: an absent key keeps the default, and
@@ -1482,6 +1503,20 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     scene->world().add<PerceptionComponent>(e, perc);
                 } else {
                     result.warnings.push_back("Perception line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  Squad:",0)==0) {
+                // Squad radio (Phase 68). Absent means "this entity shares
+                // nothing", so every older scene keeps its exact perception and
+                // navigation behaviour. A token is required: a radio with no
+                // token is a no-op, and the warning names the key rather than
+                // dropping the rest of the line silently.
+                SquadComponent squad;
+                std::string bad;
+                if (parse_squad(line, squad, bad)) {
+                    scene->world().add<SquadComponent>(e, std::move(squad));
+                } else {
+                    result.warnings.push_back("Squad line with invalid " + bad +
                                               " was ignored: " + line);
                 }
             } else if (line.rfind("  Brain:",0)==0) {
@@ -2936,6 +2971,19 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             out << "\n";
         }
+        // Squad radio (Phase 68). An empty token is semantically the absence of
+        // a radio, so it writes no line — the same rule `Faction:` follows for
+        // an empty team. The numbers are always written, booleans only when
+        // they differ from the default, so a hand-written one-key line saves
+        // back as the complete state the reader resolved.
+        const auto* squad = scene_obj.world().get<SquadComponent>(e);
+        if (squad && !squad->token.empty()) {
+            out << "  Squad: token=" << squad->token << " radio=" << squad->radio;
+            if (!squad->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
         // The decision layer (Phase 61). The brain line carries the clock, and
         // every action is its own line so the list reads like the considerations
         // it is; the order is what breaks a tie, so it is written in order.
@@ -3414,6 +3462,11 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         // Senses are authored data, and the live meter lives in the Runtime, not
         // in the component — so a copy is a full copy.
         dst.add<PerceptionComponent>(de, *pc);
+    }
+    if (const auto* squad = src.get<SquadComponent>(se)) {
+        // The radio token and range are authored data; the contacts it carries
+        // belong to the live Perception, so a copy is a full copy.
+        dst.add<SquadComponent>(de, *squad);
     }
     if (const auto* brain = src.get<BrainComponent>(se)) {
         // Considerations are authored data; the live decision lives in the

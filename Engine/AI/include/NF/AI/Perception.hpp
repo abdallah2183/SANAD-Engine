@@ -172,6 +172,15 @@ struct PerceivedTarget {
     /// target leaves every sense; `aware` outlives it by `linger`.
     bool sensed = false;
 
+    /// True when one of this sensor's OWN senses has ever reached the target.
+    /// Unlike `sensed` this is a history bit: it stays true while the target is
+    /// remembered, even after every sense goes quiet. A report received from a
+    /// squadmate sets awareness and the last known position but never this bit,
+    /// which is what stops a shared contact from being relayed onward — and what
+    /// tells navigation that a search born from radio traffic must not open a
+    /// squad call of its own.
+    bool personally_perceived = false;
+
     /// True once any sense's detection filled, and stays true until the target
     /// has been quiet past the longest `linger` of any sense that ever noticed
     /// it. Latched rather than recomputed each tick: certainty drains out of the
@@ -279,6 +288,19 @@ public:
     /// Evaluates the scene, integrating detection over `dt`. Reads only; it
     /// never mutates the scene. Negative dt clamps to zero.
     void update(const PerceptionScene& scene, float dt);
+
+    /// Records a position report from a squadmate (Phase 68): awareness and the
+    /// last known position, with **no sense reading and no detection**. The
+    /// receiver knows someone was there and where, but `is_sensing` stays false,
+    /// the detection meters stay 0, and `personally_perceived` stays false — so
+    /// a `CombatAgent` turns towards the report and holds fire (aware but not
+    /// sensing), and the radio cannot relay what it was told. The memory is kept
+    /// for `linger` seconds of silence, refreshed by every fresh report.
+    ///
+    /// A zero target id, a non-finite position or a non-finite linger is ignored;
+    /// a linger of zero is a legal "same tick only" report. This is a pure state
+    /// write: it does not touch the scene and cannot see through walls.
+    void receive_report(u32 target_id, Vec3 position, float linger);
 
     /// Every target this sensor currently knows about, in first-seen order.
     const std::vector<PerceivedTarget>& perceived() const { return m_perceived; }

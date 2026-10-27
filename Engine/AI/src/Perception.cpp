@@ -201,12 +201,14 @@ void Perception::update(const PerceptionScene& scene, float dt) {
             pt->stimulated |= static_cast<u8>(1u << k);
             extend_linger(*pt, c.linger);
             pt->last_known_position = s.position;
+            pt->personally_perceived = true;
         } else {
             const float d = (s.position - m_position).length();
             const float stim = s.strength * falloff(d, c.range + m_radius);
             if (stim <= 0.0f) continue;
             integrate_sense(*pt, s.kind, stim, c, dt);
             pt->last_known_position = s.position;
+            pt->personally_perceived = true;
         }
 
         pt->silence = 0.0f;
@@ -244,6 +246,7 @@ void Perception::update(const PerceptionScene& scene, float dt) {
             pt->last_known_position = t.position; // the truth, not a rumour
             pt->silence = 0.0f;
             pt->sensed = true;
+            pt->personally_perceived = true;
         }
         if (sound_stim > 0.0f) {
             integrate_sense(*pt, StimulusKind::Sound, sound_stim,
@@ -253,6 +256,7 @@ void Perception::update(const PerceptionScene& scene, float dt) {
             // left. Only a discrete Stimulus pins a position.
             pt->silence = 0.0f;
             pt->sensed = true;
+            pt->personally_perceived = true;
         }
         if (touch_stim > 0.0f) {
             integrate_sense(*pt, StimulusKind::Touch, touch_stim,
@@ -260,6 +264,7 @@ void Perception::update(const PerceptionScene& scene, float dt) {
             pt->last_known_position = t.position; // contact is certain
             pt->silence = 0.0f;
             pt->sensed = true;
+            pt->personally_perceived = true;
         }
     }
 
@@ -336,6 +341,22 @@ const PerceivedTarget* Perception::most_threatening() const {
         }
     }
     return best;
+}
+
+void Perception::receive_report(u32 target_id, Vec3 position, float linger) {
+    if (target_id == 0u || !std::isfinite(linger) ||
+        !std::isfinite(position.x) || !std::isfinite(position.y) ||
+        !std::isfinite(position.z)) {
+        return;
+    }
+    PerceivedTarget* pt = find_or_add(target_id);
+    // A report is knowledge, not a sense. Nothing here touches detection,
+    // `sensed` or `personally_perceived`: the target is KNOWN and cannot be
+    // fired at, and a radio cannot relay what it was told.
+    pt->last_known_position = position;
+    pt->aware = true;
+    pt->silence = 0.0f;
+    extend_linger(*pt, linger > 0.0f ? linger : 0.0f);
 }
 
 bool Perception::forget(u32 target_id) {

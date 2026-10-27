@@ -52,6 +52,11 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* pc = src.get<runtime::PerceptionComponent>(from)) {
         dst.add<runtime::PerceptionComponent>(to, *pc);
     }
+    // Phase 68: the radio is authored data on the same terms. The contacts it
+    // shares live in the Runtime's live sensations, never in the component.
+    if (const auto* squad = src.get<runtime::SquadComponent>(from)) {
+        dst.add<runtime::SquadComponent>(to, *squad);
+    }
     // Phase 61: the considerations travel with the entity too.
     if (const auto* brain = src.get<runtime::BrainComponent>(from)) {
         dst.add<runtime::BrainComponent>(to, *brain);

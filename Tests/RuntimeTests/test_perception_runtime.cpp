@@ -281,6 +281,189 @@ NF_TEST(perception_line_with_an_impossible_value_is_refused_by_name) {
     }
 }
 
+// --- squad radio (Phase 68) --------------------------------------------------
+
+NF_TEST(squad_line_round_trips_every_key) {
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_squad_round_trip";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    scene::Scene scene("SquadScene");
+    auto& world = scene.world();
+    const ecs::Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    SquadComponent squad;
+    squad.token = "guards";
+    squad.radio = 45.5f;
+    squad.enabled = false;
+    world.add<SquadComponent>(e, squad);
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/squad.nfscene", scene, err));
+    NF_CHECK(err.empty());
+
+    const auto text = vfs.read_text("content://Scenes/squad.nfscene");
+    NF_CHECK(text.ok);
+    NF_CHECK(text.value.find("Squad: token=guards radio=45.5 enabled=false") !=
+             std::string::npos);
+
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/squad.nfscene");
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene != nullptr);
+    if (!result.scene) {
+        std::filesystem::remove_all(tmp);
+        return;
+    }
+    const auto* loaded = result.scene->world().get<SquadComponent>(
+        result.scene->world().all_entities()[0]);
+    NF_CHECK(loaded != nullptr);
+    if (loaded != nullptr) {
+        NF_CHECK(loaded->token == "guards");
+        NF_CHECK_NEAR(loaded->radio, 45.5f, 1e-5f);
+        NF_CHECK(!loaded->enabled);
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(squad_absent_or_empty_token_writes_no_line) {
+    scene::Scene plain("PlainSquadScene");
+    plain.world().add<scene::Transform>(plain.world().create_entity(), scene::Transform{});
+    const std::string plain_text = serialize_scene_to_text(plain);
+    NF_CHECK(plain_text.find("Squad:") == std::string::npos);
+
+    // An empty token is the "no radio" state, exactly like an empty Faction
+    // team: the component may exist (the editor authored it) but it writes no
+    // line, so the round trip cannot resurrect an inert radio.
+    scene::Scene empty("EmptySquadScene");
+    auto& world = empty.world();
+    const ecs::Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    world.add<SquadComponent>(e, SquadComponent{});
+    const std::string empty_text = serialize_scene_to_text(empty);
+    NF_CHECK(empty_text.find("Squad:") == std::string::npos);
+
+    auto parsed = load_scene_from_text(empty_text);
+    NF_CHECK(parsed.success);
+    if (parsed.scene) {
+        NF_CHECK(parsed.scene->world().get<SquadComponent>(
+                      parsed.scene->world().all_entities()[0]) == nullptr);
+    }
+}
+
+NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
+    const std::string minimal =
+        "# SANAD Scene v1\nversion: 1\nname: MinimalSquad\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Guard\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n"
+        "  Squad: token=guards\n";
+    auto parsed = load_scene_from_text(minimal);
+    NF_CHECK(parsed.success);
+    if (parsed.scene) {
+        const auto* squad = parsed.scene->world().get<SquadComponent>(
+            parsed.scene->world().all_entities()[0]);
+        NF_CHECK(squad != nullptr);
+        if (squad != nullptr) {
+            NF_CHECK(squad->token == "guards");
+            NF_CHECK_NEAR(squad->radio, 30.0f, 1e-6f);
+            NF_CHECK(squad->enabled);
+        }
+    }
+
+    const auto refused = [](const std::string& line, const char* key) {
+        const std::string text =
+            "# SANAD Scene v1\nversion: 1\nname: BadSquad\nentity_count: 1\n"
+            "---\nentity: 1:0\n  Name: Guard\n"
+            "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+            "parent(4294967295:0)\n  " + line + "\n";
+        auto r = load_scene_from_text(text);
+        if (!r.success || !r.scene) {
+            return false;
+        }
+        const ecs::Entity e = r.scene->world().all_entities()[0];
+        bool named = false;
+        for (const std::string& warning : r.warnings) {
+            if (warning.find("Squad") != std::string::npos &&
+                warning.find(key) != std::string::npos) {
+                named = true;
+                break;
+            }
+        }
+        return r.scene->world().get<SquadComponent>(e) == nullptr && named;
+    };
+
+    // A token is required: without one the radio addresses nobody.
+    NF_CHECK(refused("Squad: radio=45", "token"));
+    // The loader's cap is 64 characters; 65 is refused rather than truncated,
+    // because a silently shortened token would address a different squad.
+    NF_CHECK(refused("Squad: token=" + std::string(65, 'a'), "token"));
+    // The range bounds are the editor's and the validator's.
+    NF_CHECK(refused("Squad: token=guards radio=20000", "radio"));
+    NF_CHECK(refused("Squad: token=guards radio=-1", "radio"));
+
+    // Exactly 64 characters is legal and round-trips.
+    const std::string longest(64, 'a');
+    const std::string cap_text =
+        "# SANAD Scene v1\nversion: 1\nname: CapSquad\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Guard\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n  Squad: token=" + longest + "\n";
+    auto cap = load_scene_from_text(cap_text);
+    NF_CHECK(cap.success);
+    if (cap.scene) {
+        const auto* squad = cap.scene->world().get<SquadComponent>(
+            cap.scene->world().all_entities()[0]);
+        NF_CHECK(squad != nullptr);
+        if (squad != nullptr) {
+            NF_CHECK(squad->token == longest);
+        }
+    }
+}
+
+NF_TEST(squad_values_with_nothing_to_send_are_warned_by_name) {
+    scene::Scene scene("SquadWarn");
+    auto& world = scene.world();
+    add_bare_camera(scene);
+    const ecs::Entity e = add_world_entity(scene, "Guard", 0.0f, 0.0f, 0.0f, false);
+    SquadComponent squad;
+    squad.token = "two words";
+    squad.radio = 0.0f;
+    world.add<SquadComponent>(e, squad);
+
+    const ValidationReport report = validate_scene(scene, "content://Scenes/squad_warn.nfscene");
+    bool whitespace = false;
+    bool silent = false;
+    bool no_perception = false;
+    for (const ValidationIssue& issue : report.issues) {
+        if (issue.message.find("whitespace") != std::string::npos) whitespace = true;
+        if (issue.message.find("radio=0") != std::string::npos) silent = true;
+        if (issue.message.find("Perception") != std::string::npos) no_perception = true;
+    }
+    NF_CHECK(whitespace);
+    NF_CHECK(silent);
+    NF_CHECK(no_perception);
+
+    // A well-formed radio with a sensor is not worth a warning.
+    scene::Scene good("SquadGood");
+    add_bare_camera(good);
+    const ecs::Entity g = add_world_entity(good, "Guard", 0.0f, 0.0f, 0.0f, false);
+    SquadComponent fine;
+    fine.token = "guards";
+    fine.radio = 45.0f;
+    good.world().add<SquadComponent>(g, fine);
+    good.world().add<PerceptionComponent>(g, PerceptionComponent{});
+    const ValidationReport quiet =
+        validate_scene(good, "content://Scenes/squad_good.nfscene");
+    bool squad_issue = false;
+    for (const ValidationIssue& issue : quiet.issues) {
+        if (issue.message.find("Squad") != std::string::npos) squad_issue = true;
+    }
+    NF_CHECK(!squad_issue);
+}
+
 // --- the validator -----------------------------------------------------------
 
 NF_TEST(perception_values_outside_the_module_range_are_warned_by_name) {
@@ -1040,6 +1223,178 @@ NF_TEST(a_script_reads_its_own_senses) {
         }
         NF_CHECK(!rt.entity_aware_of(guard, player));
         NF_CHECK_NEAR(guard_y(), 4.0f, 1e-3f); // nf.forget returned true
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+// --- squad radio (Phase 68) --------------------------------------------------
+//
+// The radio is the one path by which a memory enters a sensor without a sense.
+// These cases are about what that memory can and cannot do: a same-token mate
+// inside BOTH radios' reach learns the contact and its last known position, but
+// the report never fills a meter, never becomes a personal sighting, and never
+// travels a second hop. The filters (token, range, faction, corpse, same-token
+// target) are the frame's, not the module's, so they are pinned here.
+
+NF_TEST(squad_radio_shares_only_personal_live_contacts) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_squad_radio";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("RadioNet");
+
+        // A radio member: hit points, a team, an enabled (but blind) sensor and
+        // a radio. No collider, so the observer's sight line stays clear and
+        // the case is about the radio, not about occlusion.
+        const auto make_radio = [&](const char* name, f32 x, f32 z, const char* team,
+                                    const char* token, f32 radio) {
+            const ecs::Entity e = add_world_entity(*game, name, x, 0.0f, z, false);
+            add_health(*game, e, 100.0f);
+            FactionComponent faction;
+            faction.team = team;
+            game->world().add<FactionComponent>(e, faction);
+            PerceptionComponent senses;
+            senses.sight_range = 0.0f;
+            senses.hearing_range = 0.0f;
+            senses.touch_range = 0.0f;
+            senses.pain = false;
+            game->world().add<PerceptionComponent>(e, senses);
+            SquadComponent squad;
+            squad.token = token;
+            squad.radio = radio;
+            game->world().add<SquadComponent>(e, squad);
+            return e;
+        };
+
+        // The observer can see; it is the only member with working senses.
+        const ecs::Entity observer = add_world_entity(*game, "Observer", 1.0f, 0.0f, 1.0f, false);
+        add_health(*game, observer, 100.0f);
+        // The default forward is -Z; turn the observer to face the contact at +Z.
+        if (auto* ot = game->world().get<scene::Transform>(observer); ot != nullptr) {
+            ot->rot_y = 180.0f;
+        }
+        FactionComponent blue;
+        blue.team = "Blue";
+        game->world().add<FactionComponent>(observer, blue);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 60.0f;
+        eyes.sight_gain = 2.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        game->world().add<PerceptionComponent>(observer, eyes);
+        SquadComponent observer_squad;
+        observer_squad.token = "guards";
+        observer_squad.radio = 8.0f;
+        game->world().add<SquadComponent>(observer, observer_squad);
+
+        // The contact, five metres straight ahead.
+        const ecs::Entity target = add_world_entity(*game, "Contact", 1.0f, 0.0f, 6.0f, false);
+        add_health(*game, target, 100.0f);
+        FactionComponent red;
+        red.team = "Red";
+        game->world().add<FactionComponent>(target, red);
+
+        // Same token, inside both radios: receives.
+        const ecs::Entity mate = make_radio("Mate", 6.0f, 1.0f, "Blue", "guards", 8.0f);
+        // Same token, but the observer cannot reach it: does not receive.
+        const ecs::Entity far = make_radio("Far", 20.0f, 1.0f, "Blue", "guards", 8.0f);
+        // Token comparison is case-sensitive: does not receive.
+        const ecs::Entity stranger = make_radio("Stranger", 6.0f, 1.0f, "Blue", "Guards", 8.0f);
+        // Same token inside the observer's reach, but its own antenna is short:
+        // a delivery needs BOTH radios to reach.
+        const ecs::Entity short_radio =
+            make_radio("Short", 6.0f, 3.0f, "Blue", "guards", 2.0f);
+        // A friendly target is not a contact to share.
+        const ecs::Entity friendly = add_world_entity(*game, "Friendly", 1.5f, 0.0f, 4.0f, false);
+        add_health(*game, friendly, 100.0f);
+        game->world().add<FactionComponent>(friendly, blue);
+        // A corpse is not a contact, the same rule the nav gate keeps.
+        const ecs::Entity corpse = add_world_entity(*game, "Corpse", 1.0f, 0.0f, 8.0f, false);
+        HealthComponent dead;
+        dead.max_health = 100.0f;
+        dead.health = 0.0f;
+        game->world().add<HealthComponent>(corpse, dead);
+        game->world().add<FactionComponent>(corpse, red);
+        // Even on a faction-less scene, a same-token squadmate is never a
+        // contact: reporting one would make the squad chase itself.
+        const ecs::Entity squadmate =
+            add_world_entity(*game, "Squadmate", 1.0f, 0.0f, 3.0f, false);
+        add_health(*game, squadmate, 100.0f);
+        game->world().add<FactionComponent>(squadmate, red);
+        SquadComponent another;
+        another.token = "guards";
+        game->world().add<SquadComponent>(squadmate, another);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/RadioNet.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        // The observer really did see the contact, and the mate really did
+        // receive it from the radio rather than from a sense of its own.
+        NF_CHECK(rt.entity_aware_of(observer, target));
+        NF_CHECK(rt.entity_aware_of(mate, target));
+        Vec3 known{};
+        NF_CHECK(rt.entity_last_known(mate, target, known));
+        NF_CHECK_NEAR(known.x, 1.0f, 1e-4f);
+        NF_CHECK_NEAR(known.z, 6.0f, 1e-4f);
+        NF_CHECK(!rt.entity_sensing(mate, target));
+
+        const ai::Perception* mate_senses = rt.perception_of(mate);
+        NF_CHECK(mate_senses != nullptr);
+        if (mate_senses != nullptr) {
+            NF_CHECK_EQ(mate_senses->perceived().size(), static_cast<size_t>(1));
+            const ai::PerceivedTarget* memory =
+                mate_senses->perceived().empty() ? nullptr : &mate_senses->perceived().front();
+            NF_CHECK(memory != nullptr);
+            if (memory != nullptr) {
+                NF_CHECK(!memory->sensed);
+                NF_CHECK(!memory->personally_perceived);
+                for (u32 k = 0; k < ai::kStimulusKindCount; ++k) {
+                    NF_CHECK_NEAR(memory->detection[k], 0.0f, 1e-6f);
+                }
+            }
+        }
+
+        // Token (case), reach (both ends) and every filtered target stay out.
+        NF_CHECK(!rt.entity_aware_of(stranger, target));
+        NF_CHECK(!rt.entity_aware_of(far, target));
+        NF_CHECK(!rt.entity_aware_of(short_radio, target));
+        NF_CHECK(!rt.entity_aware_of(mate, friendly));
+        NF_CHECK(!rt.entity_aware_of(mate, corpse));
+        NF_CHECK(!rt.entity_aware_of(mate, squadmate));
+
+        // Anti-relay: the stranger stands five metres from the mate and ten from
+        // the observer, so only a SECOND hop could reach it. The report is
+        // awareness, not a sense, so the mate has nothing to relay.
+        const ai::Perception* stranger_senses = rt.perception_of(stranger);
+        NF_CHECK(stranger_senses != nullptr);
+        if (stranger_senses != nullptr) {
+            NF_CHECK(stranger_senses->perceived().empty());
+        }
     }
 
     device->wait_idle();

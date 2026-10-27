@@ -10,6 +10,7 @@
 #include <NF/Scripting/ScriptEngine.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <map>
 #include <sstream>
@@ -273,6 +274,54 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
             report.add(ValidationSeverity::Error, label,
                        "CombatAgent with combat=true and every sense disabled: this agent "
                        "can never acquire a target");
+        }
+    }
+
+    // --- squad radio (Phase 68) ------------------------------------------
+    // The loader refuses a bad line, so this is for the other two paths in and
+    // for the one mistake a single component cannot show: a radio with nothing
+    // to send. A `Squad:` line on an entity with no enabled `Perception:` is
+    // inert, and an empty token or zero range is a radio nobody can hear.
+    for (const ecs::Entity e : entities) {
+        const auto* squad = world.get<SquadComponent>(e);
+        if (squad == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (squad->token.empty()) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Squad has no token: it shares nothing");
+        } else {
+            if (squad->token.size() > 64u) {
+                report.add(ValidationSeverity::Warning, label,
+                           "Squad token is longer than 64 characters: the loader will refuse "
+                           "the line");
+            }
+            for (const char c : squad->token) {
+                if (std::isspace(static_cast<unsigned char>(c)) != 0) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "Squad token contains whitespace: the scene format reads one "
+                               "token per key");
+                    break;
+                }
+            }
+        }
+        if (!sane(squad->radio, 0.0f, 10000.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("radio ") + std::to_string(squad->radio) +
+                           " is outside [0, 10000]; the radio cannot reach that far");
+        }
+        if (squad->enabled && squad->radio <= 0.0f) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Squad radio=0 shares nothing: no contact is ever delivered");
+        }
+        if (squad->enabled) {
+            const auto* perception = world.get<PerceptionComponent>(e);
+            if (perception == nullptr || !perception->enabled) {
+                report.add(ValidationSeverity::Warning, label,
+                           "Squad has no enabled Perception line: this radio has no contacts "
+                           "of its own to share");
+            }
         }
     }
 
