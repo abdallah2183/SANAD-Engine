@@ -800,6 +800,13 @@ struct NavRouteComponent {
     /// looks around for this long, then continues the point it was on. Zero
     /// disables the detour, so a Phase 65 route is unchanged.
     f32 investigate = 0.0f;
+
+    /// Squad token for shared searches (Phase 67). A non-empty token makes
+    /// every patrol with the same token answer another member's investigation:
+    /// when one walker starts searching a last known position, the others leave
+    /// their own routes for the same point, scan for their own `investigate=`
+    /// seconds, then resume. Empty keeps the solo Phase 66 behaviour.
+    std::string squad;
 };
 
 /// One agent's live navigation state, as the viewport debug draw needs it.

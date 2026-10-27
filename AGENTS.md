@@ -253,6 +253,17 @@ Games/MyGame/
   non-zero, `hold=off` clears all investigation state, `nf.route()` appends
   `investigating` as its sixth value, and the validator warns about
   `investigate=` without `hold=`.
+- A search can be shared by a squad (Phase 67). Add `squad=<token>` to the same
+  `NavRoute:` line. A patrol with the same token answers a mate's own search: it
+  leaves its route for the same last known position, scans for its OWN
+  `investigate=` seconds, then resumes. Only a search born from the walker's own
+  senses is broadcast, so answered calls never amplify; a member never answers
+  the same live call twice. The token is one case-sensitive word of at most 64
+  characters, and participation also needs `investigate>0` and a `hold=` gate —
+  not the walker's own sight. Empty is the solo Phase 66 route byte for byte,
+  and the validator warns about `squad=` without `investigate=`. Navigation runs
+  before perception, so recruitment has the same documented one-frame latency as
+  a hold.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

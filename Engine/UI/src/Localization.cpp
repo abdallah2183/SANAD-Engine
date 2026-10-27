@@ -696,6 +696,13 @@ constexpr Entry kEntries[] = {
      "ثواني البحث في آخر موضع معروف بعد انتهاء التعليق."},
     {"route_investigating", "Investigating the last known position.",
      "تحقق في آخر موضع معروف."},
+    // Phase 67: the squad that answers the same call.
+    {"route_squad", "Squad", "الفصيل"},
+    {"route_squad_hint",
+     "Shared search: walkers with the same token answer each other's "
+     "investigation. Leave empty for a solo search.",
+     "بحث مشترك: العملاء الذين يحملون الرمز نفسه يستجيبون لتحقيق بعضهم. اتركه "
+     "فارغًا لبحث فردي."},
     {"route_held", "Held by perception.", "معلّقة بسبب الإدراك."},
     {"route_points", "Destinations", "المحطات"},
     {"route_point", "Point", "نقطة"},

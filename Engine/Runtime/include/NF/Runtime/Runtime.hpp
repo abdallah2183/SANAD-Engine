@@ -1793,6 +1793,16 @@ private:
         bool route_investigate_arrived = false;
         Vec3 route_investigate_point{};
         f32 route_investigate_remaining = 0.0f;
+        // Squad-shared investigation (Phase 67). `search_id` names the search
+        // this walker is running — mates that answer one broadcast share its
+        // id. Only a search born from this walker's own senses is broadcast;
+        // `shared` marks the ones it answered. `answered_id` is the last
+        // broadcast it consumed, so finishing a scan does not make it re-join
+        // a call that is still running beside it.
+        u64 route_investigate_search_id = 0;
+        u64 route_investigate_answered_id = 0;
+        bool route_investigate_shared = false;
+        bool route_investigate_pending_shared = false;
         // The route shape the live cursor belongs to. A shape change restarts
         // the patrol at the first point instead of indexing a point that moved.
         usize route_point_count = 0;
@@ -1800,6 +1810,19 @@ private:
         bool route_ping_pong = false;
     };
     std::unordered_map<ecs::Entity, NavAgentState> m_nav_agents;
+    /// One live search call per investigating squad member, rebuilt at the top
+    /// of every navigation step from the PREVIOUS frame's state. A mate reads
+    /// it with a one-frame latency, which is invisible next to a walk.
+    struct SquadSearchBroadcast {
+        std::string squad;
+        Vec3 position{};
+        f32 remaining = 0.0f;
+        u64 id = 0;
+    };
+    std::vector<SquadSearchBroadcast> m_squad_searches;
+    /// Monotonic per-scene serial. A new own search gets a new id, so a mate
+    /// that answered an old call can answer a later one for the same squad.
+    u64 m_squad_search_serial = 0;
     std::unique_ptr<ai::NavMesh> m_navmesh;
     /// Bumped on every bake, so a rebuilt mesh invalidates every agent's path
     /// without the agents knowing anything about the bake.

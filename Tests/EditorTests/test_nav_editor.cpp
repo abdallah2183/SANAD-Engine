@@ -206,6 +206,7 @@ NF_TEST(editor_nav_route_attach_edit_detach) {
     spec.hold = runtime::NavRouteHoldPolicy::Sensing;
     spec.resume = 1.75f;
     spec.investigate = 3.5f;
+    spec.squad = "guards";
     spec.points.push_back(runtime::NavPointSpec{2.0f, 0.5f, 3.0f, -1.0f});
     spec.points.push_back(runtime::NavPointSpec{8.0f, 0.5f, 9.0f, 2.5f});
     NF_CHECK(app.set_nav_route(e, spec, err));
@@ -219,6 +220,7 @@ NF_TEST(editor_nav_route_attach_edit_detach) {
         NF_CHECK(comp->hold == runtime::NavRouteHoldPolicy::Sensing);
         NF_CHECK_NEAR(comp->resume, 1.75f, 1e-6f);
         NF_CHECK_NEAR(comp->investigate, 3.5f, 1e-6f);
+        NF_CHECK(comp->squad == "guards");
         NF_CHECK_EQ(comp->points.size(), static_cast<usize>(2));
         NF_CHECK_NEAR(comp->points[0].x, 2.0f, 1e-6f);
         NF_CHECK_NEAR(comp->points[0].wait, -1.0f, 1e-6f);
@@ -243,13 +245,35 @@ NF_TEST(editor_nav_route_attach_edit_detach) {
     err.clear();
     NF_CHECK(!app.set_nav_route(e, bad_investigate, err));
     NF_CHECK(!err.empty());
+    // Phase 67: the squad token is one word and at most 64 characters, the
+    // same contract the loader enforces. A space would be read as a second
+    // field and an over-long token would be refused by the file.
+    runtime::NavRouteComponent bad_squad_space = spec;
+    bad_squad_space.squad = "two words";
+    err.clear();
+    NF_CHECK(!app.set_nav_route(e, bad_squad_space, err));
+    NF_CHECK(!err.empty());
+    runtime::NavRouteComponent bad_squad_long = spec;
+    bad_squad_long.squad = std::string(65u, 's');
+    err.clear();
+    NF_CHECK(!app.set_nav_route(e, bad_squad_long, err));
+    NF_CHECK(!err.empty());
     const auto* kept = world.get<runtime::NavRouteComponent>(e);
     NF_CHECK(kept != nullptr);
     if (kept != nullptr) {
         NF_CHECK(kept->hold == runtime::NavRouteHoldPolicy::Sensing);
         NF_CHECK_NEAR(kept->resume, 1.75f, 1e-6f);
         NF_CHECK_NEAR(kept->investigate, 3.5f, 1e-6f);
+        NF_CHECK(kept->squad == "guards");
     }
+
+    // The 64-character cap itself is accepted: the boundary belongs to the
+    // loader, so the inspector must not refuse the last valid name.
+    runtime::NavRouteComponent max_squad = spec;
+    max_squad.squad = std::string(64u, 's');
+    err.clear();
+    NF_CHECK(app.set_nav_route(e, max_squad, err));
+    NF_CHECK(app.set_nav_route(e, spec, err));
 
     NF_CHECK(app.detach_nav_route(e, err));
     NF_CHECK(!world.has<runtime::NavRouteComponent>(e));
@@ -300,6 +324,7 @@ NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
     route.hold = runtime::NavRouteHoldPolicy::Aware;
     route.resume = 2.25f;
     route.investigate = 4.0f;
+    route.squad = "guards";
     route.points.push_back(runtime::NavPointSpec{1.0f, 0.0f, 2.0f, -1.0f});
     route.points.push_back(runtime::NavPointSpec{7.0f, 0.0f, 8.0f, 1.5f});
     NF_CHECK(app.set_nav_route(e, route, err));
@@ -338,6 +363,7 @@ NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
         NF_CHECK(route2->hold == runtime::NavRouteHoldPolicy::Aware);
         NF_CHECK_NEAR(route2->resume, 2.25f, 1e-5f);
         NF_CHECK_NEAR(route2->investigate, 4.0f, 1e-5f);
+        NF_CHECK(route2->squad == "guards");
         NF_CHECK_EQ(route2->points.size(), static_cast<usize>(2));
         if (route2->points.size() == 2) {
             NF_CHECK_NEAR(route2->points[0].x, 1.0f, 1e-5f);

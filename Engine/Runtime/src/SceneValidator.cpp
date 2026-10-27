@@ -542,6 +542,13 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                            "NavRoute sets investigate= without hold=: there is no hold "
                            "to release, so the search never runs");
             }
+            // Phase 67: a squad shares a search; a route that never searches
+            // has nothing to share with its mates.
+            if (!route->squad.empty() && route->investigate <= 0.0f) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute sets squad= without investigate=: the squad has no "
+                           "search to share");
+            }
             if (first_volume == nullptr || first_volume_t == nullptr) {
                 report.add(ValidationSeverity::Warning, label,
                            "NavRoute exists but the scene has no enabled navigation volume: "

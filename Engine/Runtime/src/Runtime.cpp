@@ -579,8 +579,11 @@ void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string
     }
     // Navigation is a per-scene artefact like the crowd: the previous scene's
     // mesh and its walkers are dropped with it, and the new one bakes its own
-    // (a no-op for a scene with no NavMesh line).
+    // (a no-op for a scene with no NavMesh line). Squad search calls are session
+    // state on the same terms, so a new scene starts with no radio traffic.
     m_nav_agents.clear();
+    m_squad_searches.clear();
+    m_squad_search_serial = 0;
     // Terrain first (Phase 63): the bake below samples the same height field,
     // and the mesh it draws is built from it, so both have to exist before the
     // volume is voxelized.
@@ -2386,6 +2389,29 @@ u32 Runtime::step_navmesh(float dt) {
     // agent is still walking towards never reads as "dragged away".
     const f32 repath_tolerance = std::max(m_navmesh->cell_size(), 0.05f);
 
+    // Phase 67: publish the searches that were live at the end of the previous
+    // step. Rebuilding the board from the agents (rather than retaining calls)
+    // means a broadcaster that stops investigating, dies, or loses its route
+    // stops recruiting in the same frame. Only a search born from the walker's
+    // own senses is broadcast; a mate that answered a call never amplifies it.
+    m_squad_searches.clear();
+    for (const auto& [entity, state] : m_nav_agents) {
+        if (!state.on_route || !state.route_investigating ||
+            state.route_investigate_shared || state.route_investigate_search_id == 0) {
+            continue;
+        }
+        const auto* route = world.get<NavRouteComponent>(entity);
+        if (route == nullptr || !route->enabled || route->squad.empty()) {
+            continue;
+        }
+        SquadSearchBroadcast call;
+        call.squad = route->squad;
+        call.position = state.route_investigate_point;
+        call.remaining = state.route_investigate_remaining;
+        call.id = state.route_investigate_search_id;
+        m_squad_searches.push_back(std::move(call));
+    }
+
     u32 moved = 0;
     for (auto e : world.query<NavAgentComponent>()) {
         auto* comp = world.get<NavAgentComponent>(e);
@@ -2398,6 +2424,23 @@ u32 Runtime::step_navmesh(float dt) {
             continue; // bound at bake time; an agent added later re-bakes
         }
         NavAgentState& st = it->second;
+        // Drop every Phase 66/67 investigation field. A running call is marked
+        // answered before its id is forgotten: the board still holds this
+        // frame's broadcasts, and a walker whose own search just ended must not
+        // immediately re-join itself.
+        const auto clear_investigation = [&st]() {
+            if (st.route_investigate_search_id != 0) {
+                st.route_investigate_answered_id = st.route_investigate_search_id;
+            }
+            st.route_investigating = false;
+            st.route_investigate_pending = false;
+            st.route_investigate_pending_shared = false;
+            st.route_investigate_advance_after = false;
+            st.route_investigate_arrived = false;
+            st.route_investigate_remaining = 0.0f;
+            st.route_investigate_search_id = 0;
+            st.route_investigate_shared = false;
+        };
         const Vec3 start{t->local_x, t->local_y, t->local_z};
         const NavRouteComponent* route = world.get<NavRouteComponent>(e);
         // A route with fewer than two points has nothing to patrol; the agent
@@ -2452,11 +2495,7 @@ u32 Runtime::step_navmesh(float dt) {
                 st.route_direction = 1;
                 st.has_path = false;
                 st.at_goal = false;
-                st.route_investigating = false;
-                st.route_investigate_pending = false;
-                st.route_investigate_advance_after = false;
-                st.route_investigate_arrived = false;
-                st.route_investigate_remaining = 0.0f;
+                clear_investigation();
             }
             // The perception gate belongs to the route that authored it.
             st.route_held = false;
@@ -2475,11 +2514,7 @@ u32 Runtime::step_navmesh(float dt) {
                 st.route_finished = false;
                 st.route_held = false;
                 st.route_hold_remaining = 0.0f;
-                st.route_investigating = false;
-                st.route_investigate_pending = false;
-                st.route_investigate_advance_after = false;
-                st.route_investigate_arrived = false;
-                st.route_investigate_remaining = 0.0f;
+                clear_investigation();
                 st.route_point_count = route->points.size();
                 st.route_loop = route->loop;
                 st.route_ping_pong = route->ping_pong;
@@ -2488,11 +2523,7 @@ u32 Runtime::step_navmesh(float dt) {
             }
             if (st.route_finished) {
                 st.route_held = false;
-                st.route_investigating = false;
-                st.route_investigate_pending = false;
-                st.route_investigate_advance_after = false;
-                st.route_investigate_arrived = false;
-                st.route_investigate_remaining = 0.0f;
+                clear_investigation();
                 continue; // a one-way route that reached its last point stays there
             }
             // Phase 65: a route may wait for its senses instead of its clock.
@@ -2524,11 +2555,7 @@ u32 Runtime::step_navmesh(float dt) {
                 // already earned; the route must not keep a stale pause.
                 st.route_hold_remaining = 0.0f;
                 st.route_held = false;
-                st.route_investigating = false;
-                st.route_investigate_pending = false;
-                st.route_investigate_advance_after = false;
-                st.route_investigate_arrived = false;
-                st.route_investigate_remaining = 0.0f;
+                clear_investigation();
             }
             if (st.route_held) {
                 // Standing still is the point. Count it as "arrived", like an
@@ -2542,22 +2569,51 @@ u32 Runtime::step_navmesh(float dt) {
             // last known point, scans for `investigate=` seconds, then picks
             // the same route point back up.
             if (route->investigate <= 0.0f) {
-                st.route_investigate_pending = false;
-                st.route_investigating = false;
-                st.route_investigate_advance_after = false;
-                st.route_investigate_arrived = false;
-                st.route_investigate_remaining = 0.0f;
-            } else if (st.route_investigate_pending) {
-                st.route_investigate_pending = false;
-                st.route_investigating = true;
-                st.route_investigate_arrived = false;
-                // A hold that interrupted a waypoint pause replaces that
-                // pause; a hold mid-leg returns to the same destination. This
-                // is why the delay is remembered rather than the point.
-                st.route_investigate_advance_after = st.route_wait_remaining > 0.0f;
-                st.route_investigate_remaining = std::max(route->investigate, 0.0f);
-                st.has_path = false;
-                st.at_goal = false;
+                clear_investigation();
+            } else {
+                // Phase 67: a mate with no sighting of its own answers the
+                // oldest live call from its squad that it has not answered yet.
+                // The hold policy is part of the opt-in: a route that never
+                // held has no search to share or answer.
+                if (!st.route_investigating && !st.route_investigate_pending &&
+                    route->hold != NavRouteHoldPolicy::Off && !route->squad.empty()) {
+                    const SquadSearchBroadcast* call = nullptr;
+                    for (const SquadSearchBroadcast& candidate : m_squad_searches) {
+                        if (candidate.squad != route->squad ||
+                            candidate.id == st.route_investigate_answered_id) {
+                            continue;
+                        }
+                        if (call == nullptr || candidate.id < call->id) {
+                            call = &candidate;
+                        }
+                    }
+                    if (call != nullptr) {
+                        st.route_investigate_pending = true;
+                        st.route_investigate_pending_shared = true;
+                        st.route_investigate_point = call->position;
+                        st.route_investigate_search_id = call->id;
+                        st.route_investigate_answered_id = call->id;
+                    }
+                }
+                if (st.route_investigate_pending) {
+                    st.route_investigate_pending = false;
+                    st.route_investigating = true;
+                    st.route_investigate_arrived = false;
+                    st.route_investigate_shared = st.route_investigate_pending_shared;
+                    st.route_investigate_pending_shared = false;
+                    // An own sighting opens a new call for the squad; a search
+                    // that answered one keeps its id and stays silent.
+                    if (!st.route_investigate_shared) {
+                        st.route_investigate_search_id = ++m_squad_search_serial;
+                    }
+                    // A hold that interrupted a waypoint pause replaces that
+                    // pause; a hold mid-leg returns to the same destination. This
+                    // is why the delay is remembered rather than the point.
+                    st.route_investigate_advance_after = st.route_wait_remaining > 0.0f;
+                    st.route_investigate_remaining = std::max(route->investigate, 0.0f);
+                    st.has_path = false;
+                    st.at_goal = false;
+                }
             }
             // A released hold clears the paused flag; an authored wait still
             // running below sets it again on its own terms.
@@ -2572,8 +2628,15 @@ u32 Runtime::step_navmesh(float dt) {
                         continue;
                     }
                     st.route_investigate_remaining = 0.0f;
+                    // Mark the call answered before forgetting it: the board
+                    // still carries this frame's broadcast, and a walker that
+                    // just finished must not answer itself again.
+                    st.route_investigate_answered_id = st.route_investigate_search_id;
                     st.route_investigating = false;
                     st.route_investigate_arrived = false;
+                    st.route_investigate_pending_shared = false;
+                    st.route_investigate_shared = false;
+                    st.route_investigate_search_id = 0;
                     st.at_goal = false;
                     st.has_path = false;
                     if (st.route_investigate_advance_after) {

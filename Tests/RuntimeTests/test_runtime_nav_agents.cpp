@@ -1033,6 +1033,18 @@ NF_TEST(validator_names_route_mistakes) {
     searching_route.points.push_back(NavPointSpec{3.0f, 0.0f, 3.0f, -1.0f});
     s.world().add<NavRouteComponent>(searching, searching_route);
 
+    // Phase 67: a squad shares a search; a route that never investigates has
+    // nothing to share. The token is only meaningful with a search.
+    ecs::Entity squad_only = s.world().create_entity();
+    s.world().add<Transform>(squad_only, Transform{});
+    s.world().add<NavAgentComponent>(squad_only, NavAgentComponent{});
+    NavRouteComponent squad_route;
+    squad_route.hold = NavRouteHoldPolicy::Aware;
+    squad_route.squad = "guards"; // investigate=0
+    squad_route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    squad_route.points.push_back(NavPointSpec{3.0f, 0.0f, 3.0f, -1.0f});
+    s.world().add<NavRouteComponent>(squad_only, squad_route);
+
     const ValidationReport report = validate_scene(s, "test.nfscene");
     NF_CHECK(has(report, "needs at least two"));
     NF_CHECK(has(report, "ping-pong wins"));
@@ -1041,6 +1053,7 @@ NF_TEST(validator_names_route_mistakes) {
     NF_CHECK(has(report, "no enabled Perception line"));
     NF_CHECK(has(report, "resume= without hold="));
     NF_CHECK(has(report, "investigate= without hold="));
+    NF_CHECK(has(report, "squad= without investigate="));
 
     // No volume at all: the route can never bind, and the report says why.
     Scene empty("NoVolume");
@@ -1301,6 +1314,105 @@ NF_TEST(nav_route_investigate_lines_refuse_bad_values_by_name) {
     // A refused line is no route at all: the gate must not silently walk with
     // a default search time the author never wrote.
     NF_CHECK(loaded.scene->world().query<NavRouteComponent>().empty());
+}
+
+NF_TEST(nav_route_squad_line_round_trips_and_defaults_to_empty) {
+    Scene s("SquadRoundTrip");
+    ecs::Entity v = s.world().create_entity();
+    s.world().add<Transform>(v, Transform{});
+    NavMeshComponent nm;
+    nm.area_x = 12.0f;
+    nm.area_z = 12.0f;
+    s.world().add<NavMeshComponent>(v, nm);
+
+    ecs::Entity w = s.world().create_entity();
+    s.world().add<Transform>(w, Transform{});
+    s.world().add<NavAgentComponent>(w, NavAgentComponent{});
+    NavRouteComponent route;
+    route.hold = NavRouteHoldPolicy::Aware;
+    route.investigate = 2.5f;
+    route.squad = "guards";
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(NavPointSpec{8.0f, 0.0f, 8.0f, -1.0f});
+    s.world().add<NavRouteComponent>(w, route);
+
+    const std::string text = serialize_scene_to_text(s);
+    NF_CHECK(text.find("squad=guards") != std::string::npos);
+
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    const NavRouteComponent* back = nullptr;
+    for (ecs::Entity e : loaded.scene->world().all_entities()) {
+        if (const auto* found = loaded.scene->world().get<NavRouteComponent>(e)) {
+            back = found;
+        }
+    }
+    NF_CHECK(back != nullptr);
+    if (back != nullptr) {
+        NF_CHECK(back->squad == "guards");
+    }
+
+    // A route written before this phase carries no token: it loads as solo and
+    // serializes without inventing one. A Phase 66 route stays byte-identical.
+    const std::string legacy =
+        "# SANAD Scene v1\nversion: 1\nname: LegacySquad\nentity_count: 1\n---\n"
+        "entity: 1:0\n  Name: Walker\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavRoute: wait=0.5 hold=aware resume=1 investigate=2\n"
+        "  NavPoint: pos=1,0,1\n"
+        "  NavPoint: pos=4,0,4\n";
+    const SceneLoadResult plain = load_scene_from_text(legacy);
+    NF_CHECK(plain.success);
+    const auto* plain_route =
+        plain.scene->world().get<NavRouteComponent>(plain.scene->world().all_entities()[0]);
+    NF_CHECK(plain_route != nullptr);
+    if (plain_route != nullptr) {
+        NF_CHECK(plain_route->squad.empty());
+    }
+    const std::string again = serialize_scene_to_text(*plain.scene);
+    NF_CHECK(again.find("squad=") == std::string::npos);
+
+    // The cap is exactly 64 characters. A 64-character token is a valid name;
+    // a 65th character is refused rather than silently truncated, because two
+    // squads that differ only past the cut would keep answering each other.
+    const std::string max_token(64u, 's');
+    const std::string too_long(65u, 's');
+    Scene cap_scene("CapSquad");
+    ecs::Entity cap_walker = cap_scene.world().create_entity();
+    cap_scene.world().add<Transform>(cap_walker, Transform{});
+    cap_scene.world().add<NavAgentComponent>(cap_walker, NavAgentComponent{});
+    NavRouteComponent cap_route;
+    cap_route.hold = NavRouteHoldPolicy::Aware;
+    cap_route.investigate = 1.0f;
+    cap_route.squad = max_token;
+    cap_route.points.push_back(NavPointSpec{1.0f, 0.0f, 1.0f, -1.0f});
+    cap_route.points.push_back(NavPointSpec{4.0f, 0.0f, 4.0f, -1.0f});
+    cap_scene.world().add<NavRouteComponent>(cap_walker, cap_route);
+    const SceneLoadResult at_cap = load_scene_from_text(serialize_scene_to_text(cap_scene));
+    NF_CHECK(at_cap.success);
+    const auto* at_cap_route =
+        at_cap.scene->world().get<NavRouteComponent>(at_cap.scene->world().all_entities()[0]);
+    NF_CHECK(at_cap_route != nullptr);
+    if (at_cap_route != nullptr) {
+        NF_CHECK(at_cap_route->squad == max_token);
+    }
+
+    const std::string bad =
+        "# SANAD Scene v1\nversion: 1\nname: LongSquad\nentity_count: 1\n---\n"
+        "entity: 1:0\n  Name: Walker\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavAgent: speed=3 goal(0,0,0)\n"
+        "  NavRoute: hold=aware investigate=1 squad=" + too_long + "\n";
+    const SceneLoadResult refused = load_scene_from_text(bad);
+    NF_CHECK(refused.success);
+    bool named = false;
+    for (const std::string& warning : refused.warnings) {
+        if (warning.find("NavRoute line with invalid 'squad='") != std::string::npos) {
+            named = true;
+        }
+    }
+    NF_CHECK(named);
+    NF_CHECK(refused.scene->world().query<NavRouteComponent>().empty());
 }
 
 NF_TEST(perception_aware_hold_freezes_the_patrol_then_resumes_with_hysteresis) {
@@ -1918,4 +2030,214 @@ NF_TEST(investigation_replaces_an_interrupted_waypoint_pause) {
     NF_CHECK(frames < 300);
     NF_CHECK(index == 1); // the pause was replaced, not resumed
     NF_CHECK(wait <= 1e-4f);
+}
+
+NF_TEST(squad_mates_answer_a_shared_search_and_strangers_do_not) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+
+    auto s = std::make_unique<Scene>("SquadSearch");
+    // The volume is shifted so the remembered point (1, 0, -2) lies on the
+    // mesh, exactly like the Phase 66 fixtures.
+    add_nav_scene(*s, true, -4.0f);
+    ecs::Entity originator = find_walker(*s);
+    NF_CHECK(originator.valid());
+    if (!originator.valid()) {
+        return;
+    }
+
+    const auto place = [&](ecs::Entity e, f32 x, f32 z) {
+        if (auto* t = s->world().get<Transform>(e); t != nullptr) {
+            t->local_x = x;
+            t->local_z = z;
+            t->local_y = 0.0f;
+        }
+        if (auto* agent = s->world().get<NavAgentComponent>(e); agent != nullptr) {
+            agent->speed = 50.0f;
+        }
+        FactionComponent faction;
+        faction.team = "Blue";
+        s->world().add<FactionComponent>(e, faction);
+    };
+    const auto make_mate = [&](f32 x, f32 z, const char* route_squad) {
+        ecs::Entity e = s->world().create_entity();
+        s->world().add<Transform>(e, Transform{});
+        NavAgentComponent agent;
+        agent.speed = 50.0f;
+        agent.goal_x = x;
+        agent.goal_z = z;
+        s->world().add<NavAgentComponent>(e, agent);
+        place(e, x, z);
+        NavRouteComponent route;
+        route.loop = true;
+        route.hold = NavRouteHoldPolicy::Aware;
+        route.investigate = 0.5f;
+        route.squad = route_squad;
+        route.points.push_back(NavPointSpec{x, 0.0f, 6.0f, -1.0f});
+        route.points.push_back(NavPointSpec{x > 8.0f ? 9.0f : 10.0f, 0.0f, 6.0f, -1.0f});
+        s->world().add<NavRouteComponent>(e, route);
+        return e;
+    };
+
+    NavRouteComponent originator_route;
+    originator_route.loop = true;
+    originator_route.hold = NavRouteHoldPolicy::Aware;
+    originator_route.resume = 0.0f;
+    originator_route.investigate = 4.0f;
+    originator_route.squad = "guards";
+    originator_route.points.push_back(NavPointSpec{1.0f, 0.0f, 6.0f, -1.0f});
+    originator_route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+    place(originator, 1.0f, 1.0f);
+    s->world().add<NavRouteComponent>(originator, originator_route);
+
+    PerceptionComponent senses;
+    senses.sight_range = 30.0f;
+    senses.sight_half_fov_deg = 60.0f;
+    senses.sight_gain = 2.0f;
+    senses.sight_loss = 0.6f;
+    senses.sight_linger = 3.0f;
+    senses.hearing_range = 0.0f;
+    senses.touch_range = 0.0f;
+    senses.pain = false;
+    s->world().add<PerceptionComponent>(originator, senses);
+
+    // One mate carries the same token. It has no Perception, so the only way
+    // it can ever leave its route is the shared call. The stranger carries
+    // another token and must never detour.
+    ecs::Entity mate = make_mate(7.0f, 1.0f, "guards");
+    ecs::Entity stranger = make_mate(11.0f, 1.0f, "others");
+
+    ecs::Entity target = s->world().create_entity();
+    Transform tt{};
+    tt.local_x = 1.0f;
+    tt.local_z = -2.0f;
+    s->world().add<Transform>(target, tt);
+    FactionComponent target_faction;
+    target_faction.team = "Red";
+    s->world().add<FactionComponent>(target, target_faction);
+    s->world().add<HealthComponent>(target, HealthComponent{});
+
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/SquadSearch.nfscene");
+
+    const auto query = [&](ecs::Entity e, bool& held, bool& investigating) {
+        u32 index = 0;
+        u32 count = 0;
+        f32 wait = 0.0f;
+        bool finished = false;
+        return env.runtime->nav_route_state(e, index, count, wait, finished, &held,
+                                            &investigating);
+    };
+    const auto z_of = [&](ecs::Entity e) {
+        const auto* t = env.runtime->edit_scene()->world().get<Transform>(e);
+        return t != nullptr ? t->local_z : 0.0f;
+    };
+
+    // Acquire the threat and hold. The mate has no sight and keeps patrolling;
+    // the stranger keeps walking its own route for now.
+    bool held = false;
+    bool investigating = false;
+    bool mate_held = false;
+    bool mate_investigating = false;
+    bool stranger_held = false;
+    bool stranger_investigating = false;
+    for (int i = 0; i < 45; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(query(originator, held, investigating));
+    NF_CHECK(held);
+    NF_CHECK(!investigating);
+    NF_CHECK(query(mate, mate_held, mate_investigating));
+    NF_CHECK(!mate_held);
+    NF_CHECK(!mate_investigating);
+    NF_CHECK(query(stranger, stranger_held, stranger_investigating));
+    NF_CHECK(!stranger_investigating);
+
+    // The threat vanishes: the originator leaves its route for the last known
+    // position. The mate joins on the next navigation step, because the board
+    // is rebuilt from the previous frame (the documented one-frame latency).
+    env.runtime->edit_scene()->world().destroy_entity(target);
+    int start_frames = 0;
+    while (!investigating && start_frames < 60) {
+        env.runtime->update(kDt);
+        ++start_frames;
+        if (!query(originator, held, investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(investigating);
+    NF_CHECK(start_frames < 60);
+
+    int frames = 0;
+    f32 originator_min_z = std::numeric_limits<float>::max();
+    f32 mate_min_z = std::numeric_limits<float>::max();
+    f32 stranger_min_z = std::numeric_limits<float>::max();
+    f32 mate_after_finish_min_z = std::numeric_limits<float>::max();
+    bool mate_was_investigating = false;
+    bool mate_finished = false;
+    bool mate_returned_to_route = false;
+    bool stranger_ever_investigated = false;
+    bool still_investigating_at_one_second = false;
+    while (investigating && frames < 600) {
+        env.runtime->update(kDt);
+        ++frames;
+        if (!query(originator, held, investigating)) {
+            break;
+        }
+        query(mate, mate_held, mate_investigating);
+        query(stranger, stranger_held, stranger_investigating);
+        originator_min_z = std::min(originator_min_z, z_of(originator));
+        mate_min_z = std::min(mate_min_z, z_of(mate));
+        stranger_min_z = std::min(stranger_min_z, z_of(stranger));
+        if (mate_investigating) {
+            mate_was_investigating = true;
+        } else if (mate_was_investigating) {
+            mate_finished = true;
+        }
+        // Measure the "does not re-join" rule only after the mate has actually
+        // walked back out of the search point; the frame the scan ends still
+        // stands at the negative Z it searched.
+        if (mate_finished && z_of(mate) > 0.5f) {
+            mate_returned_to_route = true;
+        }
+        if (mate_returned_to_route) {
+            mate_after_finish_min_z = std::min(mate_after_finish_min_z, z_of(mate));
+        }
+        if (stranger_investigating) {
+            stranger_ever_investigated = true;
+        }
+        if (frames == 60) {
+            still_investigating_at_one_second = investigating;
+            // The mate's own 0.5s scan is over while the originator's 4s scan
+            // is still running: each searcher uses its own investigate=.
+            NF_CHECK(!mate_investigating);
+            NF_CHECK(z_of(mate) > 0.0f);
+        }
+    }
+
+    NF_CHECK(!investigating);
+    NF_CHECK(frames < 600);
+    NF_CHECK(frames >= 230); // the originator's four-second scan really ran
+    NF_CHECK(still_investigating_at_one_second);
+    NF_CHECK(mate_was_investigating);
+    NF_CHECK(mate_finished);
+    NF_CHECK(!stranger_ever_investigated);
+    NF_CHECK(originator_min_z < -1.5f);
+    NF_CHECK(mate_min_z < -1.5f);
+    NF_CHECK(stranger_min_z > 0.5f);
+    // Finishing a scan does not re-join the same still-live call: the mate
+    // returned to its route while the originator was still sweeping.
+    NF_CHECK(mate_returned_to_route);
+    NF_CHECK(mate_after_finish_min_z > 0.5f);
+
+    // And the originator picks its route point back up after the scan.
+    for (int i = 0; i < 60; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(query(originator, held, investigating));
+    NF_CHECK(!held);
+    NF_CHECK(!investigating);
+    NF_CHECK(z_of(originator) > 0.5f);
 }

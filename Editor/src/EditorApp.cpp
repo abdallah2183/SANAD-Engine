@@ -2430,6 +2430,19 @@ bool valid_nav_route_config(const runtime::NavRouteComponent& route, std::string
         out_err = "Route investigate must be within [0, 3600]";
         return false;
     }
+    // Phase 67: the loader reads `squad=` as one token, so the inspector must
+    // not accept a string the file would split in two. The cap matches the
+    // loader's 64-character limit exactly.
+    if (route.squad.size() > 64u) {
+        out_err = "Route squad must be at most 64 characters";
+        return false;
+    }
+    for (const char c : route.squad) {
+        if (std::isspace(static_cast<unsigned char>(c)) != 0) {
+            out_err = "Route squad must be one token with no spaces";
+            return false;
+        }
+    }
     for (usize i = 0; i < route.points.size(); ++i) {
         const runtime::NavPointSpec& point = route.points[i];
         const std::string which = "Route point " + std::to_string(i + 1);

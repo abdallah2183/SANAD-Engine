@@ -543,6 +543,39 @@ NavRoute: wait=1 loop=true hold=sensing resume=1.5 investigate=3
   debug overlay paints the detour yellow. `Content/Scenes/Terrain.nfscene`
   demonstrates the full sequence on WalkerA.
 
+### Squads that search together (`squad=`, Phase 67)
+
+A search can be a squad action instead of a solo one:
+
+```text
+NavRoute: wait=1 loop=true hold=sensing resume=1.5 investigate=3 squad=guards
+```
+
+- **`squad=<token>`**: one case-sensitive token, at most 64 characters. Every
+  patrol with the same token answers a mate's investigation even if it never saw
+  the threat itself; a walker needs the token, its own `investigate>0` and a
+  `hold=` policy, not its own sighting.
+- **Only own searches broadcast**: a call born from a walker's own senses is
+  published to its squad. A search that answered a call stays silent, so calls
+  cannot amplify from mate to mate.
+- **Who answers, and for how long**: a member answers the oldest live call it has
+  not answered—walking to the same last known position, scanning for **its own**
+  `investigate=` seconds, then resuming its own route. Finishing a scan records
+  the call as answered, so a still-running call cannot pull the same walker back.
+- **One frame of recruitment latency**: the board is rebuilt at the top of each
+  navigation step from the previous step's state. A mate joins one frame after
+  the call starts, and a broadcaster that stops searching, dies or loses its
+  route stops recruiting immediately.
+- **Opt-in exactly**: an empty token is the solo Phase 66 route. The key is
+  written only when non-empty, so older scenes round-trip byte-identically, and
+  the validator warns about `squad=` without `investigate=`. The token is
+  session-free scene data; no search state is ever saved.
+- **Inspector and demo**: the patrol section has a Squad field that appears with
+  the search and clears when the gate is switched off. `Terrain.nfscene` gives
+  WalkerA and WalkerC `squad=guards`; Red WalkerB is the shared threat either
+  Blue walker can call the other to search. `nf.route()` keeps its six values —
+  the squad is authored policy, not a new cursor.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -555,7 +588,7 @@ NavRoute: wait=1 loop=true hold=sensing resume=1.5 investigate=3
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`) |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
@@ -565,8 +598,8 @@ NavRoute: wait=1 loop=true hold=sensing resume=1.5 investigate=3
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 66 the counts are
-  `RuntimeTests` 431/431, `EditorTests` 293/293, `AITests` 130/130 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 67 the counts are
+  `RuntimeTests` 433/433, `EditorTests` 293/293, `AITests` 130/130 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

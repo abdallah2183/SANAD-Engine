@@ -398,6 +398,10 @@ struct InspectorCache {
     int navr_hold = 0; // NavRouteHoldPolicy: 0 off, 1 aware, 2 sensing
     float navr_resume = 0.0f;
     float navr_investigate = 0.0f;
+    // Phase 67: a squad token, one word, at most 64 characters. The loader
+    // refuses anything longer, so the buffer has one byte of headroom for the
+    // terminator and the setter rejects whitespace.
+    char navr_squad[65]{};
     std::vector<runtime::NavPointSpec> navr_points;
     // Vehicles (Step 11). Mirrors of the tune; Apply forwards the whole
     // struct through EditorApp. The four *_in fields are the debug-drive
@@ -2428,6 +2432,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.navr_hold = static_cast<int>(navr_comp->hold);
                     ic.navr_resume = navr_comp->resume;
                     ic.navr_investigate = navr_comp->investigate;
+                    std::strncpy(ic.navr_squad, navr_comp->squad.c_str(),
+                                 sizeof(ic.navr_squad) - 1);
+                    ic.navr_squad[sizeof(ic.navr_squad) - 1] = '\0';
                     ic.navr_points = navr_comp->points;
                 } else {
                     ic.navr_has = false;
@@ -5056,6 +5063,16 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip("%s", AV("route_investigate_hint").c_str());
                         }
+                        // Squad token (Phase 67): opt-in like the search itself.
+                        // Only a route that investigates can share a call.
+                        if (ic.navr_investigate > 0.0f) {
+                            ImGui::SetNextItemWidth(170.0f);
+                            ImGui::InputText(AV("route_squad").c_str(), ic.navr_squad,
+                                             sizeof(ic.navr_squad));
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip("%s", AV("route_squad_hint").c_str());
+                            }
+                        }
                     }
                     ImGui::TextDisabled("%s: %d", AV("route_points").c_str(),
                                         static_cast<int>(ic.navr_points.size()));
@@ -5120,6 +5137,11 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         edited.investigate = edited.hold == runtime::NavRouteHoldPolicy::Off
                                                  ? 0.0f
                                                  : std::max(0.0f, ic.navr_investigate);
+                        // A squad token with no gate is dead data, so switching
+                        // the gate off clears it just like resume/investigate.
+                        edited.squad = edited.hold == runtime::NavRouteHoldPolicy::Off
+                                           ? std::string{}
+                                           : std::string{ic.navr_squad};
                         std::string err;
                         if (!app.set_nav_route(sel, edited, err)) {
                             ic.error = err;
