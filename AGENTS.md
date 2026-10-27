@@ -242,6 +242,17 @@ Games/MyGame/
   `nf.route()` reports `held` as its fifth value. `hold=off` is the default and
   preserves the Phase 64 route exactly; the validator warns about a gate with
   no enabled `Perception:` and a `resume=` with no `hold=`.
+- A hold can also search the last known position (Phase 66). Add
+  `investigate=<seconds>` to the same `NavRoute:` line. Once the hold and its
+  `resume=` hysteresis end, the walker leaves the route for the strongest noticed
+  threat's last known position, scans there for that many seconds, then
+  continues. A hold that interrupted a waypoint pause replaces that pause (the
+  route advances afterwards); one that interrupted a leg re-paths to the same
+  route point. A new sighting freezes the scan, updates the remembered point and
+  restarts the detour after the new hold clears. The key is written only when
+  non-zero, `hold=off` clears all investigation state, `nf.route()` appends
+  `investigating` as its sixth value, and the validator warns about
+  `investigate=` without `hold=`.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -297,8 +308,9 @@ nf.last_known(id, gen)            -- x, y, z where I last knew it, or nil
 nf.forget(id, gen)                -- drop one memory; false if there was none
 nf.decision()                     -- name, score of what this entity wants to do
 nf.state()                       -- the state this entity's machine is in, or nil
-nf.route()                       -- index, count, wait, finished, held of its
-                                 -- patrol, or nil when walking to its goal
+nf.route()                       -- index, count, wait, finished, held,
+                                 -- investigating of its patrol, or nil when
+                                 -- walking to its goal
 print(...)                        -- engine log
 ```
 

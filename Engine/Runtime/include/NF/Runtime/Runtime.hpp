@@ -581,8 +581,12 @@ public:
     /// cannot tell friend from foe, so anyone it notices counts. Reads the
     /// senses the previous perception step left behind — navigation runs before
     /// perception in the frame, and a one-frame delay is invisible to a walk.
+    ///
+    /// When `out_last_known` is non-null, it receives the strongest noticed
+    /// threat's last known position (Phase 66's investigation destination).
     [[nodiscard]] bool nav_route_threat_perceived(ecs::Entity walker,
-                                                  NavRouteHoldPolicy policy) const;
+                                                  NavRouteHoldPolicy policy,
+                                                  Vec3* out_last_known = nullptr) const;
 
     // --- Terrain (Phase 63) ------------------------------------------------
     //
@@ -644,10 +648,12 @@ public:
     ///
     /// `out_held` (Phase 65) is optional so every Phase 64 caller keeps its
     /// exact signature. It reports whether a perception gate is holding the
-    /// patrol this frame.
+    /// patrol this frame. `out_investigating` (Phase 66) is optional for the
+    /// same reason and reports the last-known-position detour.
     [[nodiscard]] bool nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count,
                                        f32& out_wait, bool& out_finished,
-                                       bool* out_held = nullptr) const;
+                                       bool* out_held = nullptr,
+                                       bool* out_investigating = nullptr) const;
     /// Obstacles the last bake carved (static box colliders seen at build time).
     [[nodiscard]] size_t navmesh_obstacle_count() const { return m_nav_obstacle_count; }
 
@@ -1776,6 +1782,17 @@ private:
         // (`resume=`) still owed before walking continues. Both session state.
         bool route_held = false;
         f32 route_hold_remaining = 0.0f;
+        // Last-known-position investigation (Phase 66). A sighting leaves a
+        // point to search; the walker leaves the route, scans there for
+        // `investigate=` seconds, then continues. `advance_after` remembers
+        // that the hold interrupted a waypoint pause, so the search replaces
+        // that pause instead of walking back to a point already visited.
+        bool route_investigating = false;
+        bool route_investigate_pending = false;
+        bool route_investigate_advance_after = false;
+        bool route_investigate_arrived = false;
+        Vec3 route_investigate_point{};
+        f32 route_investigate_remaining = 0.0f;
         // The route shape the live cursor belongs to. A shape change restarts
         // the patrol at the first point instead of indexing a point that moved.
         usize route_point_count = 0;

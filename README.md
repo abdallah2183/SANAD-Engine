@@ -473,7 +473,7 @@ NavPoint: pos=10,12.32,10
   pause live beside the component, never in the scene. Saving mid-patrol saves
   the authored route, and a script reads the live cursor with `nf.route()` →
   `index, count, wait, finished` (nil when the entity is goal-driven); Phase 65
-  adds `held` as a fifth value.
+  adds `held` as a fifth value and Phase 66 appends `investigating` as the sixth.
 - The inspector has a **Patrol Route** section with one row per point. Editing a
   position re-paths the live agent; changing the point count or the
   loop/ping-pong policy restarts the patrol at its first point.
@@ -513,6 +513,36 @@ Faction: team=Blue
   `Content/Scenes/Terrain.nfscene` demonstrates it: WalkerA (Blue) patrols with
   `hold=sensing resume=1.5` and WalkerB is Red.
 
+### Searching the last known position (`investigate=`, Phase 66)
+
+A held patrol can do more than resume: it can walk to where the threat was last
+known, scan, and then continue the route.
+
+```text
+NavRoute: wait=1 loop=true hold=sensing resume=1.5 investigate=3
+```
+
+- **`investigate=` seconds**: after the hold and its `resume=` hysteresis end,
+  the walker leaves the route for the strongest noticed threat's last known
+  position, scans there for that long, then continues. Omitted or zero is
+  exactly the Phase 65 route, and the key is written only when non-zero.
+- **The search replaces a pause**: if the hold interrupted a waypoint pause, the
+  scan takes its place and the route advances to the next point afterwards; if
+  it interrupted a leg, the walker re-paths to the same route point. The
+  authored `wait=` is frozen while held and never replayed after a scan.
+- **A new sighting restarts the search**: while scanning, a fresh sighting
+  freezes the clock, updates the remembered point, and re-arms the detour for
+  after the new hold clears.
+- **Deterministic target**: the strongest currently noticed threat's memory is
+  used; a tie keeps the earlier cast entry.
+- **`hold=off` clears it**: switching the policy off releases the hold and drops
+  any pending search, which is the Phase 65 behaviour exactly. The validator
+  warns about `investigate=` with no `hold=`.
+- **Lua, editor and overlay**: `nf.route()` appends `investigating` as its sixth
+  value, the inspector exposes the seconds field and a live readout, and the
+  debug overlay paints the detour yellow. `Content/Scenes/Terrain.nfscene`
+  demonstrates the full sequence on WalkerA.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -525,7 +555,7 @@ Faction: team=Blue
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong and perception-gated holds (`hold=`) |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
@@ -535,8 +565,8 @@ Faction: team=Blue
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 65 the counts are
-  `RuntimeTests` 426/426, `EditorTests` 293/293, `AITests` 130/130 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 66 the counts are
+  `RuntimeTests` 431/431, `EditorTests` 293/293, `AITests` 130/130 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

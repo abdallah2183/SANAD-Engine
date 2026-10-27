@@ -794,6 +794,12 @@ struct NavRouteComponent {
     /// in and out of the sight cone. Zero resumes on the first frame the gate
     /// is clear.
     f32 resume = 0.0f;
+
+    /// Seconds to search the last known position after a hold ends (Phase 66).
+    /// The walker leaves the route, walks to where the threat was last known,
+    /// looks around for this long, then continues the point it was on. Zero
+    /// disables the detour, so a Phase 65 route is unchanged.
+    f32 investigate = 0.0f;
 };
 
 /// One agent's live navigation state, as the viewport debug draw needs it.
@@ -821,6 +827,9 @@ struct NavDebugAgent {
     /// True while a perception gate (Phase 65) is keeping the patrol still.
     /// A held walker has a route and a goal but is not consuming either.
     bool route_held = false;
+    /// True while the walker is walking to, or scanning, the last known
+    /// position of the threat that held it (Phase 66).
+    bool route_investigating = false;
 };
 
 /// Everything the navigation debug overlay draws, in one const call. Empty

@@ -37,7 +37,7 @@ entity: 7:0
   Name: WalkerA
   Transform: local(-14,14.15,14) world(-14,14.15,14) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
   NavAgent: speed=3.2 goal_x=13 goal_y=12.08 goal_z=-13 arrive=0.4 enabled=true
-  NavRoute: wait=1 loop=true ping_pong=false enabled=true hold=sensing resume=1.5
+  NavRoute: wait=1 loop=true ping_pong=false enabled=true hold=sensing resume=1.5 investigate=2
   Perception: sight=36 fov=120 gain=2.5 loss=0.6 linger=3 hearing=22 touch=1.5 pain=true radius=0.5 eye=1.5
   Faction: team=Blue enabled=true
   NavPoint: pos=-14,14.15,14

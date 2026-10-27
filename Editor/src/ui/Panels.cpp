@@ -397,6 +397,7 @@ struct InspectorCache {
     bool navr_enabled = true;
     int navr_hold = 0; // NavRouteHoldPolicy: 0 off, 1 aware, 2 sensing
     float navr_resume = 0.0f;
+    float navr_investigate = 0.0f;
     std::vector<runtime::NavPointSpec> navr_points;
     // Vehicles (Step 11). Mirrors of the tune; Apply forwards the whole
     // struct through EditorApp. The four *_in fields are the debug-drive
@@ -686,6 +687,7 @@ void draw_navmesh_overlay(ImDrawList* dl, const ImVec2& min, const ImVec2& max, 
     const ImU32 route_col = IM_COL32(255, 196, 110, 200);
     const ImU32 route_done_col = IM_COL32(110, 220, 180, 110);
     const ImU32 route_held_col = IM_COL32(255, 110, 110, 230);
+    const ImU32 route_investigating_col = IM_COL32(255, 230, 80, 240);
     const ImU32 goal_col = IM_COL32(255, 196, 110, 220);
     for (const std::vector<Vec3>& loop : snap.mesh_polygons) {
         if (loop.size() < 3) {
@@ -703,8 +705,12 @@ void draw_navmesh_overlay(ImDrawList* dl, const ImVec2& min, const ImVec2& max, 
         }
     }
     for (const runtime::NavDebugAgent& agent : snap.agents) {
-        const ImU32 col = agent.route_held ? route_held_col
-                                          : (agent.at_goal ? route_done_col : route_col);
+        // Yellow is the search: the walker is off its route, looking at a
+        // last known position. Red still means a hold, green means arrived.
+        const ImU32 col = agent.route_investigating
+                              ? route_investigating_col
+                              : (agent.route_held ? route_held_col
+                                                  : (agent.at_goal ? route_done_col : route_col));
         // Remaining route as a polyline through the unconsumed waypoints. The
         // agent's own marker is the first joint: the line starts where the
         // walker stands, not where the plan started.
@@ -2421,6 +2427,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.navr_enabled = navr_comp->enabled;
                     ic.navr_hold = static_cast<int>(navr_comp->hold);
                     ic.navr_resume = navr_comp->resume;
+                    ic.navr_investigate = navr_comp->investigate;
                     ic.navr_points = navr_comp->points;
                 } else {
                     ic.navr_has = false;
@@ -5040,6 +5047,16 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                             ImGui::SetTooltip("%s", AV("route_resume_hint").c_str());
                         }
                     }
+                    // Last-known-position search (Phase 66): opt-in, and only
+                    // meaningful when a gate exists to release.
+                    if (ic.navr_hold != 0) {
+                        ImGui::SetNextItemWidth(130.0f);
+                        ImGui::DragFloat(AV("route_investigate").c_str(), &ic.navr_investigate,
+                                         0.05f, 0.0f, 3600.0f, "%.2f s");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s", AV("route_investigate_hint").c_str());
+                        }
+                    }
                     ImGui::TextDisabled("%s: %d", AV("route_points").c_str(),
                                         static_cast<int>(ic.navr_points.size()));
                     for (int i = 0; i < static_cast<int>(ic.navr_points.size()); ++i) {
@@ -5100,6 +5117,9 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         edited.resume = edited.hold == runtime::NavRouteHoldPolicy::Off
                                             ? 0.0f
                                             : std::max(0.0f, ic.navr_resume);
+                        edited.investigate = edited.hold == runtime::NavRouteHoldPolicy::Off
+                                                 ? 0.0f
+                                                 : std::max(0.0f, ic.navr_investigate);
                         std::string err;
                         if (!app.set_nav_route(sel, edited, err)) {
                             ic.error = err;
@@ -5128,9 +5148,13 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         f32 wait = 0.0f;
                         bool finished = false;
                         bool held = false;
-                        if (rt->nav_route_state(sel, index, count, wait, finished, &held)) {
+                        bool investigating = false;
+                        if (rt->nav_route_state(sel, index, count, wait, finished, &held,
+                                                &investigating)) {
                             if (finished) {
                                 ImGui::TextDisabled("%s", AV("route_finished").c_str());
+                            } else if (investigating) {
+                                ImGui::TextDisabled("%s", AV("route_investigating").c_str());
                             } else if (held) {
                                 ImGui::TextDisabled("%s", AV("route_held").c_str());
                             } else {

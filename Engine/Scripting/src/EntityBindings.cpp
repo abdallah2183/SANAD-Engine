@@ -679,11 +679,12 @@ int l_state(lua_State* L) {
     return 1;
 }
 
-// nf.route() -> index, count, wait, finished, held, or nil when this entity is
-// not following an authored patrol route (Phase 64/65). The points are scene
-// data; the cursor and the perception hold are session state the runtime owns,
-// which is why a script reads them here instead of holding its own copy that a
-// respawn would desynchronise.
+// nf.route() -> index, count, wait, finished, held, investigating, or nil when
+// this entity is not following an authored patrol route (Phase 64/65/66). The
+// points are scene data; the cursor, the perception hold and the last-known
+// position search are session state the runtime owns, which is why a script
+// reads them here instead of holding its own copy that a respawn would
+// desynchronise.
 int l_route(lua_State* L) {
     ecs::Entity self;
     if (!self_entity(L, self)) {
@@ -696,8 +697,10 @@ int l_route(lua_State* L) {
     f32 wait = 0.0f;
     bool finished = false;
     bool held = false;
+    bool investigating = false;
     if (input == nullptr || !input->route ||
-        !input->route(self.id, self.generation, index, count, wait, finished, held)) {
+        !input->route(self.id, self.generation, index, count, wait, finished, held,
+                      investigating)) {
         lua_pushnil(L);
         return 1;
     }
@@ -706,7 +709,8 @@ int l_route(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(wait));
     lua_pushboolean(L, finished ? 1 : 0);
     lua_pushboolean(L, held ? 1 : 0);
-    return 5;
+    lua_pushboolean(L, investigating ? 1 : 0);
+    return 6;
 }
 
 // nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.

@@ -2425,6 +2425,11 @@ bool valid_nav_route_config(const runtime::NavRouteComponent& route, std::string
         out_err = "Route resume must be within [0, 3600]";
         return false;
     }
+    if (!std::isfinite(route.investigate) || route.investigate < 0.0f ||
+        route.investigate > 3600.0f) {
+        out_err = "Route investigate must be within [0, 3600]";
+        return false;
+    }
     for (usize i = 0; i < route.points.size(); ++i) {
         const runtime::NavPointSpec& point = route.points[i];
         const std::string which = "Route point " + std::to_string(i + 1);

@@ -535,6 +535,13 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                            "NavRoute sets resume= without hold=: the delay has no effect "
                            "on the patrol");
             }
+            // Phase 66: the investigation replaces a hold's release. Without a
+            // gate there is never a last known position to search.
+            if (route->investigate > 0.0f && route->hold == NavRouteHoldPolicy::Off) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute sets investigate= without hold=: there is no hold "
+                           "to release, so the search never runs");
+            }
             if (first_volume == nullptr || first_volume_t == nullptr) {
                 report.add(ValidationSeverity::Warning, label,
                            "NavRoute exists but the scene has no enabled navigation volume: "

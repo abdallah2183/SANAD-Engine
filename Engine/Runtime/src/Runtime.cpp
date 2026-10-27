@@ -1667,12 +1667,13 @@ u32 Runtime::step_script(float dt) {
         input.state = [self](u32 id, u32 gen, std::string& name) {
             return self->entity_state(ecs::Entity{id, gen}, name);
         };
-        // Patrol routes (Phase 64/65): where on its route this entity's walker
-        // is, and whether its senses are holding it there.
+        // Patrol routes (Phase 64/65/66): where on its route this entity's
+        // walker is, whether its senses are holding it there, and whether it
+        // is searching a last known position.
         input.route = [self](u32 id, u32 gen, u32& index, u32& count, f32& wait,
-                             bool& finished, bool& held) {
+                             bool& finished, bool& held, bool& investigating) {
             return self->nav_route_state(ecs::Entity{id, gen}, index, count, wait, finished,
-                                         &held);
+                                         &held, &investigating);
         };
     }
     m_scripts->set_input_source(input);
@@ -2308,7 +2309,8 @@ bool nav_route_hold_from_name(std::string_view name, NavRouteHoldPolicy& out) no
 }
 
 bool Runtime::nav_route_threat_perceived(ecs::Entity walker,
-                                         NavRouteHoldPolicy policy) const {
+                                         NavRouteHoldPolicy policy,
+                                         Vec3* out_last_known) const {
     if (policy == NavRouteHoldPolicy::Off || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return false;
     }
@@ -2319,6 +2321,7 @@ bool Runtime::nav_route_threat_perceived(ecs::Entity walker,
     ecs::World& world = m_scene_data_ptr->scene->world();
     const FactionComponent* own = world.get<FactionComponent>(walker);
     const bool walker_has_team = own != nullptr && own->enabled && !own->team.empty();
+    const ai::PerceivedTarget* best = nullptr;
     for (const ecs::Entity candidate : m_perception_target_entities) {
         if (candidate == walker || !world.is_alive(candidate)) {
             continue;
@@ -2344,13 +2347,26 @@ bool Runtime::nav_route_threat_perceived(ecs::Entity walker,
         if (id == 0u) {
             continue; // not part of this sensor's cast
         }
-        const bool noticed = policy == NavRouteHoldPolicy::Aware ? senses->is_aware_of(id)
-                                                                 : senses->is_sensing(id);
-        if (noticed) {
-            return true;
+        const ai::PerceivedTarget* memory = senses->find(id);
+        if (memory == nullptr) {
+            continue;
+        }
+        const bool noticed = policy == NavRouteHoldPolicy::Aware ? memory->aware
+                                                                 : memory->sensed;
+        // The strongest reading wins; ties keep the earlier candidate, so the
+        // chosen last-known point is deterministic for a fixed cast order.
+        if (noticed && (best == nullptr ||
+                        memory->strongest_detection() > best->strongest_detection())) {
+            best = memory;
         }
     }
-    return false;
+    if (best == nullptr) {
+        return false;
+    }
+    if (out_last_known != nullptr) {
+        *out_last_known = best->last_known_position;
+    }
+    return true;
 }
 
 u32 Runtime::step_navmesh(float dt) {
@@ -2436,6 +2452,11 @@ u32 Runtime::step_navmesh(float dt) {
                 st.route_direction = 1;
                 st.has_path = false;
                 st.at_goal = false;
+                st.route_investigating = false;
+                st.route_investigate_pending = false;
+                st.route_investigate_advance_after = false;
+                st.route_investigate_arrived = false;
+                st.route_investigate_remaining = 0.0f;
             }
             // The perception gate belongs to the route that authored it.
             st.route_held = false;
@@ -2454,6 +2475,11 @@ u32 Runtime::step_navmesh(float dt) {
                 st.route_finished = false;
                 st.route_held = false;
                 st.route_hold_remaining = 0.0f;
+                st.route_investigating = false;
+                st.route_investigate_pending = false;
+                st.route_investigate_advance_after = false;
+                st.route_investigate_arrived = false;
+                st.route_investigate_remaining = 0.0f;
                 st.route_point_count = route->points.size();
                 st.route_loop = route->loop;
                 st.route_ping_pong = route->ping_pong;
@@ -2462,27 +2488,47 @@ u32 Runtime::step_navmesh(float dt) {
             }
             if (st.route_finished) {
                 st.route_held = false;
+                st.route_investigating = false;
+                st.route_investigate_pending = false;
+                st.route_investigate_advance_after = false;
+                st.route_investigate_arrived = false;
+                st.route_investigate_remaining = 0.0f;
                 continue; // a one-way route that reached its last point stays there
             }
             // Phase 65: a route may wait for its senses instead of its clock.
             // The gate is evaluated every frame. `resume=` keeps the hold armed
             // for a moment after the last sighting, so a threat flickering at
             // the edge of a cone cannot make the walker stutter.
-            if (route->hold != NavRouteHoldPolicy::Off &&
-                nav_route_threat_perceived(e, route->hold)) {
-                st.route_hold_remaining = std::max(route->resume, 0.0f);
-                st.route_held = true;
-            } else if (st.route_hold_remaining > 0.0f) {
-                st.route_hold_remaining = std::max(0.0f, st.route_hold_remaining - dt);
-                st.route_held = st.route_hold_remaining > 0.0f;
+            if (route->hold != NavRouteHoldPolicy::Off) {
+                // Phase 66 reuses the same scan to remember WHERE the threat
+                // was last known; the point is captured while the gate is
+                // still held, before the memory can expire.
+                Vec3 last_known{};
+                const bool noticed = nav_route_threat_perceived(
+                    e, route->hold, route->investigate > 0.0f ? &last_known : nullptr);
+                if (noticed) {
+                    st.route_hold_remaining = std::max(route->resume, 0.0f);
+                    st.route_held = true;
+                    if (route->investigate > 0.0f) {
+                        st.route_investigate_point = last_known;
+                        st.route_investigate_pending = true;
+                    }
+                } else if (st.route_hold_remaining > 0.0f) {
+                    st.route_hold_remaining = std::max(0.0f, st.route_hold_remaining - dt);
+                    st.route_held = st.route_hold_remaining > 0.0f;
+                } else {
+                    st.route_held = false;
+                }
             } else {
-                st.route_held = false;
-            }
-            if (route->hold == NavRouteHoldPolicy::Off) {
                 // Switching the gate off mid-patrol releases any hold it had
                 // already earned; the route must not keep a stale pause.
                 st.route_hold_remaining = 0.0f;
                 st.route_held = false;
+                st.route_investigating = false;
+                st.route_investigate_pending = false;
+                st.route_investigate_advance_after = false;
+                st.route_investigate_arrived = false;
+                st.route_investigate_remaining = 0.0f;
             }
             if (st.route_held) {
                 // Standing still is the point. Count it as "arrived", like an
@@ -2491,10 +2537,55 @@ u32 Runtime::step_navmesh(float dt) {
                 st.at_goal = true;
                 continue;
             }
+            // Phase 66: once the hold and its hysteresis are over, a sighting
+            // leaves a place to search. The walker leaves the route for the
+            // last known point, scans for `investigate=` seconds, then picks
+            // the same route point back up.
+            if (route->investigate <= 0.0f) {
+                st.route_investigate_pending = false;
+                st.route_investigating = false;
+                st.route_investigate_advance_after = false;
+                st.route_investigate_arrived = false;
+                st.route_investigate_remaining = 0.0f;
+            } else if (st.route_investigate_pending) {
+                st.route_investigate_pending = false;
+                st.route_investigating = true;
+                st.route_investigate_arrived = false;
+                // A hold that interrupted a waypoint pause replaces that
+                // pause; a hold mid-leg returns to the same destination. This
+                // is why the delay is remembered rather than the point.
+                st.route_investigate_advance_after = st.route_wait_remaining > 0.0f;
+                st.route_investigate_remaining = std::max(route->investigate, 0.0f);
+                st.has_path = false;
+                st.at_goal = false;
+            }
             // A released hold clears the paused flag; an authored wait still
             // running below sets it again on its own terms.
             st.at_goal = false;
-            if (st.route_wait_remaining > 0.0f) {
+            if (st.route_investigating) {
+                if (st.route_investigate_arrived && st.route_investigate_remaining > 0.0f) {
+                    // Standing at the last known point, looking around. A new
+                    // sighting above froze this clock and armed a fresh point.
+                    st.route_investigate_remaining -= dt;
+                    st.at_goal = true;
+                    if (st.route_investigate_remaining > 0.0f) {
+                        continue;
+                    }
+                    st.route_investigate_remaining = 0.0f;
+                    st.route_investigating = false;
+                    st.route_investigate_arrived = false;
+                    st.at_goal = false;
+                    st.has_path = false;
+                    if (st.route_investigate_advance_after) {
+                        st.route_investigate_advance_after = false;
+                        st.route_wait_remaining = 0.0f;
+                        if (!advance_route()) {
+                            continue;
+                        }
+                    }
+                }
+            }
+            if (!st.route_investigating && st.route_wait_remaining > 0.0f) {
                 // Standing at the point, using up its pause. `at_goal` stays
                 // true so "walkers arrived" includes a guard looking around.
                 st.route_wait_remaining -= dt;
@@ -2511,11 +2602,30 @@ u32 Runtime::step_navmesh(float dt) {
             }
         }
 
+        const bool investigating = st.route_investigating;
         const NavPointSpec* destination =
-            patrolling ? &route->points[st.route_point] : nullptr;
-        const Vec3 goal = destination != nullptr
-                              ? Vec3{destination->x, destination->y, destination->z}
-                              : Vec3{comp->goal_x, comp->goal_y, comp->goal_z};
+            patrolling && !investigating ? &route->points[st.route_point] : nullptr;
+        const Vec3 goal = investigating
+                              ? st.route_investigate_point
+                              : (destination != nullptr
+                                     ? Vec3{destination->x, destination->y, destination->z}
+                                     : Vec3{comp->goal_x, comp->goal_y, comp->goal_z});
+
+        // The last known point can be where the walker already stands (a
+        // target noticed at arm's length). Asking the navmesh for a path to
+        // the current position yields a degenerate one, so start the scan now.
+        if (investigating && (goal - start).length() <=
+                                 std::max(comp->arrive_radius, comp->speed * dt)) {
+            t->local_x = goal.x;
+            t->local_y = goal.y;
+            t->local_z = goal.z;
+            t->dirty = true;
+            st.at_goal = true;
+            st.route_investigate_arrived = true;
+            st.has_path = false;
+            st.path.clear();
+            continue;
+        }
 
         bool repath = !st.has_path || st.path.size() < 2 ||
                       !st.goal.nearly_equals(goal, 1e-4f) ||
@@ -2565,7 +2675,12 @@ u32 Runtime::step_navmesh(float dt) {
             ++st.waypoint;
             if (st.waypoint >= st.path.size()) {
                 st.at_goal = true;
-                if (patrolling) {
+                if (st.route_investigating) {
+                    // Reached the last known position: the scan clock starts
+                    // on the next frame, standing still, then the route resumes.
+                    st.route_investigate_arrived = true;
+                    st.has_path = false;
+                } else if (patrolling) {
                     // Arrived at a route point: pause there (if the point asks
                     // for one), then pick the next destination. A zero wait is
                     // picked up immediately, so a route with no pauses does not
@@ -2593,7 +2708,8 @@ u32 Runtime::step_navmesh(float dt) {
 }
 
 bool Runtime::nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count,
-                              f32& out_wait, bool& out_finished, bool* out_held) const {
+                              f32& out_wait, bool& out_finished, bool* out_held,
+                              bool* out_investigating) const {
     const auto it = m_nav_agents.find(entity);
     if (it == m_nav_agents.end() || !it->second.on_route) {
         return false;
@@ -2604,6 +2720,9 @@ bool Runtime::nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count
     out_finished = it->second.route_finished;
     if (out_held != nullptr) {
         *out_held = it->second.route_held;
+    }
+    if (out_investigating != nullptr) {
+        *out_investigating = it->second.route_investigating;
     }
     return true;
 }
@@ -2972,7 +3091,12 @@ NavDebugSnapshot Runtime::nav_debug_snapshot() const {
         a.on_route = st.on_route;
         a.route_point = static_cast<u32>(st.route_point);
         a.route_held = st.route_held;
-        if (st.on_route) {
+        a.route_investigating = st.route_investigating;
+        if (st.route_investigating) {
+            // The detour's target is the last known position, not the route
+            // point the walker will pick back up afterwards.
+            a.goal = st.route_investigate_point;
+        } else if (st.on_route) {
             if (const auto* route = world.get<NavRouteComponent>(entity);
                 route != nullptr && st.route_point < route->points.size()) {
                 const NavPointSpec& point = route->points[st.route_point];

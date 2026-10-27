@@ -91,9 +91,10 @@ struct HeadlessRuntime {
 /// A volume covering [0,12]x[0,8]x[0,12] with the floor at y = 0, and one agent
 /// at (1,0,1) walking to (10,0,10). The canonical fixture: one region, a
 /// straight path, an observable arrival.
-void add_nav_scene(Scene& s, bool enable = true) {
+void add_nav_scene(Scene& s, bool enable = true, f32 volume_z0 = 0.0f) {
     ecs::Entity volume = s.world().create_entity();
     Transform vt{};
+    vt.local_z = volume_z0;
     s.world().add<Transform>(volume, vt);
     NavMeshComponent nm;
     nm.area_x = 12.0f;
@@ -177,9 +178,10 @@ struct PerceptionRouteScene {
 
 PerceptionRouteScene add_perception_route_scene(Runtime& rt, const NavRouteComponent& route,
                                                 const PerceptionComponent& perception,
-                                                f32 target_x, f32 target_z) {
+                                                f32 target_x, f32 target_z,
+                                                f32 volume_z0 = 0.0f) {
     auto s = std::make_unique<Scene>("HoldRoute");
-    add_nav_scene(*s);
+    add_nav_scene(*s, true, volume_z0);
     ecs::Entity walker = find_walker(*s);
     if (walker.valid()) {
         if (auto* t = s->world().get<Transform>(walker); t != nullptr) {
@@ -1020,6 +1022,17 @@ NF_TEST(validator_names_route_mistakes) {
     delayed_route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
     s.world().add<NavRouteComponent>(delayed, delayed_route);
 
+    // Phase 66: an investigation is the release of a hold; without a gate
+    // there is no last known position, so the search can never run.
+    ecs::Entity searching = s.world().create_entity();
+    s.world().add<Transform>(searching, Transform{});
+    s.world().add<NavAgentComponent>(searching, NavAgentComponent{});
+    NavRouteComponent searching_route;
+    searching_route.investigate = 2.0f; // hold=off
+    searching_route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    searching_route.points.push_back(NavPointSpec{3.0f, 0.0f, 3.0f, -1.0f});
+    s.world().add<NavRouteComponent>(searching, searching_route);
+
     const ValidationReport report = validate_scene(s, "test.nfscene");
     NF_CHECK(has(report, "needs at least two"));
     NF_CHECK(has(report, "ping-pong wins"));
@@ -1027,6 +1040,7 @@ NF_TEST(validator_names_route_mistakes) {
     NF_CHECK(has(report, "outside the navigation volume"));
     NF_CHECK(has(report, "no enabled Perception line"));
     NF_CHECK(has(report, "resume= without hold="));
+    NF_CHECK(has(report, "investigate= without hold="));
 
     // No volume at all: the route can never bind, and the report says why.
     Scene empty("NoVolume");
@@ -1197,6 +1211,95 @@ NF_TEST(nav_route_hold_lines_refuse_bad_values_by_name) {
     NF_CHECK(bad_resume);
     // A refused policy does not fall back to `off`: half the line is not a
     // route, so neither entity gets a component.
+    NF_CHECK(loaded.scene->world().query<NavRouteComponent>().empty());
+}
+
+// --- Last-known-position investigation (Phase 66) ---------------------------
+
+NF_TEST(nav_route_investigate_line_round_trips_and_defaults_to_zero) {
+    Scene s("InvestigateRoundTrip");
+    ecs::Entity v = s.world().create_entity();
+    s.world().add<Transform>(v, Transform{});
+    NavMeshComponent nm;
+    nm.area_x = 12.0f;
+    nm.area_z = 12.0f;
+    s.world().add<NavMeshComponent>(v, nm);
+
+    ecs::Entity w = s.world().create_entity();
+    s.world().add<Transform>(w, Transform{});
+    s.world().add<NavAgentComponent>(w, NavAgentComponent{});
+    NavRouteComponent route;
+    route.hold = NavRouteHoldPolicy::Aware;
+    route.resume = 0.5f;
+    route.investigate = 2.5f;
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(NavPointSpec{8.0f, 0.0f, 8.0f, -1.0f});
+    s.world().add<NavRouteComponent>(w, route);
+
+    const std::string text = serialize_scene_to_text(s);
+    NF_CHECK(text.find("hold=aware") != std::string::npos);
+    NF_CHECK(text.find("resume=0.5") != std::string::npos);
+    NF_CHECK(text.find("investigate=2.5") != std::string::npos);
+
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    const NavRouteComponent* back = nullptr;
+    for (ecs::Entity e : loaded.scene->world().all_entities()) {
+        if (const auto* found = loaded.scene->world().get<NavRouteComponent>(e)) {
+            back = found;
+        }
+    }
+    NF_CHECK(back != nullptr);
+    if (back != nullptr) {
+        NF_CHECK(back->hold == NavRouteHoldPolicy::Aware);
+        NF_CHECK_NEAR(back->resume, 0.5f, 1e-5f);
+        NF_CHECK_NEAR(back->investigate, 2.5f, 1e-5f);
+    }
+
+    // A route written before this phase carries no key: it loads as zero and
+    // serializes without inventing one. A Phase 65 route stays byte-identical.
+    const std::string legacy =
+        "# SANAD Scene v1\nversion: 1\nname: LegacyInvestigate\nentity_count: 1\n---\n"
+        "entity: 1:0\n  Name: Walker\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavRoute: wait=0.5 hold=aware resume=1\n"
+        "  NavPoint: pos=1,0,1\n"
+        "  NavPoint: pos=4,0,4\n";
+    const SceneLoadResult plain = load_scene_from_text(legacy);
+    NF_CHECK(plain.success);
+    const auto* plain_route =
+        plain.scene->world().get<NavRouteComponent>(plain.scene->world().all_entities()[0]);
+    NF_CHECK(plain_route != nullptr);
+    if (plain_route != nullptr) {
+        NF_CHECK_NEAR(plain_route->investigate, 0.0f, 1e-6f);
+    }
+    const std::string again = serialize_scene_to_text(*plain.scene);
+    NF_CHECK(again.find("investigate=") == std::string::npos);
+}
+
+NF_TEST(nav_route_investigate_lines_refuse_bad_values_by_name) {
+    const std::string text =
+        "# SANAD Scene v1\nversion: 1\nname: BadInvestigate\nentity_count: 2\n---\n"
+        "entity: 1:0\n  Name: WalkerA\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavAgent: speed=3 goal(0,0,0)\n"
+        "  NavRoute: hold=aware investigate=-0.5\n"
+        "---\n"
+        "entity: 2:0\n  Name: WalkerB\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavAgent: speed=3 goal(0,0,0)\n"
+        "  NavRoute: hold=aware investigate=4000\n";
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    int bad_investigate = 0;
+    for (const std::string& w : loaded.warnings) {
+        if (w.find("NavRoute line with invalid 'investigate='") != std::string::npos) {
+            ++bad_investigate;
+        }
+    }
+    NF_CHECK(bad_investigate == 2);
+    // A refused line is no route at all: the gate must not silently walk with
+    // a default search time the author never wrote.
     NF_CHECK(loaded.scene->world().query<NavRouteComponent>().empty());
 }
 
@@ -1413,4 +1516,406 @@ NF_TEST(perception_sensing_hold_releases_when_the_target_leaves_the_cone) {
             NF_CHECK(!agent.route_held);
         }
     }
+}
+
+// --- Last-known-position investigation (Phase 66) ---------------------------
+
+NF_TEST(perception_hold_investigates_last_known_position_then_returns_to_route) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.loop = false;
+    route.hold = NavRouteHoldPolicy::Aware;
+    route.resume = 0.0f;    // no hysteresis: destruction releases the gate now
+    route.investigate = 1.0f;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 6.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+
+    PerceptionComponent senses;
+    senses.sight_range = 30.0f;
+    senses.sight_half_fov_deg = 60.0f;
+    senses.sight_gain = 2.0f;
+    senses.sight_loss = 0.6f;
+    senses.sight_linger = 3.0f;
+    senses.hearing_range = 0.0f;
+    senses.touch_range = 0.0f;
+    senses.pain = false;
+
+    // The walker heads down +Z while facing -Z, so the target at (1,-2) stays
+    // in the sight cone for the whole approach. The volume is shifted so the
+    // remembered point lies on the mesh: the canonical [0,12] footprint does
+    // not cover negative Z, and an off-mesh memory would never be reached.
+    const PerceptionRouteScene sc =
+        add_perception_route_scene(*env.runtime, route, senses, 1.0f, -2.0f, -4.0f);
+    NF_CHECK(sc.walker.valid());
+    NF_CHECK(sc.target.valid());
+    if (!sc.walker.valid() || !sc.target.valid()) {
+        return;
+    }
+
+    for (int i = 0; i < 45; ++i) {
+        env.runtime->update(kDt);
+    }
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    bool held = false;
+    bool investigating = false;
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(held);
+    NF_CHECK(!investigating);
+
+    // The sixth value of nf.route() is the search, appended after Phase 65's
+    // held flag so an older script's destructuring keeps its meaning.
+    const std::string script =
+        "function update(dt)\n"
+        "  local id, gen = nf.self()\n"
+        "  local index, count, wait, finished, held, investigating = nf.route()\n"
+        "  if index == nil then\n"
+        "    nf.set_entity_scale(id, gen, -1.0, -1.0, -1.0)\n"
+        "  else\n"
+        "    nf.set_entity_scale(id, gen, held and 1.0 or 0.0,\n"
+        "                        investigating and 1.0 or 0.0,\n"
+        "                        count)\n"
+        "  end\n"
+        "end\n";
+    NF_CHECK(env.vfs.write_text("content://Scripts/route_investigate_probe.lua", script).ok);
+    ecs::World& world = env.runtime->edit_scene()->world();
+    scripting::ScriptComponent script_component;
+    script_component.source = script; // added after adoption
+    script_component.path = "content://Scripts/route_investigate_probe.lua";
+    world.add<scripting::ScriptComponent>(sc.walker, script_component);
+    for (int i = 0; i < 3; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* probe = world.get<Transform>(sc.walker);
+    NF_CHECK(probe != nullptr);
+    if (probe != nullptr) {
+        NF_CHECK_NEAR(probe->scale_x, 1.0f, 1e-5f); // held
+        NF_CHECK_NEAR(probe->scale_y, 0.0f, 1e-5f); // not investigating yet
+        NF_CHECK_NEAR(probe->scale_z, 2.0f, 1e-5f); // point count
+    }
+
+    // Losing the threat releases the gate; the walker leaves the route and
+    // heads for where it last knew the target (1, 0, -2).
+    world.destroy_entity(sc.target);
+    for (int i = 0; i < 5; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(!held);
+    NF_CHECK(investigating);
+    NF_CHECK(index == 0);
+    NF_CHECK(count == 2);
+    const auto* leaving = world.get<Transform>(sc.walker);
+    NF_CHECK(leaving != nullptr);
+    if (leaving != nullptr) {
+        NF_CHECK_NEAR(leaving->scale_x, 0.0f, 1e-5f); // script agrees: not held
+        NF_CHECK_NEAR(leaving->scale_y, 1.0f, 1e-5f); // script agrees: searching
+    }
+
+    // The overlay draws the detour to the remembered point in yellow, not the
+    // route point the walker will pick up afterwards.
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    bool saw_investigation = false;
+    for (const NavDebugAgent& agent : snap.agents) {
+        if (agent.entity == sc.walker) {
+            saw_investigation = true;
+            NF_CHECK(agent.route_investigating);
+            NF_CHECK(agent.goal.nearly_equals(Vec3{1.0f, 0.0f, -2.0f}, 1e-3f));
+        }
+    }
+    NF_CHECK(saw_investigation);
+
+    // Walk to the memory, scan there for `investigate=` seconds, then return
+    // to the SAME route point: the hold interrupted a leg, not a pause.
+    f32 min_z = std::numeric_limits<float>::max();
+    int frames = 0;
+    while (investigating && frames < 600) {
+        env.runtime->update(kDt);
+        ++frames;
+        const auto* t = world.get<Transform>(sc.walker);
+        if (t != nullptr) {
+            min_z = std::min(min_z, t->local_z);
+        }
+        if (!env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(!investigating);
+    NF_CHECK(frames < 600);
+    NF_CHECK(min_z < -1.5f); // it actually walked back to the last known position
+    NF_CHECK(index == 0);
+    NF_CHECK(count == 2);
+    NF_CHECK(!finished);
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(!held);
+    NF_CHECK(!investigating);
+
+    // And it walks back towards point 1 (z=6) instead of stopping at the memory.
+    const f32 turned_at = world.get<Transform>(sc.walker) != nullptr
+                              ? world.get<Transform>(sc.walker)->local_z
+                              : 0.0f;
+    for (int i = 0; i < 60; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* back = world.get<Transform>(sc.walker);
+    NF_CHECK(back != nullptr);
+    if (back != nullptr) {
+        NF_CHECK(back->local_z > turned_at + 1.0f);
+        NF_CHECK_NEAR(back->scale_y, 0.0f, 1e-5f); // the search is over
+    }
+}
+
+NF_TEST(a_new_sighting_during_the_scan_restarts_the_search) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.loop = false;
+    route.hold = NavRouteHoldPolicy::Aware;
+    route.resume = 0.0f;
+    route.investigate = 3.0f;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 6.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+
+    PerceptionComponent senses;
+    senses.sight_range = 30.0f;
+    senses.sight_half_fov_deg = 60.0f;
+    senses.sight_gain = 2.0f;
+    senses.sight_loss = 0.6f;
+    senses.sight_linger = 3.0f;
+    senses.hearing_range = 0.0f;
+    senses.touch_range = 0.0f;
+    senses.pain = false;
+
+    const PerceptionRouteScene sc =
+        add_perception_route_scene(*env.runtime, route, senses, 1.0f, -2.0f, -4.0f);
+    NF_CHECK(sc.walker.valid());
+    NF_CHECK(sc.target.valid());
+    if (!sc.walker.valid() || !sc.target.valid()) {
+        return;
+    }
+
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    bool held = false;
+    bool investigating = false;
+    for (int i = 0; i < 45; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(held);
+
+    // Destroy the first threat; the walker starts searching its memory.
+    ecs::World& world = env.runtime->edit_scene()->world();
+    world.destroy_entity(sc.target);
+    for (int i = 0; i < 100; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(investigating);
+    const auto* at_memory = world.get<Transform>(sc.walker);
+    NF_CHECK(at_memory != nullptr);
+    if (at_memory != nullptr) {
+        NF_CHECK(at_memory->local_z < -1.5f); // standing at the first memory
+    }
+
+    // A second threat appears directly in front. The gate closes while the
+    // scan is running: the clock must freeze and the remembered point move.
+    ecs::Entity second = world.create_entity();
+    Transform bt{};
+    bt.local_x = 1.0f;
+    bt.local_z = -3.5f;
+    bt.dirty = true;
+    world.add<Transform>(second, bt);
+    FactionComponent second_faction;
+    second_faction.team = "Red";
+    world.add<FactionComponent>(second, second_faction);
+    world.add<HealthComponent>(second, HealthComponent{});
+
+    int acquire = 0;
+    while (!held && acquire < 120) {
+        env.runtime->update(kDt);
+        ++acquire;
+        if (!env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(held);
+    NF_CHECK(acquire < 120);
+    const auto* frozen = world.get<Transform>(sc.walker);
+    NF_CHECK(frozen != nullptr);
+    const f32 frozen_z = frozen != nullptr ? frozen->local_z : 0.0f;
+    for (int i = 0; i < 20; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* still = world.get<Transform>(sc.walker);
+    NF_CHECK(still != nullptr);
+    if (still != nullptr) {
+        NF_CHECK_NEAR(still->local_z, frozen_z, 1e-4f); // the scan is frozen
+    }
+
+    // Losing the second threat re-arms the detour at ITS position, not the
+    // first one, and the walker walks there before scanning again.
+    world.destroy_entity(second);
+    for (int i = 0; i < 5; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(!held);
+    NF_CHECK(investigating);
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    bool saw_new_goal = false;
+    for (const NavDebugAgent& agent : snap.agents) {
+        if (agent.entity == sc.walker) {
+            saw_new_goal = true;
+            NF_CHECK(agent.route_investigating);
+            NF_CHECK(agent.goal.nearly_equals(Vec3{1.0f, 0.0f, -3.5f}, 1e-3f));
+        }
+    }
+    NF_CHECK(saw_new_goal);
+
+    int frames = 0;
+    f32 min_z = std::numeric_limits<float>::max();
+    while (investigating && frames < 500) {
+        env.runtime->update(kDt);
+        ++frames;
+        const auto* t = world.get<Transform>(sc.walker);
+        if (t != nullptr) {
+            min_z = std::min(min_z, t->local_z);
+        }
+        if (!env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(!investigating);
+    NF_CHECK(frames < 500);
+    NF_CHECK(min_z < -3.0f); // it reached the second memory
+    NF_CHECK(index == 0);    // the interrupt was mid-leg, so the point is kept
+}
+
+NF_TEST(investigation_replaces_an_interrupted_waypoint_pause) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.loop = false;
+    route.hold = NavRouteHoldPolicy::Aware;
+    route.resume = 0.0f;
+    route.investigate = 1.0f;
+    // A long pause at point 1. The hold starts while this pause is running, so
+    // the search must REPLACE it and the route must move on afterwards — not
+    // sit out the remaining seconds at a point the walker already visited.
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 2.0f, 5.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, 0.0f});
+
+    PerceptionComponent senses;
+    senses.sight_range = 30.0f;
+    senses.sight_half_fov_deg = 60.0f;
+    senses.sight_gain = 2.0f;
+    senses.sight_loss = 0.6f;
+    senses.sight_linger = 3.0f;
+    senses.hearing_range = 0.0f;
+    senses.touch_range = 0.0f;
+    senses.pain = false;
+
+    // Out of the cone at first: the walker reaches its point and starts the
+    // pause without being held. The shifted volume keeps the remembered point
+    // on the mesh at (1, 0, -2).
+    const PerceptionRouteScene sc =
+        add_perception_route_scene(*env.runtime, route, senses, 10.0f, 10.0f, -4.0f);
+    NF_CHECK(sc.walker.valid());
+    NF_CHECK(sc.target.valid());
+    if (!sc.walker.valid() || !sc.target.valid()) {
+        return;
+    }
+
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    bool held = false;
+    bool investigating = false;
+    for (int i = 0; i < 25; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(index == 0);
+    NF_CHECK(wait > 3.0f); // the long pause is running
+    NF_CHECK(!held);
+
+    // Put the target in front of the waiting walker. Detection accumulates for
+    // about half a second, then the gate closes and freezes the pause.
+    auto* tt = env.runtime->edit_scene()->world().get<Transform>(sc.target);
+    NF_CHECK(tt != nullptr);
+    if (tt == nullptr) {
+        return;
+    }
+    tt->local_x = 1.0f;
+    tt->local_z = -2.0f;
+    tt->dirty = true;
+    int acquire_frames = 0;
+    while (!held && acquire_frames < 120) {
+        env.runtime->update(kDt);
+        ++acquire_frames;
+        if (!env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(held);
+    NF_CHECK(acquire_frames < 120);
+    const f32 wait_when_held = wait;
+    NF_CHECK(wait_when_held > 3.0f);
+
+    for (int i = 0; i < 30; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(held);
+    NF_CHECK_NEAR(wait, wait_when_held, 1e-4f); // the pause is frozen, not spent
+
+    // The threat vanishes; the search replaces the pause and, when the scan
+    // ends, the route advances to point 2 without replaying the five seconds.
+    env.runtime->edit_scene()->world().destroy_entity(sc.target);
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating));
+    NF_CHECK(!held);
+    NF_CHECK(investigating);
+    int frames = 0;
+    while (investigating && frames < 300) {
+        env.runtime->update(kDt);
+        ++frames;
+        if (!env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held,
+                                          &investigating)) {
+            break;
+        }
+    }
+    NF_CHECK(!investigating);
+    NF_CHECK(frames < 300);
+    NF_CHECK(index == 1); // the pause was replaced, not resumed
+    NF_CHECK(wait <= 1e-4f);
 }

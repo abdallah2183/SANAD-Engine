@@ -741,6 +741,9 @@ static bool parse_nav_route(const std::string& line, NavRouteComponent& out,
         return false;
     }
     if (!optional_float_in_range(line, "resume=", 0.0f, 3600.0f, out.resume, out_bad)) return false;
+    // Phase 66: how long to search the last known position after the hold ends.
+    // Absent keeps zero, so a Phase 65 route parses exactly as it did.
+    if (!optional_float_in_range(line, "investigate=", 0.0f, 3600.0f, out.investigate, out_bad)) return false;
     return true;
 }
 
@@ -2238,6 +2241,7 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                         existing->enabled = route.enabled;
                         existing->hold = route.hold;
                         existing->resume = route.resume;
+                        existing->investigate = route.investigate;
                     }
                 }
             } else if (line.rfind("  NavPoint:",0)==0) {
@@ -3239,6 +3243,10 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             if (route->resume > 0.0f) {
                 out << " resume=" << route->resume;
+            }
+            // Phase 66: same rule — only a route that opted in writes the key.
+            if (route->investigate > 0.0f) {
+                out << " investigate=" << route->investigate;
             }
             out << "\n";
             for (const NavPointSpec& nav_point : route->points) {

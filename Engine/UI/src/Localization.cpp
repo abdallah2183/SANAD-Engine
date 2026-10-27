@@ -689,6 +689,13 @@ constexpr Entry kEntries[] = {
     {"route_resume", "Resume after (s)", "استئناف بعد (ث)"},
     {"route_resume_hint", "Seconds to keep holding after the last sighting.",
      "ثواني الاستمرار في التعليق بعد آخر إحساس بالهدف."},
+    // Phase 66: the search of the last known position once the hold ends.
+    {"route_investigate", "Investigate (s)", "تحقيق (ث)"},
+    {"route_investigate_hint",
+     "Seconds to search the last known position after the hold ends.",
+     "ثواني البحث في آخر موضع معروف بعد انتهاء التعليق."},
+    {"route_investigating", "Investigating the last known position.",
+     "تحقق في آخر موضع معروف."},
     {"route_held", "Held by perception.", "معلّقة بسبب الإدراك."},
     {"route_points", "Destinations", "المحطات"},
     {"route_point", "Point", "نقطة"},
