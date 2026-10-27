@@ -121,6 +121,12 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* na = src.get<runtime::NavAgentComponent>(from)) {
         dst.add<runtime::NavAgentComponent>(to, *na);
     }
+    if (const auto* terrain = src.get<runtime::TerrainComponent>(from)) {
+        dst.add<runtime::TerrainComponent>(to, *terrain);
+    }
+    if (const auto* route = src.get<runtime::NavRouteComponent>(from)) {
+        dst.add<runtime::NavRouteComponent>(to, *route);
+    }
     if (const auto* vc = src.get<physics::VehicleComponent>(from)) {
         // Tune crosses, live state does not. Without this, a duplicate or a Stop
         // restore would hold a JoltVehicle view into a world that is gone.

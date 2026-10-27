@@ -668,6 +668,23 @@ constexpr Entry kEntries[] = {
     {"terrain_material", "Material", "المادة"},
     {"goal", "Goal", "الهدف"},
     {"arrive_radius", "Arrive radius", "نصف قطر الوصول"},
+    // Phase 64: authored patrol routes. The live cursor has no editor of its
+    // own — these strings label the authored list and the read-only readout.
+    {"nav_route", "Patrol Route", "مسار الدورية"},
+    {"no_nav_route", "No patrol route on this entity.",
+     "لا يوجد مسار دورية لهذا الكيان."},
+    {"route_loop", "Loop", "تكرار"},
+    {"route_ping_pong", "Ping-pong", "ذهاب وعودة"},
+    {"route_wait", "Wait (s)", "انتظار (ث)"},
+    {"route_points", "Destinations", "المحطات"},
+    {"route_point", "Point", "نقطة"},
+    {"route_add_point", "Add point", "إضافة نقطة"},
+    {"route_point_wait_hint",
+     "Seconds to wait at this point; -1 uses the route wait.",
+     "ثواني الانتظار عند هذه النقطة؛ ‎-1 يستخدم انتظار المسار."},
+    {"route_live", "Live route", "المسار الجاري"},
+    {"route_finished", "Patrol finished at its last point.",
+     "انتهت الدورية عند آخر نقطة."},
     // Step 11: the drivable car. Tune keys mirror the Vehicle: scene line;
     // the four inputs are the debug-drive sliders (live only, never saved).
     {"vehicle", "Vehicle", "مركبة"},

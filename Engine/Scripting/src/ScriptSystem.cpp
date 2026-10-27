@@ -130,7 +130,11 @@ void ScriptSystem::clear_cache() {
 
 void ScriptSystem::set_input_source(const ScriptInput& input) {
     m_impl->input = input;
-    m_impl->has_input = static_cast<bool>(input.pressed) || static_cast<bool>(input.axis);
+    // A source was supplied: hand its pointer to the VM even when it has no
+    // pressed/axis callbacks. Phase 64's nf.route() reads live runtime state
+    // through this same struct and a headless runtime supplies no actions, so
+    // gating on the input callbacks alone would hide the patrol cursor.
+    m_impl->has_input = true;
 }
 
 void ScriptSystem::update(ecs::World& world, float dt) {

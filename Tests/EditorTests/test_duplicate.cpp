@@ -208,3 +208,73 @@ NF_TEST(duplicate_with_nothing_selected_is_refused) {
     NF_CHECK(cmd == nullptr);
     NF_CHECK(!err.empty());
 }
+
+NF_TEST(duplicate_carries_terrain_and_patrol_route_across_worlds) {
+    // Phase 63/64: both components are scene data, not live handles, so they
+    // must cross the source/destination worlds intact. A raw ECS record copy
+    // could not do this; SceneCopy is the one place each component is listed.
+    scene::Scene src("CopySrc");
+    ecs::Entity from = add_named(src, "Walker", ecs::kInvalidEntity);
+
+    runtime::TerrainComponent terrain;
+    terrain.resolution = 64u;
+    terrain.area = 75.0f;
+    terrain.height_scale = 11.0f;
+    terrain.noise_frequency = 0.025f;
+    terrain.octaves = 4u;
+    terrain.seed = 991u;
+    terrain.heightmap = "content://Textures/Hills.png";
+    terrain.material = "content://Materials/Ground.nfmat";
+    src.world().add<runtime::TerrainComponent>(from, terrain);
+
+    runtime::NavRouteComponent route;
+    route.wait = 0.6f;
+    route.loop = false;
+    route.ping_pong = true;
+    route.enabled = false;
+    route.points.push_back(runtime::NavPointSpec{1.5f, 0.5f, -2.0f, -1.0f});
+    route.points.push_back(runtime::NavPointSpec{9.0f, 0.5f, 8.0f, 2.25f});
+    src.world().add<runtime::NavRouteComponent>(from, route);
+
+    scene::Scene dst("CopyDst");
+    ecs::Entity to = add_named(dst, "Walker", ecs::kInvalidEntity);
+    editor::copy_entity_components(src.world(), from, dst.world(), to);
+
+    const auto* copied_terrain = dst.world().get<runtime::TerrainComponent>(to);
+    NF_CHECK(copied_terrain != nullptr);
+    if (copied_terrain != nullptr) {
+        NF_CHECK_EQ(copied_terrain->resolution, 64u);
+        NF_CHECK_NEAR(copied_terrain->area, 75.0f, 1e-6f);
+        NF_CHECK_NEAR(copied_terrain->height_scale, 11.0f, 1e-6f);
+        NF_CHECK_NEAR(copied_terrain->noise_frequency, 0.025f, 1e-6f);
+        NF_CHECK_EQ(copied_terrain->octaves, 4u);
+        NF_CHECK_EQ(copied_terrain->seed, 991u);
+        NF_CHECK(copied_terrain->heightmap == "content://Textures/Hills.png");
+        NF_CHECK(copied_terrain->material == "content://Materials/Ground.nfmat");
+    }
+
+    const auto* copied_route = dst.world().get<runtime::NavRouteComponent>(to);
+    NF_CHECK(copied_route != nullptr);
+    if (copied_route != nullptr) {
+        NF_CHECK_NEAR(copied_route->wait, 0.6f, 1e-6f);
+        NF_CHECK(!copied_route->loop);
+        NF_CHECK(copied_route->ping_pong);
+        NF_CHECK(!copied_route->enabled);
+        NF_CHECK_EQ(copied_route->points.size(), static_cast<usize>(2));
+        if (copied_route->points.size() == 2) {
+            NF_CHECK_NEAR(copied_route->points[0].x, 1.5f, 1e-6f);
+            NF_CHECK_NEAR(copied_route->points[0].z, -2.0f, 1e-6f);
+            NF_CHECK_NEAR(copied_route->points[0].wait, -1.0f, 1e-6f);
+            NF_CHECK_NEAR(copied_route->points[1].y, 0.5f, 1e-6f);
+            NF_CHECK_NEAR(copied_route->points[1].wait, 2.25f, 1e-6f);
+        }
+    }
+
+    // The destination had neither before, and the source is untouched: a copy
+    // is not a move.
+    ecs::Entity other = add_named(dst, "Other", ecs::kInvalidEntity);
+    NF_CHECK(!dst.world().has<runtime::TerrainComponent>(other));
+    NF_CHECK(!dst.world().has<runtime::NavRouteComponent>(other));
+    NF_CHECK(src.world().has<runtime::TerrainComponent>(from));
+    NF_CHECK(src.world().has<runtime::NavRouteComponent>(from));
+}

@@ -20,11 +20,13 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
+#include <NF/Runtime/SceneValidator.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <NF/ECS/ECS.hpp>
 #include <NF/Physics/Components.hpp>
 #include <NF/AI/NavMesh.hpp>
+#include <NF/Scripting/ScriptEngine.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -129,6 +131,76 @@ f32 path_distance(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
     return worst;
 }
 
+ecs::Entity find_walker(Scene& s) {
+    for (ecs::Entity e : s.world().all_entities()) {
+        if (s.world().has<NavAgentComponent>(e)) {
+            return e;
+        }
+    }
+    return ecs::kInvalidEntity;
+}
+
+/// Adopts a route scene and returns the walker. `start` is where the walker
+/// stands; the volume is the canonical 12x8x12 flat fixture from
+/// add_nav_scene(). Speed is high so a leg completes in a handful of frames and
+/// a test can spend its budget observing the route policy instead of walking.
+ecs::Entity add_route_scene(Runtime& rt, const NavRouteComponent& route, f32 speed = 50.0f,
+                            f32 start_x = 1.0f, f32 start_z = 1.0f) {
+    auto s = std::make_unique<Scene>("Route");
+    add_nav_scene(*s);
+    ecs::Entity walker = find_walker(*s);
+    if (walker.valid()) {
+        auto* t = s->world().get<Transform>(walker);
+        if (t != nullptr) {
+            t->local_x = start_x;
+            t->local_z = start_z;
+        }
+        auto* agent = s->world().get<NavAgentComponent>(walker);
+        if (agent != nullptr) {
+            agent->speed = speed;
+        }
+        s->world().add<NavRouteComponent>(walker, route);
+    }
+    rt.adopt_scene(std::move(s), "content://Scenes/Route.nfscene");
+    return walker;
+}
+
+std::vector<u32> collect_route_indices(Runtime& rt, ecs::Entity walker, int frames) {
+    std::vector<u32> seq;
+    for (int i = 0; i < frames; ++i) {
+        rt.update(kDt);
+        u32 index = 0;
+        u32 count = 0;
+        f32 wait = 0.0f;
+        bool finished = false;
+        if (rt.nav_route_state(walker, index, count, wait, finished) &&
+            (seq.empty() || seq.back() != index)) {
+            seq.push_back(index);
+        }
+    }
+    return seq;
+}
+
+/// Is `[first, last)` a contiguous subsequence of `seq`?
+bool contains_run(const std::vector<u32>& seq, const std::vector<u32>& run) {
+    if (run.empty() || seq.size() < run.size()) {
+        return false;
+    }
+    for (usize i = 0; i + run.size() <= seq.size(); ++i) {
+        bool all = true;
+        for (usize j = 0; j < run.size(); ++j) {
+            if (seq[i + j] != run[j]) {
+                all = false;
+                break;
+            }
+        }
+        if (all) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 // --- Scene format ------------------------------------------------------------
@@ -165,6 +237,12 @@ NF_TEST(navmesh_and_agent_lines_round_trip_through_scene_text) {
 
     std::string err;
     NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/n.nfscene", scene, err));
+    // Phase 63/64 are opt-in: a scene that authored neither a Terrain line nor
+    // a patrol route writes neither, so its text stays what it was.
+    const std::string saved = serialize_scene_to_text(scene);
+    NF_CHECK(saved.find("Terrain:") == std::string::npos);
+    NF_CHECK(saved.find("NavRoute:") == std::string::npos);
+    NF_CHECK(saved.find("NavPoint:") == std::string::npos);
     auto result = load_scene_from_vfs(vfs, "content://Scenes/n.nfscene");
     NF_CHECK(result.success);
     NF_CHECK(result.warnings.empty());
@@ -588,5 +666,366 @@ NF_TEST(nav_debug_edge_points_cover_every_polygon_edge_once_per_owner) {
             }
         }
         NF_CHECK(found);
+    }
+}
+
+// --- Patrol routes (Phase 64) ------------------------------------------------
+
+NF_TEST(nav_route_lines_round_trip_and_omit_an_inherited_wait) {
+    Scene s("RouteRoundTrip");
+    ecs::Entity v = s.world().create_entity();
+    s.world().add<Transform>(v, Transform{});
+    NavMeshComponent nm;
+    nm.area_x = 12.0f;
+    nm.area_z = 12.0f;
+    s.world().add<NavMeshComponent>(v, nm);
+
+    ecs::Entity w = s.world().create_entity();
+    s.world().add<Transform>(w, Transform{});
+    s.world().add<NavAgentComponent>(w, NavAgentComponent{});
+    NavRouteComponent route;
+    route.wait = 0.5f;
+    route.loop = false;
+    route.ping_pong = true;
+    route.enabled = false;
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(NavPointSpec{8.0f, 0.0f, 8.0f, 1.25f});
+    s.world().add<NavRouteComponent>(w, route);
+
+    const std::string text = serialize_scene_to_text(s);
+    NF_CHECK(text.find("NavRoute:") != std::string::npos);
+    NF_CHECK(text.find("NavPoint: pos=2,0,2\n") != std::string::npos);
+    // The inherited (-1) wait is an absent key, not a negative number: the
+    // scene says what it means.
+    NF_CHECK(text.find("NavPoint: pos=8,0,8 wait=1.25") != std::string::npos);
+
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    const NavRouteComponent* back = nullptr;
+    for (ecs::Entity e : loaded.scene->world().all_entities()) {
+        if (const auto* found = loaded.scene->world().get<NavRouteComponent>(e)) {
+            back = found;
+        }
+    }
+    NF_CHECK(back != nullptr);
+    if (back == nullptr) {
+        return;
+    }
+    NF_CHECK_NEAR(back->wait, 0.5f, 1e-5f);
+    NF_CHECK(!back->loop);
+    NF_CHECK(back->ping_pong);
+    NF_CHECK(!back->enabled);
+    NF_CHECK_EQ(back->points.size(), static_cast<usize>(2));
+    if (back->points.size() == 2) {
+        NF_CHECK_NEAR(back->points[0].x, 2.0f, 1e-5f);
+        NF_CHECK_NEAR(back->points[0].wait, -1.0f, 1e-5f);
+        NF_CHECK_NEAR(back->points[1].z, 8.0f, 1e-5f);
+        NF_CHECK_NEAR(back->points[1].wait, 1.25f, 1e-5f);
+    }
+
+    // A bare declaration keeps the documented defaults: closed patrol, no
+    // reversal, no pause, enabled.
+    const std::string bare =
+        "# SANAD Scene v1\nversion: 1\nname: BareRoute\nentity_count: 1\n---\n"
+        "entity: 1:0\n  Name: Walker\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavRoute:\n"
+        "  NavPoint: pos=1,0,1\n"
+        "  NavPoint: pos=4,0,4\n";
+    const SceneLoadResult plain = load_scene_from_text(bare);
+    NF_CHECK(plain.success);
+    const auto* plain_route =
+        plain.scene->world().get<NavRouteComponent>(plain.scene->world().all_entities()[0]);
+    NF_CHECK(plain_route != nullptr);
+    if (plain_route != nullptr) {
+        NF_CHECK_NEAR(plain_route->wait, 0.0f, 1e-6f);
+        NF_CHECK(plain_route->loop);
+        NF_CHECK(!plain_route->ping_pong);
+        NF_CHECK(plain_route->enabled);
+        NF_CHECK_EQ(plain_route->points.size(), static_cast<usize>(2));
+    }
+}
+
+NF_TEST(nav_route_lines_refuse_bad_values_by_name) {
+    const std::string text =
+        "# SANAD Scene v1\nversion: 1\nname: BadRoute\nentity_count: 1\n---\n"
+        "entity: 1:0\n  Name: Walker\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavAgent: speed=3 goal(0,0,0)\n"
+        "  NavRoute: wait=-2\n"
+        "  NavPoint: pos=1,2\n";
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    bool bad_wait = false;
+    bool bad_pos = false;
+    for (const std::string& w : loaded.warnings) {
+        if (w.find("NavRoute line with invalid 'wait='") != std::string::npos) {
+            bad_wait = true;
+        }
+        if (w.find("NavPoint line with invalid 'pos'") != std::string::npos) {
+            bad_pos = true;
+        }
+    }
+    NF_CHECK(bad_wait);
+    NF_CHECK(bad_pos);
+    // Neither refused line invents a component: the failure is one warning,
+    // not a half-authored route.
+    NF_CHECK(loaded.scene->world().query<NavRouteComponent>().empty());
+}
+
+NF_TEST(patrol_route_waits_then_stops_at_its_last_point) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.wait = 0.0f; // point 0 overrides this with a real pause
+    route.loop = false;
+    route.ping_pong = false;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 4.0f, 2.0f});
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 7.0f, 0.0f});
+    const ecs::Entity walker = add_route_scene(*env.runtime, route);
+    NF_CHECK(walker.valid());
+    if (!walker.valid()) {
+        return;
+    }
+
+    // Ten frames at 50 m/s: the 3 m leg is done, and the two-second pause is
+    // running. A patrolling guard counts as "at goal" while it waits.
+    for (int i = 0; i < 10; ++i) {
+        env.runtime->update(kDt);
+    }
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    NF_CHECK(env.runtime->nav_route_state(walker, index, count, wait, finished));
+    NF_CHECK_EQ(index, 0u);
+    NF_CHECK_EQ(count, 2u);
+    NF_CHECK(wait > 1.5f);
+    NF_CHECK(!finished);
+    NF_CHECK_EQ(env.runtime->nav_agents_at_goal(), static_cast<size_t>(1));
+
+    // Past the pause, the walker finishes the one-way route at its last point
+    // and stays there: `finished` is not "reset at the next frame".
+    for (int i = 0; i < 150; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(walker, index, count, wait, finished));
+    NF_CHECK_EQ(index, 1u);
+    NF_CHECK(finished);
+    NF_CHECK_EQ(env.runtime->nav_agents_at_goal(), static_cast<size_t>(1));
+    const auto* parked = env.runtime->scene()->world().get<Transform>(walker);
+    NF_CHECK(parked != nullptr);
+    const f32 parked_z = parked != nullptr ? parked->local_z : 0.0f;
+    NF_CHECK_NEAR(parked_z, 7.0f, 0.25f);
+
+    for (int i = 0; i < 60; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* still = env.runtime->scene()->world().get<Transform>(walker);
+    NF_CHECK(still != nullptr);
+    if (still != nullptr) {
+        NF_CHECK_NEAR(still->local_z, parked_z, 1e-5f);
+    }
+    // The authored goal (10,10) is ignored while the route runs.
+    NF_CHECK_NEAR(still != nullptr ? still->local_x : 0.0f, 1.0f, 0.25f);
+}
+
+NF_TEST(loop_route_wraps_to_the_first_point) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.loop = true;
+    route.ping_pong = false;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 1.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 1.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+    const ecs::Entity walker = add_route_scene(*env.runtime, route);
+    NF_CHECK(walker.valid());
+    if (!walker.valid()) {
+        return;
+    }
+
+    const std::vector<u32> seq = collect_route_indices(*env.runtime, walker, 60);
+    NF_CHECK(contains_run(seq, {0u, 1u, 2u, 0u}));
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    NF_CHECK(env.runtime->nav_route_state(walker, index, count, wait, finished));
+    NF_CHECK(!finished); // a closed patrol never ends
+    NF_CHECK_EQ(count, 3u);
+}
+
+NF_TEST(ping_pong_route_reverses_at_both_ends) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    // loop=true on purpose: ping-pong wins, and the route never wraps.
+    route.loop = true;
+    route.ping_pong = true;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 1.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 1.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+    const ecs::Entity walker = add_route_scene(*env.runtime, route);
+    NF_CHECK(walker.valid());
+    if (!walker.valid()) {
+        return;
+    }
+
+    const std::vector<u32> seq = collect_route_indices(*env.runtime, walker, 70);
+    // Forward to the end, back to the start, forward again: A-B-C-B-A-B.
+    NF_CHECK(contains_run(seq, {0u, 1u, 2u, 1u, 0u}));
+    NF_CHECK(!contains_run(seq, {2u, 0u})); // never wraps like a loop
+}
+
+NF_TEST(one_point_route_falls_back_to_the_goal) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 9.0f, -1.0f}); // nothing to patrol
+    const ecs::Entity walker = add_route_scene(*env.runtime, route, 3.0f);
+    NF_CHECK(walker.valid());
+    if (!walker.valid()) {
+        return;
+    }
+
+    for (int i = 0; i < 600; ++i) {
+        env.runtime->update(kDt);
+    }
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    NF_CHECK(!env.runtime->nav_route_state(walker, index, count, wait, finished));
+    const auto* t = env.runtime->scene()->world().get<Transform>(walker);
+    NF_CHECK(t != nullptr);
+    if (t != nullptr) {
+        NF_CHECK_NEAR(t->local_x, 10.0f, 0.3f);
+        NF_CHECK_NEAR(t->local_z, 10.0f, 0.3f);
+    }
+    NF_CHECK_EQ(env.runtime->nav_agents_at_goal(), static_cast<size_t>(1));
+}
+
+NF_TEST(validator_names_route_mistakes) {
+    const auto has = [](const ValidationReport& report, const char* needle) {
+        for (const ValidationIssue& issue : report.issues) {
+            if (issue.message.find(needle) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    Scene s("RouteWarnings");
+    ecs::Entity volume = s.world().create_entity();
+    s.world().add<Transform>(volume, Transform{});
+    NavMeshComponent nm;
+    nm.area_x = 10.0f;
+    nm.area_y = 5.0f;
+    nm.area_z = 10.0f;
+    s.world().add<NavMeshComponent>(volume, nm);
+
+    // A short route with both end policies set: the two policy warnings.
+    ecs::Entity walker = s.world().create_entity();
+    s.world().add<Transform>(walker, Transform{});
+    s.world().add<NavAgentComponent>(walker, NavAgentComponent{});
+    NavRouteComponent short_route;
+    short_route.loop = true;
+    short_route.ping_pong = true;
+    short_route.points.push_back(NavPointSpec{5.0f, 0.0f, 5.0f, -1.0f});
+    s.world().add<NavRouteComponent>(walker, short_route);
+
+    // A route with nobody to walk it and a point beyond the volume.
+    ecs::Entity orphan = s.world().create_entity();
+    s.world().add<Transform>(orphan, Transform{});
+    NavRouteComponent lost;
+    lost.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    lost.points.push_back(NavPointSpec{30.0f, 0.0f, 2.0f, -1.0f});
+    s.world().add<NavRouteComponent>(orphan, lost);
+
+    const ValidationReport report = validate_scene(s, "test.nfscene");
+    NF_CHECK(has(report, "needs at least two"));
+    NF_CHECK(has(report, "ping-pong wins"));
+    NF_CHECK(has(report, "without a NavAgent"));
+    NF_CHECK(has(report, "outside the navigation volume"));
+
+    // No volume at all: the route can never bind, and the report says why.
+    Scene empty("NoVolume");
+    ecs::Entity lonely = empty.world().create_entity();
+    empty.world().add<Transform>(lonely, Transform{});
+    empty.world().add<NavAgentComponent>(lonely, NavAgentComponent{});
+    NavRouteComponent route;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 1.0f, -1.0f});
+    route.points.push_back(NavPointSpec{4.0f, 0.0f, 4.0f, -1.0f});
+    empty.world().add<NavRouteComponent>(lonely, route);
+    const ValidationReport no_mesh = validate_scene(empty, "test.nfscene");
+    NF_CHECK(has(no_mesh, "no enabled navigation volume"));
+}
+
+NF_TEST(a_script_reads_the_live_patrol_cursor) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    const std::string script =
+        "function update(dt)\n"
+        "  local id, gen = nf.self()\n"
+        "  local index, count, wait, finished = nf.route()\n"
+        "  if index == nil then\n"
+        "    nf.set_entity_scale(id, gen, 0.0, 0.0, 0.0)\n"
+        "  else\n"
+        "    nf.set_entity_scale(id, gen, index + 1.0, count,\n"
+        "                        finished and 1.0 or 0.0)\n"
+        "  end\n"
+        "end\n";
+    NF_CHECK(env.vfs.write_text("content://Scripts/route_probe.lua", script).ok);
+
+    auto s = std::make_unique<Scene>("RouteProbe");
+    add_nav_scene(*s);
+    ecs::Entity walker = find_walker(*s);
+    NF_CHECK(walker.valid());
+    if (!walker.valid()) {
+        return;
+    }
+    NavRouteComponent route;
+    // A long pause keeps the cursor on point 1 while the script samples it.
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 4.0f, 5.0f});
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 7.0f, 0.0f});
+    s->world().add<NavRouteComponent>(walker, route);
+    auto* t = s->world().get<Transform>(walker);
+    if (t != nullptr) {
+        t->local_z = 1.0f;
+    }
+    auto* agent = s->world().get<NavAgentComponent>(walker);
+    if (agent != nullptr) {
+        agent->speed = 50.0f;
+    }
+    scripting::ScriptComponent script_component;
+    script_component.path = "content://Scripts/route_probe.lua";
+    s->world().add<scripting::ScriptComponent>(walker, script_component);
+
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/RouteProbe.nfscene");
+    for (int i = 0; i < 30; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* probe = env.runtime->scene()->world().get<Transform>(walker);
+    NF_CHECK(probe != nullptr);
+    if (probe != nullptr) {
+        NF_CHECK_NEAR(probe->scale_x, 1.0f, 1e-5f); // index 0 + 1
+        NF_CHECK_NEAR(probe->scale_y, 2.0f, 1e-5f); // point count
+        NF_CHECK_NEAR(probe->scale_z, 0.0f, 1e-5f); // not finished
     }
 }

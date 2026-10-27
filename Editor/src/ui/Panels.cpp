@@ -387,6 +387,15 @@ struct InspectorCache {
     float nava_goal[3]{};
     float nava_arrive = 0.25f;
     bool nava_enabled = true;
+    // Patrol route (Phase 64). The points are cached one row per destination;
+    // the live cursor (which point, how long left waiting) is runtime state and
+    // is read for display, never edited.
+    bool navr_has = false;
+    float navr_wait = 0.0f;
+    bool navr_loop = true;
+    bool navr_ping_pong = false;
+    bool navr_enabled = true;
+    std::vector<runtime::NavPointSpec> navr_points;
     // Vehicles (Step 11). Mirrors of the tune; Apply forwards the whole
     // struct through EditorApp. The four *_in fields are the debug-drive
     // inputs (live only, like the character's wish_dir/jump).
@@ -2399,6 +2408,17 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.nava_has = false;
                 }
+                if (const auto* navr_comp = w->get<runtime::NavRouteComponent>(sel)) {
+                    ic.navr_has = true;
+                    ic.navr_wait = navr_comp->wait;
+                    ic.navr_loop = navr_comp->loop;
+                    ic.navr_ping_pong = navr_comp->ping_pong;
+                    ic.navr_enabled = navr_comp->enabled;
+                    ic.navr_points = navr_comp->points;
+                } else {
+                    ic.navr_has = false;
+                    ic.navr_points.clear();
+                }
                 if (const auto* veh_comp = w->get<physics::VehicleComponent>(sel)) {
                     ic.veh_has = true;
                     ic.veh_enabled = veh_comp->enabled;
@@ -2489,6 +2509,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<runtime::NavAgentComponent>(sel) &&
                            ImGui::MenuItem(AV("nav_agent").c_str())) {
                     added = app.attach_nav_agent(sel, add_err);
+                } else if (!w->has<runtime::NavRouteComponent>(sel) &&
+                           ImGui::MenuItem(AV("nav_route").c_str())) {
+                    added = app.attach_nav_route(sel, add_err);
                 } else if (!w->has<runtime::TerrainComponent>(sel) &&
                            ImGui::MenuItem(AV("terrain").c_str())) {
                     added = app.attach_terrain(sel, add_err);
@@ -4951,6 +4974,127 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         } else {
                             ic.error.clear();
                             ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Patrol route (Phase 64) ---
+            //
+            // The points are authored destinations; where the walker is on them
+            // is live state and only shown, never edited. Apply forwards the
+            // list through the validated setter, so a point that is not a
+            // finite triple never reaches the file.
+            if (ImGui::CollapsingHeader((AV("nav_route") + "###NavRoute").c_str(),
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!ic.navr_has) {
+                    ImGui::TextDisabled("%s", AV("no_nav_route").c_str());
+                    if (ImGui::Button((AV("attach") + "##nav_route").c_str())) {
+                        std::string err;
+                        if (!app.attach_nav_route(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach nav route failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##navr_enabled").c_str(),
+                                    &ic.navr_enabled);
+                    ImGui::SameLine();
+                    ImGui::Checkbox((AV("route_loop") + "##navr").c_str(), &ic.navr_loop);
+                    ImGui::SameLine();
+                    ImGui::Checkbox((AV("route_ping_pong") + "##navr").c_str(),
+                                    &ic.navr_ping_pong);
+                    ImGui::DragFloat(AV("route_wait").c_str(), &ic.navr_wait, 0.05f, 0.0f,
+                                     3600.0f, "%.2f s");
+                    ImGui::TextDisabled("%s: %d", AV("route_points").c_str(),
+                                        static_cast<int>(ic.navr_points.size()));
+                    for (int i = 0; i < static_cast<int>(ic.navr_points.size()); ++i) {
+                        runtime::NavPointSpec& point = ic.navr_points[static_cast<usize>(i)];
+                        ImGui::PushID(i);
+                        ImGui::Text("%s %d", AV("route_point").c_str(), i + 1);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(170.0f);
+                        float pos[3]{point.x, point.y, point.z};
+                        if (ImGui::DragFloat3("##route_pos", pos, 0.1f)) {
+                            point.x = pos[0];
+                            point.y = pos[1];
+                            point.z = pos[2];
+                        }
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80.0f);
+                        float wait = point.wait;
+                        if (ImGui::DragFloat("##route_point_wait", &wait, 0.05f, -1.0f,
+                                             3600.0f, "%.2f s")) {
+                            point.wait = wait;
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s", AV("route_point_wait_hint").c_str());
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton((AV("delete") + "##route_point").c_str())) {
+                            ic.navr_points.erase(ic.navr_points.begin() + i);
+                            ImGui::PopID();
+                            break;
+                        }
+                        ImGui::PopID();
+                    }
+                    if (ImGui::Button((AV("route_add_point") + "##navr").c_str())) {
+                        runtime::NavPointSpec point;
+                        if (!ic.navr_points.empty()) {
+                            point = ic.navr_points.back();
+                            point.x += 2.0f;
+                            point.wait = -1.0f;
+                        } else if (const auto* t = w->get<scene::Transform>(sel);
+                                   t != nullptr) {
+                            point = runtime::NavPointSpec{t->local_x, t->local_y, t->local_z,
+                                                          -1.0f};
+                        }
+                        ic.navr_points.push_back(point);
+                    }
+                    if (ImGui::Button((AV("apply") + "##nav_route").c_str())) {
+                        runtime::NavRouteComponent edited;
+                        edited.points = ic.navr_points;
+                        edited.wait = ic.navr_wait;
+                        edited.loop = ic.navr_loop;
+                        edited.ping_pong = ic.navr_ping_pong;
+                        edited.enabled = ic.navr_enabled;
+                        std::string err;
+                        if (!app.set_nav_route(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Nav route edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##nav_route").c_str())) {
+                        std::string err;
+                        if (!app.detach_nav_route(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach nav route failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                    // Live cursor: which point is being walked to or waited at,
+                    // and whether a one-way route has ended. Session state, so
+                    // it is read-only here.
+                    if (runtime::Runtime* rt = app.runtime(); rt != nullptr) {
+                        u32 index = 0;
+                        u32 count = 0;
+                        f32 wait = 0.0f;
+                        bool finished = false;
+                        if (rt->nav_route_state(sel, index, count, wait, finished)) {
+                            if (finished) {
+                                ImGui::TextDisabled("%s", AV("route_finished").c_str());
+                            } else {
+                                ImGui::TextDisabled("%s: %u/%u  %s %.2f", AV("route_live").c_str(),
+                                                    index + 1, count,
+                                                    AV("route_wait").c_str(), wait);
+                            }
                         }
                     }
                 }

@@ -22,6 +22,7 @@
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
 #include <filesystem>
+#include <limits>
 #include <string>
 
 using namespace nf;
@@ -151,6 +152,81 @@ NF_TEST(editor_nav_agent_attach_edit_detach) {
     std::filesystem::remove_all(tmp);
 }
 
+NF_TEST(editor_nav_route_attach_edit_detach) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+
+    const auto tmp = nav_temp_dir("nf_ed_nav_route");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    std::string err;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+    ecs::World& world = runtime.edit_scene()->world();
+    const ecs::Entity e = world.all_entities().front();
+
+    // A point that is not a finite triple is refused before it can reach the
+    // file; the existing route (if any) is left alone.
+    runtime::NavRouteComponent bad;
+    bad.points.push_back(runtime::NavPointSpec{
+        std::numeric_limits<f32>::quiet_NaN(), 0.0f, 0.0f, -1.0f});
+    err.clear();
+    NF_CHECK(!app.set_nav_route(e, bad, err));
+    NF_CHECK(!err.empty());
+    NF_CHECK(!world.has<runtime::NavRouteComponent>(e));
+
+    // Attaching authors a usable two-point route around the entity.
+    NF_CHECK(app.attach_nav_route(e, err));
+    const auto* attached = world.get<runtime::NavRouteComponent>(e);
+    NF_CHECK(attached != nullptr);
+    if (attached != nullptr) {
+        NF_CHECK_EQ(attached->points.size(), static_cast<usize>(2));
+        NF_CHECK(attached->loop);
+        NF_CHECK(!attached->ping_pong);
+    }
+    // Idempotent, like the other attach methods.
+    NF_CHECK(app.attach_nav_route(e, err));
+
+    runtime::NavRouteComponent spec;
+    spec.wait = 0.75f;
+    spec.loop = false;
+    spec.ping_pong = true;
+    spec.enabled = false;
+    spec.points.push_back(runtime::NavPointSpec{2.0f, 0.5f, 3.0f, -1.0f});
+    spec.points.push_back(runtime::NavPointSpec{8.0f, 0.5f, 9.0f, 2.5f});
+    NF_CHECK(app.set_nav_route(e, spec, err));
+    const auto* comp = world.get<runtime::NavRouteComponent>(e);
+    NF_CHECK(comp != nullptr);
+    if (comp != nullptr) {
+        NF_CHECK_NEAR(comp->wait, 0.75f, 1e-6f);
+        NF_CHECK(!comp->loop);
+        NF_CHECK(comp->ping_pong);
+        NF_CHECK(!comp->enabled);
+        NF_CHECK_EQ(comp->points.size(), static_cast<usize>(2));
+        NF_CHECK_NEAR(comp->points[0].x, 2.0f, 1e-6f);
+        NF_CHECK_NEAR(comp->points[0].wait, -1.0f, 1e-6f);
+        NF_CHECK_NEAR(comp->points[1].z, 9.0f, 1e-6f);
+        NF_CHECK_NEAR(comp->points[1].wait, 2.5f, 1e-6f);
+    }
+
+    NF_CHECK(app.detach_nav_route(e, err));
+    NF_CHECK(!world.has<runtime::NavRouteComponent>(e));
+    err.clear();
+    NF_CHECK(!app.detach_nav_route(e, err));
+    NF_CHECK(!err.empty());
+
+    std::filesystem::remove_all(tmp);
+}
+
 NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
     const GpuFixture& f = require_gpu();
     auto& device = *f.device;
@@ -184,6 +260,13 @@ NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
     na.goal_x = 3.0f;
     na.goal_z = -6.0f;
     NF_CHECK(app.set_nav_agent(e, na, err));
+    runtime::NavRouteComponent route;
+    route.wait = 0.4f;
+    route.loop = false;
+    route.ping_pong = true;
+    route.points.push_back(runtime::NavPointSpec{1.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(runtime::NavPointSpec{7.0f, 0.0f, 8.0f, 1.5f});
+    NF_CHECK(app.set_nav_route(e, route, err));
     NF_CHECK(app.save(err));
 
     AssetRegistry reg2;
@@ -209,6 +292,20 @@ NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
         NF_CHECK_NEAR(na2->speed, 4.5f, 1e-5f);
         NF_CHECK_NEAR(na2->goal_x, 3.0f, 1e-5f);
         NF_CHECK_NEAR(na2->goal_z, -6.0f, 1e-5f);
+    }
+    const auto* route2 = runtime2.edit_scene()->world().get<runtime::NavRouteComponent>(e2);
+    NF_CHECK(route2 != nullptr);
+    if (route2 != nullptr) {
+        NF_CHECK_NEAR(route2->wait, 0.4f, 1e-5f);
+        NF_CHECK(!route2->loop);
+        NF_CHECK(route2->ping_pong);
+        NF_CHECK_EQ(route2->points.size(), static_cast<usize>(2));
+        if (route2->points.size() == 2) {
+            NF_CHECK_NEAR(route2->points[0].x, 1.0f, 1e-5f);
+            NF_CHECK_NEAR(route2->points[0].wait, -1.0f, 1e-5f);
+            NF_CHECK_NEAR(route2->points[1].z, 8.0f, 1e-5f);
+            NF_CHECK_NEAR(route2->points[1].wait, 1.5f, 1e-5f);
+        }
     }
 
     // A reopened scene's runtime bakes its own volume: the authoring path and
@@ -247,12 +344,15 @@ NF_TEST(editor_every_add_menu_component_attaches_nav_entries) {
 
     NF_CHECK(app.attach_navmesh(e, err));
     NF_CHECK(app.attach_nav_agent(e, err));
+    NF_CHECK(app.attach_nav_route(e, err));
     // Idempotent: attaching what is already there is a success, not a failure.
     NF_CHECK(app.attach_navmesh(e, err));
+    NF_CHECK(app.attach_nav_route(e, err));
 
     ecs::World& world = runtime.edit_scene()->world();
     NF_CHECK(world.has<runtime::NavMeshComponent>(e));
     NF_CHECK(world.has<runtime::NavAgentComponent>(e));
+    NF_CHECK(world.has<runtime::NavRouteComponent>(e));
 
     std::filesystem::remove_all(tmp);
 }

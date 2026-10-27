@@ -480,6 +480,71 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- patrol routes (Phase 64) ---------------------------------------
+    //
+    // A route is only as good as the walker that follows it and the volume it
+    // lives on, and neither fact is visible by reading one line. The runtime
+    // degrades quietly (a one-point route falls back to the goal, a route with
+    // no volume never binds), so the validator is where the author hears it.
+    {
+        const NavMeshComponent* first_volume = nullptr;
+        const scene::Transform* first_volume_t = nullptr;
+        for (const ecs::Entity e : entities) {
+            const auto* nm = world.get<NavMeshComponent>(e);
+            const auto* t = world.get<scene::Transform>(e);
+            if (nm != nullptr && t != nullptr && nm->enabled) {
+                first_volume = nm;
+                first_volume_t = t;
+                break;
+            }
+        }
+        for (const ecs::Entity e : entities) {
+            const auto* route = world.get<NavRouteComponent>(e);
+            if (route == nullptr || !route->enabled) {
+                continue;
+            }
+            const std::string label = entity_label(world, e);
+            if (!world.has<NavAgentComponent>(e)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute without a NavAgent on the same entity: nothing will "
+                           "walk this route");
+            }
+            if (route->points.size() < 2) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute has " + std::to_string(route->points.size()) +
+                               " point(s): a patrol needs at least two, so the agent will "
+                               "keep walking to its goal");
+            }
+            if (route->loop && route->ping_pong) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute sets loop=true and ping_pong=true: ping-pong wins and "
+                           "the route never wraps");
+            }
+            if (first_volume == nullptr || first_volume_t == nullptr) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute exists but the scene has no enabled navigation volume: "
+                           "no mesh is baked and the agent never moves");
+                continue;
+            }
+            for (usize i = 0; i < route->points.size(); ++i) {
+                const NavPointSpec& point = route->points[i];
+                const bool inside =
+                    point.x >= first_volume_t->local_x &&
+                    point.x <= first_volume_t->local_x + first_volume->area_x &&
+                    point.y >= first_volume_t->local_y &&
+                    point.y <= first_volume_t->local_y + first_volume->area_y &&
+                    point.z >= first_volume_t->local_z &&
+                    point.z <= first_volume_t->local_z + first_volume->area_z;
+                if (!inside) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "route point " + std::to_string(i + 1) +
+                                   " is outside the navigation volume: the agent cannot "
+                                   "path there");
+                }
+            }
+        }
+    }
+
     // --- combat (Phase 44) ---------------------------------------------
     //
     // A `Weapon:` line the loader refused never reaches here, so these rules

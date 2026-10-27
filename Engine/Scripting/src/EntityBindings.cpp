@@ -679,6 +679,33 @@ int l_state(lua_State* L) {
     return 1;
 }
 
+// nf.route() -> index, count, wait, finished, or nil when this entity is not
+// following an authored patrol route (Phase 64). The points are scene data; the
+// cursor is session state the runtime owns, which is why a script reads it here
+// instead of holding its own copy that a respawn would desynchronise.
+int l_route(lua_State* L) {
+    ecs::Entity self;
+    if (!self_entity(L, self)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const ScriptInput* input = bound_input(L);
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    if (input == nullptr || !input->route ||
+        !input->route(self.id, self.generation, index, count, wait, finished)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(index));
+    lua_pushinteger(L, static_cast<lua_Integer>(count));
+    lua_pushnumber(L, static_cast<lua_Number>(wait));
+    lua_pushboolean(L, finished ? 1 : 0);
+    return 4;
+}
+
 // nf.health(id, gen) -> current, max. (0, 0) for an entity with no hit points.
 int l_health(lua_State* L) {
     ecs::Entity e;
@@ -847,6 +874,8 @@ void install_input_bindings(LuaVM& vm, const ScriptInput* input) {
     lua_setfield(L, -2, "decision");
     lua_pushcfunction(L, l_state);
     lua_setfield(L, -2, "state");
+    lua_pushcfunction(L, l_route);
+    lua_setfield(L, -2, "route");
     lua_pop(L, 1);
 }
 

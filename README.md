@@ -425,6 +425,58 @@ Transition: from=return to=patrol when=distance at=4 below=true
   action; `nf.state()` returns the state a script is running in, and the editor
   has a full **State machine** section with a row per state and per edge.
 
+### A ground the AI can walk (`Terrain:` / `NavLink:`, Phase 63)
+
+The navigation bake used to assume a flat floor. One `Terrain:` line replaces it
+with the same deterministic height field the player sees:
+
+```text
+Terrain: res=128 area=90 height=24 freq=0.01 octaves=4 seed=3
+         material=content://Materials/Grass.nfmat
+```
+
+- **One field, two consumers**: the terrain mesh and the navigation bake sample
+  the same noise (or `heightmap=` image), so a hill the player climbs is a hill
+  the agent paths over. A scene without the line keeps the flat floor it always
+  had, byte for byte.
+- **Links for what a bake cannot infer**: `NavLink: from=-6,12.42,14
+  to=4,13.46,-12` snaps both ends onto the mesh and drops (counts, and warns in
+  the validator) a link that ends off it; `one_way=true` makes a drop one-way.
+
+### Patrol routes on it (`NavRoute:` / `NavPoint:`, Phase 64)
+
+A `NavAgent:` walked to one goal and stopped. A route turns the same walker into
+a patrol without a script:
+
+```text
+NavAgent: speed=3.2 goal_x=0 goal_y=0 goal_z=0 arrive=0.4
+NavRoute: wait=1 loop=true ping_pong=false
+NavPoint: pos=-14,14.15,14
+NavPoint: pos=13,12.08,-13 wait=2.5
+NavPoint: pos=10,12.32,10
+```
+
+- **The points are destinations, not a spline**: the runtime asks the navmesh for
+  a path to each in order, so a route bends around whatever the bake says is
+  walkable. Y must sit near the baked surface (`NavMesh::locate` allows the
+  agent's climb tolerance); a point off the mesh cannot be reached.
+- **Policy is three words**: `loop=true` wraps after the last point,
+  `ping_pong=true` reverses at both ends (and wins if both are set), and neither
+  stops the walker at the last point — `finished`. `wait=` is seconds paused at
+  each point; a point's own `wait=` overrides it, and an absent `wait=` (stored
+  as `-1`) inherits the route's.
+- **The goal does not disappear**: a route with fewer than two points,
+  `enabled=false`, or a removed component falls back to the authored
+  `NavAgent:` goal from wherever the walker stands, and the validator warns
+  about the short route instead of leaving a silent no-op.
+- **The cursor is session state**: point index, direction and the remaining
+  pause live beside the component, never in the scene. Saving mid-patrol saves
+  the authored route, and a script reads the live cursor with `nf.route()` →
+  `index, count, wait, finished` (nil when the entity is goal-driven).
+- The inspector has a **Patrol Route** section with one row per point. Editing a
+  position re-paths the live agent; changing the point count or the
+  loop/ping-pong policy restarts the patrol at its first point.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -437,7 +489,7 @@ Transition: from=return to=patrol when=distance at=4 below=true
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; NavMesh |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops and ping-pong |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
@@ -447,8 +499,8 @@ Transition: from=return to=patrol when=distance at=4 below=true
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 62 the counts are
-  `RuntimeTests` 405/405, `EditorTests` 290/290, `AITests` 129/129 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 64 the counts are
+  `RuntimeTests` 422/422, `EditorTests` 293/293, `AITests` 130/130 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

@@ -352,6 +352,14 @@ public:
     bool attach_nav_agent(ecs::Entity e, std::string& out_err);
     bool set_nav_agent(ecs::Entity e, const runtime::NavAgentComponent& na, std::string& out_err);
     bool detach_nav_agent(ecs::Entity e, std::string& out_err);
+    /// Patrol routes (Phase 64): an optional list of destinations for the
+    /// NavAgent on the same entity. Attaching authors a two-point route around
+    /// the entity so the inspector has something to edit; the live point index
+    /// is runtime state and is never part of the component.
+    bool attach_nav_route(ecs::Entity e, std::string& out_err);
+    bool set_nav_route(ecs::Entity e, const runtime::NavRouteComponent& route,
+                       std::string& out_err);
+    bool detach_nav_route(ecs::Entity e, std::string& out_err);
     // --- Vehicles (Step 11) ----------------------------------------------------
     // Same direct-edit shape as navigation: validated at the door, add-or-replace,
     // and a synchronous vehicle re-bind so the authored car simulates without a

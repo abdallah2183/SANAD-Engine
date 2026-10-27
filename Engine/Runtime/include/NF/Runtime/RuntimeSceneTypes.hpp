@@ -719,6 +719,48 @@ struct NavAgentComponent {
     bool enabled = true;
 };
 
+/// One authored destination on a patrol route (Phase 64). Position is world
+/// space, like the agent's goal: a patrol is a fact about the level, not about
+/// the entity's parent. `wait` is seconds to pause at THIS point; a negative
+/// value means "use the route's own wait=" (the loader writes a bare
+/// `NavPoint:` line when the point has no wait of its own).
+struct NavPointSpec {
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+    f32 wait = -1.0f;
+};
+
+/// An authored patrol route for the NavAgent on the same entity (Phase 64).
+///
+/// Without this component the agent walks to its `NavAgent:` goal exactly as it
+/// did before — so a scene that never heard of patrols behaves and round-trips
+/// byte for byte. With an enabled route of at least two points, the points are
+/// the destinations in line order and the goal is ignored while the route
+/// runs (a one-point route has nothing to patrol; the validator says so).
+///
+/// The live point index, direction and wait belong to the session, exactly like
+/// the path: they are reset when the scene is adopted and never written to
+/// file. Editing a point's position re-paths from the current one; changing the
+/// route's shape restarts the patrol at the first point.
+struct NavRouteComponent {
+    /// Destinations in walk order. `NavPoint:` lines append here; the order is
+    /// the route.
+    std::vector<NavPointSpec> points;
+    /// Seconds to pause at every point that does not override it.
+    f32 wait = 0.0f;
+    /// After the last point, walk back to the first: a closed patrol.
+    bool loop = true;
+    /// Reverse at the ends instead of wrapping: A-B-C-B-A. Wins over `loop`
+    /// when both are set; the validator points out the redundant pair rather
+    /// than silently choosing one.
+    bool ping_pong = false;
+    /// Off: the route stays authored and placed but the agent falls back to its
+    /// goal, the same "switch it off, keep it" contract the other components
+    /// keep.
+    bool enabled = true;
+};
+
 /// One agent's live navigation state, as the viewport debug draw needs it.
 /// A plain copy out of the runtime: position from the entity's Transform, the
 /// authored goal from the component, the route from the bound path state.
@@ -735,6 +777,12 @@ struct NavDebugAgent {
     std::vector<Vec3> path;
     bool has_path = false;
     bool at_goal = false;
+    /// True while the agent is following an authored route rather than its
+    /// `NavAgent:` goal. The route's live cursor is session state; the points
+    /// themselves are scene data (NavRouteComponent).
+    bool on_route = false;
+    /// Index of the route point being walked to, or waited at.
+    u32 route_point = 0;
 };
 
 /// Everything the navigation debug overlay draws, in one const call. Empty

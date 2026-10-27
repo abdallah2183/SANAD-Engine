@@ -2406,6 +2406,31 @@ bool valid_nav_agent_config(const runtime::NavAgentComponent& na, std::string& o
     return true;
 }
 
+// Patrol routes (Phase 64). The bounds mirror parse_nav_route/parse_nav_point:
+// a route the inspector accepts is a route the file round-trips. The point
+// count is deliberately unbounded — the validator warns about fewer than two,
+// because a one-point route is authorable and simply falls back to the goal.
+bool valid_nav_route_config(const runtime::NavRouteComponent& route, std::string& out_err) {
+    if (!std::isfinite(route.wait) || route.wait < 0.0f || route.wait > 3600.0f) {
+        out_err = "Route wait must be within [0, 3600]";
+        return false;
+    }
+    for (usize i = 0; i < route.points.size(); ++i) {
+        const runtime::NavPointSpec& point = route.points[i];
+        const std::string which = "Route point " + std::to_string(i + 1);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+            out_err = which + " must be a finite point";
+            return false;
+        }
+        // -1 is the authored "inherit the route wait" sentinel.
+        if (!std::isfinite(point.wait) || point.wait < -1.0f || point.wait > 3600.0f) {
+            out_err = which + " wait must be within [-1, 3600]";
+            return false;
+        }
+    }
+    return true;
+}
+
 // Vehicles (Step 11). The bounds mirror the scene loader's parse_vehicle, so
 // a tune the inspector accepts is a tune the file round-trips — a range that
 // differed between the two would let the UI write a component the loader then
@@ -2868,6 +2893,81 @@ bool EditorApp::detach_nav_agent(ecs::Entity e, std::string& out_err) {
     if (m_runtime != nullptr) {
         m_runtime->build_scene_navmesh();
     }
+    return true;
+}
+
+bool EditorApp::attach_nav_route(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<runtime::NavRouteComponent>(e)) {
+        return true;
+    }
+    // Two points around the entity: a fresh route that already reads as a
+    // patrol in the viewport, instead of an empty list the author has to
+    // discover how to fill. The Y is the entity's own height; terrain-scene
+    // authors snap it with the point fields.
+    const auto* t = w->get<scene::Transform>(e);
+    const f32 x = t != nullptr ? t->local_x : 0.0f;
+    const f32 y = t != nullptr ? t->local_y : 0.0f;
+    const f32 z = t != nullptr ? t->local_z : 0.0f;
+    runtime::NavRouteComponent route;
+    route.points.push_back(runtime::NavPointSpec{x, y, z, -1.0f});
+    route.points.push_back(runtime::NavPointSpec{x + 4.0f, y, z, -1.0f});
+    w->add<runtime::NavRouteComponent>(e, std::move(route));
+    after_mutation(e);
+    // The mesh does not depend on the route: the runtime's step detects the
+    // new shape and starts the walker at its first point. No re-bake, so an
+    // existing agent keeps the path it is walking.
+    return true;
+}
+
+bool EditorApp::set_nav_route(ecs::Entity e, const runtime::NavRouteComponent& route,
+                              std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_nav_route_config(route, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<runtime::NavRouteComponent>(e)) {
+        *existing = route;
+    } else {
+        w->add<runtime::NavRouteComponent>(e, route);
+    }
+    after_mutation(e);
+    // Same reasoning as attach: a moved point changes the destination the live
+    // agent re-paths to; the shape/policy change restarts the cursor.
+    return true;
+}
+
+bool EditorApp::detach_nav_route(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::NavRouteComponent>(e)) {
+        out_err = "Entity has no NavRouteComponent";
+        return false;
+    }
+    w->remove<runtime::NavRouteComponent>(e);
+    after_mutation(e);
+    // Removing the route returns the agent to its authored goal on the next
+    // step; nothing has to be rebuilt.
     return true;
 }
 

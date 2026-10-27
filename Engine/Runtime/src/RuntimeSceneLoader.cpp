@@ -719,6 +719,36 @@ static bool parse_nav_agent(const std::string& line, NavAgentComponent& out, std
     return true;
 }
 
+// --- Patrol routes (Phase 64) -----------------------------------------------
+//
+// `NavRoute:` declares the route's policy and `NavPoint:` appends one
+// destination. Same optional-key contract as every line above: absent keeps
+// the default, present-but-impossible rejects that line by name. The route and
+// its points may be interleaved; the loader merges them on the entity.
+
+static bool parse_nav_route(const std::string& line, NavRouteComponent& out,
+                            std::string& out_bad) {
+    if (!optional_float_in_range(line, "wait=", 0.0f, 3600.0f, out.wait, out_bad)) return false;
+    out.loop = line.find("loop=false") == std::string::npos;
+    out.ping_pong = line.find("ping_pong=true") != std::string::npos;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
+static bool parse_nav_point(const std::string& line, NavPointSpec& out, std::string& out_bad) {
+    if (!field_vec3_commas(line, "pos=", out.x, out.y, out.z)) {
+        out_bad = "pos";
+        return false;
+    }
+    // -1 is the component's sentinel for "use the route's wait", so a point
+    // only carries a wait when the author wrote one. Zero is meaningful: it
+    // overrides a non-zero route wait with "do not pause here".
+    f32 wait = out.wait;
+    if (!optional_float_in_range(line, "wait=", 0.0f, 3600.0f, wait, out_bad)) return false;
+    out.wait = wait;
+    return true;
+}
+
 // --- Weapons and hit points (Phase 44) --------------------------------------
 //
 // The two lines follow the contract the rest of the format keeps: every key is
@@ -2179,6 +2209,45 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 } else {
                     scene->world().add<NavAgentComponent>(e, std::move(comp));
                 }
+            } else if (line.rfind("  NavRoute:",0)==0) {
+                // The patrol policy (Phase 64). Points may be written before or
+                // after this line, so the parse MERGES the policy into whatever
+                // the entity already carries instead of replacing it.
+                NavRouteComponent route;
+                std::string bad;
+                if (!parse_nav_route(line, route, bad)) {
+                    result.warnings.push_back("NavRoute line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    auto* existing = scene->world().get<NavRouteComponent>(e);
+                    if (existing == nullptr) {
+                        scene->world().add<NavRouteComponent>(e, std::move(route));
+                    } else {
+                        existing->wait = route.wait;
+                        existing->loop = route.loop;
+                        existing->ping_pong = route.ping_pong;
+                        existing->enabled = route.enabled;
+                    }
+                }
+            } else if (line.rfind("  NavPoint:",0)==0) {
+                // One destination on the patrol route (Phase 64). Like
+                // `NavLink:`, the line appends to the component its neighbours
+                // declare and creates it when the author wrote the points first.
+                NavPointSpec point;
+                std::string bad;
+                if (!parse_nav_point(line, point, bad)) {
+                    result.warnings.push_back("NavPoint line with invalid '" + bad +
+                                              "' was ignored: " + line);
+                } else {
+                    auto* route = scene->world().get<NavRouteComponent>(e);
+                    if (route == nullptr) {
+                        scene->world().add<NavRouteComponent>(e, NavRouteComponent{});
+                        route = scene->world().get<NavRouteComponent>(e);
+                    }
+                    if (route != nullptr) {
+                        route->points.push_back(point);
+                    }
+                }
             } else if (line.rfind("  Weapon:",0)==0) {
                 // A gun (Phase 44): the authored profile only. The live state
                 // (rounds left, cooldown, burst queue) is session data and is
@@ -3142,6 +3211,25 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
                 << " arrive=" << agent->arrive_radius
                 << " enabled=" << (agent->enabled ? "true" : "false") << "\n";
         }
+        // The patrol route (Phase 64): policy on one line, one destination per
+        // line after it, so the order an author reads is the order the agent
+        // walks. A scene without the component writes nothing, which is what
+        // keeps its file byte for byte what it was before this phase.
+        const auto* route = scene_obj.world().get<NavRouteComponent>(e);
+        if (route) {
+            out << "  NavRoute: wait=" << route->wait
+                << " loop=" << (route->loop ? "true" : "false")
+                << " ping_pong=" << (route->ping_pong ? "true" : "false")
+                << " enabled=" << (route->enabled ? "true" : "false") << "\n";
+            for (const NavPointSpec& nav_point : route->points) {
+                out << "  NavPoint: pos=" << nav_point.x << "," << nav_point.y << "," << nav_point.z;
+                // -1 is "use the route wait", and is what an absent key means.
+                if (nav_point.wait >= 0.0f) {
+                    out << " wait=" << nav_point.wait;
+                }
+                out << "\n";
+            }
+        }
         // Vehicle: config only — the four drive inputs are live gameplay state
         // and the JoltVehicle pointer is session state, so neither is scene
         // data (same rule as Character's wish_dir/jump/grounded).
@@ -3348,11 +3436,21 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     if (const auto* nm = src.get<NavMeshComponent>(se)) {
         dst.add<NavMeshComponent>(de, *nm);
     }
+    if (const auto* terrain = src.get<TerrainComponent>(se)) {
+        // Pure scene data: the runtime rebuilds the mesh and the sampler from
+        // the component on adopt, so a copy is a full copy.
+        dst.add<TerrainComponent>(de, *terrain);
+    }
     if (const auto* na = src.get<NavAgentComponent>(se)) {
         // The live path is per-session state the runtime keeps beside the
         // component, so there is nothing to scrub here — the component itself
         // is pure configuration plus the authored goal.
         dst.add<NavAgentComponent>(de, *na);
+    }
+    if (const auto* route = src.get<NavRouteComponent>(se)) {
+        // Points are authored data; the live point index/direction/wait live
+        // beside the component in the runtime, never inside it.
+        dst.add<NavRouteComponent>(de, *route);
     }
     if (const auto* vc = src.get<physics::VehicleComponent>(se)) {
         // Live inputs (throttle/steer/brake/handbrake) are per-session, and

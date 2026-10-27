@@ -615,7 +615,9 @@ public:
     /// Enabled agents bound right now.
     [[nodiscard]] size_t nav_agent_count() const { return m_nav_agents.size(); }
     /// Agents whose last step drove them onto their goal. The difference
-    /// between "walkers exist" and "walkers arrived".
+    /// between "walkers exist" and "walkers arrived". A patrolling agent counts
+    /// while it waits at a route point; a non-looping route that reached its
+    /// last point stays counted (see nav_route_state's `finished`).
     [[nodiscard]] size_t nav_agents_at_goal() const {
         size_t n = 0;
         for (const auto& [entity, state] : m_nav_agents) {
@@ -624,6 +626,14 @@ public:
         }
         return n;
     }
+    /// The live cursor of an authored patrol route (Phase 64): point index,
+    /// point count, seconds left in the wait at that point, and whether a
+    /// non-looping route has ended at its last point. False when the entity has
+    /// no enabled route of at least two points or no bound agent (no bake, or
+    /// the agent/route is disabled). The points are scene data; this is the
+    /// session state no file holds.
+    [[nodiscard]] bool nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count,
+                                       f32& out_wait, bool& out_finished) const;
     /// Obstacles the last bake carved (static box colliders seen at build time).
     [[nodiscard]] size_t navmesh_obstacle_count() const { return m_nav_obstacle_count; }
 
@@ -1739,6 +1749,19 @@ private:
         bool has_path = false;
         bool at_goal = false;
         u64 mesh_generation = 0;    ///< Bake this path was planned against.
+        // Patrol routes (Phase 64). The authored points are scene data; where
+        // the walker is on them is session state, beside the path for the same
+        // reason. `route_point` is the point being walked to or waited at.
+        bool on_route = false;
+        usize route_point = 0;
+        i32 route_direction = 1;    ///< +1 forward, -1 backward (ping-pong).
+        f32 route_wait_remaining = 0.0f;
+        bool route_finished = false; ///< Non-looping route reached its last point.
+        // The route shape the live cursor belongs to. A shape change restarts
+        // the patrol at the first point instead of indexing a point that moved.
+        usize route_point_count = 0;
+        bool route_loop = false;
+        bool route_ping_pong = false;
     };
     std::unordered_map<ecs::Entity, NavAgentState> m_nav_agents;
     std::unique_ptr<ai::NavMesh> m_navmesh;

@@ -216,6 +216,19 @@ Games/MyGame/
   cannot climb back up). Endpoints are world space and are snapped onto the
   baked mesh; a link whose end is off the mesh is dropped and counted, and the
   validator warns about it before the bake ever runs.
+- A walker can patrol a route instead of walking to one goal (Phase 64). The
+  policy is one line and every destination is its own line:
+  `NavRoute: wait=1 loop=true ping_pong=false` then
+  `NavPoint: pos=-14,14.15,14` and `NavPoint: pos=13,12.08,-13 wait=2.5`. The
+  runtime asks the navmesh for a path to each point in order, so Y must sit near
+  the baked surface (a point off the mesh is unreachable). `loop=true` wraps
+  after the last point, `ping_pong=true` reverses at both ends and wins if both
+  are set, and with neither the walker stops at the last point. `wait=` is the
+  pause at each point; a point's own `wait=` overrides it, and an absent
+  `wait=` inherits the route's. A route with fewer than two points, or
+  `enabled=false`, falls back to the `NavAgent:` goal; the validator warns about
+  it. The live cursor (index, direction, remaining pause) is session state and
+  is never saved — read it from Lua with `nf.route()`.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -270,7 +283,9 @@ nf.sensing(id, gen)               -- is a sense reading it THIS frame?
 nf.last_known(id, gen)            -- x, y, z where I last knew it, or nil
 nf.forget(id, gen)                -- drop one memory; false if there was none
 nf.decision()                     -- name, score of what this entity wants to do
-nf.state()                        -- the state this entity's machine is in, or nil
+nf.state()                       -- the state this entity's machine is in, or nil
+nf.route()                       -- index, count, wait, finished of its patrol,
+                                 -- or nil when it is walking to its goal
 print(...)                        -- engine log
 ```
 

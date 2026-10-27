@@ -2,6 +2,7 @@
 
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Editor/PlayMode.hpp>
+#include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -147,4 +148,82 @@ NF_TEST(editor_play_duplicate_names_detect_multiplicity_mismatch) {
     std::string diff;
     NF_CHECK(!editor::scenes_equal_structure(a, b, diff));
     NF_CHECK(!diff.empty());
+}
+
+NF_TEST(editor_play_clone_carries_terrain_and_patrol_route) {
+    // Phase 63/64 regressions: the Terrain and NavRoute components were not in
+    // the clone's component list, so Play simulated a scene without its ground
+    // and without its patrol, and Stop restored the same hole.
+    scene::Scene edit("NavClone");
+    build_sample(edit);
+    ecs::Entity root = ecs::kInvalidEntity;
+    for (ecs::Entity e : edit.world().all_entities()) {
+        const auto* n = edit.world().get<scene::NameComponent>(e);
+        if (n != nullptr && n->name == "Root") {
+            root = e;
+        }
+    }
+    NF_CHECK(root.valid());
+    if (!root.valid()) {
+        return;
+    }
+
+    runtime::TerrainComponent terrain;
+    terrain.resolution = 32u;
+    terrain.area = 64.0f;
+    terrain.height_scale = 9.0f;
+    terrain.octaves = 3u;
+    terrain.seed = 17u;
+    terrain.material = "content://Materials/Ground.nfmat";
+    edit.world().add<runtime::TerrainComponent>(root, terrain);
+
+    runtime::NavRouteComponent route;
+    route.wait = 0.25f;
+    route.loop = false;
+    route.ping_pong = true;
+    route.points.push_back(runtime::NavPointSpec{1.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(runtime::NavPointSpec{5.0f, 0.0f, 6.0f, 1.0f});
+    edit.world().add<runtime::NavRouteComponent>(root, route);
+
+    auto clone = editor::clone_scene(edit);
+    NF_CHECK(clone != nullptr);
+    if (clone == nullptr) {
+        return;
+    }
+    ecs::Entity cloned_root = ecs::kInvalidEntity;
+    for (ecs::Entity e : clone->world().all_entities()) {
+        const auto* n = clone->world().get<scene::NameComponent>(e);
+        if (n != nullptr && n->name == "Root") {
+            cloned_root = e;
+        }
+    }
+    NF_CHECK(cloned_root.valid());
+    if (!cloned_root.valid()) {
+        return;
+    }
+    const auto* cloned_terrain = clone->world().get<runtime::TerrainComponent>(cloned_root);
+    NF_CHECK(cloned_terrain != nullptr);
+    if (cloned_terrain != nullptr) {
+        NF_CHECK_EQ(cloned_terrain->resolution, 32u);
+        NF_CHECK_NEAR(cloned_terrain->area, 64.0f, 1e-5f);
+        NF_CHECK_NEAR(cloned_terrain->height_scale, 9.0f, 1e-5f);
+        NF_CHECK_EQ(cloned_terrain->seed, 17u);
+        NF_CHECK(cloned_terrain->material == "content://Materials/Ground.nfmat");
+    }
+    const auto* cloned_route = clone->world().get<runtime::NavRouteComponent>(cloned_root);
+    NF_CHECK(cloned_route != nullptr);
+    if (cloned_route != nullptr) {
+        NF_CHECK_NEAR(cloned_route->wait, 0.25f, 1e-6f);
+        NF_CHECK(!cloned_route->loop);
+        NF_CHECK(cloned_route->ping_pong);
+        NF_CHECK_EQ(cloned_route->points.size(), static_cast<usize>(2));
+        if (cloned_route->points.size() == 2) {
+            NF_CHECK_NEAR(cloned_route->points[0].x, 1.0f, 1e-6f);
+            NF_CHECK_NEAR(cloned_route->points[1].wait, 1.0f, 1e-6f);
+        }
+    }
+
+    std::string diff;
+    NF_CHECK(editor::scenes_equal_structure(edit, *clone, diff));
+    NF_CHECK(diff.empty());
 }

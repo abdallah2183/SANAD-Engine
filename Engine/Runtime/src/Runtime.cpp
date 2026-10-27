@@ -1666,6 +1666,11 @@ u32 Runtime::step_script(float dt) {
         input.state = [self](u32 id, u32 gen, std::string& name) {
             return self->entity_state(ecs::Entity{id, gen}, name);
         };
+        // Patrol routes (Phase 64): where on its route this entity's walker is.
+        input.route = [self](u32 id, u32 gen, u32& index, u32& count, f32& wait,
+                             bool& finished) {
+            return self->nav_route_state(ecs::Entity{id, gen}, index, count, wait, finished);
+        };
     }
     m_scripts->set_input_source(input);
     m_scripts->update(world, dt);
@@ -2262,6 +2267,21 @@ void Runtime::build_scene_navmesh() {
                 ground ? "terrain" : "flat floor");
 }
 
+namespace {
+
+/// How long an agent pauses at route point `index`. A negative per-point wait
+/// means "use the route's wait", which is how one line can set the pace for a
+/// whole patrol while a single stop can override it with `wait=0`.
+f32 nav_route_point_wait(const NavRouteComponent& route, usize index) {
+    if (index >= route.points.size()) {
+        return 0.0f;
+    }
+    const f32 point_wait = route.points[index].wait;
+    return point_wait >= 0.0f ? point_wait : route.wait;
+}
+
+} // namespace
+
 u32 Runtime::step_navmesh(float dt) {
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene || m_navmesh == nullptr ||
         !m_navmesh->built()) {
@@ -2292,7 +2312,103 @@ u32 Runtime::step_navmesh(float dt) {
         }
         NavAgentState& st = it->second;
         const Vec3 start{t->local_x, t->local_y, t->local_z};
-        const Vec3 goal{comp->goal_x, comp->goal_y, comp->goal_z};
+        const NavRouteComponent* route = world.get<NavRouteComponent>(e);
+        // A route with fewer than two points has nothing to patrol; the agent
+        // keeps its goal and the validator names the useless line.
+        const bool patrolling =
+            route != nullptr && route->enabled && route->points.size() >= 2;
+
+        // Move the cursor to the next destination, or end a one-way route at
+        // its last point. Only called while `patrolling`.
+        auto advance_route = [&]() {
+            const usize last = route->points.size() - 1;
+            if (st.route_ping_pong) {
+                if (st.route_direction > 0) {
+                    if (st.route_point >= last) {
+                        st.route_direction = -1;
+                        st.route_point = last - 1;
+                    } else {
+                        ++st.route_point;
+                    }
+                } else if (st.route_point == 0) {
+                    st.route_direction = 1;
+                    st.route_point = 1;
+                } else {
+                    --st.route_point;
+                }
+                return true;
+            }
+            if (route->loop) {
+                st.route_point = (st.route_point + 1) % route->points.size();
+                return true;
+            }
+            if (st.route_point >= last) {
+                // No loop and no ping-pong: the last point is the end of the
+                // patrol, not a place to start over from.
+                st.route_finished = true;
+                st.at_goal = true;
+                st.has_path = false;
+                return false;
+            }
+            ++st.route_point;
+            return true;
+        };
+
+        if (!patrolling) {
+            if (st.on_route) {
+                // The route was removed, disabled, or lost a point: fall back
+                // to the authored goal from wherever the agent now stands.
+                st.on_route = false;
+                st.route_finished = false;
+                st.route_wait_remaining = 0.0f;
+                st.route_point = 0;
+                st.route_direction = 1;
+                st.has_path = false;
+                st.at_goal = false;
+            }
+        } else {
+            // A different route shape or policy addresses points the live
+            // cursor may not have: restart at the first point.
+            const bool shape_changed =
+                !st.on_route || st.route_point_count != route->points.size() ||
+                st.route_loop != route->loop || st.route_ping_pong != route->ping_pong;
+            if (shape_changed) {
+                st.on_route = true;
+                st.route_point = 0;
+                st.route_direction = 1;
+                st.route_wait_remaining = 0.0f;
+                st.route_finished = false;
+                st.route_point_count = route->points.size();
+                st.route_loop = route->loop;
+                st.route_ping_pong = route->ping_pong;
+                st.has_path = false;
+                st.at_goal = false;
+            }
+            if (st.route_finished) {
+                continue; // a one-way route that reached its last point stays there
+            }
+            if (st.route_wait_remaining > 0.0f) {
+                // Standing at the point, using up its pause. `at_goal` stays
+                // true so "walkers arrived" includes a guard looking around.
+                st.route_wait_remaining -= dt;
+                st.at_goal = true;
+                if (st.route_wait_remaining > 0.0f) {
+                    continue;
+                }
+                st.route_wait_remaining = 0.0f;
+                st.at_goal = false;
+                if (!advance_route()) {
+                    continue;
+                }
+                st.has_path = false;
+            }
+        }
+
+        const NavPointSpec* destination =
+            patrolling ? &route->points[st.route_point] : nullptr;
+        const Vec3 goal = destination != nullptr
+                              ? Vec3{destination->x, destination->y, destination->z}
+                              : Vec3{comp->goal_x, comp->goal_y, comp->goal_z};
 
         bool repath = !st.has_path || st.path.size() < 2 ||
                       !st.goal.nearly_equals(goal, 1e-4f) ||
@@ -2342,6 +2458,18 @@ u32 Runtime::step_navmesh(float dt) {
             ++st.waypoint;
             if (st.waypoint >= st.path.size()) {
                 st.at_goal = true;
+                if (patrolling) {
+                    // Arrived at a route point: pause there (if the point asks
+                    // for one), then pick the next destination. A zero wait is
+                    // picked up immediately, so a route with no pauses does not
+                    // spend one frame standing at every point.
+                    st.route_wait_remaining = nav_route_point_wait(*route, st.route_point);
+                    st.has_path = false;
+                    if (st.route_wait_remaining <= 0.0f) {
+                        st.at_goal = false;
+                        advance_route();
+                    }
+                }
             }
         } else if (step_len > 0.0f) {
             const f32 inv = 1.0f / dist;
@@ -2355,6 +2483,19 @@ u32 Runtime::step_navmesh(float dt) {
         ++moved;
     }
     return moved;
+}
+
+bool Runtime::nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count,
+                              f32& out_wait, bool& out_finished) const {
+    const auto it = m_nav_agents.find(entity);
+    if (it == m_nav_agents.end() || !it->second.on_route) {
+        return false;
+    }
+    out_index = static_cast<u32>(it->second.route_point);
+    out_count = static_cast<u32>(it->second.route_point_count);
+    out_wait = std::max(0.0f, it->second.route_wait_remaining);
+    out_finished = it->second.route_finished;
+    return true;
 }
 
 void Runtime::bind_scene_vehicles() {
@@ -2714,6 +2855,18 @@ NavDebugSnapshot Runtime::nav_debug_snapshot() const {
         }
         if (const auto* comp = world.get<NavAgentComponent>(entity); comp != nullptr) {
             a.goal = Vec3{comp->goal_x, comp->goal_y, comp->goal_z};
+        }
+        // A patrolling agent's live target is the route point it is walking to,
+        // not the authored goal the route ignores while it runs. The overlay
+        // must draw where the walker is actually headed.
+        a.on_route = st.on_route;
+        a.route_point = static_cast<u32>(st.route_point);
+        if (st.on_route) {
+            if (const auto* route = world.get<NavRouteComponent>(entity);
+                route != nullptr && st.route_point < route->points.size()) {
+                const NavPointSpec& point = route->points[st.route_point];
+                a.goal = Vec3{point.x, point.y, point.z};
+            }
         }
         // The route from the waypoint currently walked to: the travelled legs
         // are history, and drawing them would paint the path the agent has

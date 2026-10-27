@@ -152,6 +152,16 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
             // beside the component in the runtime, never inside it).
             dw.add<runtime::NavAgentComponent>(de, *na);
         }
+        if (const auto* terrain = sw.get<runtime::TerrainComponent>(se)) {
+            // Pure scene data: the runtime rebuilds the terrain state and the
+            // navigation bake from it on adopt, so a copy is a full copy.
+            dw.add<runtime::TerrainComponent>(de, *terrain);
+        }
+        if (const auto* route = sw.get<runtime::NavRouteComponent>(se)) {
+            // The authored points cross; the live cursor is runtime state and
+            // is not inside the component.
+            dw.add<runtime::NavRouteComponent>(de, *route);
+        }
         if (const auto* vc = sw.get<physics::VehicleComponent>(se)) {
             // Tune only: live inputs are per-session and the JoltVehicle view
             // points at another world's simulation. A clone that carried
@@ -216,6 +226,13 @@ std::string signature_of(const ecs::World& w, ecs::Entity e) {
     s += w.has<vfx::ParticleComponent>(e) ? "V" : "-";
     s += w.has<physics::ClothComponent>(e) ? "F" : "-";
     s += w.has<physics::CharacterComponent>(e) ? "H" : "-";
+    // Navigation (Phase 28/63/64): the volume, its walker, the ground the bake
+    // samples and the patrol. A clone that dropped any of them changed what the
+    // session simulated while looking structurally identical without these.
+    s += w.has<runtime::NavMeshComponent>(e) ? "B" : "-";
+    s += w.has<runtime::NavAgentComponent>(e) ? "W" : "-";
+    s += w.has<runtime::TerrainComponent>(e) ? "E" : "-";
+    s += w.has<runtime::NavRouteComponent>(e) ? "r" : "-";
     return s;
 }
 
