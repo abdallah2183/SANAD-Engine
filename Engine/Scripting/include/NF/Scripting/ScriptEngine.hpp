@@ -204,11 +204,12 @@ struct ScriptInput {
     /// has no machine. `nf.state()` returns nil in that case.
     std::function<bool(u32, u32, std::string&)> state;
 
-    /// Patrol routes (Phase 64): the live cursor of the route this entity's
+    /// Patrol routes (Phase 64/65): the live cursor of the route this entity's
     /// `NavAgent:` is walking — point index (0-based), point count, seconds
-    /// left in the wait at that point, and whether a non-looping route has
-    /// finished. False when the entity is following its goal instead.
-    std::function<bool(u32, u32, u32&, u32&, f32&, bool&)> route;
+    /// left in the wait at that point, whether a non-looping route has
+    /// finished, and whether a perception gate is holding it this frame. False
+    /// when the entity is following its goal instead.
+    std::function<bool(u32, u32, u32&, u32&, f32&, bool&, bool&)> route;
 };
 
 /// RAII Lua 5.4 VM. Not copyable. Single-threaded use only (like lua_State).

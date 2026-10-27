@@ -165,6 +165,51 @@ ecs::Entity add_route_scene(Runtime& rt, const NavRouteComponent& route, f32 spe
     return walker;
 }
 
+/// A patrol scene with a sensor (Phase 65): the walker on the canonical volume,
+/// a route, an enabled Perception, and one hostile target at (x, 0, z). The
+/// walker is Blue and the target Red, so the faction filter sees a threat; the
+/// target has hit points, so it is a cast member and a corpse would stop
+/// counting. Returns both entities for the test to move or destroy.
+struct PerceptionRouteScene {
+    ecs::Entity walker = ecs::kInvalidEntity;
+    ecs::Entity target = ecs::kInvalidEntity;
+};
+
+PerceptionRouteScene add_perception_route_scene(Runtime& rt, const NavRouteComponent& route,
+                                                const PerceptionComponent& perception,
+                                                f32 target_x, f32 target_z) {
+    auto s = std::make_unique<Scene>("HoldRoute");
+    add_nav_scene(*s);
+    ecs::Entity walker = find_walker(*s);
+    if (walker.valid()) {
+        if (auto* t = s->world().get<Transform>(walker); t != nullptr) {
+            t->local_x = 1.0f;
+            t->local_z = 1.0f;
+        }
+        if (auto* agent = s->world().get<NavAgentComponent>(walker); agent != nullptr) {
+            agent->speed = 4.0f;
+        }
+        s->world().add<NavRouteComponent>(walker, route);
+        FactionComponent faction;
+        faction.team = "Blue";
+        s->world().add<FactionComponent>(walker, faction);
+        s->world().add<PerceptionComponent>(walker, perception);
+    }
+
+    ecs::Entity target = s->world().create_entity();
+    Transform tt{};
+    tt.local_x = target_x;
+    tt.local_z = target_z;
+    s->world().add<Transform>(target, tt);
+    FactionComponent target_faction;
+    target_faction.team = "Red";
+    s->world().add<FactionComponent>(target, target_faction);
+    s->world().add<HealthComponent>(target, HealthComponent{});
+
+    rt.adopt_scene(std::move(s), "content://Scenes/HoldRoute.nfscene");
+    return PerceptionRouteScene{walker, target};
+}
+
 std::vector<u32> collect_route_indices(Runtime& rt, ecs::Entity walker, int frames) {
     std::vector<u32> seq;
     for (int i = 0; i < frames; ++i) {
@@ -955,11 +1000,33 @@ NF_TEST(validator_names_route_mistakes) {
     lost.points.push_back(NavPointSpec{30.0f, 0.0f, 2.0f, -1.0f});
     s.world().add<NavRouteComponent>(orphan, lost);
 
+    // Phase 65: a gate with no sensor can never hold, and a delay with no gate
+    // can never matter. Both are author mistakes a readable line cannot show.
+    ecs::Entity gated = s.world().create_entity();
+    s.world().add<Transform>(gated, Transform{});
+    s.world().add<NavAgentComponent>(gated, NavAgentComponent{});
+    NavRouteComponent gated_route;
+    gated_route.hold = NavRouteHoldPolicy::Aware;
+    gated_route.points.push_back(NavPointSpec{3.0f, 0.0f, 3.0f, -1.0f});
+    gated_route.points.push_back(NavPointSpec{4.0f, 0.0f, 4.0f, -1.0f});
+    s.world().add<NavRouteComponent>(gated, gated_route);
+
+    ecs::Entity delayed = s.world().create_entity();
+    s.world().add<Transform>(delayed, Transform{});
+    s.world().add<NavAgentComponent>(delayed, NavAgentComponent{});
+    NavRouteComponent delayed_route;
+    delayed_route.resume = 1.5f; // hold=off: the delay has nothing to delay
+    delayed_route.points.push_back(NavPointSpec{5.0f, 0.0f, 5.0f, -1.0f});
+    delayed_route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+    s.world().add<NavRouteComponent>(delayed, delayed_route);
+
     const ValidationReport report = validate_scene(s, "test.nfscene");
     NF_CHECK(has(report, "needs at least two"));
     NF_CHECK(has(report, "ping-pong wins"));
     NF_CHECK(has(report, "without a NavAgent"));
     NF_CHECK(has(report, "outside the navigation volume"));
+    NF_CHECK(has(report, "no enabled Perception line"));
+    NF_CHECK(has(report, "resume= without hold="));
 
     // No volume at all: the route can never bind, and the report says why.
     Scene empty("NoVolume");
@@ -1027,5 +1094,323 @@ NF_TEST(a_script_reads_the_live_patrol_cursor) {
         NF_CHECK_NEAR(probe->scale_x, 1.0f, 1e-5f); // index 0 + 1
         NF_CHECK_NEAR(probe->scale_y, 2.0f, 1e-5f); // point count
         NF_CHECK_NEAR(probe->scale_z, 0.0f, 1e-5f); // not finished
+    }
+}
+
+// --- Perception-gated patrols (Phase 65) ------------------------------------
+
+NF_TEST(nav_route_hold_lines_round_trip_and_default_to_off) {
+    // The gate is two keys on the line the patrol already has. A route that
+    // never writes them is a Phase 64 route, byte for byte.
+    NF_CHECK(std::string(nav_route_hold_name(NavRouteHoldPolicy::Off)) == "off");
+    NF_CHECK(std::string(nav_route_hold_name(NavRouteHoldPolicy::Aware)) == "aware");
+    NF_CHECK(std::string(nav_route_hold_name(NavRouteHoldPolicy::Sensing)) == "sensing");
+    NavRouteHoldPolicy parsed = NavRouteHoldPolicy::Aware;
+    NF_CHECK(nav_route_hold_from_name("sensing", parsed));
+    NF_CHECK(parsed == NavRouteHoldPolicy::Sensing);
+    NF_CHECK(!nav_route_hold_from_name("watching", parsed));
+
+    Scene s("HoldRoundTrip");
+    ecs::Entity v = s.world().create_entity();
+    s.world().add<Transform>(v, Transform{});
+    NavMeshComponent nm;
+    nm.area_x = 12.0f;
+    nm.area_z = 12.0f;
+    s.world().add<NavMeshComponent>(v, nm);
+
+    ecs::Entity w = s.world().create_entity();
+    s.world().add<Transform>(w, Transform{});
+    s.world().add<NavAgentComponent>(w, NavAgentComponent{});
+    NavRouteComponent route;
+    route.hold = NavRouteHoldPolicy::Sensing;
+    route.resume = 1.5f;
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(NavPointSpec{8.0f, 0.0f, 8.0f, -1.0f});
+    s.world().add<NavRouteComponent>(w, route);
+
+    const std::string text = serialize_scene_to_text(s);
+    NF_CHECK(text.find("hold=sensing") != std::string::npos);
+    NF_CHECK(text.find("resume=1.5") != std::string::npos);
+
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    const NavRouteComponent* back = nullptr;
+    for (ecs::Entity e : loaded.scene->world().all_entities()) {
+        if (const auto* found = loaded.scene->world().get<NavRouteComponent>(e)) {
+            back = found;
+        }
+    }
+    NF_CHECK(back != nullptr);
+    if (back != nullptr) {
+        NF_CHECK(back->hold == NavRouteHoldPolicy::Sensing);
+        NF_CHECK_NEAR(back->resume, 1.5f, 1e-5f);
+    }
+
+    // A route written before this phase carries neither key: it loads as
+    // `hold=off, resume=0` and serializes without inventing either.
+    const std::string legacy =
+        "# SANAD Scene v1\nversion: 1\nname: LegacyHold\nentity_count: 1\n---\n"
+        "entity: 1:0\n  Name: Walker\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavRoute: wait=0.5\n"
+        "  NavPoint: pos=1,0,1\n"
+        "  NavPoint: pos=4,0,4\n";
+    const SceneLoadResult plain = load_scene_from_text(legacy);
+    NF_CHECK(plain.success);
+    const auto* plain_route =
+        plain.scene->world().get<NavRouteComponent>(plain.scene->world().all_entities()[0]);
+    NF_CHECK(plain_route != nullptr);
+    if (plain_route != nullptr) {
+        NF_CHECK(plain_route->hold == NavRouteHoldPolicy::Off);
+        NF_CHECK_NEAR(plain_route->resume, 0.0f, 1e-6f);
+    }
+    const std::string again = serialize_scene_to_text(*plain.scene);
+    NF_CHECK(again.find("hold=") == std::string::npos);
+    NF_CHECK(again.find("resume=") == std::string::npos);
+}
+
+NF_TEST(nav_route_hold_lines_refuse_bad_values_by_name) {
+    const std::string text =
+        "# SANAD Scene v1\nversion: 1\nname: BadHold\nentity_count: 2\n---\n"
+        "entity: 1:0\n  Name: WalkerA\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavAgent: speed=3 goal(0,0,0)\n"
+        "  NavRoute: hold=watching\n"
+        "---\n"
+        "entity: 2:0\n  Name: WalkerB\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)\n"
+        "  NavAgent: speed=3 goal(0,0,0)\n"
+        "  NavRoute: hold=aware resume=-1\n";
+    const SceneLoadResult loaded = load_scene_from_text(text);
+    NF_CHECK(loaded.success);
+    bool bad_hold = false;
+    bool bad_resume = false;
+    for (const std::string& w : loaded.warnings) {
+        if (w.find("NavRoute line with invalid 'hold'") != std::string::npos) {
+            bad_hold = true;
+        }
+        if (w.find("NavRoute line with invalid 'resume='") != std::string::npos) {
+            bad_resume = true;
+        }
+    }
+    NF_CHECK(bad_hold);
+    NF_CHECK(bad_resume);
+    // A refused policy does not fall back to `off`: half the line is not a
+    // route, so neither entity gets a component.
+    NF_CHECK(loaded.scene->world().query<NavRouteComponent>().empty());
+}
+
+NF_TEST(perception_aware_hold_freezes_the_patrol_then_resumes_with_hysteresis) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.loop = false;
+    route.hold = NavRouteHoldPolicy::Aware;
+    // Half a second of post-sighting stillness: long enough to observe, short
+    // enough that the test does not spend its budget waiting for it.
+    route.resume = 0.5f;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 6.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+
+    PerceptionComponent senses;
+    senses.sight_range = 30.0f;
+    senses.sight_half_fov_deg = 60.0f;
+    senses.sight_gain = 2.0f; // one second to fill at strength 0.5
+    senses.sight_loss = 0.6f;
+    senses.sight_linger = 3.0f;
+    senses.hearing_range = 0.0f;
+    senses.touch_range = 0.0f;
+    senses.pain = false;
+
+    // The walker starts at (1,1) looking down -Z; the target stands in front of
+    // it at (1,-2), so the sight cone and the faction filter both see a threat.
+    const PerceptionRouteScene sc =
+        add_perception_route_scene(*env.runtime, route, senses, 1.0f, -2.0f);
+    NF_CHECK(sc.walker.valid());
+    NF_CHECK(sc.target.valid());
+    if (!sc.walker.valid() || !sc.target.valid()) {
+        return;
+    }
+
+    for (int i = 0; i < 45; ++i) {
+        env.runtime->update(kDt);
+    }
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    bool held = false;
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held));
+    NF_CHECK(held);
+    NF_CHECK(env.runtime->entity_aware_of(sc.walker, sc.target));
+    NF_CHECK(env.runtime->entity_sensing(sc.walker, sc.target));
+
+    const auto* frozen = env.runtime->scene()->world().get<Transform>(sc.walker);
+    NF_CHECK(frozen != nullptr);
+    const f32 frozen_z = frozen != nullptr ? frozen->local_z : 0.0f;
+    NF_CHECK(frozen_z > 1.0f); // it walked before it noticed, then stopped
+    for (int i = 0; i < 30; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* still = env.runtime->scene()->world().get<Transform>(sc.walker);
+    NF_CHECK(still != nullptr);
+    if (still != nullptr) {
+        NF_CHECK_NEAR(still->local_z, frozen_z, 1e-4f);
+    }
+
+    // The debug overlay reads the same hold: red route, arrived marker.
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    bool saw_agent = false;
+    for (const NavDebugAgent& agent : snap.agents) {
+        if (agent.entity == sc.walker) {
+            saw_agent = true;
+            NF_CHECK(agent.route_held);
+            NF_CHECK(agent.at_goal);
+        }
+    }
+    NF_CHECK(saw_agent);
+
+    // The fifth value of nf.route() is the hold, so a script can play its own
+    // "I see something" pose without duplicating the gate.
+    const std::string script =
+        "function update(dt)\n"
+        "  local id, gen = nf.self()\n"
+        "  local index, count, wait, finished, held = nf.route()\n"
+        "  if index == nil then\n"
+        "    nf.set_entity_scale(id, gen, -1.0, -1.0, -1.0)\n"
+        "  else\n"
+        "    nf.set_entity_scale(id, gen, held and 1.0 or 0.0, count,\n"
+        "                        finished and 1.0 or 0.0)\n"
+        "  end\n"
+        "end\n";
+    NF_CHECK(env.vfs.write_text("content://Scripts/route_hold_probe.lua", script).ok);
+    ecs::World& world = env.runtime->edit_scene()->world();
+    scripting::ScriptComponent script_component;
+    // Added after adoption, so nothing has loaded the file into `source` yet;
+    // ScriptSystem ticks the source, not the path.
+    script_component.source = script;
+    script_component.path = "content://Scripts/route_hold_probe.lua";
+    world.add<scripting::ScriptComponent>(sc.walker, script_component);
+    for (int i = 0; i < 3; ++i) {
+        env.runtime->update(kDt);
+    }
+    const auto* probe = world.get<Transform>(sc.walker);
+    NF_CHECK(probe != nullptr);
+    if (probe != nullptr) {
+        NF_CHECK_NEAR(probe->scale_x, 1.0f, 1e-5f); // held
+        NF_CHECK_NEAR(probe->scale_y, 2.0f, 1e-5f); // point count
+    }
+
+    // Removing the threat does not release the patrol immediately: `resume=`
+    // keeps it still for half a second of post-sighting hysteresis.
+    world.destroy_entity(sc.target);
+    for (int i = 0; i < 20; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held));
+    NF_CHECK(held);
+    const auto* during = world.get<Transform>(sc.walker);
+    NF_CHECK(during != nullptr);
+    if (during != nullptr) {
+        NF_CHECK_NEAR(during->local_z, frozen_z, 1e-4f);
+    }
+
+    // Past the delay the walker takes up the same route and point again.
+    for (int i = 0; i < 20; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held));
+    NF_CHECK(!held);
+    const auto* released = world.get<Transform>(sc.walker);
+    NF_CHECK(released != nullptr);
+    if (released != nullptr) {
+        NF_CHECK(released->local_z > frozen_z + 0.05f);
+        NF_CHECK_NEAR(released->scale_x, 0.0f, 1e-5f); // the script sees it too
+    }
+}
+
+NF_TEST(perception_sensing_hold_releases_when_the_target_leaves_the_cone) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("no Vulkan device");
+        return;
+    }
+    NavRouteComponent route;
+    route.loop = false;
+    route.hold = NavRouteHoldPolicy::Sensing;
+    route.resume = 0.0f;
+    route.points.push_back(NavPointSpec{1.0f, 0.0f, 6.0f, -1.0f});
+    route.points.push_back(NavPointSpec{6.0f, 0.0f, 6.0f, -1.0f});
+
+    PerceptionComponent senses;
+    senses.sight_range = 30.0f;
+    senses.sight_half_fov_deg = 60.0f;
+    senses.sight_gain = 2.0f;
+    senses.sight_loss = 0.6f;
+    senses.sight_linger = 30.0f; // the memory outlives the sighting by far
+    senses.hearing_range = 0.0f;
+    senses.touch_range = 0.0f;
+    senses.pain = false;
+
+    const PerceptionRouteScene sc =
+        add_perception_route_scene(*env.runtime, route, senses, 1.0f, -2.0f);
+    NF_CHECK(sc.walker.valid());
+    NF_CHECK(sc.target.valid());
+    if (!sc.walker.valid() || !sc.target.valid()) {
+        return;
+    }
+
+    for (int i = 0; i < 45; ++i) {
+        env.runtime->update(kDt);
+    }
+    u32 index = 0;
+    u32 count = 0;
+    f32 wait = 0.0f;
+    bool finished = false;
+    bool held = false;
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held));
+    NF_CHECK(held);
+
+    const auto* frozen = env.runtime->scene()->world().get<Transform>(sc.walker);
+    NF_CHECK(frozen != nullptr);
+    const f32 frozen_z = frozen != nullptr ? frozen->local_z : 0.0f;
+
+    // Out of the cone, still well inside sight range: the walker remembers the
+    // target (linger) but no sense is reading it this frame. `sensing` must
+    // release the patrol even though `aware` stays true.
+    auto* tt = env.runtime->edit_scene()->world().get<Transform>(sc.target);
+    NF_CHECK(tt != nullptr);
+    if (tt == nullptr) {
+        return;
+    }
+    tt->local_x = 10.0f;
+    tt->local_z = 1.0f;
+
+    // The first frame's perception step is what stops `sensed`; navigation
+    // runs before it, so the gate opens on the second frame.
+    for (int i = 0; i < 2; ++i) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->nav_route_state(sc.walker, index, count, wait, finished, &held));
+    NF_CHECK(!held);
+    NF_CHECK(env.runtime->entity_aware_of(sc.walker, sc.target));
+    NF_CHECK(!env.runtime->entity_sensing(sc.walker, sc.target));
+
+    // Released for the whole frame, not just the Accessor: the walker moved.
+    const auto* released = env.runtime->scene()->world().get<Transform>(sc.walker);
+    NF_CHECK(released != nullptr);
+    if (released != nullptr) {
+        NF_CHECK(released->local_z > frozen_z + 0.02f);
+    }
+
+    // And the snapshot agrees, so the overlay is not frozen red.
+    const NavDebugSnapshot snap = env.runtime->nav_debug_snapshot();
+    for (const NavDebugAgent& agent : snap.agents) {
+        if (agent.entity == sc.walker) {
+            NF_CHECK(!agent.route_held);
+        }
     }
 }

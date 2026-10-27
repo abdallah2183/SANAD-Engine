@@ -732,6 +732,15 @@ static bool parse_nav_route(const std::string& line, NavRouteComponent& out,
     out.loop = line.find("loop=false") == std::string::npos;
     out.ping_pong = line.find("ping_pong=true") != std::string::npos;
     out.enabled = line.find("enabled=false") == std::string::npos;
+    // Phase 65: an absent key keeps `off`, so a Phase 64 route parses exactly
+    // as it did. A present-but-unknown policy rejects the line rather than
+    // silently walking a patrol the author meant to gate.
+    const std::string hold = field_value(line, "hold=");
+    if (!hold.empty() && !nav_route_hold_from_name(hold, out.hold)) {
+        out_bad = "hold";
+        return false;
+    }
+    if (!optional_float_in_range(line, "resume=", 0.0f, 3600.0f, out.resume, out_bad)) return false;
     return true;
 }
 
@@ -2227,6 +2236,8 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                         existing->loop = route.loop;
                         existing->ping_pong = route.ping_pong;
                         existing->enabled = route.enabled;
+                        existing->hold = route.hold;
+                        existing->resume = route.resume;
                     }
                 }
             } else if (line.rfind("  NavPoint:",0)==0) {
@@ -3220,7 +3231,16 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             out << "  NavRoute: wait=" << route->wait
                 << " loop=" << (route->loop ? "true" : "false")
                 << " ping_pong=" << (route->ping_pong ? "true" : "false")
-                << " enabled=" << (route->enabled ? "true" : "false") << "\n";
+                << " enabled=" << (route->enabled ? "true" : "false");
+            // Phase 65 keys are written only when authored: a route that never
+            // opted in keeps the exact Phase 64 line, byte for byte.
+            if (route->hold != NavRouteHoldPolicy::Off) {
+                out << " hold=" << nav_route_hold_name(route->hold);
+            }
+            if (route->resume > 0.0f) {
+                out << " resume=" << route->resume;
+            }
+            out << "\n";
             for (const NavPointSpec& nav_point : route->points) {
                 out << "  NavPoint: pos=" << nav_point.x << "," << nav_point.y << "," << nav_point.z;
                 // -1 is "use the route wait", and is what an absent key means.

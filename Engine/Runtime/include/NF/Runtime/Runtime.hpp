@@ -575,6 +575,15 @@ public:
     /// per-scene artefact here.
     void build_scene_navmesh();
 
+    /// Perception gate for a patrol (Phase 65): true when the walker's senses
+    /// currently know (`Aware`) or read (`Sensing`) a threat. A threat is
+    /// another live perception target on a hostile team; a walker with no team
+    /// cannot tell friend from foe, so anyone it notices counts. Reads the
+    /// senses the previous perception step left behind — navigation runs before
+    /// perception in the frame, and a one-frame delay is invisible to a walk.
+    [[nodiscard]] bool nav_route_threat_perceived(ecs::Entity walker,
+                                                  NavRouteHoldPolicy policy) const;
+
     // --- Terrain (Phase 63) ------------------------------------------------
     //
     // The scene's `Terrain:` entities are one height source with three readers:
@@ -632,8 +641,13 @@ public:
     /// no enabled route of at least two points or no bound agent (no bake, or
     /// the agent/route is disabled). The points are scene data; this is the
     /// session state no file holds.
+    ///
+    /// `out_held` (Phase 65) is optional so every Phase 64 caller keeps its
+    /// exact signature. It reports whether a perception gate is holding the
+    /// patrol this frame.
     [[nodiscard]] bool nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count,
-                                       f32& out_wait, bool& out_finished) const;
+                                       f32& out_wait, bool& out_finished,
+                                       bool* out_held = nullptr) const;
     /// Obstacles the last bake carved (static box colliders seen at build time).
     [[nodiscard]] size_t navmesh_obstacle_count() const { return m_nav_obstacle_count; }
 
@@ -1757,6 +1771,11 @@ private:
         i32 route_direction = 1;    ///< +1 forward, -1 backward (ping-pong).
         f32 route_wait_remaining = 0.0f;
         bool route_finished = false; ///< Non-looping route reached its last point.
+        // Perception-gated patrol (Phase 65). `route_held` is this frame's
+        // answer; `route_hold_remaining` is the post-sighting hysteresis
+        // (`resume=`) still owed before walking continues. Both session state.
+        bool route_held = false;
+        f32 route_hold_remaining = 0.0f;
         // The route shape the live cursor belongs to. A shape change restarts
         // the patrol at the first point instead of indexing a point that moved.
         usize route_point_count = 0;

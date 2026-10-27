@@ -229,6 +229,19 @@ Games/MyGame/
   `enabled=false`, falls back to the `NavAgent:` goal; the validator warns about
   it. The live cursor (index, direction, remaining pause) is session state and
   is never saved — read it from Lua with `nf.route()`.
+- A patrol can stop when its senses find something (Phase 65). Add
+  `hold=aware|sensing resume=<seconds>` to the `NavRoute:` line. `hold=aware`
+  pauses while the walker's perception still KNOWS another live target
+  (including the linger window); `hold=sensing` pauses only while a sense reads
+  one this frame. If the walker has an enabled non-empty `Faction: team=`, only
+  a different non-empty team counts; with no team it treats anyone it notices
+  as a threat, and a target at zero `Health:` is skipped. `resume=` keeps it
+  still that many seconds after the gate opens (default 0), then the same route
+  point continues; the authored wait freezes while held. The gate reads the
+  previous perception step (navigation runs before perception), and
+  `nf.route()` reports `held` as its fifth value. `hold=off` is the default and
+  preserves the Phase 64 route exactly; the validator warns about a gate with
+  no enabled `Perception:` and a `resume=` with no `hold=`.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`
@@ -284,8 +297,8 @@ nf.last_known(id, gen)            -- x, y, z where I last knew it, or nil
 nf.forget(id, gen)                -- drop one memory; false if there was none
 nf.decision()                     -- name, score of what this entity wants to do
 nf.state()                       -- the state this entity's machine is in, or nil
-nf.route()                       -- index, count, wait, finished of its patrol,
-                                 -- or nil when it is walking to its goal
+nf.route()                       -- index, count, wait, finished, held of its
+                                 -- patrol, or nil when walking to its goal
 print(...)                        -- engine log
 ```
 

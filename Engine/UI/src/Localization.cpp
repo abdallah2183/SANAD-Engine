@@ -676,6 +676,20 @@ constexpr Entry kEntries[] = {
     {"route_loop", "Loop", "تكرار"},
     {"route_ping_pong", "Ping-pong", "ذهاب وعودة"},
     {"route_wait", "Wait (s)", "انتظار (ث)"},
+    // Phase 65: the perception gate and its post-sighting delay.
+    {"route_hold", "Hold patrol", "تعليق الدورية"},
+    {"route_hold_off", "Off", "معطّل"},
+    {"route_hold_aware", "While aware", "عند المعرفة"},
+    {"route_hold_sensing", "While sensing", "عند الإحساس"},
+    {"route_hold_hint",
+     "Hold the patrol while the walker's senses know a hostile target. A walker "
+     "with no team treats everyone it notices as a threat.",
+     "تتوقف الدورية ما دام إدراك العميل يعرف هدفًا معاديًا. والعميل بلا فريق يعدّ "
+     "كل من يلاحظه تهديدًا."},
+    {"route_resume", "Resume after (s)", "استئناف بعد (ث)"},
+    {"route_resume_hint", "Seconds to keep holding after the last sighting.",
+     "ثواني الاستمرار في التعليق بعد آخر إحساس بالهدف."},
+    {"route_held", "Held by perception.", "معلّقة بسبب الإدراك."},
     {"route_points", "Destinations", "المحطات"},
     {"route_point", "Point", "نقطة"},
     {"route_add_point", "Add point", "إضافة نقطة"},

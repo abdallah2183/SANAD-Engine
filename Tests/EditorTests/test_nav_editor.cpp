@@ -201,6 +201,10 @@ NF_TEST(editor_nav_route_attach_edit_detach) {
     spec.loop = false;
     spec.ping_pong = true;
     spec.enabled = false;
+    // Phase 65: the inspector's two new fields travel through the same
+    // validated setter the rest of the route does.
+    spec.hold = runtime::NavRouteHoldPolicy::Sensing;
+    spec.resume = 1.75f;
     spec.points.push_back(runtime::NavPointSpec{2.0f, 0.5f, 3.0f, -1.0f});
     spec.points.push_back(runtime::NavPointSpec{8.0f, 0.5f, 9.0f, 2.5f});
     NF_CHECK(app.set_nav_route(e, spec, err));
@@ -211,11 +215,32 @@ NF_TEST(editor_nav_route_attach_edit_detach) {
         NF_CHECK(!comp->loop);
         NF_CHECK(comp->ping_pong);
         NF_CHECK(!comp->enabled);
+        NF_CHECK(comp->hold == runtime::NavRouteHoldPolicy::Sensing);
+        NF_CHECK_NEAR(comp->resume, 1.75f, 1e-6f);
         NF_CHECK_EQ(comp->points.size(), static_cast<usize>(2));
         NF_CHECK_NEAR(comp->points[0].x, 2.0f, 1e-6f);
         NF_CHECK_NEAR(comp->points[0].wait, -1.0f, 1e-6f);
         NF_CHECK_NEAR(comp->points[1].z, 9.0f, 1e-6f);
         NF_CHECK_NEAR(comp->points[1].wait, 2.5f, 1e-6f);
+    }
+
+    // The two new fields are validated like every other: a negative resume is
+    // refused before it can reach the file, and the good route is untouched.
+    runtime::NavRouteComponent bad_resume = spec;
+    bad_resume.resume = -0.5f;
+    err.clear();
+    NF_CHECK(!app.set_nav_route(e, bad_resume, err));
+    NF_CHECK(!err.empty());
+    runtime::NavRouteComponent bad_hold = spec;
+    bad_hold.hold = static_cast<runtime::NavRouteHoldPolicy>(7);
+    err.clear();
+    NF_CHECK(!app.set_nav_route(e, bad_hold, err));
+    NF_CHECK(!err.empty());
+    const auto* kept = world.get<runtime::NavRouteComponent>(e);
+    NF_CHECK(kept != nullptr);
+    if (kept != nullptr) {
+        NF_CHECK(kept->hold == runtime::NavRouteHoldPolicy::Sensing);
+        NF_CHECK_NEAR(kept->resume, 1.75f, 1e-6f);
     }
 
     NF_CHECK(app.detach_nav_route(e, err));
@@ -264,6 +289,8 @@ NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
     route.wait = 0.4f;
     route.loop = false;
     route.ping_pong = true;
+    route.hold = runtime::NavRouteHoldPolicy::Aware;
+    route.resume = 2.25f;
     route.points.push_back(runtime::NavPointSpec{1.0f, 0.0f, 2.0f, -1.0f});
     route.points.push_back(runtime::NavPointSpec{7.0f, 0.0f, 8.0f, 1.5f});
     NF_CHECK(app.set_nav_route(e, route, err));
@@ -299,6 +326,8 @@ NF_TEST(editor_nav_components_round_trip_through_save_and_load) {
         NF_CHECK_NEAR(route2->wait, 0.4f, 1e-5f);
         NF_CHECK(!route2->loop);
         NF_CHECK(route2->ping_pong);
+        NF_CHECK(route2->hold == runtime::NavRouteHoldPolicy::Aware);
+        NF_CHECK_NEAR(route2->resume, 2.25f, 1e-5f);
         NF_CHECK_EQ(route2->points.size(), static_cast<usize>(2));
         if (route2->points.size() == 2) {
             NF_CHECK_NEAR(route2->points[0].x, 1.0f, 1e-5f);

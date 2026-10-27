@@ -1,5 +1,6 @@
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/BuiltinModules.hpp>
+#include <NF/Runtime/Factions.hpp>
 #include <NF/Runtime/PlayerLook.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/SceneExtraction.hpp>
@@ -1666,10 +1667,12 @@ u32 Runtime::step_script(float dt) {
         input.state = [self](u32 id, u32 gen, std::string& name) {
             return self->entity_state(ecs::Entity{id, gen}, name);
         };
-        // Patrol routes (Phase 64): where on its route this entity's walker is.
+        // Patrol routes (Phase 64/65): where on its route this entity's walker
+        // is, and whether its senses are holding it there.
         input.route = [self](u32 id, u32 gen, u32& index, u32& count, f32& wait,
-                             bool& finished) {
-            return self->nav_route_state(ecs::Entity{id, gen}, index, count, wait, finished);
+                             bool& finished, bool& held) {
+            return self->nav_route_state(ecs::Entity{id, gen}, index, count, wait, finished,
+                                         &held);
         };
     }
     m_scripts->set_input_source(input);
@@ -2282,6 +2285,74 @@ f32 nav_route_point_wait(const NavRouteComponent& route, usize index) {
 
 } // namespace
 
+const char* nav_route_hold_name(NavRouteHoldPolicy hold) noexcept {
+    switch (hold) {
+    case NavRouteHoldPolicy::Off: return "off";
+    case NavRouteHoldPolicy::Aware: return "aware";
+    case NavRouteHoldPolicy::Sensing: return "sensing";
+    }
+    return "off";
+}
+
+bool nav_route_hold_from_name(std::string_view name, NavRouteHoldPolicy& out) noexcept {
+    constexpr NavRouteHoldPolicy kPolicies[] = {NavRouteHoldPolicy::Off,
+                                                NavRouteHoldPolicy::Aware,
+                                                NavRouteHoldPolicy::Sensing};
+    for (const NavRouteHoldPolicy policy : kPolicies) {
+        if (name == nav_route_hold_name(policy)) {
+            out = policy;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Runtime::nav_route_threat_perceived(ecs::Entity walker,
+                                         NavRouteHoldPolicy policy) const {
+    if (policy == NavRouteHoldPolicy::Off || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return false;
+    }
+    const ai::Perception* senses = perception_of(walker);
+    if (senses == nullptr) {
+        return false; // no Perception: line, so there is nothing to gate on
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+    const FactionComponent* own = world.get<FactionComponent>(walker);
+    const bool walker_has_team = own != nullptr && own->enabled && !own->team.empty();
+    for (const ecs::Entity candidate : m_perception_target_entities) {
+        if (candidate == walker || !world.is_alive(candidate)) {
+            continue;
+        }
+        // A corpse is not a reason to stop patrolling. A target with no health
+        // is still alive by definition (a weapon emplacement, a deciding NPC).
+        if (const auto* health = world.get<HealthComponent>(candidate);
+            health != nullptr && !health_alive(*health)) {
+            continue;
+        }
+        // Faction is the same social rule combat uses: a walker on a real team
+        // ignores allies and neutrals. A walker with no team cannot tell who is
+        // a friend, so anyone it notices is a potential threat — the honest
+        // reading of "neutral" in this engine.
+        if (walker_has_team) {
+            const FactionComponent* other = world.get<FactionComponent>(candidate);
+            if (other == nullptr || !other->enabled || other->team.empty() ||
+                team_relation(own->team, other->team) != TeamRelation::Hostile) {
+                continue;
+            }
+        }
+        const u32 id = perception_local_target_id(walker, candidate);
+        if (id == 0u) {
+            continue; // not part of this sensor's cast
+        }
+        const bool noticed = policy == NavRouteHoldPolicy::Aware ? senses->is_aware_of(id)
+                                                                 : senses->is_sensing(id);
+        if (noticed) {
+            return true;
+        }
+    }
+    return false;
+}
+
 u32 Runtime::step_navmesh(float dt) {
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene || m_navmesh == nullptr ||
         !m_navmesh->built()) {
@@ -2366,6 +2437,9 @@ u32 Runtime::step_navmesh(float dt) {
                 st.has_path = false;
                 st.at_goal = false;
             }
+            // The perception gate belongs to the route that authored it.
+            st.route_held = false;
+            st.route_hold_remaining = 0.0f;
         } else {
             // A different route shape or policy addresses points the live
             // cursor may not have: restart at the first point.
@@ -2378,6 +2452,8 @@ u32 Runtime::step_navmesh(float dt) {
                 st.route_direction = 1;
                 st.route_wait_remaining = 0.0f;
                 st.route_finished = false;
+                st.route_held = false;
+                st.route_hold_remaining = 0.0f;
                 st.route_point_count = route->points.size();
                 st.route_loop = route->loop;
                 st.route_ping_pong = route->ping_pong;
@@ -2385,8 +2461,39 @@ u32 Runtime::step_navmesh(float dt) {
                 st.at_goal = false;
             }
             if (st.route_finished) {
+                st.route_held = false;
                 continue; // a one-way route that reached its last point stays there
             }
+            // Phase 65: a route may wait for its senses instead of its clock.
+            // The gate is evaluated every frame. `resume=` keeps the hold armed
+            // for a moment after the last sighting, so a threat flickering at
+            // the edge of a cone cannot make the walker stutter.
+            if (route->hold != NavRouteHoldPolicy::Off &&
+                nav_route_threat_perceived(e, route->hold)) {
+                st.route_hold_remaining = std::max(route->resume, 0.0f);
+                st.route_held = true;
+            } else if (st.route_hold_remaining > 0.0f) {
+                st.route_hold_remaining = std::max(0.0f, st.route_hold_remaining - dt);
+                st.route_held = st.route_hold_remaining > 0.0f;
+            } else {
+                st.route_held = false;
+            }
+            if (route->hold == NavRouteHoldPolicy::Off) {
+                // Switching the gate off mid-patrol releases any hold it had
+                // already earned; the route must not keep a stale pause.
+                st.route_hold_remaining = 0.0f;
+                st.route_held = false;
+            }
+            if (st.route_held) {
+                // Standing still is the point. Count it as "arrived", like an
+                // authored wait, so the arrival readout does not flap while a
+                // guard studies what it noticed.
+                st.at_goal = true;
+                continue;
+            }
+            // A released hold clears the paused flag; an authored wait still
+            // running below sets it again on its own terms.
+            st.at_goal = false;
             if (st.route_wait_remaining > 0.0f) {
                 // Standing at the point, using up its pause. `at_goal` stays
                 // true so "walkers arrived" includes a guard looking around.
@@ -2486,7 +2593,7 @@ u32 Runtime::step_navmesh(float dt) {
 }
 
 bool Runtime::nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count,
-                              f32& out_wait, bool& out_finished) const {
+                              f32& out_wait, bool& out_finished, bool* out_held) const {
     const auto it = m_nav_agents.find(entity);
     if (it == m_nav_agents.end() || !it->second.on_route) {
         return false;
@@ -2495,6 +2602,9 @@ bool Runtime::nav_route_state(ecs::Entity entity, u32& out_index, u32& out_count
     out_count = static_cast<u32>(it->second.route_point_count);
     out_wait = std::max(0.0f, it->second.route_wait_remaining);
     out_finished = it->second.route_finished;
+    if (out_held != nullptr) {
+        *out_held = it->second.route_held;
+    }
     return true;
 }
 
@@ -2861,6 +2971,7 @@ NavDebugSnapshot Runtime::nav_debug_snapshot() const {
         // must draw where the walker is actually headed.
         a.on_route = st.on_route;
         a.route_point = static_cast<u32>(st.route_point);
+        a.route_held = st.route_held;
         if (st.on_route) {
             if (const auto* route = world.get<NavRouteComponent>(entity);
                 route != nullptr && st.route_point < route->points.size()) {

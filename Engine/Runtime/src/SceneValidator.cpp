@@ -520,6 +520,21 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                            "NavRoute sets loop=true and ping_pong=true: ping-pong wins and "
                            "the route never wraps");
             }
+            // Phase 65: the perception gate reads the same entity's senses.
+            // Without a sensor the route walks exactly as it did before, which
+            // is a silent no-op the author should hear about.
+            if (route->hold != NavRouteHoldPolicy::Off) {
+                const auto* perception = world.get<PerceptionComponent>(e);
+                if (perception == nullptr || !perception->enabled) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "NavRoute uses a hold= policy but the entity has no enabled "
+                               "Perception line: the patrol can never be held");
+                }
+            } else if (route->resume > 0.0f) {
+                report.add(ValidationSeverity::Warning, label,
+                           "NavRoute sets resume= without hold=: the delay has no effect "
+                           "on the patrol");
+            }
             if (first_volume == nullptr || first_volume_t == nullptr) {
                 report.add(ValidationSeverity::Warning, label,
                            "NavRoute exists but the scene has no enabled navigation volume: "

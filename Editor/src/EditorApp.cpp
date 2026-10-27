@@ -2415,6 +2415,16 @@ bool valid_nav_route_config(const runtime::NavRouteComponent& route, std::string
         out_err = "Route wait must be within [0, 3600]";
         return false;
     }
+    if (route.hold != runtime::NavRouteHoldPolicy::Off &&
+        route.hold != runtime::NavRouteHoldPolicy::Aware &&
+        route.hold != runtime::NavRouteHoldPolicy::Sensing) {
+        out_err = "Route hold must be off, aware or sensing";
+        return false;
+    }
+    if (!std::isfinite(route.resume) || route.resume < 0.0f || route.resume > 3600.0f) {
+        out_err = "Route resume must be within [0, 3600]";
+        return false;
+    }
     for (usize i = 0; i < route.points.size(); ++i) {
         const runtime::NavPointSpec& point = route.points[i];
         const std::string which = "Route point " + std::to_string(i + 1);

@@ -395,6 +395,8 @@ struct InspectorCache {
     bool navr_loop = true;
     bool navr_ping_pong = false;
     bool navr_enabled = true;
+    int navr_hold = 0; // NavRouteHoldPolicy: 0 off, 1 aware, 2 sensing
+    float navr_resume = 0.0f;
     std::vector<runtime::NavPointSpec> navr_points;
     // Vehicles (Step 11). Mirrors of the tune; Apply forwards the whole
     // struct through EditorApp. The four *_in fields are the debug-drive
@@ -672,8 +674,9 @@ void draw_ground_grid(ImDrawList* dl, const ImVec2& min, const ImVec2& max, cons
 //
 // Colours follow the grid's philosophy (quiet annotation, not competing
 // geometry): mesh edges sit at grid-like alpha, agent routes ride the accent
-// warm side so a route reads against both the mesh and the floor, and arrived
-// agents dim to the mesh colour because their story is over.
+// warm side so a route reads against both the mesh and the floor, arrived
+// agents dim to the mesh colour because their story is over, and a walker held
+// by its senses goes red so a paused patrol is visibly paused for a reason.
 void draw_navmesh_overlay(ImDrawList* dl, const ImVec2& min, const ImVec2& max, const Mat4& view_proj,
                           const runtime::NavDebugSnapshot& snap) {
     if (!snap.has_mesh) {
@@ -682,6 +685,7 @@ void draw_navmesh_overlay(ImDrawList* dl, const ImVec2& min, const ImVec2& max, 
     const ImU32 mesh_col = IM_COL32(110, 220, 180, 42);
     const ImU32 route_col = IM_COL32(255, 196, 110, 200);
     const ImU32 route_done_col = IM_COL32(110, 220, 180, 110);
+    const ImU32 route_held_col = IM_COL32(255, 110, 110, 230);
     const ImU32 goal_col = IM_COL32(255, 196, 110, 220);
     for (const std::vector<Vec3>& loop : snap.mesh_polygons) {
         if (loop.size() < 3) {
@@ -699,7 +703,8 @@ void draw_navmesh_overlay(ImDrawList* dl, const ImVec2& min, const ImVec2& max, 
         }
     }
     for (const runtime::NavDebugAgent& agent : snap.agents) {
-        const ImU32 col = agent.at_goal ? route_done_col : route_col;
+        const ImU32 col = agent.route_held ? route_held_col
+                                          : (agent.at_goal ? route_done_col : route_col);
         // Remaining route as a polyline through the unconsumed waypoints. The
         // agent's own marker is the first joint: the line starts where the
         // walker stands, not where the plan started.
@@ -2414,6 +2419,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.navr_loop = navr_comp->loop;
                     ic.navr_ping_pong = navr_comp->ping_pong;
                     ic.navr_enabled = navr_comp->enabled;
+                    ic.navr_hold = static_cast<int>(navr_comp->hold);
+                    ic.navr_resume = navr_comp->resume;
                     ic.navr_points = navr_comp->points;
                 } else {
                     ic.navr_has = false;
@@ -5008,6 +5015,31 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                                     &ic.navr_ping_pong);
                     ImGui::DragFloat(AV("route_wait").c_str(), &ic.navr_wait, 0.05f, 0.0f,
                                      3600.0f, "%.2f s");
+                    // Perception gate (Phase 65). The combo is index-based so
+                    // the enum never appears in the scene text; Apply maps it
+                    // back to the policy the loader parses.
+                    const std::string hold_labels[] = {
+                        AV("route_hold_off"), AV("route_hold_aware"),
+                        AV("route_hold_sensing")};
+                    const char* hold_items[] = {hold_labels[0].c_str(), hold_labels[1].c_str(),
+                                                hold_labels[2].c_str()};
+                    int hold = std::clamp(ic.navr_hold, 0, 2);
+                    ImGui::SetNextItemWidth(170.0f);
+                    if (ImGui::Combo(AV("route_hold").c_str(), &hold, hold_items, 3)) {
+                        ic.navr_hold = hold;
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("route_hold_hint").c_str());
+                    }
+                    if (ic.navr_hold != 0) {
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(130.0f);
+                        ImGui::DragFloat(AV("route_resume").c_str(), &ic.navr_resume, 0.05f,
+                                         0.0f, 3600.0f, "%.2f s");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s", AV("route_resume_hint").c_str());
+                        }
+                    }
                     ImGui::TextDisabled("%s: %d", AV("route_points").c_str(),
                                         static_cast<int>(ic.navr_points.size()));
                     for (int i = 0; i < static_cast<int>(ic.navr_points.size()); ++i) {
@@ -5060,6 +5092,14 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         edited.loop = ic.navr_loop;
                         edited.ping_pong = ic.navr_ping_pong;
                         edited.enabled = ic.navr_enabled;
+                        edited.hold = static_cast<runtime::NavRouteHoldPolicy>(
+                            std::clamp(ic.navr_hold, 0, 2));
+                        // A resume delay with no gate is dead data; the
+                        // validator warns about it, so the inspector clears it
+                        // when the author switches the gate off.
+                        edited.resume = edited.hold == runtime::NavRouteHoldPolicy::Off
+                                            ? 0.0f
+                                            : std::max(0.0f, ic.navr_resume);
                         std::string err;
                         if (!app.set_nav_route(sel, edited, err)) {
                             ic.error = err;
@@ -5087,9 +5127,12 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         u32 count = 0;
                         f32 wait = 0.0f;
                         bool finished = false;
-                        if (rt->nav_route_state(sel, index, count, wait, finished)) {
+                        bool held = false;
+                        if (rt->nav_route_state(sel, index, count, wait, finished, &held)) {
                             if (finished) {
                                 ImGui::TextDisabled("%s", AV("route_finished").c_str());
+                            } else if (held) {
+                                ImGui::TextDisabled("%s", AV("route_held").c_str());
                             } else {
                                 ImGui::TextDisabled("%s: %u/%u  %s %.2f", AV("route_live").c_str(),
                                                     index + 1, count,

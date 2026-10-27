@@ -731,6 +731,31 @@ struct NavPointSpec {
     f32 wait = -1.0f;
 };
 
+/// When a patrol pauses for what its senses know (Phase 65).
+///
+/// This is deliberately a tiny vocabulary rather than a script hook: a guard
+/// that stops walking when it spots someone is the one patrol behaviour every
+/// game wants, and the frame already has the senses to answer it. A route that
+/// never writes `hold=` keeps the Phase 64 behaviour exactly.
+enum class NavRouteHoldPolicy : u8 {
+    /// Never hold: the patrol is a pure walk, as it was in Phase 64.
+    Off = 0,
+    /// Stop while the walker's perception KNOWS a threat, including the linger
+    /// window after the threat broke line of sight. This is "a guard stands
+    /// still while it watches / remembers someone".
+    Aware = 1,
+    /// Stop only while a sense is reading a threat THIS frame. A remembered but
+    /// unseen threat does not hold the patrol — this is "the guard pauses at
+    /// the moment it hears or sees something, then keeps walking".
+    Sensing = 2,
+};
+
+/// Stable technical name for the scene format and the logs.
+[[nodiscard]] const char* nav_route_hold_name(NavRouteHoldPolicy hold) noexcept;
+/// Parses the name the `NavRoute:` line carries. False when it is not one.
+[[nodiscard]] bool nav_route_hold_from_name(std::string_view name,
+                                            NavRouteHoldPolicy& out) noexcept;
+
 /// An authored patrol route for the NavAgent on the same entity (Phase 64).
 ///
 /// Without this component the agent walks to its `NavAgent:` goal exactly as it
@@ -759,6 +784,16 @@ struct NavRouteComponent {
     /// goal, the same "switch it off, keep it" contract the other components
     /// keep.
     bool enabled = true;
+
+    /// Perception gate (Phase 65). Off by default, so a route authored before
+    /// this phase walks, saves and loads exactly as it did.
+    NavRouteHoldPolicy hold = NavRouteHoldPolicy::Off;
+
+    /// Seconds to KEEP holding after the gate last saw a threat. This is the
+    /// hysteresis that stops a patrol from stuttering while a target flickers
+    /// in and out of the sight cone. Zero resumes on the first frame the gate
+    /// is clear.
+    f32 resume = 0.0f;
 };
 
 /// One agent's live navigation state, as the viewport debug draw needs it.
@@ -783,6 +818,9 @@ struct NavDebugAgent {
     bool on_route = false;
     /// Index of the route point being walked to, or waited at.
     u32 route_point = 0;
+    /// True while a perception gate (Phase 65) is keeping the patrol still.
+    /// A held walker has a route and a goal but is not consuming either.
+    bool route_held = false;
 };
 
 /// Everything the navigation debug overlay draws, in one const call. Empty
