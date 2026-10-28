@@ -1,7 +1,7 @@
 # SANAD Scene v1
 version: 1
 name: Terrain
-entity_count: 9
+entity_count: 10
 ---
 entity: 1:0
   Name: Camera
@@ -67,3 +67,8 @@ entity: 9:0
   NavPoint: pos=-14,14.15,14
   NavPoint: pos=13,12.08,-13
   NavPoint: pos=-12,13.77,-12
+---
+entity: 10:0
+  Name: RadioJammer
+  Transform: local(0,13,0) world(0,13,0) rot(0,0,0) scale(1,1,1) parent(4294967295:0)
+  Jammer: radius=9 strength=0.5

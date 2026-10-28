@@ -518,6 +518,10 @@ public:
     /// the END of the previous step, before the live snapshot, so a fresh sight
     /// always wins over an older last position. A lost callout is still a
     /// report: knowledge, never a sense, never a relay.
+    ///
+    /// Phase 70: an enabled `Jammer:` field inside reach shortens the antenna
+    /// of any member inside it, so the same exchange decides delivery from the
+    /// jammed ranges. A scene with no jammer is byte-for-byte the Phase 69 link.
     void exchange_squad_radio();
     /// Feeds the sensors for this frame: rebuilds the cast, ages the noises
     /// still audible, routes this frame's pain to its victims, and steps every

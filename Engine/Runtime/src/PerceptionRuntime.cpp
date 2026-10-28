@@ -228,6 +228,45 @@ void Runtime::exchange_squad_radio() {
     }
     ecs::World& world = m_scene_data_ptr->scene->world();
 
+    // Phase 70: radio jammers. The fields are snapshotted once per exchange so
+    // the per-link check is a handful of distance tests, and a scene with no
+    // `Jammer:` line pays one component lookup per entity per frame.
+    struct JammerField {
+        Vec3 origin{};
+        f32 radius_sq = 0.0f;
+        f32 strength = 0.0f;
+    };
+    std::vector<JammerField> jammers;
+    for (const ecs::Entity e : world.all_entities()) {
+        const auto* jammer = world.get<JammerComponent>(e);
+        if (jammer == nullptr || !jammer->enabled ||
+            !(jammer->radius > 0.0f) || !(jammer->strength > 0.0f) ||
+            !std::isfinite(jammer->radius) || !std::isfinite(jammer->strength)) {
+            continue;
+        }
+        const auto* transform = world.get<scene::Transform>(e);
+        if (transform == nullptr) {
+            continue;
+        }
+        jammers.push_back(JammerField{
+            Vec3{transform->world_x, transform->world_y, transform->world_z},
+            jammer->radius * jammer->radius,
+            std::clamp(jammer->strength, 0.0f, 1.0f)});
+    }
+    // An antenna inside the STRONGEST field loses that fraction of its range.
+    // Fields do not stack: one field is already a placement decision, and two
+    // overlapping fields must not silently multiply into a dead radio.
+    const auto antenna_factor = [&jammers](Vec3 position) -> f32 {
+        f32 strongest = 0.0f;
+        for (const JammerField& field : jammers) {
+            const Vec3 delta = position - field.origin;
+            if (delta.length_sq() <= field.radius_sq && field.strength > strongest) {
+                strongest = field.strength;
+            }
+        }
+        return 1.0f - strongest;
+    };
+
     // One contact, snapshotted from the reporter before anything is delivered.
     // The token and range are copied by value: delivery writes memories, never
     // components, and a snapshot is what makes same-frame relays impossible.
@@ -352,8 +391,11 @@ void Runtime::exchange_squad_radio() {
             const Vec3 delta = origin - report.origin;
             // A link needs BOTH radios to reach: a scout with a short antenna
             // cannot shout past it even when the listener could hear farther.
-            const f32 reach = std::min(report.radio, squad->radio);
-            if (delta.length_sq() > reach * reach) {
+            // Phase 70 multiplies each antenna by its jammer field first, so a
+            // field over either end can cut the same link.
+            const f32 reach = std::min(report.radio * antenna_factor(report.origin),
+                                       squad->radio * antenna_factor(origin));
+            if (!(reach > 0.0f) || delta.length_sq() > reach * reach) {
                 continue;
             }
             if (receiver.entity == target) {

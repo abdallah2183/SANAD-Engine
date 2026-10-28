@@ -57,6 +57,10 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
     if (const auto* squad = src.get<runtime::SquadComponent>(from)) {
         dst.add<runtime::SquadComponent>(to, *squad);
     }
+    // Phase 70: the jammer field travels with the entity too.
+    if (const auto* jammer = src.get<runtime::JammerComponent>(from)) {
+        dst.add<runtime::JammerComponent>(to, *jammer);
+    }
     // Phase 61: the considerations travel with the entity too.
     if (const auto* brain = src.get<runtime::BrainComponent>(from)) {
         dst.add<runtime::BrainComponent>(to, *brain);

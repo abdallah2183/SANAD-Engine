@@ -647,6 +647,34 @@ Squad: token=guards radio=45 lost=2
   field, the validator warns about a value outside `[0, 10000]`, and Terrain's
   WalkerA and WalkerC use `lost=2`.
 
+### Radios that can be jammed (`Jammer:`, Phase 70)
+
+A field degrades every squad radio inside it:
+
+```text
+Jammer: radius=9 strength=0.5
+```
+
+- **`radius=`** is the field reach in metres, `[0, 10000]`, default 12.
+  **`strength=`** is the fraction of an antenna's range removed inside it,
+  `[0, 1]`, default 1. `enabled=false`, `radius=0` or `strength=0` is inert, and
+  a scene without the line is exactly the Phase 69 radio.
+- **Who is affected**: any member of a squad radio (live report or lost callout)
+  whose world position is inside the field. The strongest covering field wins;
+  fields do not stack, and there is no team filter — a jammer jams its owner's
+  antenna too.
+- **How delivery changes**: an antenna inside a field keeps `1 - strength` of
+  its range, and a delivery still needs BOTH jammed antennas to reach. A field
+  over either end of a link can cut it; `strength=1` silences a radio completely.
+- **What is not jammed**: the Phase 67 `squad=` search board, personal senses,
+  detection, and lost tracking. Jamming only decides whether a radio delivery
+  arrives this frame; it never changes what a member sees or remembers by itself.
+- **Demo, inspector and validator**: Terrain's `RadioJammer` entity is a 9 m,
+  50% field in the walkers' path, so the Blue squad loses half its radio reach
+  near it. The inspector has a Radio jammer section with attach/apply/detach, the
+  loader refuses values outside the bounds, and the validator names an
+  out-of-range field, an inert field and a field with no Transform.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -659,7 +687,7 @@ Squad: token=guards radio=45 lost=2
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`), personally sensed contacts shared over an opt-in squad radio (`Squad:`), and an opt-in lost-contact callout (`lost=`) |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`), personally sensed contacts shared over an opt-in squad radio (`Squad:`), an opt-in lost-contact callout (`lost=`) and an opt-in radio jammer field (`Jammer:`) |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
@@ -669,8 +697,8 @@ Squad: token=guards radio=45 lost=2
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 69 the counts are
-  `RuntimeTests` 442/442, `EditorTests` 294/294, `AITests` 134/134 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 70 the counts are
+  `RuntimeTests` 447/447, `EditorTests` 295/295, `AITests` 134/134 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

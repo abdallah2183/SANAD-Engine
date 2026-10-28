@@ -79,6 +79,11 @@ std::unique_ptr<scene::Scene> clone_scene(const scene::Scene& src) {
         if (const auto* squad = sw.get<runtime::SquadComponent>(se)) {
             dw.add<runtime::SquadComponent>(de, *squad);
         }
+        // A jammer field (Phase 70) is authored data on the same terms: the
+        // radius and strength are what a clone needs, with no session state.
+        if (const auto* jammer = sw.get<runtime::JammerComponent>(se)) {
+            dw.add<runtime::JammerComponent>(de, *jammer);
+        }
         // The decision layer (Phase 61) is authored data on the same terms.
         if (const auto* brain = sw.get<runtime::BrainComponent>(se)) {
             dw.add<runtime::BrainComponent>(de, *brain);

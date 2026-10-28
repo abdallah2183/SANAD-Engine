@@ -2490,6 +2490,22 @@ bool valid_squad_config(const runtime::SquadComponent& squad, std::string& out_e
     return true;
 }
 
+// Radio jammers (Phase 70). The bounds are the loader's: a field covers
+// [0, 10000] metres and removes a [0, 1] fraction of the range. Zero is legal
+// at either key and writes an inert field, which the validator names rather
+// than the setter refusing — the same split the squad radio keeps.
+bool valid_jammer_config(const runtime::JammerComponent& jammer, std::string& out_err) {
+    if (!std::isfinite(jammer.radius) || jammer.radius < 0.0f || jammer.radius > 10000.0f) {
+        out_err = "Jammer radius must be within [0, 10000] metres";
+        return false;
+    }
+    if (!std::isfinite(jammer.strength) || jammer.strength < 0.0f || jammer.strength > 1.0f) {
+        out_err = "Jammer strength must be within [0, 1]";
+        return false;
+    }
+    return true;
+}
+
 // Vehicles (Step 11). The bounds mirror the scene loader's parse_vehicle, so
 // a tune the inspector accepts is a tune the file round-trips — a range that
 // differed between the two would let the UI write a component the loader then
@@ -3090,6 +3106,68 @@ bool EditorApp::detach_squad(ecs::Entity e, std::string& out_err) {
         return false;
     }
     w->remove<runtime::SquadComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_jammer(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (w->has<runtime::JammerComponent>(e)) {
+        return true;
+    }
+    // The defaults are a real field (12 m, full strength), so the attach is
+    // immediately visible in Play and round-trips as a `Jammer:` line. A zero
+    // radius or strength would attach an inert component, which is why the
+    // defaults are not the struct's "off" values.
+    w->add<runtime::JammerComponent>(e, runtime::JammerComponent{});
+    after_mutation(e);
+    // The field is read live each perception step, so no rebind is needed.
+    return true;
+}
+
+bool EditorApp::set_jammer(ecs::Entity e, const runtime::JammerComponent& jammer,
+                           std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!valid_jammer_config(jammer, out_err)) {
+        return false;
+    }
+    if (auto* existing = w->get<runtime::JammerComponent>(e)) {
+        *existing = jammer;
+    } else {
+        w->add<runtime::JammerComponent>(e, jammer);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_jammer(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) {
+        out_err = "Entity not alive";
+        return false;
+    }
+    if (!w->has<runtime::JammerComponent>(e)) {
+        out_err = "Entity has no JammerComponent";
+        return false;
+    }
+    w->remove<runtime::JammerComponent>(e);
     after_mutation(e);
     return true;
 }

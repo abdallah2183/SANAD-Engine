@@ -448,6 +448,18 @@ static bool parse_squad(const std::string& line, SquadComponent& out, std::strin
     return true;
 }
 
+// `Jammer:` (Phase 70). The field that degrades squad radios. Both keys are
+// optional with the component's defaults, so a bare `Jammer:` line is a 12 m
+// full-strength field. The bounds match the editor's and the runtime's.
+static bool parse_jammer(const std::string& line, JammerComponent& out, std::string& out_bad) {
+    if (!optional_float_in_range(line, "radius=", 0.0f, 10000.0f, out.radius, out_bad))
+        return false;
+    if (!optional_float_in_range(line, "strength=", 0.0f, 1.0f, out.strength, out_bad))
+        return false;
+    out.enabled = line.find("enabled=false") == std::string::npos;
+    return true;
+}
+
 // `Brain:` and `BrainAction:` (Phase 61). The brain line declares the decision
 // maker, and each action line is one consideration appended to it. The contract
 // is the same as every other optional line: an absent key keeps the default, and
@@ -1519,6 +1531,18 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                     scene->world().add<SquadComponent>(e, std::move(squad));
                 } else {
                     result.warnings.push_back("Squad line with invalid " + bad +
+                                              " was ignored: " + line);
+                }
+            } else if (line.rfind("  Jammer:",0)==0) {
+                // Radio jammer (Phase 70). Absent means "no field", so every
+                // older scene keeps its exact radio behaviour. A bad value
+                // rejects the line by name.
+                JammerComponent jammer;
+                std::string bad;
+                if (parse_jammer(line, jammer, bad)) {
+                    scene->world().add<JammerComponent>(e, jammer);
+                } else {
+                    result.warnings.push_back("Jammer line with invalid " + bad +
                                               " was ignored: " + line);
                 }
             } else if (line.rfind("  Brain:",0)==0) {
@@ -2989,6 +3013,17 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             out << "\n";
         }
+        // Radio jammer (Phase 70). The field is authored data even at its
+        // defaults — a bare `Jammer:` line means a real 12 m field — so the
+        // component always writes its numbers.
+        const auto* jammer = scene_obj.world().get<JammerComponent>(e);
+        if (jammer) {
+            out << "  Jammer: radius=" << jammer->radius << " strength=" << jammer->strength;
+            if (!jammer->enabled) {
+                out << " enabled=false";
+            }
+            out << "\n";
+        }
         // The decision layer (Phase 61). The brain line carries the clock, and
         // every action is its own line so the list reads like the considerations
         // it is; the order is what breaks a tie, so it is written in order.
@@ -3472,6 +3507,11 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         // The radio token and range are authored data; the contacts it carries
         // belong to the live Perception, so a copy is a full copy.
         dst.add<SquadComponent>(de, *squad);
+    }
+    if (const auto* jammer = src.get<JammerComponent>(se)) {
+        // A field has no live state either: radius, strength and the flag are
+        // all authored data, so a copy is a full copy.
+        dst.add<JammerComponent>(de, *jammer);
     }
     if (const auto* brain = src.get<BrainComponent>(se)) {
         // Considerations are authored data; the live decision lives in the

@@ -1250,6 +1250,24 @@ constexpr Entry kEntries[] = {
      "the last position once. Zero disables the callout.",
      "عندما ينقطع اتصال رصده هذا الكيان بنفسه، يبلّغ رفاقه بآخر موضع مرة واحدة. "
      "الصفر يعطّل النداء."},
+    // --- Radio jammer authoring (Phase 70) -----------------------------------
+    // A field that shortens the antennas inside it. Strength is a fraction, so
+    // the two numbers read as "how big" and "how much", never as a range pair.
+    {"jammer", "Radio jammer", "تشويش الراديو"},
+    {"no_jammer", "No radio jammer on this entity.", "لا يوجد تشويش راديو لهذا الكيان۔"},
+    {"add_jammer", "Add radio jammer", "إضافة تشويش راديو"},
+    {"jammer_radius", "Jammer radius (m)", "نصف قطر التشويش (م)"},
+    {"jammer_radius_hint",
+     "Every squad radio inside this radius loses part of its reach. The strongest "
+     "field covering an antenna wins; fields do not stack. Zero is inert.",
+     "كل راديو فصيل داخل هذا النصف يخسر جزءًا من مداه. أقوى حقل يغطي الهوائي هو "
+     "الذي يُطبَّق، والحقول لا تتراكم. الصفر معطّل."},
+    {"jammer_strength", "Jammed fraction", "نسبة التشويش"},
+    {"jammer_strength_hint",
+     "The fraction of the radio range removed inside the field: 1 silences a "
+     "radio, 0 keeps it at full range. A jammer jams its own side too.",
+     "نسبة مدى الراديو المفقودة داخل الحقل: 1 يُسكت الراديو، و0 يُبقيه بمداه "
+     "الكامل. التشويش يشمل فصيل صاحبه أيضًا."},
     // --- Decision layer authoring (Phase 61) --------------------------------
     // The considerations an NPC weighs. The input names are scene-format tokens
     // and they are translated here too, so the Arabic UI shows no Latin in a

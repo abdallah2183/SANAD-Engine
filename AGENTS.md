@@ -293,6 +293,18 @@ Games/MyGame/
   and never restarts or replaces a personal investigation. The bounds are
   `[0, 10000]`, the validator warns outside them, and the editor's Squad radio
   section has the field.
+- A squad radio can be jammed (Phase 70). Add `Jammer: radius=<metres>
+  strength=<fraction>` to any entity with a Transform. Every squad radio whose
+  world position is inside the field keeps `1 - strength` of its range (strength
+  is `[0, 1]`, radius `[0, 10000]`, defaults 12 and 1), and a delivery still
+  needs BOTH jammed antennas to reach. The strongest covering field wins; fields
+  do not stack and there is no team filter, so a jammer jams its owner too.
+  Jamming applies to live reports and lost callouts, never to the Phase 67
+  `squad=` board, personal senses, detection, or the lost bookkeeping. A scene
+  with no `Jammer:` line is exactly Phase 69. `radius=0`, `strength=0` or
+  `enabled=false` is inert; the validator names an out-of-range field, an inert
+  field and a field with no Transform, and the editor has a Radio jammer
+  section.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

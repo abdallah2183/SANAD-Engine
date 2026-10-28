@@ -281,6 +281,12 @@ struct InspectorCache {
     float squad_radio = 30.0f;
     float squad_lost = 0.0f;
     char squad_token[65]{};
+    // Radio jammer (Phase 70). The field radius and the fraction of an
+    // antenna's reach it removes inside that radius.
+    bool jammer_has = false;
+    bool jammer_enabled = true;
+    float jammer_radius = 12.0f;
+    float jammer_strength = 1.0f;
     // Decision layer (Phase 61). The action list is cached as the components'
     // own structs: it is a variable-length list of seven-field records, and
     // mirroring it into parallel arrays would be seven places to keep in step.
@@ -2292,6 +2298,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.squad_has = false;
                 }
+                if (const auto* jammer = w->get<runtime::JammerComponent>(sel)) {
+                    ic.jammer_has = true;
+                    ic.jammer_enabled = jammer->enabled;
+                    ic.jammer_radius = jammer->radius;
+                    ic.jammer_strength = jammer->strength;
+                } else {
+                    ic.jammer_has = false;
+                }
                 if (const auto* brain = w->get<runtime::BrainComponent>(sel)) {
                     ic.brain_has = true;
                     ic.brain_enabled = brain->enabled;
@@ -2557,6 +2571,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<runtime::SquadComponent>(sel) &&
                            ImGui::MenuItem(AV("squad").c_str())) {
                     added = app.attach_squad(sel, add_err);
+                } else if (!w->has<runtime::JammerComponent>(sel) &&
+                           ImGui::MenuItem(AV("jammer").c_str())) {
+                    added = app.attach_jammer(sel, add_err);
                 } else if (!w->has<physics::VehicleComponent>(sel) &&
                            ImGui::MenuItem(AV("vehicle").c_str())) {
                     added = app.attach_vehicle(sel, add_err);
@@ -4199,6 +4216,63 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                         if (!app.detach_squad(sel, err)) {
                             ic.error = err;
                             push_error(app.console(), "Detach squad radio failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                }
+            }
+            // --- Radio jammer (Phase 70) ---
+            // The field that degrades squad radios inside its radius. Always
+            // visible like Squad: Attach authors the default 12 m field,
+            // Apply validates through the loader's own bounds, Detach removes
+            // the `Jammer:` line.
+            if (ImGui::CollapsingHeader((AV("jammer") + "###Jammer").c_str())) {
+                if (!ic.jammer_has) {
+                    ImGui::TextDisabled("%s", AV("no_jammer").c_str());
+                    if (ImGui::Button((AV("add_jammer") + "##jammer").c_str())) {
+                        std::string err;
+                        if (!app.attach_jammer(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Attach jammer failed", err);
+                        } else {
+                            ic.error.clear();
+                            ic.valid = false;
+                        }
+                    }
+                } else {
+                    ImGui::Checkbox((AV("enabled") + "##jammer_enabled").c_str(),
+                                    &ic.jammer_enabled);
+                    ImGui::DragFloat((AV("jammer_radius") + "##jammer").c_str(),
+                                     &ic.jammer_radius, 0.25f, 0.0f, 10000.0f, "%.1f m");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("jammer_radius_hint").c_str());
+                    }
+                    ImGui::SliderFloat((AV("jammer_strength") + "##jammer").c_str(),
+                                       &ic.jammer_strength, 0.0f, 1.0f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("jammer_strength_hint").c_str());
+                    }
+                    if (ImGui::Button((AV("apply") + "##jammer").c_str())) {
+                        runtime::JammerComponent edited;
+                        edited.enabled = ic.jammer_enabled;
+                        edited.radius = ic.jammer_radius;
+                        edited.strength = ic.jammer_strength;
+                        std::string err;
+                        if (!app.set_jammer(sel, edited, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Jammer edit failed", err);
+                        } else {
+                            ic.error.clear();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button((AV("detach") + "##jammer").c_str())) {
+                        std::string err;
+                        if (!app.detach_jammer(sel, err)) {
+                            ic.error = err;
+                            push_error(app.console(), "Detach jammer failed", err);
                         } else {
                             ic.error.clear();
                             ic.valid = false;

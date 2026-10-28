@@ -608,3 +608,97 @@ NF_TEST(editor_squad_attach_edit_detach_and_round_trip) {
 
     std::filesystem::remove_all(tmp);
 }
+
+// Phase 70: the radio jammer is authorable on the same terms. Attach authors a
+// real field (12 m at full strength), the setter enforces the loader's bounds,
+// and the round trip is what keeps an authored field across a reopen.
+NF_TEST(editor_jammer_attach_edit_detach_and_round_trip) {
+    const GpuFixture& f = require_gpu();
+    auto& device = *f.device;
+
+    const auto tmp = nav_temp_dir("nf_ed_jammer_rt");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+
+    std::string err;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+    ecs::World& world = runtime.edit_scene()->world();
+    const ecs::Entity e = world.all_entities().front();
+    NF_CHECK(!world.has<runtime::JammerComponent>(e));
+
+    NF_CHECK(app.attach_jammer(e, err));
+    const auto* attached = world.get<runtime::JammerComponent>(e);
+    NF_CHECK(attached != nullptr);
+    if (attached != nullptr) {
+        NF_CHECK_NEAR(attached->radius, 12.0f, 1e-6f);
+        NF_CHECK_NEAR(attached->strength, 1.0f, 1e-6f);
+        NF_CHECK(attached->enabled);
+    }
+
+    // The setter's rules are the loader's: radius is [0, 10000] and strength
+    // is [0, 1]. A refused edit leaves the component exactly as it was.
+    runtime::JammerComponent bad;
+    bad.radius = -1.0f;
+    NF_CHECK(!app.set_jammer(e, bad, err));
+    NF_CHECK(!err.empty());
+    bad.radius = 10001.0f;
+    NF_CHECK(!app.set_jammer(e, bad, err));
+    bad.radius = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(!app.set_jammer(e, bad, err));
+    bad.radius = 12.0f;
+    bad.strength = -0.1f;
+    NF_CHECK(!app.set_jammer(e, bad, err));
+    bad.strength = 1.5f;
+    NF_CHECK(!app.set_jammer(e, bad, err));
+    bad.strength = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(!app.set_jammer(e, bad, err));
+    const auto* unchanged = world.get<runtime::JammerComponent>(e);
+    NF_CHECK(unchanged != nullptr);
+    if (unchanged != nullptr) {
+        NF_CHECK_NEAR(unchanged->radius, 12.0f, 1e-6f);
+        NF_CHECK_NEAR(unchanged->strength, 1.0f, 1e-6f);
+        NF_CHECK(unchanged->enabled);
+    }
+
+    runtime::JammerComponent edited;
+    edited.radius = 9.5f;
+    edited.strength = 0.5f;
+    edited.enabled = false;
+    err.clear();
+    NF_CHECK(app.set_jammer(e, edited, err));
+    NF_CHECK(err.empty());
+    err.clear();
+    NF_CHECK(app.save(err));
+    NF_CHECK(err.empty());
+
+    AssetRegistry reg2;
+    AssetManager manager2(vfs, reg2);
+    runtime::Runtime runtime2(vfs, reg2, manager2, device, nullptr);
+    editor::ConsoleBuffer console2;
+    editor::EditorApp app2(vfs, reg2, manager2, console2);
+    app2.attach_runtime(&runtime2);
+    NF_CHECK(app2.open_scene("content://Scenes/Work.nfscene", err));
+    const ecs::Entity e2 = runtime2.edit_scene()->world().all_entities().front();
+    const auto* loaded = runtime2.edit_scene()->world().get<runtime::JammerComponent>(e2);
+    NF_CHECK(loaded != nullptr);
+    if (loaded != nullptr) {
+        NF_CHECK_NEAR(loaded->radius, 9.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->strength, 0.5f, 1e-5f);
+        NF_CHECK(!loaded->enabled);
+    }
+
+    NF_CHECK(app2.detach_jammer(e2, err));
+    NF_CHECK(!runtime2.edit_scene()->world().has<runtime::JammerComponent>(e2));
+    NF_CHECK(!app2.detach_jammer(e2, err));
+
+    std::filesystem::remove_all(tmp);
+}

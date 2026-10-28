@@ -1125,6 +1125,32 @@ struct SquadComponent {
     bool enabled = true;
 };
 
+/// A radio jammer (Phase 70).
+///
+/// One optional `Jammer: radius=<metres> strength=<fraction>` line on any
+/// entity turns its world position into a field that degrades every squad
+/// radio inside it. An antenna inside a field loses `strength` of its reach,
+/// and a delivery needs BOTH antennas to reach, so a field over either end of
+/// a link can cut it. The strongest field covering an antenna wins; fields do
+/// not add up. There is no team filter: a jammer jams its owner's radio too,
+/// which makes placement a choice rather than a free buff.
+///
+/// `radius=0` or `strength=0` is inert, and a scene with no line is exactly
+/// the Phase 69 radio. Jamming is radio-only: it never touches the Phase 67
+/// `squad=` search board, a personal sense, or the lost-callout bookkeeping —
+/// it only decides whether this frame's delivery arrives.
+struct JammerComponent {
+    /// Reach of the field in metres, `[0, 10000]`. 0 jams nothing.
+    f32 radius = 12.0f;
+
+    /// Fraction of an antenna's radio range removed inside the field, `[0, 1]`.
+    /// 1 silences a radio completely; 0 is inert.
+    f32 strength = 1.0f;
+
+    /// Off keeps the field authored and inert.
+    bool enabled = true;
+};
+
 /// What a brain action reads (Phase 61).
 ///
 /// The frame fills one number per input from the world it already has — the

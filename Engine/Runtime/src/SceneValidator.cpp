@@ -331,6 +331,39 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- radio jammers (Phase 70) ----------------------------------------
+    // A field with no reach or no strength is an authored component that does
+    // nothing, which is worth naming rather than leaving as a silent typo.
+    for (const ecs::Entity e : entities) {
+        const auto* jammer = world.get<JammerComponent>(e);
+        if (jammer == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (!sane(jammer->radius, 0.0f, 10000.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("Jammer radius ") + std::to_string(jammer->radius) +
+                           " is outside [0, 10000]; it cannot cover that area");
+        }
+        if (!sane(jammer->strength, 0.0f, 1.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("Jammer strength ") + std::to_string(jammer->strength) +
+                           " is outside [0, 1]; it is clamped at runtime");
+        }
+        if (jammer->enabled && jammer->radius <= 0.0f) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Jammer radius=0 jams nothing: no radio is inside its field");
+        }
+        if (jammer->enabled && jammer->strength <= 0.0f) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Jammer strength=0 jams nothing: every radio keeps its full range");
+        }
+        if (world.get<scene::Transform>(e) == nullptr) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Jammer has no Transform: its field has no position and jams nothing");
+        }
+    }
+
     // --- decision layer (Phase 61) ---------------------------------------
     // The loader refuses a bad line, so this is for the other two paths in and
     // for the mistakes only the WHOLE list can show: a brain with nothing to

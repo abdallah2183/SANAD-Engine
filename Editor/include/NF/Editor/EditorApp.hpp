@@ -368,6 +368,14 @@ public:
     bool attach_squad(ecs::Entity e, std::string& out_err);
     bool set_squad(ecs::Entity e, const runtime::SquadComponent& squad, std::string& out_err);
     bool detach_squad(ecs::Entity e, std::string& out_err);
+    /// Radio jammer (Phase 70): the optional `Jammer:` field that degrades
+    /// squad radios inside its radius. Attaching authors the default 12 m,
+    /// full-strength field; applying validates radius and strength against the
+    /// loader's own bounds.
+    bool attach_jammer(ecs::Entity e, std::string& out_err);
+    bool set_jammer(ecs::Entity e, const runtime::JammerComponent& jammer,
+                    std::string& out_err);
+    bool detach_jammer(ecs::Entity e, std::string& out_err);
     // --- Vehicles (Step 11) ----------------------------------------------------
     // Same direct-edit shape as navigation: validated at the door, add-or-replace,
     // and a synchronous vehicle re-bind so the authored car simulates without a

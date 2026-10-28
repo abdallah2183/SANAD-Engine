@@ -1570,3 +1570,488 @@ NF_TEST(squad_lost_callout_uses_the_last_position_once) {
     device->shutdown();
     std::filesystem::remove_all(tmp);
 }
+
+// --- radio jammers (Phase 70) -------------------------------------------------
+
+NF_TEST(jammer_line_round_trips_every_key) {
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_jammer_round_trip";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    scene::Scene scene("JammerScene");
+    auto& world = scene.world();
+    const ecs::Entity e = world.create_entity();
+    world.add<scene::Transform>(e, scene::Transform{});
+    JammerComponent jammer;
+    jammer.radius = 9.5f;
+    jammer.strength = 0.5f;
+    jammer.enabled = false;
+    world.add<JammerComponent>(e, jammer);
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/jammer.nfscene", scene, err));
+    NF_CHECK(err.empty());
+
+    const auto text = vfs.read_text("content://Scenes/jammer.nfscene");
+    NF_CHECK(text.ok);
+    NF_CHECK(text.value.find("Jammer: radius=9.5 strength=0.5 enabled=false") !=
+             std::string::npos);
+
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/jammer.nfscene");
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene != nullptr);
+    if (!result.scene) {
+        std::filesystem::remove_all(tmp);
+        return;
+    }
+    const auto* loaded = result.scene->world().get<JammerComponent>(
+        result.scene->world().all_entities()[0]);
+    NF_CHECK(loaded != nullptr);
+    if (loaded != nullptr) {
+        NF_CHECK_NEAR(loaded->radius, 9.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->strength, 0.5f, 1e-5f);
+        NF_CHECK(!loaded->enabled);
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(jammer_line_defaults_and_refuses_bad_values_by_name) {
+    // A scene that never authored a jammer writes no line, so every older
+    // scene keeps its exact Phase 69 radio behaviour.
+    scene::Scene plain("PlainJammerScene");
+    plain.world().add<scene::Transform>(plain.world().create_entity(), scene::Transform{});
+    const std::string plain_text = serialize_scene_to_text(plain);
+    NF_CHECK(plain_text.find("Jammer:") == std::string::npos);
+
+    // A bare line is a real field: the defaults are 12 m at full strength,
+    // because an attached field that did nothing would be a trap.
+    const std::string minimal =
+        "# SANAD Scene v1\nversion: 1\nname: MinimalJammer\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Jammer\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n"
+        "  Jammer:\n";
+    auto parsed = load_scene_from_text(minimal);
+    NF_CHECK(parsed.success);
+    if (parsed.scene) {
+        const auto* jammer = parsed.scene->world().get<JammerComponent>(
+            parsed.scene->world().all_entities()[0]);
+        NF_CHECK(jammer != nullptr);
+        if (jammer != nullptr) {
+            NF_CHECK_NEAR(jammer->radius, 12.0f, 1e-6f);
+            NF_CHECK_NEAR(jammer->strength, 1.0f, 1e-6f);
+            NF_CHECK(jammer->enabled);
+        }
+    }
+
+    const auto refused = [](const std::string& line, const char* key) {
+        const std::string text =
+            "# SANAD Scene v1\nversion: 1\nname: BadJammer\nentity_count: 1\n"
+            "---\nentity: 1:0\n  Name: Jammer\n"
+            "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+            "parent(4294967295:0)\n  " + line + "\n";
+        auto r = load_scene_from_text(text);
+        if (!r.success || !r.scene) {
+            return false;
+        }
+        const ecs::Entity e = r.scene->world().all_entities()[0];
+        bool named = false;
+        for (const std::string& warning : r.warnings) {
+            if (warning.find("Jammer") != std::string::npos &&
+                warning.find(key) != std::string::npos) {
+                named = true;
+                break;
+            }
+        }
+        return r.scene->world().get<JammerComponent>(e) == nullptr && named;
+    };
+
+    // The loader's bounds are the editor's and the validator's.
+    NF_CHECK(refused("Jammer: radius=20000", "radius"));
+    NF_CHECK(refused("Jammer: radius=-1", "radius"));
+    NF_CHECK(refused("Jammer: strength=1.5", "strength"));
+    NF_CHECK(refused("Jammer: strength=-0.1", "strength"));
+
+    // Zero is legal: it is an authored field that does nothing, which the
+    // validator names rather than the loader refusing the line.
+    const std::string inert_text =
+        "# SANAD Scene v1\nversion: 1\nname: InertJammer\nentity_count: 1\n"
+        "---\nentity: 1:0\n  Name: Jammer\n"
+        "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
+        "parent(4294967295:0)\n  Jammer: radius=0 strength=0\n";
+    auto inert = load_scene_from_text(inert_text);
+    NF_CHECK(inert.success);
+    if (inert.scene) {
+        const auto* jammer = inert.scene->world().get<JammerComponent>(
+            inert.scene->world().all_entities()[0]);
+        NF_CHECK(jammer != nullptr);
+        if (jammer != nullptr) {
+            NF_CHECK_NEAR(jammer->radius, 0.0f, 1e-6f);
+            NF_CHECK_NEAR(jammer->strength, 0.0f, 1e-6f);
+        }
+    }
+}
+
+NF_TEST(jammer_values_that_do_nothing_are_warned_by_name) {
+    scene::Scene scene("JammerWarn");
+    auto& world = scene.world();
+    add_bare_camera(scene);
+    const ecs::Entity e = add_world_entity(scene, "Jammer", 0.0f, 0.0f, 0.0f, false);
+    JammerComponent jammer;
+    jammer.radius = 0.0f;
+    jammer.strength = 0.0f;
+    world.add<JammerComponent>(e, jammer);
+
+    const ValidationReport report = validate_scene(scene, "content://Scenes/jammer_warn.nfscene");
+    bool radius_zero = false;
+    bool strength_zero = false;
+    for (const ValidationIssue& issue : report.issues) {
+        if (issue.message.find("radius=0") != std::string::npos) radius_zero = true;
+        if (issue.message.find("strength=0") != std::string::npos) strength_zero = true;
+    }
+    NF_CHECK(radius_zero);
+    NF_CHECK(strength_zero);
+
+    // Out-of-range values are reported as outside the bounds, not as "inert":
+    // the field is not doing nothing, it is doing something undefined.
+    JammerComponent outside;
+    outside.radius = 20000.0f;
+    outside.strength = 2.0f;
+    world.add<JammerComponent>(e, outside);
+    const ValidationReport bad =
+        validate_scene(scene, "content://Scenes/jammer_bad.nfscene");
+    bool radius_out = false;
+    bool strength_out = false;
+    for (const ValidationIssue& issue : bad.issues) {
+        if (issue.message.find("radius") != std::string::npos &&
+            issue.message.find("outside") != std::string::npos) {
+            radius_out = true;
+        }
+        if (issue.message.find("strength") != std::string::npos &&
+            issue.message.find("outside") != std::string::npos) {
+            strength_out = true;
+        }
+    }
+    NF_CHECK(radius_out);
+    NF_CHECK(strength_out);
+
+    // A field with no Transform has no position, and a good field is silent.
+    const ecs::Entity floating = world.create_entity();
+    world.add<scene::NameComponent>(floating, scene::NameComponent{"FloatingJammer"});
+    world.add<JammerComponent>(floating, JammerComponent{});
+    const ValidationReport no_transform =
+        validate_scene(scene, "content://Scenes/jammer_float.nfscene");
+    bool missing_transform = false;
+    for (const ValidationIssue& issue : no_transform.issues) {
+        if (issue.message.find("Jammer") != std::string::npos &&
+            issue.message.find("Transform") != std::string::npos) {
+            missing_transform = true;
+        }
+    }
+    NF_CHECK(missing_transform);
+
+    scene::Scene good("JammerGood");
+    add_bare_camera(good);
+    const ecs::Entity g = add_world_entity(good, "Jammer", 0.0f, 0.0f, 0.0f, false);
+    JammerComponent fine;
+    fine.radius = 9.0f;
+    fine.strength = 0.5f;
+    good.world().add<JammerComponent>(g, fine);
+    const ValidationReport quiet =
+        validate_scene(good, "content://Scenes/jammer_good.nfscene");
+    bool jammer_issue = false;
+    for (const ValidationIssue& issue : quiet.issues) {
+        if (issue.message.find("Jammer") != std::string::npos) jammer_issue = true;
+    }
+    NF_CHECK(!jammer_issue);
+}
+
+NF_TEST(jammer_cuts_live_reports_at_the_receiving_antenna) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_jammer_live";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("JammerNet");
+        const auto make_radio = [&](const char* name, f32 x, f32 z) {
+            const ecs::Entity e = add_world_entity(*game, name, x, 0.0f, z, false);
+            add_health(*game, e, 100.0f);
+            FactionComponent faction;
+            faction.team = "Blue";
+            game->world().add<FactionComponent>(e, faction);
+            PerceptionComponent senses;
+            senses.sight_range = 0.0f;
+            senses.hearing_range = 0.0f;
+            senses.touch_range = 0.0f;
+            senses.pain = false;
+            game->world().add<PerceptionComponent>(e, senses);
+            SquadComponent squad;
+            squad.token = "guards";
+            squad.radio = 8.0f;
+            game->world().add<SquadComponent>(e, squad);
+            return e;
+        };
+        const auto add_field = [&](f32 x, f32 z, f32 radius, f32 strength) {
+            const ecs::Entity e = add_world_entity(*game, "Jammer", x, 0.0f, z, false);
+            JammerComponent jammer;
+            jammer.radius = radius;
+            jammer.strength = strength;
+            game->world().add<JammerComponent>(e, jammer);
+            return e;
+        };
+
+        const ecs::Entity observer = add_world_entity(*game, "Observer", 1.0f, 0.0f, 1.0f, false);
+        add_health(*game, observer, 100.0f);
+        if (auto* ot = game->world().get<scene::Transform>(observer); ot != nullptr) {
+            ot->rot_y = 180.0f;
+        }
+        FactionComponent blue;
+        blue.team = "Blue";
+        game->world().add<FactionComponent>(observer, blue);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 60.0f;
+        eyes.sight_gain = 2.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        game->world().add<PerceptionComponent>(observer, eyes);
+        SquadComponent observer_squad;
+        observer_squad.token = "guards";
+        observer_squad.radio = 8.0f;
+        game->world().add<SquadComponent>(observer, observer_squad);
+
+        const ecs::Entity target = add_world_entity(*game, "Contact", 1.0f, 0.0f, 6.0f, false);
+        add_health(*game, target, 100.0f);
+        FactionComponent red;
+        red.team = "Red";
+        game->world().add<FactionComponent>(target, red);
+
+        // Five metres from the observer, both antennas full: receives.
+        const ecs::Entity clear = make_radio("Clear", 6.0f, 1.0f);
+        // Same distance, but a receiver-side field leaves 2 m of antenna:
+        // a delivery needs the receiver to reach as well, so it stays blind.
+        const ecs::Entity rx_jammed = make_radio("RxJammed", 6.0f, 3.0f);
+        add_field(6.0f, 3.0f, 1.0f, 0.75f);
+        // 3.6 m away under TWO 50% fields: the strongest field wins, so the
+        // antenna is 4 m and the link arrives. If fields stacked it would be
+        // 2 m and the same link would fail — this pins "no stacking".
+        const ecs::Entity stacked = make_radio("Stacked", 4.5f, 2.0f);
+        add_field(4.5f, 2.0f, 1.5f, 0.5f);
+        add_field(4.5f, 2.0f, 1.5f, 0.5f);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/JammerNet.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK(rt.entity_aware_of(clear, target));
+        NF_CHECK(rt.entity_aware_of(stacked, target));
+        NF_CHECK(!rt.entity_aware_of(rx_jammed, target));
+        NF_CHECK(!rt.entity_sensing(clear, target));
+
+        // The link is not one-way through the sender: the same field over the
+        // reporter would have cut the clear mate too. Jamming is team-agnostic,
+        // so a field over a Blue member is not a friendly buff.
+        const auto* rx_senses = rt.perception_of(rx_jammed);
+        NF_CHECK(rx_senses != nullptr);
+        if (rx_senses != nullptr) {
+            NF_CHECK(rx_senses->perceived().empty());
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(jammer_cuts_lost_callouts_at_the_reporting_antenna) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_jammer_lost";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    constexpr f32 dt = 1.0f / 60.0f;
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("JammedLostNet");
+        const ecs::Entity observer = add_world_entity(*game, "Observer", 1.0f, 0.0f, 1.0f,
+                                                      false);
+        add_health(*game, observer, 100.0f);
+        if (auto* ot = game->world().get<scene::Transform>(observer); ot != nullptr) {
+            ot->rot_y = 180.0f;
+        }
+        FactionComponent blue;
+        blue.team = "Blue";
+        game->world().add<FactionComponent>(observer, blue);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 60.0f;
+        eyes.sight_gain = 2.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        game->world().add<PerceptionComponent>(observer, eyes);
+        SquadComponent observer_squad;
+        observer_squad.token = "guards";
+        observer_squad.radio = 8.0f;
+        observer_squad.lost = 2.0f;
+        game->world().add<SquadComponent>(observer, observer_squad);
+
+        const ecs::Entity mate = add_world_entity(*game, "Mate", 6.0f, 0.0f, 1.0f, false);
+        add_health(*game, mate, 100.0f);
+        game->world().add<FactionComponent>(mate, blue);
+        PerceptionComponent mate_senses;
+        mate_senses.sight_range = 0.0f;
+        mate_senses.hearing_range = 0.0f;
+        mate_senses.touch_range = 0.0f;
+        mate_senses.pain = false;
+        // A short linger makes the suppressed callout visible: the receiver
+        // forgets the live report after half a second unless the lost window
+        // refreshes it, and that refresh is precisely what jamming prevents.
+        mate_senses.sight_linger = 0.5f;
+        game->world().add<PerceptionComponent>(mate, mate_senses);
+        SquadComponent mate_squad;
+        mate_squad.token = "guards";
+        mate_squad.radio = 8.0f;
+        mate_squad.lost = 2.0f;
+        game->world().add<SquadComponent>(mate, mate_squad);
+
+        const ecs::Entity target = add_world_entity(*game, "Contact", 1.0f, 0.0f, 6.0f,
+                                                    false);
+        add_health(*game, target, 100.0f);
+        FactionComponent red;
+        red.team = "Red";
+        game->world().add<FactionComponent>(target, red);
+
+        // The field sits on the REPORTER and starts off, so the live report
+        // arrives first; enabling it cuts the antenna only for the callout.
+        const ecs::Entity tx_field =
+            add_world_entity(*game, "Jammer", 1.0f, 0.0f, 1.0f, false);
+        JammerComponent jammer;
+        jammer.radius = 1.0f;
+        jammer.strength = 0.75f;
+        jammer.enabled = false;
+        game->world().add<JammerComponent>(tx_field, jammer);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/JammedLostNet.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(dt);
+        }
+
+        NF_CHECK(rt.entity_aware_of(mate, target));
+        const ai::Perception* mate_senses_live = rt.perception_of(mate);
+        NF_CHECK(mate_senses_live != nullptr);
+        float live_deadline = 0.0f;
+        if (mate_senses_live != nullptr && !mate_senses_live->perceived().empty()) {
+            live_deadline = mate_senses_live->perceived().front().linger_deadline;
+        }
+
+        // Silence the reporter's antenna, then make the contact vanish. The
+        // observer still sees the loss (jamming is radio-only): it queues the
+        // callout, but a 2 m antenna cannot shout 5.4 m.
+        if (auto* field = rt.edit_scene()->world().get<JammerComponent>(tx_field);
+            field != nullptr) {
+            field->enabled = true;
+        }
+        if (auto* tt = rt.edit_scene()->world().get<scene::Transform>(target); tt != nullptr) {
+            tt->local_z = -100.0f;
+            tt->world_z = -100.0f;
+        }
+        rt.update(dt); // notices the loss and queues the callout
+        rt.update(dt); // the failed delivery attempt
+
+        const ai::Perception* after_jam = rt.perception_of(mate);
+        NF_CHECK(after_jam != nullptr);
+        if (after_jam != nullptr && !after_jam->perceived().empty()) {
+            // No refresh: the live report's 0.5 s deadline is untouched.
+            NF_CHECK_NEAR(after_jam->perceived().front().linger_deadline, live_deadline, 1e-5f);
+        }
+
+        // Past the live window and well inside the 2 s lost window, the mate is
+        // still deaf: the callout never arrived.
+        for (int frame = 0; frame < 72; ++frame) {
+            rt.update(dt);
+        }
+        NF_CHECK(!rt.entity_aware_of(mate, target));
+
+        // Clearing the field restores the link: a fresh sighting delivers the
+        // live report again, and the following loss extends the window to the
+        // receiver's own lost=2.
+        if (auto* field = rt.edit_scene()->world().get<JammerComponent>(tx_field);
+            field != nullptr) {
+            field->enabled = false;
+        }
+        if (auto* tt = rt.edit_scene()->world().get<scene::Transform>(target); tt != nullptr) {
+            tt->local_z = 6.0f;
+            tt->world_z = 6.0f;
+        }
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(dt);
+        }
+        NF_CHECK(rt.entity_aware_of(mate, target));
+        const ai::Perception* after_clear = rt.perception_of(mate);
+        NF_CHECK(after_clear != nullptr);
+        float clear_deadline = 0.0f;
+        if (after_clear != nullptr && !after_clear->perceived().empty()) {
+            clear_deadline = after_clear->perceived().front().linger_deadline;
+        }
+
+        if (auto* tt = rt.edit_scene()->world().get<scene::Transform>(target); tt != nullptr) {
+            tt->local_z = -100.0f;
+            tt->world_z = -100.0f;
+        }
+        rt.update(dt);
+        rt.update(dt);
+
+        const ai::Perception* refreshed = rt.perception_of(mate);
+        NF_CHECK(refreshed != nullptr);
+        if (refreshed != nullptr && !refreshed->perceived().empty()) {
+            // The lost window is 2 s, so the deadline moved at least ~1.5 s
+            // past the live report's 0.5 s window.
+            NF_CHECK(refreshed->perceived().front().linger_deadline >
+                      clear_deadline + 1.0f);
+            NF_CHECK(!refreshed->perceived().front().personally_perceived);
+            NF_CHECK(!refreshed->perceived().front().sensed);
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
