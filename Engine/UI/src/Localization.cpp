@@ -1244,6 +1244,12 @@ constexpr Entry kEntries[] = {
      "the reporter's range and the receiver's.",
      "لا يُسلَّم التقرير إلا عندما يبلغه الراديان معًا: يجب أن تقع المسافة داخل مدى "
      "المُبلِّغ والمستقبل."},
+    {"squad_lost", "Lost callout (s)", "نداء الفقدان (ث)"},
+    {"squad_lost_hint",
+     "When a contact this entity personally sensed stops being sensed, it reports "
+     "the last position once. Zero disables the callout.",
+     "عندما ينقطع اتصال رصده هذا الكيان بنفسه، يبلّغ رفاقه بآخر موضع مرة واحدة. "
+     "الصفر يعطّل النداء."},
     // --- Decision layer authoring (Phase 61) --------------------------------
     // The considerations an NPC weighs. The input names are scene-format tokens
     // and they are translated here too, so the Arabic UI shows no Latin in a

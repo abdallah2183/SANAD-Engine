@@ -531,6 +531,7 @@ NF_TEST(editor_squad_attach_edit_detach_and_round_trip) {
     if (attached != nullptr) {
         NF_CHECK(attached->token == "squad");
         NF_CHECK_NEAR(attached->radio, 30.0f, 1e-6f);
+        NF_CHECK_NEAR(attached->lost, 0.0f, 1e-6f);
         NF_CHECK(attached->enabled);
     }
 
@@ -552,17 +553,27 @@ NF_TEST(editor_squad_attach_edit_detach_and_round_trip) {
     NF_CHECK(!app.set_squad(e, bad, err));
     bad.radio = std::numeric_limits<float>::quiet_NaN();
     NF_CHECK(!app.set_squad(e, bad, err));
+    // Phase 69: the lost-callout window has the same bounds as the range.
+    bad.radio = 30.0f;
+    bad.lost = -1.0f;
+    NF_CHECK(!app.set_squad(e, bad, err));
+    bad.lost = 10001.0f;
+    NF_CHECK(!app.set_squad(e, bad, err));
+    bad.lost = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(!app.set_squad(e, bad, err));
     const auto* unchanged = world.get<runtime::SquadComponent>(e);
     NF_CHECK(unchanged != nullptr);
     if (unchanged != nullptr) {
         NF_CHECK(unchanged->token == "squad");
         NF_CHECK_NEAR(unchanged->radio, 30.0f, 1e-6f);
+        NF_CHECK_NEAR(unchanged->lost, 0.0f, 1e-6f);
         NF_CHECK(unchanged->enabled);
     }
 
     runtime::SquadComponent edited;
     edited.token = "guards";
     edited.radio = 45.5f;
+    edited.lost = 2.5f;
     edited.enabled = false;
     err.clear(); // a rejected edit left its message here; success is not required to clear it
     NF_CHECK(app.set_squad(e, edited, err));
@@ -585,6 +596,7 @@ NF_TEST(editor_squad_attach_edit_detach_and_round_trip) {
     if (loaded != nullptr) {
         NF_CHECK(loaded->token == "guards");
         NF_CHECK_NEAR(loaded->radio, 45.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->lost, 2.5f, 1e-5f);
         NF_CHECK(!loaded->enabled);
     }
 

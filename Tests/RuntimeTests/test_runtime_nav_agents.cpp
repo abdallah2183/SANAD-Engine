@@ -2511,3 +2511,206 @@ NF_TEST(squad_radio_born_search_is_silent) {
     NF_CHECK(!mate_ever_investigated);
     NF_CHECK(mate_min_x > 9.0f); // the second mate never left its own x
 }
+
+// Phase 69: a lost-contact callout is a radio report too. A mate loses a target
+// the walker has NEVER seen, and calls out where it last had it. The walker is
+// already investigating a personal sighting elsewhere; the callout may delay it
+// (hold=aware) but must not replace the personal point, and once its short
+// receiver window expires the walker finishes the personal scan and returns to
+// the route instead of starting a second search at the reported position.
+NF_TEST(squad_lost_callout_never_replaces_a_personal_search) {
+    HeadlessRuntime env;
+    if (!env.ok()) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto s = std::make_unique<Scene>("LostSearch");
+    add_nav_scene(*s);
+    ecs::Entity walker = find_walker(*s);
+    NF_CHECK(walker.valid());
+    if (auto* t = s->world().get<Transform>(walker); t != nullptr) {
+        t->local_x = 2.0f;
+        t->local_z = 5.0f;
+        t->rot_y = -90.0f; // face +X, where the personal contact stands
+    }
+    if (auto* agent = s->world().get<NavAgentComponent>(walker); agent != nullptr) {
+        agent->speed = 8.0f;
+    }
+    FactionComponent blue;
+    blue.team = "Blue";
+    s->world().add<FactionComponent>(walker, blue);
+    PerceptionComponent eyes;
+    eyes.sight_range = 4.5f; // short: the scout's contact at x=10 is never seen
+    eyes.sight_half_fov_deg = 60.0f;
+    eyes.sight_gain = 2.0f;
+    eyes.sight_loss = 0.6f;
+    eyes.sight_linger = 0.5f;
+    eyes.hearing_range = 0.0f;
+    eyes.touch_range = 0.0f;
+    eyes.pain = false;
+    s->world().add<PerceptionComponent>(walker, eyes);
+    SquadComponent walker_radio;
+    walker_radio.token = "guards";
+    walker_radio.radio = 8.0f;
+    // 2 s: long past the 0.5 s sight linger, so a late awareness can only be
+    // the lost callout; still short enough to expire before the personal scan
+    // ends, which is what keeps a second search from starting afterwards.
+    walker_radio.lost = 2.0f;
+    s->world().add<SquadComponent>(walker, walker_radio);
+    NavRouteComponent route;
+    route.loop = true;
+    route.hold = NavRouteHoldPolicy::Aware;
+    route.investigate = 1.5f;
+    route.squad = "guards";
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 2.0f, -1.0f});
+    route.points.push_back(NavPointSpec{2.0f, 0.0f, 9.0f, -1.0f});
+    s->world().add<NavRouteComponent>(walker, route);
+
+    // The walker's own contact, three metres straight ahead.
+    ecs::Entity personal = s->world().create_entity();
+    Transform pt{};
+    pt.local_x = 5.0f;
+    pt.local_z = 5.0f;
+    s->world().add<Transform>(personal, pt);
+    FactionComponent red;
+    red.team = "Red";
+    s->world().add<FactionComponent>(personal, red);
+    s->world().add<HealthComponent>(personal, HealthComponent{});
+
+    // The scout-only contact: eight metres from the walker's route, inside the
+    // scout's long sight and outside the walker's short one, the whole time.
+    ecs::Entity lost_target = s->world().create_entity();
+    Transform lt{};
+    lt.local_x = 10.0f;
+    lt.local_z = 9.5f;
+    s->world().add<Transform>(lost_target, lt);
+    s->world().add<FactionComponent>(lost_target, red);
+    s->world().add<HealthComponent>(lost_target, HealthComponent{});
+
+    // The scout: eyes and a radio, no route. It is the only member that ever
+    // sees the lost target, so the callout is radio-born for the walker.
+    ecs::Entity scout = s->world().create_entity();
+    Transform st{};
+    st.local_x = 2.0f;
+    st.local_z = 10.0f;
+    st.rot_y = -90.0f; // face +X
+    s->world().add<Transform>(scout, st);
+    s->world().add<FactionComponent>(scout, blue);
+    PerceptionComponent scout_eyes;
+    scout_eyes.sight_range = 30.0f;
+    scout_eyes.sight_half_fov_deg = 60.0f;
+    scout_eyes.sight_gain = 2.0f;
+    scout_eyes.hearing_range = 0.0f;
+    scout_eyes.touch_range = 0.0f;
+    scout_eyes.pain = false;
+    s->world().add<PerceptionComponent>(scout, scout_eyes);
+    SquadComponent scout_radio;
+    scout_radio.token = "guards";
+    scout_radio.radio = 8.0f;
+    scout_radio.lost = 0.5f;
+    s->world().add<SquadComponent>(scout, scout_radio);
+    s->world().add<HealthComponent>(scout, HealthComponent{});
+
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/LostSearch.nfscene");
+
+    const auto query = [&](bool& held, bool& investigating) {
+        u32 index = 0;
+        u32 count = 0;
+        f32 wait = 0.0f;
+        bool finished = false;
+        return env.runtime->nav_route_state(walker, index, count, wait, finished, &held,
+                                            &investigating);
+    };
+
+    const auto walker_x = [&]() -> f32 {
+        const auto* t = env.runtime->edit_scene()->world().get<Transform>(walker);
+        return t != nullptr ? t->local_x : 0.0f;
+    };
+
+    // Let the walker notice its own contact (gain 2 reaches 1.0 in half a second).
+    for (int frame = 0; frame < 90; ++frame) {
+        env.runtime->update(kDt);
+    }
+    NF_CHECK(env.runtime->entity_aware_of(walker, personal));
+    Vec3 known{};
+    NF_CHECK(env.runtime->entity_last_known(walker, personal, known));
+    NF_CHECK_NEAR(known.x, 5.0f, 1e-4f);
+
+    // The personal contact vanishes; the walker's search for it is personal.
+    // It is MOVED out of sight rather than destroyed: a destruction renumbers
+    // the shared cast, and this case is about the search, not cast ids.
+    if (auto* t = env.runtime->edit_scene()->world().get<Transform>(personal);
+        t != nullptr) {
+        t->local_x = -30.0f;
+        t->local_z = -30.0f;
+        t->world_x = -30.0f;
+        t->world_z = -30.0f;
+    }
+    for (int frame = 0; frame < 20; ++frame) {
+        env.runtime->update(kDt);
+    }
+
+    // The scout's contact vanishes too. One step notices, the next delivers.
+    if (auto* t = env.runtime->edit_scene()->world().get<Transform>(lost_target);
+        t != nullptr) {
+        t->local_x = -30.0f;
+        t->local_z = -30.0f;
+        t->world_x = -30.0f;
+        t->world_z = -30.0f;
+    }
+
+    bool ever_investigating = false;
+    bool near_personal = false;
+    bool finished_personal = false;
+    bool second_search = false;
+    bool lost_aware = false;
+    bool lost_aware_late = false;
+    bool ever_sensed_lost = false;
+    f32 max_x = -1000.0f;
+    for (int frame = 0; frame < 600; ++frame) {
+        env.runtime->update(kDt);
+        if (env.runtime->entity_aware_of(walker, lost_target)) {
+            lost_aware = true;
+            // 1.5 s after the move the live report's 0.5 s window is long gone.
+            if (frame >= 90 && frame <= 120) {
+                lost_aware_late = true;
+            }
+        }
+        if (env.runtime->entity_sensing(walker, lost_target)) {
+            ever_sensed_lost = true;
+        }
+        max_x = std::max(max_x, walker_x());
+        bool held = false;
+        bool investigating = false;
+        if (!query(held, investigating)) {
+            continue;
+        }
+        if (investigating) {
+            ever_investigating = true;
+            if (walker_x() > 4.0f) {
+                near_personal = true;
+            }
+        }
+        if (ever_investigating && !investigating) {
+            finished_personal = true;
+        }
+        if (finished_personal && investigating) {
+            second_search = true;
+        }
+    }
+
+    // The callout really arrived (the walker was aware of a target it never
+    // sensed), and it stayed knowledge: no sense ever read it.
+    NF_CHECK(lost_aware);
+    NF_CHECK(lost_aware_late);
+    NF_CHECK(!ever_sensed_lost);
+    // The personal search ran at its own point and never diverted to the
+    // scout's position on +X. A replacement would have walked to x≈10.
+    NF_CHECK(ever_investigating);
+    NF_CHECK(near_personal);
+    NF_CHECK(max_x < 7.5f);
+    // Its short lost window expired before the scan ended, so the scan closed
+    // and the walker went back to the route instead of opening a second search.
+    NF_CHECK(finished_personal);
+    NF_CHECK(!second_search);
+}

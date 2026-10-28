@@ -109,6 +109,7 @@ void Runtime::bind_scene_perception() {
     m_perception_noises.clear();
     m_perception_pain.clear();
     m_perception_sight_targets.clear();
+    m_perception_lost_callouts.clear();
 
     if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
         return;
@@ -184,30 +185,48 @@ void Runtime::bind_scene_perception() {
 // Squad radio (Phase 68)
 // ---------------------------------------------------------------------------
 
+bool Runtime::squad_contact_allowed(ecs::Entity reporter, ecs::Entity target,
+                                    const std::string& token) const {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene || reporter == target) {
+        return false;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+    if (!world.is_alive(target)) {
+        return false;
+    }
+    // A corpse is not a contact, the same rule the nav gate uses. An entity
+    // with no Health is still alive (a deciding NPC, a turret).
+    if (const auto* health = world.get<HealthComponent>(target);
+        health != nullptr && !health_alive(*health)) {
+        return false;
+    }
+    // A same-token squadmate is never a contact, even on a scene that forgot
+    // to author factions. Reporting one would turn the squad into a circle of
+    // ghosts chasing each other.
+    if (const auto* target_squad = world.get<SquadComponent>(target);
+        target_squad != nullptr && target_squad->enabled && target_squad->token == token) {
+        return false;
+    }
+    // Faction is the same social filter the hold uses: a member on a real team
+    // reports only enemies; one with no team cannot tell friend from foe and
+    // reports anyone it notices.
+    const FactionComponent* own = world.get<FactionComponent>(reporter);
+    if (own != nullptr && own->enabled && !own->team.empty()) {
+        const auto* other = world.get<FactionComponent>(target);
+        if (other == nullptr || !other->enabled || other->team.empty() ||
+            team_relation(own->team, other->team) != TeamRelation::Hostile) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void Runtime::exchange_squad_radio() {
     if (m_perceptions.size() < 2 || !m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        m_perception_lost_callouts.clear();
         return;
     }
     ecs::World& world = m_scene_data_ptr->scene->world();
-
-    // The inverse of `perception_local_target_id`: a sensor's memory is keyed on
-    // its OWN cast id, and the radio has to translate that back to the shared id
-    // before another sensor can translate it into ITS own id.
-    const auto local_to_shared = [this](ecs::Entity sensor, u32 local) -> u32 {
-        if (local == 0u) {
-            return 0u;
-        }
-        for (usize i = 0; i < m_perception_target_entities.size(); ++i) {
-            if (m_perception_target_entities[i] == sensor) {
-                const u32 sensor_shared = static_cast<u32>(i) + 1u;
-                const u32 shared = local >= sensor_shared ? local + 1u : local;
-                return shared <= m_perception_target_entities.size() ? shared : 0u;
-            }
-        }
-        // A sensor outside the shared cast (authored without a Transform when
-        // the cast was built) has no shift.
-        return local <= m_perception_target_entities.size() ? local : 0u;
-    };
 
     // One contact, snapshotted from the reporter before anything is delivered.
     // The token and range are copied by value: delivery writes memories, never
@@ -219,10 +238,50 @@ void Runtime::exchange_squad_radio() {
         Vec3 origin{};
         u32 target_shared_id = 0;
         Vec3 position{};
+        /// A lost-contact callout (Phase 69): the receiver's own `lost` window
+        /// is the memory, with its sight linger as the floor. A live report is
+        /// unchanged from Phase 68 and uses the linger alone.
+        bool lost = false;
     };
     std::vector<Report> reports;
-    reports.reserve(m_perceptions.size());
+    reports.reserve(m_perceptions.size() + m_perception_lost_callouts.size());
 
+    // --- 1. lost-contact callouts queued at the end of the previous step ------
+    // Delivered BEFORE the live snapshot: if a mate is seeing the target right
+    // now, the fresh position must win over the older last-known one.
+    for (const SquadLostCallout& callout : m_perception_lost_callouts) {
+        if (!world.is_alive(callout.reporter) || !world.is_alive(callout.target)) {
+            continue;
+        }
+        const auto* squad = world.get<SquadComponent>(callout.reporter);
+        if (squad == nullptr || !squad->enabled || squad->token.empty() ||
+            !(squad->radio > 0.0f) || !std::isfinite(squad->radio) ||
+            !(squad->lost > 0.0f) || !std::isfinite(squad->lost)) {
+            continue;
+        }
+        const u32 shared = perception_target_id(callout.target);
+        if (shared == 0u ||
+            !squad_contact_allowed(callout.reporter, callout.target, squad->token)) {
+            continue;
+        }
+        const auto* transform = world.get<scene::Transform>(callout.reporter);
+        if (transform == nullptr) {
+            continue;
+        }
+        Report report;
+        report.reporter = callout.reporter;
+        report.token = squad->token;
+        report.radio = squad->radio;
+        report.origin = Vec3{transform->world_x, transform->world_y, transform->world_z};
+        report.target_shared_id = shared;
+        report.position = callout.position;
+        report.lost = true;
+        reports.push_back(std::move(report));
+    }
+    // The callouts were one-shot messages: this exchange was their delivery.
+    m_perception_lost_callouts.clear();
+
+    // --- 2. this step's live contacts ---------------------------------------
     for (const PerceptionBinding& binding : m_perceptions) {
         const auto* squad = world.get<SquadComponent>(binding.entity);
         if (squad == nullptr || !squad->enabled || squad->token.empty() ||
@@ -233,8 +292,6 @@ void Runtime::exchange_squad_radio() {
         if (transform == nullptr) {
             continue;
         }
-        const FactionComponent* own = world.get<FactionComponent>(binding.entity);
-        const bool reporter_has_team = own != nullptr && own->enabled && !own->team.empty();
 
         for (const ai::PerceivedTarget& memory : binding.perception.perceived()) {
             // Only a contact this member is reading PERSONALLY this tick. A
@@ -243,37 +300,13 @@ void Runtime::exchange_squad_radio() {
             if (!memory.sensed || !memory.personally_perceived) {
                 continue;
             }
-            const u32 shared = local_to_shared(binding.entity, memory.target_id);
+            const u32 shared = perception_shared_target_id(binding.entity, memory.target_id);
             if (shared == 0u) {
                 continue;
             }
             const ecs::Entity target = m_perception_target_entities[shared - 1u];
-            if (target == binding.entity || !world.is_alive(target)) {
+            if (!squad_contact_allowed(binding.entity, target, squad->token)) {
                 continue;
-            }
-            // A corpse is not a contact, the same rule the nav gate uses. An
-            // entity with no Health is still alive (a deciding NPC, a turret).
-            if (const auto* health = world.get<HealthComponent>(target);
-                health != nullptr && !health_alive(*health)) {
-                continue;
-            }
-            // A same-token squadmate is never a contact, even on a scene that
-            // forgot to author factions. Reporting one would turn the squad
-            // into a circle of ghosts chasing each other.
-            if (const auto* target_squad = world.get<SquadComponent>(target);
-                target_squad != nullptr && target_squad->enabled &&
-                target_squad->token == squad->token) {
-                continue;
-            }
-            // Faction is the same social filter the hold uses: a member on a
-            // real team reports only enemies; one with no team cannot tell
-            // friend from foe and reports anyone it notices.
-            if (reporter_has_team) {
-                const auto* other = world.get<FactionComponent>(target);
-                if (other == nullptr || !other->enabled || other->team.empty() ||
-                    team_relation(own->team, other->team) != TeamRelation::Hostile) {
-                    continue;
-                }
             }
             Report report;
             report.reporter = binding.entity;
@@ -282,6 +315,7 @@ void Runtime::exchange_squad_radio() {
             report.origin = Vec3{transform->world_x, transform->world_y, transform->world_z};
             report.target_shared_id = shared;
             report.position = memory.last_known_position;
+            report.lost = false;
             reports.push_back(std::move(report));
         }
     }
@@ -291,7 +325,7 @@ void Runtime::exchange_squad_radio() {
 
     // Deliver the snapshot. Receivers are visited in the same bind order as
     // reporters, so two runs with the same scene and the same dt produce the
-    // same memories.
+    // same memories. Lost callouts come first in the list, live reports after.
     for (const Report& report : reports) {
         const ecs::Entity target = m_perception_target_entities[report.target_shared_id - 1u];
         const auto* target_faction = world.get<FactionComponent>(target);
@@ -302,6 +336,12 @@ void Runtime::exchange_squad_radio() {
             const auto* squad = world.get<SquadComponent>(receiver.entity);
             if (squad == nullptr || !squad->enabled || !(squad->radio > 0.0f) ||
                 !std::isfinite(squad->radio) || squad->token != report.token) {
+                continue;
+            }
+            // A lost callout needs the RECEIVER to opt in too: its own `lost`
+            // window is the memory it is willing to give the message. Zero
+            // keeps that member exactly at Phase 68.
+            if (report.lost && (!(squad->lost > 0.0f) || !std::isfinite(squad->lost))) {
                 continue;
             }
             const auto* transform = world.get<scene::Transform>(receiver.entity);
@@ -332,9 +372,13 @@ void Runtime::exchange_squad_radio() {
                 continue;
             }
             // The receiver keeps a rumour for its own search window. A sensor
-            // with no linger has no memory to give the report, by design.
-            const f32 linger =
-                receiver.perception.sense(ai::StimulusKind::Sight).linger;
+            // with no linger has no memory to give the report, by design. A
+            // lost callout asks for its own `lost` window instead, never less
+            // than that same linger.
+            f32 linger = receiver.perception.sense(ai::StimulusKind::Sight).linger;
+            if (report.lost) {
+                linger = std::max(linger, squad->lost);
+            }
             receiver.perception.receive_report(local, report.position, linger);
         }
     }
@@ -384,6 +428,22 @@ u32 Runtime::perception_local_target_id(ecs::Entity sensor, ecs::Entity target) 
     }
     // A sensor that is not in the cast has no local cast at all: no shift.
     return shared;
+}
+
+u32 Runtime::perception_shared_target_id(ecs::Entity sensor, u32 local) const {
+    if (local == 0u) {
+        return 0u;
+    }
+    for (usize i = 0; i < m_perception_target_entities.size(); ++i) {
+        if (m_perception_target_entities[i] == sensor) {
+            const u32 sensor_shared = static_cast<u32>(i) + 1u;
+            const u32 shared = local >= sensor_shared ? local + 1u : local;
+            return shared <= m_perception_target_entities.size() ? shared : 0u;
+        }
+    }
+    // A sensor outside the shared cast (authored without a Transform when the
+    // cast was built) has no shift.
+    return local <= m_perception_target_entities.size() ? local : 0u;
 }
 
 bool Runtime::entity_aware_of(ecs::Entity sensor, ecs::Entity target) const {
@@ -571,6 +631,9 @@ void Runtime::step_perception(f32 dt) {
         const auto* transform = world.get<scene::Transform>(binding.entity);
         const auto* pc = world.get<PerceptionComponent>(binding.entity);
         if (transform == nullptr || pc == nullptr || !pc->enabled) {
+            // A sensor that cannot step cannot lose a contact either: drop its
+            // bookkeeping so re-enabling starts from what it actually sees.
+            binding.squad_contacts.clear();
             continue;
         }
         ai::Perception& p = binding.perception;
@@ -637,7 +700,80 @@ void Runtime::step_perception(f32 dt) {
         }
 
         p.update(binding.cast, dt);
+        track_squad_contacts(binding);
     }
+}
+
+void Runtime::track_squad_contacts(PerceptionBinding& binding) {
+    if (!m_scene_data_ptr || !m_scene_data_ptr->scene) {
+        return;
+    }
+    ecs::World& world = m_scene_data_ptr->scene->world();
+    const auto* squad = world.get<SquadComponent>(binding.entity);
+    const bool radio_live = squad != nullptr && squad->enabled && !squad->token.empty() &&
+                            squad->radio > 0.0f && std::isfinite(squad->radio);
+    // `lost` is the RECEIVER's memory window; on the reporter it is the opt-in
+    // switch. A member with lost=0 keeps Phase 68 exactly: no callout at all.
+    const bool callouts = radio_live && squad->lost > 0.0f && std::isfinite(squad->lost);
+
+    std::vector<PerceptionBinding::SquadContact> next;
+    next.reserve(binding.squad_contacts.size());
+    if (radio_live) {
+        for (const ai::PerceivedTarget& memory : binding.perception.perceived()) {
+            // The same anti-relay gate as the live report: only what this
+            // sensor read with its OWN senses is allowed to move on.
+            if (!memory.sensed || !memory.personally_perceived) {
+                continue;
+            }
+            const u32 shared = perception_shared_target_id(binding.entity, memory.target_id);
+            if (shared == 0u) {
+                continue;
+            }
+            const ecs::Entity target = m_perception_target_entities[shared - 1u];
+            if (!squad_contact_allowed(binding.entity, target, squad->token)) {
+                continue;
+            }
+            bool updated = false;
+            for (PerceptionBinding::SquadContact& contact : binding.squad_contacts) {
+                if (contact.target == target) {
+                    contact.last_position = memory.last_known_position;
+                    next.push_back(contact);
+                    updated = true;
+                    break;
+                }
+            }
+            if (!updated) {
+                next.push_back(PerceptionBinding::SquadContact{target,
+                                                               memory.last_known_position});
+            }
+        }
+        if (callouts) {
+            for (const PerceptionBinding::SquadContact& previous : binding.squad_contacts) {
+                bool still_sensed = false;
+                for (const PerceptionBinding::SquadContact& current : next) {
+                    if (current.target == previous.target) {
+                        still_sensed = true;
+                        break;
+                    }
+                }
+                if (still_sensed) {
+                    continue;
+                }
+                // A corpse is a kill, not a lost contact, and an actor that
+                // left the cast has nothing to call out. A target still in the
+                // cast but no longer reportable (a token or faction change) is
+                // dropped silently for the same reason the live report skips it.
+                if (!squad_contact_allowed(binding.entity, previous.target, squad->token)) {
+                    continue;
+                }
+                m_perception_lost_callouts.push_back(SquadLostCallout{
+                    binding.entity, previous.target, previous.last_position});
+            }
+        }
+    }
+    // Entries are replaced, never appended across steps: a contact that fell
+    // out stays gone, so its callout is queued exactly once.
+    binding.squad_contacts = std::move(next);
 }
 
 bool Runtime::perception_sight_blocked(ecs::Entity sensor, const Vec3& from, const Vec3& to) {

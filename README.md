@@ -618,6 +618,35 @@ Squad: token=guards radio=45
   uses `hold=aware`, so a report from WalkerA stops it even though its own sight
   is shorter, and Red WalkerB is the contact both can share.
 
+### Squads that call out a lost contact (`lost=`, Phase 69)
+
+A live report says "I see them now". A callout says "I saw them there, and I
+have lost them":
+
+```text
+Squad: token=guards radio=45 lost=2
+```
+
+- **`lost=`** is the receiver's memory window in seconds, `[0, 10000]`, default
+  0. Zero keeps Phase 68 exactly: no callout is sent or accepted. Both radios
+  have to opt in, and the receiver's own sight `linger` remains a floor, so a
+  longer personal search window is never shortened.
+- **When it fires**: the step a contact this member PERSONALLY sensed stops
+  being sensed, the member queues exactly one callout with the last position it
+  held. A target that dies is a kill, not a lost contact; a contact that arrived
+  only over the radio never enters the bookkeeping, so the anti-relay rule does
+  not change.
+- **One frame later**: the callout is delivered at the start of the next radio
+  exchange with the same filters as a live report (token, both ranges, faction,
+  corpse, self, same-token mates). It is awareness and a last known position,
+  never a sense and never detection.
+- **Navigation**: a lost callout obeys the Phase 68 rules. It can hold or arm a
+  radio-born search, it stays silent on the Phase 67 board (`search_id=0`), and
+  it never restarts or replaces a personal investigation.
+- **Inspector, validator and demo**: the Squad radio section has a lost-window
+  field, the validator warns about a value outside `[0, 10000]`, and Terrain's
+  WalkerA and WalkerC use `lost=2`.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -630,7 +659,7 @@ Squad: token=guards radio=45
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`), and personally sensed contacts shared over an opt-in squad radio (`Squad:`) |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`), personally sensed contacts shared over an opt-in squad radio (`Squad:`), and an opt-in lost-contact callout (`lost=`) |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
@@ -640,8 +669,8 @@ Squad: token=guards radio=45
 - **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 68 the counts are
-  `RuntimeTests` 440/440, `EditorTests` 294/294, `AITests` 134/134 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 69 the counts are
+  `RuntimeTests` 442/442, `EditorTests` 294/294, `AITests` 134/134 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -

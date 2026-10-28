@@ -442,6 +442,8 @@ static bool parse_squad(const std::string& line, SquadComponent& out, std::strin
         }
     }
     if (!optional_float_in_range(line, "radio=", 0.0f, 10000.0f, out.radio, out_bad)) return false;
+    // Phase 69: the lost-contact callout window. Zero is the Phase 68 radio.
+    if (!optional_float_in_range(line, "lost=", 0.0f, 10000.0f, out.lost, out_bad)) return false;
     out.enabled = line.find("enabled=false") == std::string::npos;
     return true;
 }
@@ -2979,6 +2981,9 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
         const auto* squad = scene_obj.world().get<SquadComponent>(e);
         if (squad && !squad->token.empty()) {
             out << "  Squad: token=" << squad->token << " radio=" << squad->radio;
+            if (squad->lost > 0.0f) {
+                out << " lost=" << squad->lost;
+            }
             if (!squad->enabled) {
                 out << " enabled=false";
             }

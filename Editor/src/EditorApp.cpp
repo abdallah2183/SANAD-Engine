@@ -2483,6 +2483,10 @@ bool valid_squad_config(const runtime::SquadComponent& squad, std::string& out_e
         out_err = "Squad radio must be within [0, 10000] metres";
         return false;
     }
+    if (!std::isfinite(squad.lost) || squad.lost < 0.0f || squad.lost > 10000.0f) {
+        out_err = "Squad lost-callout window must be within [0, 10000] seconds";
+        return false;
+    }
     return true;
 }
 

@@ -279,6 +279,7 @@ struct InspectorCache {
     bool squad_has = false;
     bool squad_enabled = true;
     float squad_radio = 30.0f;
+    float squad_lost = 0.0f;
     char squad_token[65]{};
     // Decision layer (Phase 61). The action list is cached as the components'
     // own structs: it is a variable-length list of seven-field records, and
@@ -2284,6 +2285,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.squad_has = true;
                     ic.squad_enabled = squad->enabled;
                     ic.squad_radio = squad->radio;
+                    ic.squad_lost = squad->lost;
                     std::strncpy(ic.squad_token, squad->token.c_str(),
                                  sizeof(ic.squad_token) - 1);
                     ic.squad_token[sizeof(ic.squad_token) - 1] = '\0';
@@ -4172,10 +4174,16 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("%s", AV("squad_range_hint").c_str());
                     }
+                    ImGui::DragFloat((AV("squad_lost") + "##squad").c_str(), &ic.squad_lost,
+                                     0.1f, 0.0f, 10000.0f, "%.2f s");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("squad_lost_hint").c_str());
+                    }
                     if (ImGui::Button((AV("apply") + "##squad").c_str())) {
                         runtime::SquadComponent edited;
                         edited.enabled = ic.squad_enabled;
                         edited.radio = ic.squad_radio;
+                        edited.lost = ic.squad_lost;
                         edited.token = std::string{ic.squad_token};
                         std::string err;
                         if (!app.set_squad(sel, edited, err)) {

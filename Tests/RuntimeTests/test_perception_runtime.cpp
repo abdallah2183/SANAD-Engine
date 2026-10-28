@@ -297,6 +297,7 @@ NF_TEST(squad_line_round_trips_every_key) {
     SquadComponent squad;
     squad.token = "guards";
     squad.radio = 45.5f;
+    squad.lost = 2.5f;
     squad.enabled = false;
     world.add<SquadComponent>(e, squad);
 
@@ -306,7 +307,7 @@ NF_TEST(squad_line_round_trips_every_key) {
 
     const auto text = vfs.read_text("content://Scenes/squad.nfscene");
     NF_CHECK(text.ok);
-    NF_CHECK(text.value.find("Squad: token=guards radio=45.5 enabled=false") !=
+    NF_CHECK(text.value.find("Squad: token=guards radio=45.5 lost=2.5 enabled=false") !=
              std::string::npos);
 
     auto result = load_scene_from_vfs(vfs, "content://Scenes/squad.nfscene");
@@ -322,6 +323,7 @@ NF_TEST(squad_line_round_trips_every_key) {
     if (loaded != nullptr) {
         NF_CHECK(loaded->token == "guards");
         NF_CHECK_NEAR(loaded->radio, 45.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->lost, 2.5f, 1e-5f);
         NF_CHECK(!loaded->enabled);
     }
 
@@ -369,6 +371,7 @@ NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
         if (squad != nullptr) {
             NF_CHECK(squad->token == "guards");
             NF_CHECK_NEAR(squad->radio, 30.0f, 1e-6f);
+            NF_CHECK_NEAR(squad->lost, 0.0f, 1e-6f);
             NF_CHECK(squad->enabled);
         }
     }
@@ -403,6 +406,9 @@ NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
     // The range bounds are the editor's and the validator's.
     NF_CHECK(refused("Squad: token=guards radio=20000", "radio"));
     NF_CHECK(refused("Squad: token=guards radio=-1", "radio"));
+    // Phase 69 adds the lost-callout window with the same bounds.
+    NF_CHECK(refused("Squad: token=guards lost=20000", "lost"));
+    NF_CHECK(refused("Squad: token=guards lost=-1", "lost"));
 
     // Exactly 64 characters is legal and round-trips.
     const std::string longest(64, 'a');
@@ -431,20 +437,24 @@ NF_TEST(squad_values_with_nothing_to_send_are_warned_by_name) {
     SquadComponent squad;
     squad.token = "two words";
     squad.radio = 0.0f;
+    squad.lost = 20000.0f;
     world.add<SquadComponent>(e, squad);
 
     const ValidationReport report = validate_scene(scene, "content://Scenes/squad_warn.nfscene");
     bool whitespace = false;
     bool silent = false;
     bool no_perception = false;
+    bool lost_window = false;
     for (const ValidationIssue& issue : report.issues) {
         if (issue.message.find("whitespace") != std::string::npos) whitespace = true;
         if (issue.message.find("radio=0") != std::string::npos) silent = true;
         if (issue.message.find("Perception") != std::string::npos) no_perception = true;
+        if (issue.message.find("lost") != std::string::npos) lost_window = true;
     }
     NF_CHECK(whitespace);
     NF_CHECK(silent);
     NF_CHECK(no_perception);
+    NF_CHECK(lost_window);
 
     // A well-formed radio with a sensor is not worth a warning.
     scene::Scene good("SquadGood");
@@ -453,6 +463,7 @@ NF_TEST(squad_values_with_nothing_to_send_are_warned_by_name) {
     SquadComponent fine;
     fine.token = "guards";
     fine.radio = 45.0f;
+    fine.lost = 2.0f;
     good.world().add<SquadComponent>(g, fine);
     good.world().add<PerceptionComponent>(g, PerceptionComponent{});
     const ValidationReport quiet =
@@ -1395,6 +1406,164 @@ NF_TEST(squad_radio_shares_only_personal_live_contacts) {
         if (stranger_senses != nullptr) {
             NF_CHECK(stranger_senses->perceived().empty());
         }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+// --- squad lost-contact callouts (Phase 69) -----------------------------------
+//
+// A live report says "I see them now". A lost callout says "I saw them THERE,
+// and I have lost them" — exactly once. These cases pin the three consequences:
+// it derives only from a personal sighting (the radio is still not a relay), it
+// needs both radios to opt in, and its memory window is the RECEIVER's `lost`
+// with that receiver's own linger as the floor.
+
+NF_TEST(squad_lost_callout_uses_the_last_position_once) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_squad_lost";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    constexpr f32 dt = 1.0f / 60.0f;
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("LostNet");
+        const auto make_radio = [&](const char* name, f32 x, f32 z, f32 lost,
+                                    f32 sight_linger) {
+            const ecs::Entity e = add_world_entity(*game, name, x, 0.0f, z, false);
+            add_health(*game, e, 100.0f);
+            FactionComponent faction;
+            faction.team = "Blue";
+            game->world().add<FactionComponent>(e, faction);
+            PerceptionComponent senses;
+            senses.sight_range = 0.0f;
+            senses.hearing_range = 0.0f;
+            senses.touch_range = 0.0f;
+            senses.pain = false;
+            senses.sight_linger = sight_linger;
+            game->world().add<PerceptionComponent>(e, senses);
+            SquadComponent squad;
+            squad.token = "guards";
+            squad.radio = 8.0f;
+            squad.lost = lost;
+            game->world().add<SquadComponent>(e, squad);
+            return e;
+        };
+
+        // The observer is the only member with eyes. It faces +Z, where the
+        // contact starts five metres ahead.
+        const ecs::Entity observer = add_world_entity(*game, "Observer", 1.0f, 0.0f, 1.0f,
+                                                      false);
+        add_health(*game, observer, 100.0f);
+        if (auto* ot = game->world().get<scene::Transform>(observer); ot != nullptr) {
+            ot->rot_y = 180.0f;
+        }
+        FactionComponent blue;
+        blue.team = "Blue";
+        game->world().add<FactionComponent>(observer, blue);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 60.0f;
+        eyes.sight_gain = 2.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        game->world().add<PerceptionComponent>(observer, eyes);
+        SquadComponent observer_squad;
+        observer_squad.token = "guards";
+        observer_squad.radio = 8.0f;
+        observer_squad.lost = 2.0f;
+        game->world().add<SquadComponent>(observer, observer_squad);
+
+        // The mate opted in (lost=2) and has a SHORT sight linger, so the lost
+        // window is distinguishable from a live report's memory. The second
+        // mate did not opt in (lost=0) and must keep Phase 68 exactly.
+        const ecs::Entity mate = make_radio("Mate", 6.0f, 1.0f, 2.0f, 0.5f);
+        const ecs::Entity no_opt_in = make_radio("NoOptIn", 6.0f, 3.0f, 0.0f, 0.5f);
+
+        const ecs::Entity target = add_world_entity(*game, "Contact", 1.0f, 0.0f, 6.0f,
+                                                    false);
+        add_health(*game, target, 100.0f);
+        FactionComponent red;
+        red.team = "Red";
+        game->world().add<FactionComponent>(target, red);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/LostNet.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(dt);
+        }
+
+        // Both opted-in and opted-out mates got the LIVE report first: the
+        // callout is an addition, not a replacement for Phase 68.
+        NF_CHECK(rt.entity_aware_of(mate, target));
+        NF_CHECK(rt.entity_aware_of(no_opt_in, target));
+        NF_CHECK(!rt.entity_sensing(mate, target));
+
+        // The contact vanishes from every sense but stays alive and in the cast.
+        if (auto* tt = rt.edit_scene()->world().get<scene::Transform>(target); tt != nullptr) {
+            tt->local_z = -100.0f;
+            tt->world_z = -100.0f;
+        }
+
+        // One step notices the loss and queues it; the next exchange delivers it.
+        rt.update(dt);
+        rt.update(dt);
+
+        Vec3 known{};
+        NF_CHECK(rt.entity_last_known(mate, target, known));
+        NF_CHECK_NEAR(known.x, 1.0f, 1e-4f);
+        NF_CHECK_NEAR(known.z, 6.0f, 1e-4f); // the last sighting, never -100
+        NF_CHECK(!rt.entity_sensing(mate, target));
+        const ai::Perception* mate_senses = rt.perception_of(mate);
+        NF_CHECK(mate_senses != nullptr);
+        if (mate_senses != nullptr) {
+            const ai::PerceivedTarget* memory =
+                mate_senses->perceived().empty() ? nullptr : &mate_senses->perceived().front();
+            NF_CHECK(memory != nullptr);
+            if (memory != nullptr) {
+                // The receiver's own lost=2 is the window, above its 0.5 linger.
+                NF_CHECK_NEAR(memory->linger_deadline, 2.0f, 1e-5f);
+                NF_CHECK(!memory->personally_perceived);
+                NF_CHECK(!memory->sensed);
+            }
+        }
+        const ai::Perception* no_opt_senses = rt.perception_of(no_opt_in);
+        NF_CHECK(no_opt_senses != nullptr);
+        if (no_opt_senses != nullptr) {
+            const ai::PerceivedTarget* memory =
+                no_opt_senses->perceived().empty() ? nullptr : &no_opt_senses->perceived().front();
+            NF_CHECK(memory != nullptr);
+            if (memory != nullptr) {
+                // An opted-out receiver got only the Phase 68 live window.
+                NF_CHECK_NEAR(memory->linger_deadline, 0.5f, 1e-5f);
+            }
+        }
+
+        // One-shot: after the receiver's own 2 s window nothing refreshes it,
+        // even though the reporter is still alive and its radio still works.
+        for (int frame = 0; frame < 150; ++frame) {
+            rt.update(dt);
+        }
+        NF_CHECK(!rt.entity_aware_of(mate, target));
+        NF_CHECK(!rt.entity_aware_of(no_opt_in, target));
     }
 
     device->wait_idle();

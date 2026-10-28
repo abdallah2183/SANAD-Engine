@@ -1099,6 +1099,12 @@ struct PerceptionComponent {
 /// The token is one case-sensitive word of at most 64 characters. An empty
 /// token is inert and writes no scene line, exactly like an empty `Faction:`
 /// team. `radio=0` keeps the component authored but shares nothing.
+///
+/// Phase 69 adds a final callout: when a contact this member PERSONALLY sensed
+/// stops being sensed, it reports the last position it held once, with `lost`
+/// seconds of memory on the receiver. That report is still derived from a
+/// personal sighting, never from radio traffic, so the anti-relay rule does not
+/// change. `lost=0` keeps the Phase 68 behaviour exactly.
 struct SquadComponent {
     /// Who hears whom. Two radios talk when the token matches exactly.
     std::string token;
@@ -1106,6 +1112,13 @@ struct SquadComponent {
     /// Link range in metres. A delivery needs the distance to fit **both**
     /// radios, so a short-range scout cannot shout past its own antenna.
     f32 radio = 30.0f;
+
+    /// Seconds of memory a lost-contact callout leaves on a receiver, and the
+    /// reason the callout happens at all. Zero (the default) sends none: the
+    /// radio shares only what is being sensed this frame, as in Phase 68. The
+    /// receiver's own `linger` is still a floor, so a longer personal search
+    /// window is never shortened.
+    f32 lost = 0.0f;
 
     /// Off keeps the component authored and inert, the same contract every
     /// other component's enabled flag keeps.

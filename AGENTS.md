@@ -280,6 +280,19 @@ Games/MyGame/
   navigation runs first. The validator warns about a bad token, a range outside
   the bounds, `radio=0`, and a radio with no enabled `Perception:`; the editor
   has a Squad radio section.
+- A squad can also call out a contact it loses (Phase 69). Add `lost=<seconds>`
+  to the same `Squad:` line. The step a contact this member PERSONALLY sensed
+  stops being sensed, it sends exactly one callout with the last position it
+  held; a mate receives awareness and that position for its OWN `lost` window
+  (never less than its sight `linger`). `lost=0` is the default and keeps Phase
+  68 exactly, and the report needs both radios to opt in. The callout is still
+  derived from a personal sighting, never from radio traffic, so it cannot be
+  relayed; it uses the same token, range, faction, corpse and same-token-mate
+  filters as a live report. It obeys the same navigation rules: a lost callout
+  can arm a radio-born search, is silent on the Phase 67 board (`search_id=0`),
+  and never restarts or replaces a personal investigation. The bounds are
+  `[0, 10000]`, the validator warns outside them, and the editor's Squad radio
+  section has the field.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

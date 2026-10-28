@@ -311,6 +311,12 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                        std::string("radio ") + std::to_string(squad->radio) +
                            " is outside [0, 10000]; the radio cannot reach that far");
         }
+        if (!sane(squad->lost, 0.0f, 10000.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("lost ") + std::to_string(squad->lost) +
+                           " is outside [0, 10000]; no lost-contact callout can use that "
+                           "window");
+        }
         if (squad->enabled && squad->radio <= 0.0f) {
             report.add(ValidationSeverity::Warning, label,
                        "Squad radio=0 shares nothing: no contact is ever delivered");

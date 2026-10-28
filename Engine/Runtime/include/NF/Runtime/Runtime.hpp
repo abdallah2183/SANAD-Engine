@@ -513,6 +513,11 @@ public:
     /// A report only sets awareness and the last known position — never a sense
     /// and never detection — so a receiver can hold/investigate but cannot fire
     /// at it and cannot pass it on.
+    ///
+    /// Phase 69: the same exchange delivers the lost-contact callouts queued at
+    /// the END of the previous step, before the live snapshot, so a fresh sight
+    /// always wins over an older last position. A lost callout is still a
+    /// report: knowledge, never a sense, never a relay.
     void exchange_squad_radio();
     /// Feeds the sensors for this frame: rebuilds the cast, ages the noises
     /// still audible, routes this frame's pain to its victims, and steps every
@@ -533,6 +538,19 @@ public:
     /// the stimulus attribution and the agent bridge — so it lives in exactly one
     /// function rather than in a table each caller rebuilds.
     [[nodiscard]] u32 perception_local_target_id(ecs::Entity sensor, ecs::Entity target) const;
+    /// The inverse of `perception_local_target_id`: the SHARED cast id of a
+    /// sensor's local id, or 0 when the local id is not one this cast contains.
+    /// The radio speaks the shared language; a sensor's memory speaks its own.
+    [[nodiscard]] u32 perception_shared_target_id(ecs::Entity sensor, u32 local) const;
+    /// The one contact filter a radio report and a lost-contact callout share:
+    /// alive target, not the reporter, not a same-token squadmate, and — when
+    /// the reporter has a real team — hostile to it. Keeping both paths on this
+    /// predicate means a callout can never name something a live report would
+    /// have refused.
+    [[nodiscard]] bool squad_contact_allowed(ecs::Entity reporter, ecs::Entity target,
+                                             const std::string& token) const;
+    // `track_squad_contacts` is declared with the perception state below, where
+    // its `PerceptionBinding` parameter is complete.
     /// True when something solid stands between the two points. Only sight asks;
     /// hearing goes around corners and touch is contact by definition. `sensor`
     /// is skipped, because a ray that starts inside its own collider would
@@ -1949,8 +1967,38 @@ private:
         /// stimulus — a guard would spend half a second detecting itself and
         /// `most_threatening()` would answer "me".
         ai::PerceptionScene cast;
+
+        /// A contact this sensor personally sensed last step, with the last
+        /// position it held, tracked so the step the contact falls out of the
+        /// senses can call it out once (Phase 69). Keyed on the ENTITY, not the
+        /// cast id: the shared cast is rebuilt every frame, and destroying an
+        /// actor in front of the target renumbers everyone behind it. The vector
+        /// is replaced each step, not searched: an AI cast is tens of actors,
+        /// and linear scans keep the update order deterministic.
+        struct SquadContact {
+            ecs::Entity target{};
+            Vec3 last_position{};
+        };
+        std::vector<SquadContact> squad_contacts;
     };
     std::vector<PerceptionBinding> m_perceptions;
+
+    /// One lost-contact callout waiting for the next radio exchange (Phase 69).
+    /// Queued at the end of the step that noticed the loss and delivered at the
+    /// start of the next one, exactly like a live report: same one-frame
+    /// latency, same knowledge-only contract. Delivered once, then dropped.
+    struct SquadLostCallout {
+        ecs::Entity reporter{};
+        ecs::Entity target{};
+        Vec3 position{};
+    };
+    std::vector<SquadLostCallout> m_perception_lost_callouts;
+
+    /// Phase 69: books the contacts this sensor PERSONALLY sensed this step and
+    /// queues exactly one callout for each contact that fell out of its senses.
+    /// Radio-born memories never enter this bookkeeping, so a report can never
+    /// spawn a callout and the anti-relay rule keeps its teeth.
+    void track_squad_contacts(PerceptionBinding& binding);
 
     /// The cast for THIS frame. Rebuilt every frame so the target ids a sensor's
     /// memory is keyed on stay stable: `PerceptionScene::add_target` hands out
