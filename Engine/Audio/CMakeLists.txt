@@ -14,6 +14,7 @@
 # level's audio is authoring + three calls rather than an integration project.
 
 set(NFAUDIO_SOURCES
+    src/AudioDSP.cpp
     src/AudioEngine.cpp
     src/AudioDecoder.cpp
     src/AudioScene.cpp
@@ -25,6 +26,7 @@ set(NFAUDIO_SOURCES
     src/Occlusion.cpp
     src/OggVorbisImpl.cpp
     src/Reverb.cpp
+    src/SoundCue.cpp
 )
 
 if(WIN32)
