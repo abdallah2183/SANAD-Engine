@@ -516,6 +516,7 @@ add_executable(Scene2DTests
     TestFramework.cpp
     Scene2DTests/test_scene2d.cpp
     Scene2DTests/test_systems.cpp
+    Scene2DTests/test_parallax_and_nineslice.cpp
 )
 target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)

@@ -2,6 +2,8 @@
 # Design doc Section 54 (2D Engine), Section 55 (Tilemap), Section 56 (2D Physics).
 
 set(NFSCENE2D_SOURCES
+    src/NineSlice.cpp
+    src/Parallax.cpp
     src/SpriteAtlas.cpp
     src/SpriteBatcher.cpp
     src/Tilemap.cpp
