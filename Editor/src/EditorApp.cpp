@@ -1247,6 +1247,48 @@ bool EditorApp::create_sprite(ecs::Entity parent, std::string& out_err) {
     w->add<scene::NameComponent>(e, scene::NameComponent{"Sprite2D"});
     runtime::SpriteComponent sp;
     w->add<runtime::SpriteComponent>(e, sp);
+
+    // Attach a Quad primitive mesh so it is immediately rendered & selectable
+    assets::AssetId quad_id;
+    if (ensure_primitive_asset(PrimitiveKind::Quad, quad_id, out_err)) {
+        runtime::MeshComponent mc;
+        mc.mesh_id = quad_id;
+        mc.material = runtime::kDefaultMaterialPath;
+        w->add<runtime::MeshComponent>(e, mc);
+    }
+
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_tilemap(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    scene::Transform t{};
+    t.dirty = true;
+    w->add<scene::Transform>(e, t);
+    w->add<scene::NameComponent>(e, scene::NameComponent{"Tilemap"});
+    runtime::TilemapComponent tm;
+    w->add<runtime::TilemapComponent>(e, tm);
+
+    assets::AssetId quad_id;
+    if (ensure_primitive_asset(PrimitiveKind::Quad, quad_id, out_err)) {
+        runtime::MeshComponent mc;
+        mc.mesh_id = quad_id;
+        mc.material = runtime::kDefaultMaterialPath;
+        w->add<runtime::MeshComponent>(e, mc);
+    }
+
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }

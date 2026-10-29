@@ -1417,6 +1417,123 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 }
                 sprite.enabled = line.find("enabled=false") == std::string::npos;
                 scene->world().add<SpriteComponent>(e, std::move(sprite));
+            } else if (line.rfind("  Tilemap:", 0) == 0) {
+                // 2D Tilemap grid (Phase 74).
+                TilemapComponent tm;
+                std::string ts = field_value(line, "tileset=");
+                if (ts.empty()) ts = field_value(line, "texture=");
+                tm.tileset_texture = ts;
+                size_t ts_pos = line.find("tile_size=");
+                if (ts_pos != std::string::npos) {
+                    float tsz = 32.0f;
+                    if (sscanf(line.c_str() + ts_pos, "tile_size=%f", &tsz) == 1 && std::isfinite(tsz) && tsz > 0.0f) {
+                        tm.tile_size = tsz;
+                    }
+                }
+                size_t col_pos = line.find("columns=");
+                if (col_pos != std::string::npos) {
+                    unsigned int cols = 16;
+                    if (sscanf(line.c_str() + col_pos, "columns=%u", &cols) == 1 && cols > 0) {
+                        tm.columns = cols;
+                    }
+                }
+                size_t row_pos = line.find("rows=");
+                if (row_pos != std::string::npos) {
+                    unsigned int rws = 16;
+                    if (sscanf(line.c_str() + row_pos, "rows=%u", &rws) == 1 && rws > 0) {
+                        tm.rows = rws;
+                    }
+                }
+                size_t zo_pos = line.find("z_order=");
+                if (zo_pos != std::string::npos) {
+                    int zo = 0;
+                    if (sscanf(line.c_str() + zo_pos, "z_order=%d", &zo) == 1) {
+                        tm.z_order = zo;
+                    }
+                }
+                if (line.find("generate_collider=true") != std::string::npos) {
+                    tm.generate_collider = true;
+                }
+                tm.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<TilemapComponent>(e, std::move(tm));
+            } else if (line.rfind("  RigidBody2D:", 0) == 0) {
+                // 2D RigidBody (Phase 74).
+                RigidBody2DComponent rb;
+                if (line.find("type=static") != std::string::npos) {
+                    rb.body_type = RigidBody2DComponent::Static;
+                } else if (line.find("type=kinematic") != std::string::npos) {
+                    rb.body_type = RigidBody2DComponent::Kinematic;
+                } else {
+                    rb.body_type = RigidBody2DComponent::Dynamic;
+                }
+                size_t m_pos = line.find("mass=");
+                if (m_pos != std::string::npos) {
+                    float m = 1.0f;
+                    if (sscanf(line.c_str() + m_pos, "mass=%f", &m) == 1 && std::isfinite(m) && m > 0.0f) {
+                        rb.mass = m;
+                    }
+                }
+                size_t ld_pos = line.find("lin_damp=");
+                if (ld_pos != std::string::npos) {
+                    float ld = 0.0f;
+                    if (sscanf(line.c_str() + ld_pos, "lin_damp=%f", &ld) == 1 && std::isfinite(ld) && ld >= 0.0f) {
+                        rb.linear_damping = ld;
+                    }
+                }
+                size_t ad_pos = line.find("ang_damp=");
+                if (ad_pos != std::string::npos) {
+                    float ad = 0.05f;
+                    if (sscanf(line.c_str() + ad_pos, "ang_damp=%f", &ad) == 1 && std::isfinite(ad) && ad >= 0.0f) {
+                        rb.angular_damping = ad;
+                    }
+                }
+                if (line.find("fixed_rot=true") != std::string::npos) {
+                    rb.fixed_rotation = true;
+                }
+                rb.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<RigidBody2DComponent>(e, std::move(rb));
+            } else if (line.rfind("  Collider2D:", 0) == 0) {
+                // 2D Collider (Phase 74).
+                Collider2DComponent col;
+                if (line.find("shape=circle") != std::string::npos) {
+                    col.shape = Collider2DComponent::Circle;
+                    size_t rad_pos = line.find("radius=");
+                    if (rad_pos != std::string::npos) {
+                        float rad = 0.5f;
+                        if (sscanf(line.c_str() + rad_pos, "radius=%f", &rad) == 1 && std::isfinite(rad) && rad > 0.0f) {
+                            col.radius = rad;
+                        }
+                    }
+                } else {
+                    col.shape = Collider2DComponent::Box;
+                    size_t sz_pos = line.find("size(");
+                    if (sz_pos != std::string::npos) {
+                        float sx = 1.0f, sy = 1.0f;
+                        if (sscanf(line.c_str() + sz_pos, "size(%f,%f)", &sx, &sy) == 2) {
+                            if (std::isfinite(sx) && sx > 0.0f) col.size_x = sx;
+                            if (std::isfinite(sy) && sy > 0.0f) col.size_y = sy;
+                        }
+                    }
+                }
+                size_t fr_pos = line.find("friction=");
+                if (fr_pos != std::string::npos) {
+                    float fr = 0.2f;
+                    if (sscanf(line.c_str() + fr_pos, "friction=%f", &fr) == 1 && std::isfinite(fr) && fr >= 0.0f) {
+                        col.friction = fr;
+                    }
+                }
+                size_t rst_pos = line.find("restitution=");
+                if (rst_pos != std::string::npos) {
+                    float rst = 0.0f;
+                    if (sscanf(line.c_str() + rst_pos, "restitution=%f", &rst) == 1 && std::isfinite(rst) && rst >= 0.0f) {
+                        col.restitution = rst;
+                    }
+                }
+                if (line.find("is_sensor=true") != std::string::npos) {
+                    col.is_sensor = true;
+                }
+                col.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<Collider2DComponent>(e, std::move(col));
             } else if (line.rfind("  Light:",0)==0) {
                 // `type=` decides which light the numbers describe. Three shapes
                 // share one line prefix because the format's readers are humans,
@@ -2615,6 +2732,47 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             if (!sp->enabled) out << " enabled=false";
             out << "\n";
         }
+        const auto* tm = scene_obj.world().get<TilemapComponent>(e);
+        if (tm) {
+            out << "  Tilemap:";
+            if (!tm->tileset_texture.empty()) {
+                out << " tileset=" << tm->tileset_texture;
+            }
+            out << " tile_size=" << tm->tile_size;
+            out << " columns=" << tm->columns;
+            out << " rows=" << tm->rows;
+            if (tm->z_order != 0) out << " z_order=" << tm->z_order;
+            if (tm->generate_collider) out << " generate_collider=true";
+            if (!tm->enabled) out << " enabled=false";
+            out << "\n";
+        }
+        const auto* rb2 = scene_obj.world().get<RigidBody2DComponent>(e);
+        if (rb2) {
+            out << "  RigidBody2D:";
+            const char* tstr = (rb2->body_type == RigidBody2DComponent::Static) ? "static" :
+                               (rb2->body_type == RigidBody2DComponent::Kinematic) ? "kinematic" : "dynamic";
+            out << " type=" << tstr;
+            out << " mass=" << rb2->mass;
+            out << " lin_damp=" << rb2->linear_damping;
+            out << " ang_damp=" << rb2->angular_damping;
+            if (rb2->fixed_rotation) out << " fixed_rot=true";
+            if (!rb2->enabled) out << " enabled=false";
+            out << "\n";
+        }
+        const auto* col2 = scene_obj.world().get<Collider2DComponent>(e);
+        if (col2) {
+            out << "  Collider2D:";
+            if (col2->shape == Collider2DComponent::Circle) {
+                out << " shape=circle radius=" << col2->radius;
+            } else {
+                out << " shape=box size(" << col2->size_x << "," << col2->size_y << ")";
+            }
+            out << " friction=" << col2->friction;
+            out << " restitution=" << col2->restitution;
+            if (col2->is_sensor) out << " is_sensor=true";
+            if (!col2->enabled) out << " enabled=false";
+            out << "\n";
+        }
         const auto* l = scene_obj.world().get<DirectionalLight>(e);
         if (l) {
             out << "  Light: type=Directional dir(" << l->dir_x << "," << l->dir_y << "," << l->dir_z << ") color(" << l->color_r << "," << l->color_g << "," << l->color_b << ") intensity=" << l->intensity;
@@ -3508,6 +3666,15 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* sp = src.get<SpriteComponent>(se)) {
         dst.add<SpriteComponent>(de, *sp);
+    }
+    if (const auto* tm = src.get<TilemapComponent>(se)) {
+        dst.add<TilemapComponent>(de, *tm);
+    }
+    if (const auto* rb2 = src.get<RigidBody2DComponent>(se)) {
+        dst.add<RigidBody2DComponent>(de, *rb2);
+    }
+    if (const auto* col2 = src.get<Collider2DComponent>(se)) {
+        dst.add<Collider2DComponent>(de, *col2);
     }
     if (const auto* l = src.get<DirectionalLight>(se)) {
         dst.add<DirectionalLight>(de, *l);

@@ -388,6 +388,62 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         }
     }
 
+    // --- 2D Tilemaps (Phase 74) -------------------------------------------
+    for (const ecs::Entity e : entities) {
+        const auto* tm = world.get<TilemapComponent>(e);
+        if (tm == nullptr) continue;
+        const std::string label = entity_label(world, e);
+        if (!sane(tm->tile_size, 0.1f, 4096.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Tilemap tile size must be positive and <= 4096");
+        }
+        if (tm->columns == 0 || tm->columns > 4096 || tm->rows == 0 || tm->rows > 4096) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Tilemap grid dimensions (columns/rows) must be between 1 and 4096");
+        }
+    }
+
+    // --- 2D Physics (Phase 74) --------------------------------------------
+    for (const ecs::Entity e : entities) {
+        if (const auto* rb = world.get<RigidBody2DComponent>(e)) {
+            const std::string label = entity_label(world, e);
+            if (!sane(rb->mass, 0.0001f, 1000000.0f)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "RigidBody2D mass must be positive");
+            }
+            if (rb->linear_damping < 0.0f || !std::isfinite(rb->linear_damping)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "RigidBody2D linear damping must be non-negative");
+            }
+            if (rb->angular_damping < 0.0f || !std::isfinite(rb->angular_damping)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "RigidBody2D angular damping must be non-negative");
+            }
+        }
+        if (const auto* col = world.get<Collider2DComponent>(e)) {
+            const std::string label = entity_label(world, e);
+            if (col->shape == Collider2DComponent::Box) {
+                if (!sane(col->size_x, 0.001f, 10000.0f) || !sane(col->size_y, 0.001f, 10000.0f)) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "Collider2D box dimensions must be positive");
+                }
+            } else if (col->shape == Collider2DComponent::Circle) {
+                if (!sane(col->radius, 0.001f, 10000.0f)) {
+                    report.add(ValidationSeverity::Warning, label,
+                               "Collider2D circle radius must be positive");
+                }
+            }
+            if (col->friction < 0.0f || col->friction > 10.0f || !std::isfinite(col->friction)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "Collider2D friction should be in [0, 10]");
+            }
+            if (col->restitution < 0.0f || col->restitution > 1.0f || !std::isfinite(col->restitution)) {
+                report.add(ValidationSeverity::Warning, label,
+                           "Collider2D restitution should be in [0, 1]");
+            }
+        }
+    }
+
     // --- decision layer (Phase 61) ---------------------------------------
     // The loader refuses a bad line, so this is for the other two paths in and
     // for the mistakes only the WHOLE list can show: a brain with nothing to
@@ -832,6 +888,11 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
             if (const auto* sp = world.get<SpriteComponent>(e); sp != nullptr) {
                 if (!sp->texture.empty()) {
                     check_path(label, "sprite texture", sp->texture);
+                }
+            }
+            if (const auto* tm = world.get<TilemapComponent>(e); tm != nullptr) {
+                if (!tm->tileset_texture.empty()) {
+                    check_path(label, "tilemap texture", tm->tileset_texture);
                 }
             }
             if (const auto* pp = world.get<PostProcessComponent>(e); pp != nullptr) {

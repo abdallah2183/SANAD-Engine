@@ -495,3 +495,98 @@ NF_TEST(scene_physics_combined_round_trip) {
 
     std::filesystem::remove_all(tmp);
 }
+
+
+NF_TEST(scene_2d_tilemap_round_trip) {
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_scene_tilemap_test";
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    Scene scene("TilemapScene");
+    auto& w = scene.world();
+    ecs::Entity e = w.create_entity();
+    w.add<Transform>(e, Transform{});
+
+    TilemapComponent tm;
+    tm.tileset_texture = "content://Textures/world_tiles.png";
+    tm.tile_size = 16.0f;
+    tm.columns = 32;
+    tm.rows = 24;
+    tm.z_order = 1;
+    tm.generate_collider = true;
+    tm.enabled = true;
+    w.add<TilemapComponent>(e, tm);
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/tilemap.nfscene", scene, err));
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/tilemap.nfscene");
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene && result.scene->world().alive_entity_count() == 1);
+    auto loaded_e = result.scene->world().all_entities()[0];
+    auto* loaded_tm = result.scene->world().get<TilemapComponent>(loaded_e);
+    NF_CHECK(loaded_tm != nullptr);
+    NF_CHECK(loaded_tm->tileset_texture == "content://Textures/world_tiles.png");
+    NF_CHECK(fabsf(loaded_tm->tile_size - 16.0f) < 1e-4f);
+    NF_CHECK(loaded_tm->columns == 32);
+    NF_CHECK(loaded_tm->rows == 24);
+    NF_CHECK(loaded_tm->z_order == 1);
+    NF_CHECK(loaded_tm->generate_collider == true);
+    NF_CHECK(loaded_tm->enabled == true);
+
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(scene_2d_physics_round_trip) {
+    VirtualFileSystem vfs;
+    auto tmp = nf::test::temp_root() / "nf_scene_phys2d_test";
+    std::filesystem::create_directories(tmp);
+    vfs.mount("content://", tmp);
+
+    Scene scene("Phys2DScene");
+    auto& w = scene.world();
+    ecs::Entity e = w.create_entity();
+    w.add<Transform>(e, Transform{});
+
+    RigidBody2DComponent rb;
+    rb.body_type = RigidBody2DComponent::Kinematic;
+    rb.mass = 5.0f;
+    rb.linear_damping = 0.1f;
+    rb.angular_damping = 0.2f;
+    rb.fixed_rotation = true;
+    w.add<RigidBody2DComponent>(e, rb);
+
+    Collider2DComponent col;
+    col.shape = Collider2DComponent::Box;
+    col.size_x = 2.0f;
+    col.size_y = 1.5f;
+    col.friction = 0.35f;
+    col.restitution = 0.5f;
+    col.is_sensor = true;
+    w.add<Collider2DComponent>(e, col);
+
+    std::string err;
+    NF_CHECK(save_scene_to_vfs(vfs, "content://Scenes/phys2d.nfscene", scene, err));
+    auto result = load_scene_from_vfs(vfs, "content://Scenes/phys2d.nfscene");
+    NF_CHECK(result.success);
+    NF_CHECK(result.scene && result.scene->world().alive_entity_count() == 1);
+    auto loaded_e = result.scene->world().all_entities()[0];
+    auto* loaded_rb = result.scene->world().get<RigidBody2DComponent>(loaded_e);
+    auto* loaded_col = result.scene->world().get<Collider2DComponent>(loaded_e);
+    NF_CHECK(loaded_rb != nullptr);
+    NF_CHECK(loaded_rb->body_type == RigidBody2DComponent::Kinematic);
+    NF_CHECK(fabsf(loaded_rb->mass - 5.0f) < 1e-4f);
+    NF_CHECK(fabsf(loaded_rb->linear_damping - 0.1f) < 1e-4f);
+    NF_CHECK(fabsf(loaded_rb->angular_damping - 0.2f) < 1e-4f);
+    NF_CHECK(loaded_rb->fixed_rotation == true);
+
+    NF_CHECK(loaded_col != nullptr);
+    NF_CHECK(loaded_col->shape == Collider2DComponent::Box);
+    NF_CHECK(fabsf(loaded_col->size_x - 2.0f) < 1e-4f);
+    NF_CHECK(fabsf(loaded_col->size_y - 1.5f) < 1e-4f);
+    NF_CHECK(fabsf(loaded_col->friction - 0.35f) < 1e-4f);
+    NF_CHECK(fabsf(loaded_col->restitution - 0.5f) < 1e-4f);
+    NF_CHECK(loaded_col->is_sensor == true);
+
+    std::filesystem::remove_all(tmp);
+}

@@ -1517,6 +1517,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     push_error(app.console(), "Create sprite failed", err);
                 }
             }
+            if (ImGui::MenuItem(AV("tilemap_2d").c_str())) {
+                if (!app.create_tilemap(parent, err)) {
+                    push_error(app.console(), "Create tilemap failed", err);
+                }
+            }
             ImGui::Separator();
             if (ImGui::MenuItem(AV("camera").c_str())) {
                 if (!app.create_camera(parent, err)) {
@@ -1861,6 +1866,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (ImGui::MenuItem(AV("sprite_2d").c_str())) {
                 std::string err;
                 app.create_sprite(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("tilemap_2d").c_str())) {
+                std::string err;
+                app.create_tilemap(ecs::kInvalidEntity, err);
             }
             if (ImGui::MenuItem(AV("audio_source").c_str())) {
                 std::string err;
@@ -2900,6 +2909,22 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     // refused by the setter (and warned about by the loader).
                     // Their sections carry the path field and the add button.
                     added = app.set_reverb_zone(sel, audio::ReverbZoneComponent{}, add_err);
+                } else if (!w->has<runtime::SpriteComponent>(sel) &&
+                           ImGui::MenuItem(AV("sprite_2d").c_str())) {
+                    w->add<runtime::SpriteComponent>(sel, runtime::SpriteComponent{});
+                    added = true;
+                } else if (!w->has<runtime::TilemapComponent>(sel) &&
+                           ImGui::MenuItem(AV("tilemap_2d").c_str())) {
+                    w->add<runtime::TilemapComponent>(sel, runtime::TilemapComponent{});
+                    added = true;
+                } else if (!w->has<runtime::RigidBody2DComponent>(sel) &&
+                           ImGui::MenuItem(AV("rigidbody_2d").c_str())) {
+                    w->add<runtime::RigidBody2DComponent>(sel, runtime::RigidBody2DComponent{});
+                    added = true;
+                } else if (!w->has<runtime::Collider2DComponent>(sel) &&
+                           ImGui::MenuItem(AV("collider_2d").c_str())) {
+                    w->add<runtime::Collider2DComponent>(sel, runtime::Collider2DComponent{});
+                    added = true;
                 } else if (!w->has<physics::RigidBodyComponent>(sel) &&
                            ImGui::MenuItem(AV("rigid_body").c_str())) {
                     added = app.set_rigid_body(sel, physics::RigidBodyComponent{}, add_err);
@@ -4000,6 +4025,70 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     ImGui::Checkbox(AV("billboard").c_str(), &sp->billboard);
                     ImGui::SameLine();
                     ImGui::Checkbox(AV("enabled").c_str(), &sp->enabled);
+                }
+            }
+            // --- 2D Tilemap (Phase 74) ---
+            if (auto* tm = w->get<runtime::TilemapComponent>(sel)) {
+                if (ImGui::CollapsingHeader((AV("tilemap_2d") + "###Tilemap2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    static char tm_buf[256];
+                    std::strncpy(tm_buf, tm->tileset_texture.c_str(), sizeof(tm_buf) - 1);
+                    tm_buf[sizeof(tm_buf) - 1] = '\0';
+                    if (ImGui::InputText(AV("texture").c_str(), tm_buf, sizeof(tm_buf))) {
+                        tm->tileset_texture = tm_buf;
+                    }
+                    ImGui::DragFloat(AV("tile_size").c_str(), &tm->tile_size, 1.0f, 1.0f, 512.0f);
+                    int cols = static_cast<int>(tm->columns);
+                    int rws = static_cast<int>(tm->rows);
+                    if (ImGui::DragInt(AV("columns").c_str(), &cols, 1, 1, 1024)) {
+                        if (cols > 0) tm->columns = static_cast<uint32_t>(cols);
+                    }
+                    if (ImGui::DragInt(AV("rows").c_str(), &rws, 1, 1, 1024)) {
+                        if (rws > 0) tm->rows = static_cast<uint32_t>(rws);
+                    }
+                    ImGui::DragInt(AV("z_order").c_str(), &tm->z_order, 1, -1000, 1000);
+                    ImGui::Checkbox(AV("generate_collider").c_str(), &tm->generate_collider);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("enabled").c_str(), &tm->enabled);
+                }
+            }
+            // --- 2D RigidBody (Phase 74) ---
+            if (auto* rb2 = w->get<runtime::RigidBody2DComponent>(sel)) {
+                if (ImGui::CollapsingHeader((AV("rigidbody_2d") + "###RigidBody2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const char* body_types[] = {"Dynamic", "Static", "Kinematic"};
+                    int cur_type = rb2->body_type;
+                    if (cur_type < 0 || cur_type > 2) cur_type = 0;
+                    if (ImGui::Combo(AV("type").c_str(), &cur_type, body_types, 3)) {
+                        rb2->body_type = cur_type;
+                    }
+                    if (cur_type == 0) {
+                        ImGui::DragFloat(AV("mass").c_str(), &rb2->mass, 0.1f, 0.01f, 10000.0f);
+                    }
+                    ImGui::DragFloat(AV("linear_damping").c_str(), &rb2->linear_damping, 0.01f, 0.0f, 100.0f);
+                    ImGui::DragFloat(AV("angular_damping").c_str(), &rb2->angular_damping, 0.01f, 0.0f, 100.0f);
+                    ImGui::Checkbox(AV("fixed_rotation").c_str(), &rb2->fixed_rotation);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("enabled").c_str(), &rb2->enabled);
+                }
+            }
+            // --- 2D Collider (Phase 74) ---
+            if (auto* col2 = w->get<runtime::Collider2DComponent>(sel)) {
+                if (ImGui::CollapsingHeader((AV("collider_2d") + "###Collider2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const char* shapes[] = {"Box", "Circle"};
+                    int cur_shape = col2->shape;
+                    if (cur_shape < 0 || cur_shape > 1) cur_shape = 0;
+                    if (ImGui::Combo(AV("shape").c_str(), &cur_shape, shapes, 2)) {
+                        col2->shape = cur_shape;
+                    }
+                    if (cur_shape == 0) {
+                        ImGui::DragFloat2(AV("size").c_str(), &col2->size_x, 0.05f, 0.01f, 1000.0f);
+                    } else {
+                        ImGui::DragFloat(AV("radius").c_str(), &col2->radius, 0.05f, 0.01f, 500.0f);
+                    }
+                    ImGui::DragFloat(AV("friction").c_str(), &col2->friction, 0.01f, 0.0f, 1.0f);
+                    ImGui::DragFloat(AV("restitution").c_str(), &col2->restitution, 0.01f, 0.0f, 1.0f);
+                    ImGui::Checkbox(AV("is_sensor").c_str(), &col2->is_sensor);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("enabled").c_str(), &col2->enabled);
                 }
             }
             if (auto* pl = w->get<runtime::PointLightComponent>(sel)) {

@@ -71,6 +71,50 @@ struct SpriteComponent {
     bool enabled = true;
 };
 
+/// A 2D tilemap grid component (Phase 74).
+struct TilemapComponent {
+    std::string tileset_texture;          // Path to atlas texture e.g. "content://Textures/tileset.png"
+    float tile_size = 32.0f;              // Size of each tile in world/render units
+    uint32_t columns = 16;                // Grid width in tiles
+    uint32_t rows = 16;                   // Grid height in tiles
+    int32_t z_order = 0;                  // 2D depth layer
+    bool generate_collider = false;       // Auto-generate 2D collision boundaries for solid tiles
+    bool enabled = true;
+};
+
+/// Deterministic 2D rigid body physics component (Phase 74).
+struct RigidBody2DComponent {
+    enum BodyType : int {
+        Dynamic = 0,
+        Static = 1,
+        Kinematic = 2
+    };
+
+    int body_type = Dynamic;              // Dynamic (0), Static (1), Kinematic (2)
+    float mass = 1.0f;                    // Mass in kg (for dynamic bodies)
+    float linear_damping = 0.0f;          // Linear velocity damping [0, inf)
+    float angular_damping = 0.05f;        // Angular velocity damping [0, inf)
+    bool fixed_rotation = false;          // Prevent body from rotating
+    bool enabled = true;
+};
+
+/// 2D collider attached to an entity with or without RigidBody2D (Phase 74).
+struct Collider2DComponent {
+    enum Shape : int {
+        Box = 0,
+        Circle = 1
+    };
+
+    int shape = Box;                      // Box (0) or Circle (1)
+    float size_x = 1.0f;                  // Box width or half-width
+    float size_y = 1.0f;                  // Box height or half-height
+    float radius = 0.5f;                  // Circle radius
+    float friction = 0.2f;                // Surface friction [0, 10]
+    float restitution = 0.0f;             // Bounciness [0, 1]
+    bool is_sensor = false;               // Trigger-only without physical collision
+    bool enabled = true;
+};
+
 struct DirectionalLight {
     float dir_x = -0.5f, dir_y = -1.0f, dir_z = -0.3f;
     float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;

@@ -206,6 +206,7 @@ public:
     bool create_spot_light(ecs::Entity parent, std::string& out_err);
     bool create_camera(ecs::Entity parent, std::string& out_err);
     bool create_sprite(ecs::Entity parent, std::string& out_err);
+    bool create_tilemap(ecs::Entity parent, std::string& out_err);
     bool create_audio_emitter(ecs::Entity parent, std::string& out_err);
     // Attaches the natural-palette procedural sky to its own entity. The
     // renderer takes the first sky in the scene, so callers use this only when

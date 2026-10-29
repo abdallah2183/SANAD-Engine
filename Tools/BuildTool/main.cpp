@@ -77,11 +77,28 @@ void print_help() {
               << "                                   [--replay <log>] [--input-log <out>] [--replay-strict]\n"
               << "                                   build, then launch the player\n"
               << "  nf verify [--project <file>]     check every cooked asset is present\n"
+              << "  nf info                          display engine specifications and environment\n"
               << "  nf guide                        print the coding-agent game guide\n"
               << "  nf --help | --version\n"
               << "\n"
               << "Without --project, the current directory (and its parents) is searched\n"
               << "for a single .nfproj.\n";
+}
+
+void print_engine_info() {
+    std::cout << "SANAD Engine System Information\n"
+              << "===============================\n"
+              << "Version:         " << NF_ENGINE_VERSION << "\n"
+              << "Edition:         2D/3D Hybrid Engine (Phase 74)\n"
+              << "Graphics API:    Vulkan 1.3 (HLSL SM6.0 via DXC cross-compiler)\n"
+              << "3D Physics:      Jolt Physics (Deterministic)\n"
+              << "2D Physics:      SANAD Deterministic 2D Solver\n"
+              << "Audio Subsystem: MiniAudio (Spatial 3D & Procedural One-Shots)\n"
+              << "Scene Format:    .nfscene (Plaintext, Human-Readable, Diffable)\n"
+              << "Project Format:  .nfproj\n"
+              << "Templates:       " << project_template_name_list() << "\n"
+              << "Template Root:   " << (std::string(NF_TEMPLATES_ROOT).empty() ? "<embedded>" : NF_TEMPLATES_ROOT) << "\n"
+              << "Shader Root:     " << (std::string(NF_BASIC3D_SHADER_DIR).empty() ? "<embedded>" : NF_BASIC3D_SHADER_DIR) << "\n";
 }
 
 // The terminal-sized version of AGENTS.md. Agents often run `nf --help` before
@@ -492,6 +509,10 @@ int main(int argc, char** argv) {
     }
     if (command == "guide" || command == "ai") {
         print_agent_guide();
+        return 0;
+    }
+    if (command == "info" || command == "status") {
+        print_engine_info();
         return 0;
     }
 

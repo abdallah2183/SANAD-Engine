@@ -1361,6 +1361,15 @@ constexpr Entry kEntries[] = {
     {"z_order", "Z-Order", "طبقة العرض"},
     {"inner_angle", "Inner Angle", "الزاوية الداخلية"},
     {"outer_angle", "Outer Angle", "الزاوية الخارجية"},
+    {"tilemap_2d", "2D Tilemap", "خريطة مربعات ثنائية"},
+    {"rigidbody_2d", "2D RigidBody", "جسم فيزيائي ثنائي"},
+    {"collider_2d", "2D Collider", "مصادم ثنائي الأبعاد"},
+    {"tile_size", "Tile Size", "حجم المربع"},
+    {"columns", "Columns", "الأعمدة"},
+    {"rows", "Rows", "الصفوف"},
+    {"generate_collider", "Generate Collider", "توليد المصادم"},
+    {"fixed_rotation", "Fixed Rotation", "تثبيت الدوران"},
+    {"is_sensor", "Trigger / Sensor", "مستشعر فقط (بدون تصادم)"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread
