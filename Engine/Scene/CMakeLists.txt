@@ -3,6 +3,7 @@
 set(NFSCENE_SOURCES
     src/Transform.cpp
     src/SpatialOctree.cpp
+    src/SceneQuery.cpp
     src/StreamingVolume.cpp
     src/Scene.cpp
     src/Prefab.cpp

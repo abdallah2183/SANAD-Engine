@@ -2,6 +2,7 @@
 
 set(NFECS_SOURCES
     src/ECS.cpp
+    src/EntityCommandBuffer.cpp
 )
 
 nf_engine_library(NFEcs

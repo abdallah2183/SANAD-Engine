@@ -26,6 +26,7 @@ add_executable(CoreTests
     CoreTests/test_geometry.cpp
     CoreTests/test_eventbus.cpp
     CoreTests/test_ring_allocator.cpp
+    CoreTests/test_object_pool.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)
@@ -48,6 +49,8 @@ add_executable(ECSTests
     ECSTests/test_scene.cpp
     ECSTests/test_prefab.cpp
     ECSTests/test_octree.cpp
+    ECSTests/test_entity_command_buffer.cpp
+    ECSTests/test_scene_query.cpp
     ECSTests/test_benchmarks.cpp
 )
 target_include_directories(ECSTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
