@@ -13,6 +13,7 @@
 //     preempt. Long actions must be idempotent across ticks.
 //   - A tree tick never allocates; node objects own their state.
 
+#include <NF/Core/Math.hpp>
 #include <NF/Core/Types.hpp>
 
 #include <functional>
@@ -25,30 +26,61 @@ namespace nf::ai {
 
 enum class BTStatus : u8 { Success = 0, Failure = 1, Running = 2 };
 
-/// String/number/flag working memory shared by a tree's nodes.
+/// String/number/flag/vector/entity working memory shared by a tree's nodes.
+/// Supports hierarchical parent blackboard inheritance and observer change callbacks.
 class Blackboard {
 public:
-    void set_number(const std::string& key, double value) { m_numbers[key] = value; }
-    double get_number(const std::string& key, double fallback = 0.0) const {
-        const auto it = m_numbers.find(key);
-        return it != m_numbers.end() ? it->second : fallback;
-    }
-    void set_flag(const std::string& key, bool value) { m_flags[key] = value; }
-    bool get_flag(const std::string& key, bool fallback = false) const {
-        const auto it = m_flags.find(key);
-        return it != m_flags.end() ? it->second : fallback;
-    }
-    void set_text(const std::string& key, std::string value) { m_texts[key] = std::move(value); }
-    std::string get_text(const std::string& key, const std::string& fallback = {}) const {
-        const auto it = m_texts.find(key);
-        return it != m_texts.end() ? it->second : fallback;
-    }
+    using ObserverCallback = std::function<void(const std::string& key)>;
+
+    void set_number(const std::string& key, double value);
+    [[nodiscard]] double get_number(const std::string& key, double fallback = 0.0) const;
+    [[nodiscard]] bool has_number(const std::string& key) const;
+
+    void set_flag(const std::string& key, bool value);
+    [[nodiscard]] bool get_flag(const std::string& key, bool fallback = false) const;
+    [[nodiscard]] bool has_flag(const std::string& key) const;
+
+    void set_text(const std::string& key, std::string value);
+    [[nodiscard]] std::string get_text(const std::string& key, const std::string& fallback = {}) const;
+    [[nodiscard]] bool has_text(const std::string& key) const;
+
+    void set_vector(const std::string& key, const Vec3& value);
+    [[nodiscard]] Vec3 get_vector(const std::string& key, const Vec3& fallback = {}) const;
+    [[nodiscard]] bool has_vector(const std::string& key) const;
+
+    void set_entity(const std::string& key, u32 entity_id);
+    [[nodiscard]] u32 get_entity(const std::string& key, u32 fallback = 0) const;
+    [[nodiscard]] bool has_entity(const std::string& key) const;
+
+    [[nodiscard]] bool has(const std::string& key) const;
+    void unset(const std::string& key);
     void clear();
 
+    /// Parent blackboard delegation for squad / collective AI
+    void set_parent(const Blackboard* parent) noexcept { m_parent = parent; }
+    [[nodiscard]] const Blackboard* parent() const noexcept { return m_parent; }
+
+    /// Observer callbacks on key modifications
+    u32 register_observer(const std::string& key, ObserverCallback callback);
+    void unregister_observer(u32 handle);
+
 private:
+    void notify_observers(const std::string& key);
+
+    const Blackboard* m_parent = nullptr;
     std::unordered_map<std::string, double> m_numbers;
     std::unordered_map<std::string, bool> m_flags;
     std::unordered_map<std::string, std::string> m_texts;
+    std::unordered_map<std::string, Vec3> m_vectors;
+    std::unordered_map<std::string, u32> m_entities;
+
+    struct ObserverEntry {
+        u32 id = 0;
+        std::string key;
+        ObserverCallback callback;
+    };
+    std::vector<ObserverEntry> m_observers;
+    u32 m_next_observer_id = 1;
 };
 
 class BTNode {
@@ -220,6 +252,133 @@ private:
     std::unique_ptr<BTNode> m_child;
 };
 
+/// Periodic background service running while a branch or node is active
+class BTService {
+public:
+    explicit BTService(float interval = 0.2f, float random_deviation = 0.0f)
+        : m_interval(std::max(0.01f, interval)), m_deviation(std::max(0.0f, random_deviation)) {}
+    virtual ~BTService() = default;
+
+    virtual void tick_service(Blackboard& bb, float dt) = 0;
+    virtual void on_service_enter(Blackboard& /*bb*/) {}
+    virtual void on_service_exit(Blackboard& /*bb*/) {}
+
+    void update(Blackboard& bb, float dt);
+    void reset();
+
+    [[nodiscard]] float interval() const noexcept { return m_interval; }
+
+private:
+    float m_interval = 0.2f;
+    float m_deviation = 0.0f;
+    float m_elapsed = 0.0f;
+};
+
+class BTLambdaService : public BTService {
+public:
+    using ServiceFn = std::function<void(Blackboard&, float)>;
+    BTLambdaService(float interval, ServiceFn fn, float deviation = 0.0f)
+        : BTService(interval, deviation), m_fn(std::move(fn)) {}
+
+    void tick_service(Blackboard& bb, float dt) override {
+        if (m_fn) m_fn(bb, dt);
+    }
+
+private:
+    ServiceFn m_fn;
+};
+
+/// Node that hosts and executes one or more services while its child runs
+class BTServiceNode : public BTNode {
+public:
+    explicit BTServiceNode(std::unique_ptr<BTNode> child) : m_child(std::move(child)) {}
+
+    void add_service(std::unique_ptr<BTService> service) {
+        if (service) m_services.push_back(std::move(service));
+    }
+
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+    std::vector<std::unique_ptr<BTService>> m_services;
+    bool m_was_active = false;
+};
+
+enum class BBConditionOp : u8 {
+    IsSet = 0,
+    IsNotSet,
+    BoolEquals,
+    NumberEquals,
+    NumberLessThan,
+    NumberGreaterThan,
+    TextEquals,
+    DistanceLess,
+    DistanceGreater
+};
+
+struct BBCondition {
+    std::string key;
+    BBConditionOp op = BBConditionOp::IsSet;
+    bool bool_val = false;
+    double number_val = 0.0;
+    std::string text_val;
+    Vec3 vector_val{};
+    float distance_threshold = 0.0f;
+
+    static BBCondition is_set(std::string k) {
+        BBCondition c;
+        c.key = std::move(k);
+        c.op = BBConditionOp::IsSet;
+        return c;
+    }
+    static BBCondition is_not_set(std::string k) {
+        BBCondition c;
+        c.key = std::move(k);
+        c.op = BBConditionOp::IsNotSet;
+        return c;
+    }
+    static BBCondition bool_equals(std::string k, bool val) {
+        BBCondition c;
+        c.key = std::move(k);
+        c.op = BBConditionOp::BoolEquals;
+        c.bool_val = val;
+        return c;
+    }
+    static BBCondition number_compare(std::string k, BBConditionOp op, double val) {
+        BBCondition c;
+        c.key = std::move(k);
+        c.op = op;
+        c.number_val = val;
+        return c;
+    }
+    static BBCondition distance_compare(std::string k, BBConditionOp op, const Vec3& target, float dist) {
+        BBCondition c;
+        c.key = std::move(k);
+        c.op = op;
+        c.vector_val = target;
+        c.distance_threshold = dist;
+        return c;
+    }
+
+    [[nodiscard]] bool evaluate(const Blackboard& bb) const;
+};
+
+/// Executes child only if blackboard condition is met; otherwise returns Failure
+class BTBlackboardDecorator : public BTNode {
+public:
+    BTBlackboardDecorator(std::unique_ptr<BTNode> child, BBCondition condition)
+        : m_child(std::move(child)), m_condition(std::move(condition)) {}
+
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+    BBCondition m_condition;
+};
+
 class BehaviorTree {
 public:
     explicit BehaviorTree(std::unique_ptr<BTNode> root) : m_root(std::move(root)) {}
@@ -246,6 +405,8 @@ public:
     BTBuilder& time_limit(float max_seconds);
     BTBuilder& force_success();
     BTBuilder& force_failure();
+    BTBuilder& service(float interval, std::function<void(Blackboard&, float)> fn);
+    BTBuilder& blackboard_check(BBCondition condition);
     BTBuilder& wait(float seconds);
     BTBuilder& action(std::function<BTStatus(Blackboard&, float)> fn);
     BTBuilder& condition(std::function<bool(const Blackboard&)> fn);
@@ -265,14 +426,24 @@ private:
         Retry,
         TimeLimit,
         ForceSuccess,
-        ForceFailure
+        ForceFailure,
+        ServiceNode,
+        BlackboardDecorator
     };
 
     struct StackFrame {
-        FrameType type;
+        FrameType type = FrameType::Sequence;
         float param_f = 0.0f;
         int param_i = 0;
+        BBCondition bb_condition{};
+        std::function<void(Blackboard&, float)> service_fn{};
         std::vector<std::unique_ptr<BTNode>> children;
+
+        StackFrame() = default;
+        StackFrame(FrameType t, float pf = 0.0f, int pi = 0)
+            : type(t), param_f(pf), param_i(pi) {}
+        StackFrame(FrameType t, float pf, int pi, std::vector<std::unique_ptr<BTNode>> ch)
+            : type(t), param_f(pf), param_i(pi), children(std::move(ch)) {}
     };
 
     std::vector<StackFrame> m_stack;
