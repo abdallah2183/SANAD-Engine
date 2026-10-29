@@ -2241,6 +2241,37 @@ Vulkan ولا يلمس العارض: يأكل زمن الإطار بالثوان
 
 ---
 
+### المرحلة 73: ترقية البنية التحتية والأنظمة الداخلية للمحرك (Core Engine Deep Architecture Upgrade)
+
+تطوير عميق للأنظمة الهيكلية والرياضية الأساسية داخل محرك سند (SANAD Engine Core):
+
+- [x] **نظام الهندسة الحسابية ثلاثية الأبعاد (3D Computational Geometry Subsystem)**:
+      - ملفات الهيكل: `Engine/Core/include/NF/Core/Geometry.hpp` و `Engine/Core/src/Geometry.cpp`.
+      - الأشكال الرياضية الأساسية: صندوق الإحاطة المتعامد (`AABB`) مع التمدد والدمج والتحويل المصفوفي التام، كرة الإحاطة (`BoundingSphere`)، الأشعة (`Ray`)، والمستويات الرياضية (`Plane`) مع التعامد والتطبيع وحساب المسافات الموجبة والسالبة.
+      - هرم الرؤية الميداني الكامل (`Frustum`) المكون من 6 مستويات مع تقليم فائق السرعة عبر فحص الرؤوس الموجبة/السالبة (Positive/Negative vertex culling) لصناديق الإحاطة والكرات.
+      - خوارزمية Möller–Trumbore لاختبار تقاطع الأشعة مع المثلثات ثلاثية الأبعاد بدقة حاسوبية عظمى.
+- [x] **ناقل الأحداث المتزامن والمؤجل المنفصل (Type-Safe Pub/Sub EventBus)**:
+      - ملفات الهيكل: `Engine/Core/include/NF/Core/EventBus.hpp` و `Engine/Core/src/EventBus.cpp`.
+      - معمارية نشر واشتراك آمنة النوع بنسبة 100% ودون الحاجة لتسجيل مسبق.
+      - دعم النشر الفوري المباشر (`publish<T>`) والنشر المؤجل عبر رتل آمن (`queue<T>` و `dispatch_queued()`).
+      - حماية كاملة ضد إعادة الدخول (Re-entrancy safe) وتعديل المشتركين أثناء استدعاء ردود النداء (Callbacks).
+      - توكنات اشتراك ذاتية التحرير عبر نمط RAII (`ScopedSubscription`).
+- [x] **المخصص الحلقي الدائري فائق السرعة (O(1) Circular Ring Buffer Allocator)**:
+      - ملفات الهيكل: `Engine/Core/include/NF/Core/RingAllocator.hpp` و `Engine/Core/src/RingAllocator.cpp`.
+      - تخصيص خطي $O(1)$ خفيف ومناسب للبيانات العابرة في كل إطار (Transient Frame Data) ومناطق الترحيل للمعالج الرسومي (GPU Staging).
+      - إدارة دقيقة للمحاذاة المطلقة (Memory Alignment) حتى 64 بايت مع دعم الالتفاف الآمن (Wrap-around) وتجنب التشتت وتتبع المؤشرات النشطة (`tail` / `head`).
+- [x] **الشجرة الثمانية للتقسيم المكاني ثلاثي الأبعاد (Adaptive Spatial Octree)**:
+      - ملفات الهيكل: `Engine/Scene/include/NF/Scene/SpatialOctree.hpp` و `Engine/Scene/src/SpatialOctree.cpp`.
+      - تسريع الاستعلامات المكانية وتحويل كلفة التقليم والاصطدام من $O(N)$ إلى $O(\log N)$.
+      - تقسيم شجري تكيفي حسب السعة القصوى وعمق الشجرة مع إعادة موازنة ديناميكية عند تحديث مواضع الكيانات.
+      - استعلامات مكانية متقدمة: التقليم بهرم الرؤية (`query_frustum`)، التقاطع مع الصناديق (`query_aabb`)، وتتبع الأشعة (`query_ray`).
+- [x] **حزم الاختبارات والاستقرار**:
+      - 11 اختباراً جديداً في `Tests/CoreTests/test_geometry.cpp` و `test_eventbus.cpp` و `test_ring_allocator.cpp` تجتاز جميعاً بنسبة 100% (88/88 في `CoreTests`).
+      - اختبارات الشجرة الثمانية في `Tests/ECSTests/test_octree.cpp` تجتاز جميعاً بنسبة 100% (35/35 في `ECSTests`).
+      - بناء `/W4 /WX` نظيف بالكامل وتوقيع 47 ثنائياً تنفيذياً.
+
+---
+
 ## آلية المشاركة والمساهمة
 
 1. اختيار إحدى النقاط المفتوحة في الجدول أعلاه أو في قسم الـ [Issues](https://github.com/abdallah2183/SANAD-Engine/issues).

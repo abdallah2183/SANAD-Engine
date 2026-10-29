@@ -6,15 +6,18 @@ set(NFCORE_SOURCES
     src/Assert.cpp
     src/Types.cpp
     src/Math.cpp
+    src/Geometry.cpp
     src/UUID.cpp
     src/Hash.cpp
     src/Time.cpp
     src/FileSystem.cpp
     src/Threading.cpp
     src/Memory.cpp
+    src/RingAllocator.cpp
     src/Containers.cpp
     src/Reflection.cpp
     src/Profiler.cpp
+    src/EventBus.cpp
     src/CrashHandler.cpp
 )
 
