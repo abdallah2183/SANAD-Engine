@@ -7,6 +7,7 @@ set(NFSCENE_SOURCES
     src/StreamingVolume.cpp
     src/Scene.cpp
     src/Prefab.cpp
+    src/Spline.cpp
 )
 
 nf_engine_library(NFScene

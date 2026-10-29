@@ -58,6 +58,7 @@ add_executable(ECSTests
     ECSTests/test_octree.cpp
     ECSTests/test_entity_command_buffer.cpp
     ECSTests/test_scene_query.cpp
+    ECSTests/test_spline.cpp
     ECSTests/test_benchmarks.cpp
 )
 target_include_directories(ECSTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
