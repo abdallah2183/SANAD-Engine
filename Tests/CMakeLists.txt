@@ -30,6 +30,9 @@ add_executable(CoreTests
     CoreTests/test_curve_and_easing.cpp
     CoreTests/test_tween.cpp
     CoreTests/test_state_machine.cpp
+    CoreTests/test_string_id.cpp
+    CoreTests/test_bitset.cpp
+    CoreTests/test_timer_manager.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)

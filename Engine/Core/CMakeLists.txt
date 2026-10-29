@@ -22,6 +22,8 @@ set(NFCORE_SOURCES
     src/Curve.cpp
     src/Tween.cpp
     src/StateMachine.cpp
+    src/StringId.cpp
+    src/TimerManager.cpp
 )
 
 nf_engine_library(NFCore
