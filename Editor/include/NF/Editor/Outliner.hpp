@@ -28,6 +28,10 @@ enum class OutlinerKind : uint8_t {
     Sky,
     Light,
     Camera,
+    Sprite2D,
+    Tilemap,
+    Audio,
+    Physics,
 };
 
 struct OutlinerRow {

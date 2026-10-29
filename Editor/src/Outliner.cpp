@@ -1,5 +1,7 @@
 #include <NF/Editor/Outliner.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
+#include <NF/Audio/Components.hpp>
+#include <NF/Physics/Components.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -86,10 +88,21 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
         OutlinerKind kind = OutlinerKind::Empty;
         if (world.has<runtime::CameraComponent>(f.e)) {
             kind = OutlinerKind::Camera;
-        } else if (world.has<runtime::DirectionalLight>(f.e)) {
+        } else if (world.has<runtime::DirectionalLight>(f.e) ||
+                   world.has<runtime::PointLightComponent>(f.e) ||
+                   world.has<runtime::SpotLightComponent>(f.e)) {
             kind = OutlinerKind::Light;
         } else if (world.has<runtime::SkyComponent>(f.e)) {
             kind = OutlinerKind::Sky;
+        } else if (world.has<runtime::TilemapComponent>(f.e)) {
+            kind = OutlinerKind::Tilemap;
+        } else if (world.has<runtime::SpriteComponent>(f.e)) {
+            kind = OutlinerKind::Sprite2D;
+        } else if (world.has<audio::AudioComponent>(f.e)) {
+            kind = OutlinerKind::Audio;
+        } else if (world.has<physics::RigidBodyComponent>(f.e) ||
+                   world.has<runtime::RigidBody2DComponent>(f.e)) {
+            kind = OutlinerKind::Physics;
         } else if (world.has<runtime::MeshComponent>(f.e)) {
             kind = OutlinerKind::Mesh;
         }

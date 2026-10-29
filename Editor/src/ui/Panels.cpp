@@ -949,6 +949,14 @@ ImVec4 outliner_kind_color(OutlinerKind kind) {
             return ImVec4(1.00f, 0.80f, 0.45f, 1.0f); // warm amber
         case OutlinerKind::Sky:
             return ImVec4(0.60f, 0.88f, 0.85f, 1.0f); // pale teal
+        case OutlinerKind::Sprite2D:
+            return ImVec4(0.30f, 0.88f, 0.60f, 1.0f); // vibrant emerald
+        case OutlinerKind::Tilemap:
+            return ImVec4(0.40f, 0.92f, 0.75f, 1.0f); // mint tilemap
+        case OutlinerKind::Audio:
+            return ImVec4(0.85f, 0.55f, 1.00f, 1.0f); // rich violet
+        case OutlinerKind::Physics:
+            return ImVec4(1.00f, 0.60f, 0.35f, 1.0f); // sunset orange
         case OutlinerKind::Mesh:
         case OutlinerKind::Empty:
         default:
@@ -1009,6 +1017,71 @@ void outliner_kind_icon(ImDrawList* dl, ImVec2 c, float s, OutlinerKind kind) {
                                 cl, 16);
             dl->AddCircleFilled(ImVec2(c.x + h * 0.55f, c.y - h * 0.02f), h * 0.32f,
                                 cl, 12);
+            break;
+        }
+        case OutlinerKind::Sprite2D: {
+            const ImU32 frame = IM_COL32(36, 180, 120, 255);
+            const ImU32 inner = IM_COL32(20, 45, 35, 255);
+            const ImU32 sun = IM_COL32(255, 215, 100, 255);
+            const ImU32 mountain = IM_COL32(52, 211, 153, 255);
+            dl->AddRectFilled(ImVec2(c.x - h * 0.90f, c.y - h * 0.80f),
+                              ImVec2(c.x + h * 0.90f, c.y + h * 0.80f), inner, 2.0f);
+            dl->AddRect(ImVec2(c.x - h * 0.90f, c.y - h * 0.80f),
+                        ImVec2(c.x + h * 0.90f, c.y + h * 0.80f), frame, 2.0f, 0, t * 0.9f);
+            dl->AddCircleFilled(ImVec2(c.x + h * 0.40f, c.y - h * 0.30f), h * 0.22f, sun, 10);
+            dl->AddTriangleFilled(ImVec2(c.x - h * 0.70f, c.y + h * 0.60f),
+                                  ImVec2(c.x - h * 0.05f, c.y - h * 0.15f),
+                                  ImVec2(c.x + h * 0.60f, c.y + h * 0.60f), mountain);
+            break;
+        }
+        case OutlinerKind::Tilemap: {
+            const ImU32 border = IM_COL32(45, 212, 160, 255);
+            const ImU32 tile_a = IM_COL32(52, 211, 153, 220);
+            const ImU32 tile_b = IM_COL32(20, 70, 50, 200);
+            const float q = h * 0.85f;
+            dl->AddRectFilled(ImVec2(c.x - q, c.y - q), ImVec2(c.x, c.y), tile_a, 1.0f);
+            dl->AddRectFilled(ImVec2(c.x, c.y - q), ImVec2(c.x + q, c.y), tile_b, 1.0f);
+            dl->AddRectFilled(ImVec2(c.x - q, c.y), ImVec2(c.x, c.y + q), tile_b, 1.0f);
+            dl->AddRectFilled(ImVec2(c.x, c.y), ImVec2(c.x + q, c.y + q), tile_a, 1.0f);
+            dl->AddRect(ImVec2(c.x - q, c.y - q), ImVec2(c.x + q, c.y + q), border, 1.5f, 0, t);
+            dl->AddLine(ImVec2(c.x - q, c.y), ImVec2(c.x + q, c.y), border, t * 0.8f);
+            dl->AddLine(ImVec2(c.x, c.y - q), ImVec2(c.x, c.y + q), border, t * 0.8f);
+            break;
+        }
+        case OutlinerKind::Audio: {
+            const ImU32 spk = IM_COL32(200, 140, 255, 255);
+            dl->AddRectFilled(ImVec2(c.x - h * 0.80f, c.y - h * 0.35f),
+                              ImVec2(c.x - h * 0.30f, c.y + h * 0.35f), spk, 1.0f);
+            dl->AddTriangleFilled(ImVec2(c.x - h * 0.30f, c.y - h * 0.35f),
+                                  ImVec2(c.x + h * 0.20f, c.y - h * 0.75f),
+                                  ImVec2(c.x - h * 0.30f, c.y + h * 0.35f), spk);
+            dl->AddTriangleFilled(ImVec2(c.x - h * 0.30f, c.y + h * 0.35f),
+                                  ImVec2(c.x + h * 0.20f, c.y - h * 0.75f),
+                                  ImVec2(c.x + h * 0.20f, c.y + h * 0.75f), spk);
+            dl->PathArcTo(ImVec2(c.x + h * 0.10f, c.y), h * 0.45f, -0.25f * 3.14159f, 0.25f * 3.14159f, 8);
+            dl->PathStroke(spk, 0, t * 0.85f);
+            dl->PathArcTo(ImVec2(c.x + h * 0.10f, c.y), h * 0.80f, -0.30f * 3.14159f, 0.30f * 3.14159f, 10);
+            dl->PathStroke(spk, 0, t * 0.85f);
+            break;
+        }
+        case OutlinerKind::Physics: {
+            const ImU32 phys = IM_COL32(255, 150, 70, 255);
+            const float pw = h * 0.85f;
+            const ImVec2 p0(c.x, c.y - h * 0.90f);
+            const ImVec2 p1(c.x + pw, c.y - h * 0.50f);
+            const ImVec2 p2(c.x + pw * 0.75f, c.y + h * 0.35f);
+            const ImVec2 p3(c.x, c.y + h * 0.95f);
+            const ImVec2 p4(c.x - pw * 0.75f, c.y + h * 0.35f);
+            const ImVec2 p5(c.x - pw, c.y - h * 0.50f);
+            dl->AddTriangleFilled(p0, p1, p3, IM_COL32(60, 30, 15, 200));
+            dl->AddTriangleFilled(p0, p3, p5, IM_COL32(60, 30, 15, 200));
+            dl->AddLine(p0, p1, phys, t);
+            dl->AddLine(p1, p2, phys, t);
+            dl->AddLine(p2, p3, phys, t);
+            dl->AddLine(p3, p4, phys, t);
+            dl->AddLine(p4, p5, phys, t);
+            dl->AddLine(p5, p0, phys, t);
+            dl->AddCircleFilled(c, h * 0.28f, phys, 10);
             break;
         }
         case OutlinerKind::Mesh: {
@@ -1646,6 +1719,39 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                      sizeof(outliner_filter))) {
             app.outliner().filter_text = outliner_filter;
         }
+        static int s_outliner_cat = 0;
+        {
+            auto draw_cat_pill = [&](const char* label, int cat_idx, ImU32 active_color) {
+                const bool active = (s_outliner_cat == cat_idx);
+                if (active) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, active_color);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active_color);
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(32, 37, 46, 200));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(48, 56, 70, 255));
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(180, 190, 205, 230));
+                }
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 2.0f));
+                if (ImGui::Button(label)) {
+                    s_outliner_cat = (active && cat_idx != 0) ? 0 : cat_idx;
+                }
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(3);
+            };
+            draw_cat_pill(AV("filter_all").c_str(), 0, IM_COL32(59, 130, 246, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill("3D", 1, IM_COL32(79, 140, 255, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill("2D", 2, IM_COL32(16, 185, 129, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_light").c_str(), 3, IM_COL32(245, 158, 11, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_audio").c_str(), 4, IM_COL32(168, 85, 247, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_physics").c_str(), 5, IM_COL32(249, 115, 22, 220));
+        }
         // Live census: total entities plus selection size, so an empty-looking
         // tree still answers "is the scene really empty".
         {
@@ -1659,7 +1765,24 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::TextDisabled("%s", AVF("stats_entities", total).c_str());
             }
         }
-        const std::vector<OutlinerRow> rows = app.outliner_rows();
+        std::vector<OutlinerRow> rows = app.outliner_rows();
+        if (s_outliner_cat != 0) {
+            std::vector<OutlinerRow> filtered;
+            for (const OutlinerRow& r : rows) {
+                bool keep = false;
+                if (s_outliner_cat == 1) keep = (r.kind == OutlinerKind::Mesh);
+                else if (s_outliner_cat == 2) keep = (r.kind == OutlinerKind::Sprite2D || r.kind == OutlinerKind::Tilemap);
+                else if (s_outliner_cat == 3) keep = (r.kind == OutlinerKind::Light || r.kind == OutlinerKind::Sky);
+                else if (s_outliner_cat == 4) keep = (r.kind == OutlinerKind::Audio);
+                else if (s_outliner_cat == 5) keep = (r.kind == OutlinerKind::Physics);
+                if (keep) {
+                    OutlinerRow flat = r;
+                    flat.depth = 0;
+                    filtered.push_back(flat);
+                }
+            }
+            rows = std::move(filtered);
+        }
         if (rows.empty()) {
             ImGui::Spacing();
             ImGui::TextWrapped("%s", AV("empty_scene_hint").c_str());
@@ -2078,13 +2201,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // fix (negated m[1][1]) turned that correction into a double flip —
         // upside-down view with mirrored gizmo drags.
         ImGui::Image(static_cast<ImTextureID>(UiRenderer::kViewportTextureId), img_size);
+        const ImVec2 vp_img_min = ImGui::GetItemRectMin();
+        const ImVec2 vp_img_max = ImGui::GetItemRectMax();
+        const bool vp_img_hovered = ImGui::IsItemHovered();
+
         // Ground grid over the image (drawn, not composited): world grid lines
         // projected through the camera the frame was rendered with, so the grid
         // sits in the scene rather than on the screen. Without it the viewport is
         // a gradient with no sense of scale or where the origin is.
-        // One camera extraction serves both the ground grid and the orientation
-        // gizmo: asking the Runtime twice for the same frame's view is the kind
-        // of duplication that drifts apart later.
         rendering::Camera vp_cam{};
         const bool have_cam =
             app.runtime() != nullptr &&
@@ -2092,13 +2216,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                           static_cast<uint32_t>(std::max(1.0f, img_size.y)),
                                           vp_cam);
         if (ui_settings().show_grid && have_cam) {
-            const ImVec2 mn = ImGui::GetItemRectMin();
-            const ImVec2 mx = ImGui::GetItemRectMax();
-            // ImGui draws AFTER the scene image, so the grid paints over the
-            // geometry where the two overlap. That is the standard editor
-            // compromise (the alternative is a depth-aware overlay pass, which
-            // needs the depth buffer in this draw list) and it is what keeps
-            // the grid usable as a reference while orbiting.
+            const ImVec2 mn = vp_img_min;
+            const ImVec2 mx = vp_img_max;
             if (app.is_2d_mode()) {
                 draw_2d_grid(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
                              ui_settings().grid_step, kGridHalfExtent, app.view_pivot()[0],
@@ -2109,56 +2228,117 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                  app.view_pivot()[2]);
             }
         }
-        // Navigation debug overlay beside the grid: the baked mesh outlines
-        // plus every bound agent's remaining route, through the same camera.
-        // Same no-persistence contract as the grid — a View toggle, off by
-        // default, read-only over the runtime's debug snapshot.
         if (ui_settings().show_navmesh && have_cam && app.runtime() != nullptr) {
-            const ImVec2 mn = ImGui::GetItemRectMin();
-            const ImVec2 mx = ImGui::GetItemRectMax();
+            const ImVec2 mn = vp_img_min;
+            const ImVec2 mx = vp_img_max;
             draw_navmesh_overlay(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
                                  app.runtime()->nav_debug_snapshot());
         }
-        // The gizmo hover for this frame: a click on it routes to a handle
-        // press (no re-pick), anywhere else to the pick press below.
         GizmoHandle gizmo_hover = GizmoHandle::None;
         if (have_cam) {
-            draw_orientation_gizmo(ImGui::GetWindowDrawList(), ImGui::GetItemRectMax(), vp_cam);
-            // Transform gizmo over the image (selection arrows / rings /
-            // boxes). Draws nothing while playing or with no selection. A
-            // click on the hovered handle below must raise a gizmo press
-            // instead of the pick press (no re-select while grabbing).
-            gizmo_hover = draw_transform_gizmo(app, vp_cam, ImGui::GetItemRectMin(),
-                                               ImGui::GetItemRectMax());
+            draw_orientation_gizmo(ImGui::GetWindowDrawList(), vp_img_max, vp_cam);
+            gizmo_hover = draw_transform_gizmo(app, vp_cam, vp_img_min, vp_img_max);
         }
-        // Mode badge in viewport top corner
+        // Interactive floating HUD overlay over the viewport image
         {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            const ImVec2 vp_min = ImGui::GetItemRectMin();
-            const bool is_2d = app.is_2d_mode();
-            const char* mode_badge = is_2d ? "[ 2D ]" : "[ 3D ]";
-            const ImVec2 badge_pos(vp_min.x + 10.0f, vp_min.y + 10.0f);
-            const ImVec2 text_sz = ImGui::CalcTextSize(mode_badge);
-            const ImVec2 badge_pad(6.0f, 3.0f);
-            const ImU32 bg_col = is_2d ? IM_COL32(16, 185, 129, 210) : IM_COL32(20, 20, 28, 190);
-            const ImU32 border_col = is_2d ? IM_COL32(52, 211, 153, 240) : IM_COL32(76, 141, 255, 180);
-            dl->AddRectFilled(ImVec2(badge_pos.x - badge_pad.x, badge_pos.y - badge_pad.y),
-                              ImVec2(badge_pos.x + text_sz.x + badge_pad.x, badge_pos.y + text_sz.y + badge_pad.y),
-                              bg_col, 4.0f);
-            dl->AddRect(ImVec2(badge_pos.x - badge_pad.x, badge_pos.y - badge_pad.y),
-                        ImVec2(badge_pos.x + text_sz.x + badge_pad.x, badge_pos.y + text_sz.y + badge_pad.y),
-                        border_col, 4.0f, 0, 1.0f);
-            dl->AddText(badge_pos, IM_COL32(245, 245, 250, 255), mode_badge);
+            ImGui::SetNextWindowPos(ImVec2(vp_img_min.x + 10.0f, vp_img_min.y + 10.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.80f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 0.0f));
+            if (ImGui::Begin("##viewport_hud_overlay", nullptr,
+                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
+                // 1. Dimension mode [2D] / [3D]
+                const bool is_2d = app.is_2d_mode();
+                if (is_2d) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 220));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(52, 211, 153, 255));
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
+                }
+                if (ImGui::Button(is_2d ? "[ 2D ]###hud_dim" : "[ 3D ]###hud_dim")) {
+                    app.set_2d_mode(!is_2d);
+                    if (!is_2d) {
+                        app.set_gizmo_mode(GizmoMode::Translate);
+                    }
+                }
+                ImGui::PopStyleColor(2);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", is_2d ? ui::tr("view_mode_2d").c_str() : ui::tr("view_mode_3d").c_str());
+                }
+
+                ImGui::SameLine();
+                // 2. Coordinate space switch [عالمي] / [محلي]
+                const bool hud_local_space = app.gizmo_space() == GizmoSpace::Local;
+                const std::string space_str = hud_local_space ? AV("local_space") : AV("world_space");
+                if (ImGui::Button((space_str + "###hud_space").c_str())) {
+                    app.set_gizmo_space(hud_local_space ? GizmoSpace::World : GizmoSpace::Local);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", (hud_local_space ? AV("local_space") : AV("world_space")).c_str());
+                }
+
+                ImGui::SameLine();
+                // 3. Grid toggle [⊞ شبكة]
+                bool& grid_on = ui_settings().show_grid;
+                if (grid_on) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(59, 130, 246, 200));
+                }
+                if (ImGui::Button((AV("grid") + "###hud_grid").c_str())) {
+                    grid_on = !grid_on;
+                }
+                if (grid_on) {
+                    ImGui::PopStyleColor();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", AV("grid").c_str());
+                }
+
+                ImGui::SameLine();
+                // 4. Snap toggle [🧲 مغناطيس]
+                GizmoSnap& hud_snap = app.gizmo_snap();
+                bool hud_snap_on = hud_snap.any();
+                if (hud_snap_on) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(234, 88, 12, 200));
+                }
+                if (ImGui::Button((AV("snap") + "###hud_snap").c_str())) {
+                    if (!hud_snap_on) {
+                        hud_snap = GizmoSnap{0.25f, 15.0f, 0.25f};
+                    } else {
+                        hud_snap = GizmoSnap{};
+                    }
+                }
+                if (hud_snap_on) {
+                    ImGui::PopStyleColor();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", AV("snap").c_str());
+                }
+
+                ImGui::SameLine();
+                // 5. Frame button [F]
+                ImGui::BeginDisabled(!app.selection().has_selection() || app.playing());
+                if (ImGui::Button("F###hud_frame")) {
+                    intents.nav_frame = 1;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", AV("frame_selection_hint").c_str());
+                }
+                ImGui::EndDisabled();
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(3);
         }
+
         // Live simulation overlay: what the frame actually stepped, for the
-        // "is anything running" glance. Counts come straight from the Runtime
-        // getters, so a wired system shows up here the moment it binds. Off by
-        // default: a first launch should show the scene, not a census card over
-        // its corner (View > Viewport stats brings it back).
+        // "is anything running" glance. Positioned below the floating HUD.
         if (app.runtime() != nullptr && ui_settings().show_viewport_stats) {
             runtime::Runtime* rt = app.runtime();
-            const ImVec2 img_mn = ImGui::GetItemRectMin();
-            ImGui::SetNextWindowPos(ImVec2(img_mn.x + 8.0f, img_mn.y + 8.0f), ImGuiCond_Always);
+            const ImVec2 img_mn = vp_img_min;
+            ImGui::SetNextWindowPos(ImVec2(img_mn.x + 10.0f, img_mn.y + 48.0f), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.6f);
             if (ImGui::Begin("##viewport_stats", nullptr,
                              ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
@@ -2198,8 +2378,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // release folds one undoable command. NDC is recomputed from the live
         // mouse position every frame (the panel can resize mid-gesture).
         {
-            const ImVec2 mn = ImGui::GetItemRectMin();
-            const ImVec2 mx = ImGui::GetItemRectMax();
+            const ImVec2 mn = vp_img_min;
+            const ImVec2 mx = vp_img_max;
             const float w = mx.x - mn.x;
             const float h = mx.y - mn.y;
             auto to_ndc = [&](float& out_x, float& out_y) {
@@ -2221,7 +2401,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // a drag would only fight the simulation.
             // A click on a gizmo handle owns the click instead: constrained
             // drag on the current selection, no re-pick.
-            if (!app.playing() && !press_armed && ImGui::IsItemHovered() &&
+            if (!app.playing() && !press_armed && vp_img_hovered &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 if (w > 1.0f && h > 1.0f) {
                     press_armed = true;
@@ -2264,7 +2444,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (!app.playing()) {
             {
                 const ImGuiIO& nav_io = ImGui::GetIO();
-                const bool over_view = ImGui::IsItemHovered();
+                const bool over_view = vp_img_hovered;
                 static bool nav_held = false;
                 if (!nav_held && over_view && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
                     nav_held = true;
@@ -2994,6 +3174,40 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 t_changed |= draw_vec3_control(AV("rotation").c_str(), ic.rot, 0.0f, 0.5f);
                 t_changed |= draw_vec3_control(AV("scale").c_str(), ic.scl, 1.0f, 0.02f, 0.01f, 1000.0f);
 
+                // Quick Transform Actions: Copy, Paste, Reset
+                ImGui::Spacing();
+                static struct {
+                    float pos[3] = {0.0f, 0.0f, 0.0f};
+                    float rot[3] = {0.0f, 0.0f, 0.0f};
+                    float scl[3] = {1.0f, 1.0f, 1.0f};
+                    bool valid = false;
+                } s_tr_clip;
+
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                if (ImGui::Button((AV("copy_transform") + "###btn_copy_tr").c_str())) {
+                    s_tr_clip.pos[0] = ic.pos[0]; s_tr_clip.pos[1] = ic.pos[1]; s_tr_clip.pos[2] = ic.pos[2];
+                    s_tr_clip.rot[0] = ic.rot[0]; s_tr_clip.rot[1] = ic.rot[1]; s_tr_clip.rot[2] = ic.rot[2];
+                    s_tr_clip.scl[0] = ic.scl[0]; s_tr_clip.scl[1] = ic.scl[1]; s_tr_clip.scl[2] = ic.scl[2];
+                    s_tr_clip.valid = true;
+                }
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!s_tr_clip.valid);
+                if (ImGui::Button((AV("paste_transform") + "###btn_paste_tr").c_str())) {
+                    ic.pos[0] = s_tr_clip.pos[0]; ic.pos[1] = s_tr_clip.pos[1]; ic.pos[2] = s_tr_clip.pos[2];
+                    ic.rot[0] = s_tr_clip.rot[0]; ic.rot[1] = s_tr_clip.rot[1]; ic.rot[2] = s_tr_clip.rot[2];
+                    ic.scl[0] = s_tr_clip.scl[0]; ic.scl[1] = s_tr_clip.scl[1]; ic.scl[2] = s_tr_clip.scl[2];
+                    t_changed = true;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button((AV("reset_transform") + "###btn_reset_tr").c_str())) {
+                    ic.pos[0] = 0.0f; ic.pos[1] = 0.0f; ic.pos[2] = 0.0f;
+                    ic.rot[0] = 0.0f; ic.rot[1] = 0.0f; ic.rot[2] = 0.0f;
+                    ic.scl[0] = 1.0f; ic.scl[1] = 1.0f; ic.scl[2] = 1.0f;
+                    t_changed = true;
+                }
+                ImGui::PopStyleVar();
+
                 auto* cur_tr = w->get<scene::Transform>(sel);
                 if (cur_tr != nullptr && t_changed) {
                     cur_tr->local_x = ic.pos[0];
@@ -3604,6 +3818,39 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::CollapsingHeader((AV("directional_light") + "###DirectionalLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::DragFloat3(AV("direction").c_str(), ic.light_dir, 0.02f);
                 ImGui::ColorEdit3(AV("color").c_str(), ic.light_color);
+                {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(245, 158, 11, 180));
+                    if (ImGui::Button((AV("preset_sun") + "###psun_dl").c_str())) {
+                        ic.light_color[0] = 1.0f; ic.light_color[1] = 0.95f; ic.light_color[2] = 0.82f;
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(239, 68, 68, 180));
+                    if (ImGui::Button((AV("preset_fire") + "###pfire_dl").c_str())) {
+                        ic.light_color[0] = 1.0f; ic.light_color[1] = 0.55f; ic.light_color[2] = 0.20f;
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(6, 182, 212, 180));
+                    if (ImGui::Button((AV("preset_neon") + "###pneon_dl").c_str())) {
+                        ic.light_color[0] = 0.15f; ic.light_color[1] = 0.85f; ic.light_color[2] = 1.0f;
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 180));
+                    if (ImGui::Button((AV("preset_emerald") + "###pemerald_dl").c_str())) {
+                        ic.light_color[0] = 0.20f; ic.light_color[1] = 0.95f; ic.light_color[2] = 0.45f;
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(99, 102, 241, 180));
+                    if (ImGui::Button((AV("preset_moon") + "###pmoon_dl").c_str())) {
+                        ic.light_color[0] = 0.65f; ic.light_color[1] = 0.78f; ic.light_color[2] = 1.0f;
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar();
+                }
                 ImGui::DragFloat(AV("intensity").c_str(), &ic.light_intensity, 0.05f, 0.0f, 16.0f);
                 ImGui::Checkbox(AV("cast_shadows").c_str(), &ic.light_shadows);
                 ImGui::SliderFloat(AV("shadow_strength").c_str(), &ic.light_shadow_strength, 0.0f, 1.0f);
@@ -4097,6 +4344,39 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     if (ImGui::ColorEdit3(AV("color").c_str(), col)) {
                         pl->color_r = col[0]; pl->color_g = col[1]; pl->color_b = col[2];
                     }
+                    {
+                        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(245, 158, 11, 180));
+                        if (ImGui::Button((AV("preset_sun") + "###psun_pl").c_str())) {
+                            pl->color_r = 1.0f; pl->color_g = 0.95f; pl->color_b = 0.82f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(239, 68, 68, 180));
+                        if (ImGui::Button((AV("preset_fire") + "###pfire_pl").c_str())) {
+                            pl->color_r = 1.0f; pl->color_g = 0.55f; pl->color_b = 0.20f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(6, 182, 212, 180));
+                        if (ImGui::Button((AV("preset_neon") + "###pneon_pl").c_str())) {
+                            pl->color_r = 0.15f; pl->color_g = 0.85f; pl->color_b = 1.0f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 180));
+                        if (ImGui::Button((AV("preset_emerald") + "###pemerald_pl").c_str())) {
+                            pl->color_r = 0.20f; pl->color_g = 0.95f; pl->color_b = 0.45f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(99, 102, 241, 180));
+                        if (ImGui::Button((AV("preset_moon") + "###pmoon_pl").c_str())) {
+                            pl->color_r = 0.65f; pl->color_g = 0.78f; pl->color_b = 1.0f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::PopStyleVar();
+                    }
                     ImGui::DragFloat(AV("intensity").c_str(), &pl->intensity, 0.1f, 0.0f, 100.0f);
                     ImGui::DragFloat(AV("radius").c_str(), &pl->radius, 0.2f, 0.1f, 1000.0f);
                     ImGui::Checkbox(AV("cast_shadows").c_str(), &pl->cast_shadows);
@@ -4109,6 +4389,39 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     float col[3] = {sl->color_r, sl->color_g, sl->color_b};
                     if (ImGui::ColorEdit3(AV("color").c_str(), col)) {
                         sl->color_r = col[0]; sl->color_g = col[1]; sl->color_b = col[2];
+                    }
+                    {
+                        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(245, 158, 11, 180));
+                        if (ImGui::Button((AV("preset_sun") + "###psun_sl").c_str())) {
+                            sl->color_r = 1.0f; sl->color_g = 0.95f; sl->color_b = 0.82f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(239, 68, 68, 180));
+                        if (ImGui::Button((AV("preset_fire") + "###pfire_sl").c_str())) {
+                            sl->color_r = 1.0f; sl->color_g = 0.55f; sl->color_b = 0.20f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(6, 182, 212, 180));
+                        if (ImGui::Button((AV("preset_neon") + "###pneon_sl").c_str())) {
+                            sl->color_r = 0.15f; sl->color_g = 0.85f; sl->color_b = 1.0f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 180));
+                        if (ImGui::Button((AV("preset_emerald") + "###pemerald_sl").c_str())) {
+                            sl->color_r = 0.20f; sl->color_g = 0.95f; sl->color_b = 0.45f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(99, 102, 241, 180));
+                        if (ImGui::Button((AV("preset_moon") + "###pmoon_sl").c_str())) {
+                            sl->color_r = 0.65f; sl->color_g = 0.78f; sl->color_b = 1.0f;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::PopStyleVar();
                     }
                     ImGui::DragFloat(AV("intensity").c_str(), &sl->intensity, 0.1f, 0.0f, 100.0f);
                     ImGui::DragFloat(AV("range").c_str(), &sl->range, 0.2f, 0.1f, 1000.0f);
@@ -6246,18 +6559,47 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
         const char* levels[5] = {level_labels[0].c_str(), level_labels[1].c_str(),
                                  level_labels[2].c_str(), level_labels[3].c_str(),
                                  level_labels[4].c_str()};
-        ImGui::Combo(AV("level").c_str(), &level_filter, levels, 5);
+
+        // Live severity counts
+        const std::vector<LogMessage> all_logs = app.console().filtered(LogLevel::Trace);
+        const int count_all = static_cast<int>(all_logs.size());
+        int count_info = 0;
+        int count_warn = 0;
+        int count_error = 0;
+        for (const auto& log_m : all_logs) {
+            if (log_m.level == LogLevel::Error) count_error++;
+            else if (log_m.level == LogLevel::Warn) count_warn++;
+            else count_info++;
+        }
+
+        // Row 1: Interactive quick severity filter pills
+        auto draw_severity_pill = [&](const std::string& name, int lvl, int cnt, ImVec4 active_col) {
+            const bool is_sel = (level_filter == lvl);
+            if (is_sel) {
+                ImGui::PushStyleColor(ImGuiCol_Button, active_col);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(active_col.x * 1.15f, active_col.y * 1.15f, active_col.z * 1.15f, 1.0f));
+            }
+            const std::string pill_text = name + " (" + std::to_string(cnt) + ")###pill_lvl_" + std::to_string(lvl);
+            if (ImGui::Button(pill_text.c_str())) {
+                level_filter = lvl;
+            }
+            if (is_sel) {
+                ImGui::PopStyleColor(2);
+            }
+        };
+
+        draw_severity_pill(AV("filter_all"), 0, count_all, ImVec4(0.25f, 0.45f, 0.85f, 0.9f));
         ImGui::SameLine();
-        // Category filter: the bitmask the ConsoleBuffer query takes. The
-        // names mirror LogCategory; index 0 is "All" so nothing is hidden by
-        // default. The index is NOT the enum value — LogCategory::All is
-        // 0xFFFF, and indexing the arrays with it would read far out of bounds.
-        //
-        // A3b decision: these stay ENGLISH on purpose. They are the same tags
-        // that prefix every log line, so translating the filter would break the
-        // correspondence between the chip you click and the text you are
-        // filtering. The Level filter above IS localised, because Trace/Info/
-        // Warn are severities a user reads rather than enum identifiers.
+        draw_severity_pill(level_labels[2], 2, count_info, ImVec4(0.18f, 0.58f, 0.88f, 0.9f));
+        ImGui::SameLine();
+        draw_severity_pill(level_labels[3], 3, count_warn, ImVec4(0.85f, 0.58f, 0.15f, 0.9f));
+        ImGui::SameLine();
+        draw_severity_pill(level_labels[4], 4, count_error, ImVec4(0.88f, 0.22f, 0.25f, 0.9f));
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
         static int category_filter = 0;
         const char* categories[] = {"All",  "Core", "Render", "Physics", "Audio",
                                     "Network", "Asset", "Editor", "Script", "ECS",
@@ -6268,39 +6610,43 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             LogCategory::Asset,   LogCategory::Editor,  LogCategory::Script,
             LogCategory::ECS,     LogCategory::Platform, LogCategory::RHI,
             LogCategory::Jobs,    LogCategory::Scene};
-        ImGui::Combo(AV("category").c_str(), &category_filter, categories, 14);
+        const int cat_index =
+            (category_filter >= 0 && category_filter < IM_ARRAYSIZE(category_values))
+                ? category_filter
+                : 0;
+        const LogCategory selected = category_values[cat_index];
+        static char search[128] = "";
+        const nf::editor::ConsoleBuffer::Filter filter{
+            static_cast<LogLevel>(level_filter),
+            (selected == LogCategory::All) ? LogCategory::All : selected,
+            std::string(search)};
+        const std::vector<LogMessage> lines = app.console().filtered(filter);
+
+        if (ImGui::Button((AV("copy_all_logs") + "###btn_copy_all_logs").c_str())) {
+            std::string full_txt;
+            for (const auto& log_m : lines) {
+                full_txt += "[" + std::string(category_name(log_m.category)) + "] " + log_m.text + "\n";
+            }
+            ImGui::SetClipboardText(full_txt.c_str());
+        }
         ImGui::SameLine();
         if (ImGui::Button(AV("clear").c_str())) {
             app.console().clear();
         }
         ImGui::SameLine();
         rt_disabled_str(AVF("console_dropped", app.console().dropped()));
-        // Search: case-insensitive substring over the message text. Frame-
-        // persistent like the two combos above; the panel owns the query state
-        // and ConsoleBuffer stays a pure reader.
-        static char search[128] = "";
+
+        // Row 2: Category, Search box, and Autoscroll
+        ImGui::Combo(AV("category").c_str(), &category_filter, categories, 14);
+        ImGui::SameLine();
         ImGui::PushItemWidth(220.0f);
-        // ##id keeps the label out of the shaped-text path; the hint is owned
-        // (not a temporary) so it outlives the widget call.
         const std::string search_hint = AV("console_search_hint");
         ImGui::InputTextWithHint("##consolesearch", search_hint.c_str(), search,
                                  IM_ARRAYSIZE(search));
         ImGui::PopItemWidth();
         ImGui::SameLine();
-        // Autoscroll used to be unconditional: reading an old error meant
-        // fighting the panel every frame. Off = the view stays where it is.
         static bool auto_scroll = true;
         ImGui::Checkbox(AV("autoscroll").c_str(), &auto_scroll);
-        const int cat_index =
-            (category_filter >= 0 && category_filter < IM_ARRAYSIZE(category_values))
-                ? category_filter
-                : 0;
-        const LogCategory selected = category_values[cat_index];
-        const nf::editor::ConsoleBuffer::Filter filter{
-            static_cast<LogLevel>(level_filter),
-            (selected == LogCategory::All) ? LogCategory::All : selected,
-            std::string(search)};
-        const std::vector<LogMessage> lines = app.console().filtered(filter);
         // --- Polished log rows: level dot + category chip + message ---------
         // Denser than the old "[LEVEL][Category] text" line: a colored dot
         // carries severity at a glance, the category is a muted chip, and the
@@ -6315,8 +6661,17 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     const LogMessage& m = lines[static_cast<size_t>(li)];
                     ImVec4 dot = level_color(m.level);
                     const ImVec2 p = ImGui::GetCursorScreenPos();
-                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
+                    const float row_w = ImGui::GetContentRegionAvail().x;
+                    const float row_h = ImGui::GetTextLineHeightWithSpacing();
                     ImDrawList* dl = ImGui::GetWindowDrawList();
+                    if (m.level == LogLevel::Error) {
+                        dl->AddRectFilled(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(239, 68, 68, 28), 3.0f);
+                        dl->AddRect(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(239, 68, 68, 60), 3.0f);
+                    } else if (m.level == LogLevel::Warn) {
+                        dl->AddRectFilled(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(245, 158, 11, 22), 3.0f);
+                        dl->AddRect(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(245, 158, 11, 50), 3.0f);
+                    }
+                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
                     dl->AddCircleFilled(
                         ImVec2(p.x + 6.0f, p.y + 8.0f), 4.0f,
                         IM_COL32(static_cast<int>(dot.x * 255.0f),

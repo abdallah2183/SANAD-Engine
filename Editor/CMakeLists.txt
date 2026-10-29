@@ -44,7 +44,7 @@ add_library(NFEditorCore STATIC
     ${NFEDITOR_CORE_SOURCES}
 )
 target_include_directories(NFEditorCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics NFGameplay NFScripting NFVfx NFUI imgui)
+target_link_libraries(NFEditorCore PUBLIC NFCore NFEcs NFScene NFAssets NFRuntime NFJobs NFPhysics NFAudio NFGameplay NFScripting NFVfx NFUI imgui)
 nf_target_set_warnings(NFEditorCore)
 
 add_executable(SANADEditor

@@ -1370,6 +1370,20 @@ constexpr Entry kEntries[] = {
     {"generate_collider", "Generate Collider", "توليد المصادم"},
     {"fixed_rotation", "Fixed Rotation", "تثبيت الدوران"},
     {"is_sensor", "Trigger / Sensor", "مستشعر فقط (بدون تصادم)"},
+    {"filter_all", "All", "الكل"},
+    {"filter_light", "Lights", "إضاءة"},
+    {"filter_audio", "Audio", "صوت"},
+    {"filter_physics", "Physics", "فيزياء"},
+    {"grid", "Grid", "شبكة"},
+    {"copy_transform", "Copy TRS", "نسخ التحويل"},
+    {"paste_transform", "Paste TRS", "لصق التحويل"},
+    {"reset_transform", "Reset TRS", "تصفير شامل"},
+    {"copy_all_logs", "Copy All Logs", "نسخ كل السجلات"},
+    {"preset_sun", "Sun", "شمس"},
+    {"preset_fire", "Torch", "نار"},
+    {"preset_neon", "Neon", "نيون"},
+    {"preset_emerald", "Emerald", "زمرد"},
+    {"preset_moon", "Moon", "قمر"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread
