@@ -1,4 +1,5 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
+#include <NF/Assets/PackageArchive.hpp>
 
 #include <NF/Core/Logger.hpp>
 
@@ -160,38 +161,67 @@ VFSResult<std::filesystem::path> VirtualFileSystem::resolve_internal(std::string
 
 VFSResult<bool> VirtualFileSystem::exists(std::string_view logical_path) const {
     auto r = resolve_internal(logical_path);
-    if (!r.ok) return VFSResult<bool>::failure(r.error);
-    std::error_code ec;
-    bool ex = std::filesystem::exists(r.value, ec);
-    if (ec) return VFSResult<bool>::failure(ec.message());
-    return VFSResult<bool>::success(ex);
+    if (r.ok) {
+        std::error_code ec;
+        bool ex = std::filesystem::exists(r.value, ec);
+        if (!ec && ex) {
+            return VFSResult<bool>::success(true);
+        }
+    }
+
+    std::string path_str(logical_path);
+    for (const auto& pm : m_package_mounts) {
+        if (path_str.rfind(pm.logical, 0) == 0 && pm.archive) {
+            std::string rel = path_str.substr(pm.logical.size());
+            if (pm.archive->contains(rel)) {
+                return VFSResult<bool>::success(true);
+            }
+        }
+    }
+
+    if (!r.ok && m_package_mounts.empty()) {
+        return VFSResult<bool>::failure(r.error);
+    }
+    return VFSResult<bool>::success(false);
 }
 
 VFSResult<std::vector<u8>> VirtualFileSystem::read_bytes(std::string_view logical_path) const {
     auto r = resolve_internal(logical_path);
+    if (r.ok) {
+        std::error_code ec;
+        if (std::filesystem::exists(r.value, ec) && !std::filesystem::is_directory(r.value, ec)) {
+            std::ifstream file(r.value, std::ios::binary);
+            if (file) {
+                file.seekg(0, std::ios::end);
+                const std::streampos end = file.tellg();
+                if (end != std::streampos(-1)) {
+                    file.seekg(0, std::ios::beg);
+                    const size_t size = static_cast<size_t>(end);
+                    std::vector<u8> data(size);
+                    if (size > 0) {
+                        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
+                    }
+                    if (file) {
+                        return VFSResult<std::vector<u8>>::success(std::move(data));
+                    }
+                }
+            }
+        }
+    }
+
+    std::string path_str(logical_path);
+    for (const auto& pm : m_package_mounts) {
+        if (path_str.rfind(pm.logical, 0) == 0 && pm.archive) {
+            std::string rel = path_str.substr(pm.logical.size());
+            if (pm.archive->contains(rel)) {
+                auto data = pm.archive->read_bytes(rel);
+                return VFSResult<std::vector<u8>>::success(std::move(data));
+            }
+        }
+    }
+
     if (!r.ok) return VFSResult<std::vector<u8>>::failure(r.error);
-    std::ifstream file(r.value, std::ios::binary);
-    if (!file) return VFSResult<std::vector<u8>>::failure("Failed to open file for reading: '" + std::string(logical_path) + "'");
-    file.seekg(0, std::ios::end);
-    // tellg() answers -1 when the seek or the tell fails; casting that to an
-    // unsigned size yields SIZE_MAX and the allocation below then throws
-    // std::length_error — uncaught, so the process aborts. A file whose size
-    // cannot be determined is a failed read, not a SIZE_MAX-byte one.
-    const std::streampos end = file.tellg();
-    if (end == std::streampos(-1)) {
-        return VFSResult<std::vector<u8>>::failure("Failed to determine file size: '" + std::string(logical_path) + "'");
-    }
-    file.seekg(0, std::ios::beg);
-    if (!file) {
-        return VFSResult<std::vector<u8>>::failure("Failed to seek file: '" + std::string(logical_path) + "'");
-    }
-    const size_t size = static_cast<size_t>(end);
-    std::vector<u8> data(size);
-    if (size>0) {
-        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
-        if (!file) return VFSResult<std::vector<u8>>::failure("Failed to read file: '" + std::string(logical_path) + "'");
-    }
-    return VFSResult<std::vector<u8>>::success(std::move(data));
+    return VFSResult<std::vector<u8>>::failure("Failed to open file for reading: '" + std::string(logical_path) + "'");
 }
 
 VFSResult<std::string> VirtualFileSystem::read_text(std::string_view logical_path) const {
@@ -231,11 +261,90 @@ VFSResult<void> VirtualFileSystem::create_directories(std::string_view logical_p
 
 VFSResult<bool> VirtualFileSystem::is_directory(std::string_view logical_path) const {
     auto r = resolve_internal(logical_path);
-    if (!r.ok) return VFSResult<bool>::failure(r.error);
-    std::error_code ec;
-    bool is_dir = std::filesystem::is_directory(r.value, ec);
-    if (ec) return VFSResult<bool>::failure(ec.message());
-    return VFSResult<bool>::success(is_dir);
+    if (r.ok) {
+        std::error_code ec;
+        bool is_dir = std::filesystem::is_directory(r.value, ec);
+        if (!ec && is_dir) {
+            return VFSResult<bool>::success(true);
+        }
+    }
+
+    std::string path_str(logical_path);
+    for (const auto& pm : m_package_mounts) {
+        if (path_str.rfind(pm.logical, 0) == 0 && pm.archive) {
+            std::string rel = path_str.substr(pm.logical.size());
+            std::string prefix = PackageArchive::normalize_key(rel);
+            if (!prefix.empty() && prefix.back() != '/') {
+                prefix.push_back('/');
+            }
+            for (const auto& f : pm.archive->list_files()) {
+                if (f.rfind(prefix, 0) == 0) {
+                    return VFSResult<bool>::success(true);
+                }
+            }
+        }
+    }
+
+    if (r.ok) {
+        std::error_code ec;
+        bool is_dir = std::filesystem::is_directory(r.value, ec);
+        if (ec) return VFSResult<bool>::failure(ec.message());
+        return VFSResult<bool>::success(is_dir);
+    }
+    return VFSResult<bool>::failure(r.error);
+}
+
+VFSResult<void> VirtualFileSystem::mount_package(std::string_view logical, const std::filesystem::path& package_path) {
+    std::string log_str(logical);
+    if (!log_str.ends_with("://")) {
+        return VFSResult<void>::failure("Package mount logical must end with '://'");
+    }
+
+    std::string err;
+    auto archive = PackageArchive::open_file(package_path, err);
+    if (!archive) {
+        return VFSResult<void>::failure("Failed to mount package archive: " + err);
+    }
+
+    return mount_package(logical, std::shared_ptr<PackageArchive>(std::move(archive)));
+}
+
+VFSResult<void> VirtualFileSystem::mount_package(std::string_view logical, std::shared_ptr<PackageArchive> package) {
+    if (!package) {
+        return VFSResult<void>::failure("Cannot mount null package archive");
+    }
+    std::string log_str(logical);
+    if (!log_str.ends_with("://")) {
+        return VFSResult<void>::failure("Package mount logical must end with '://'");
+    }
+
+    for (const auto& pm : m_package_mounts) {
+        if (pm.logical == log_str && pm.archive == package) {
+            return VFSResult<void>::failure("Package already mounted at '" + log_str + "'");
+        }
+    }
+
+    m_package_mounts.push_back({log_str, std::move(package)});
+    std::sort(m_package_mounts.begin(), m_package_mounts.end(),
+        [](const PackageMount& a, const PackageMount& b) {
+            return a.logical.size() > b.logical.size();
+        });
+    return VFSResult<void>::success();
+}
+
+void VirtualFileSystem::unmount_package(std::string_view logical) {
+    std::string log_str(logical);
+    std::erase_if(m_package_mounts, [&](const PackageMount& pm) {
+        return pm.logical == log_str;
+    });
+}
+
+std::vector<std::string> VirtualFileSystem::package_mounts() const {
+    std::vector<std::string> res;
+    for (const auto& pm : m_package_mounts) {
+        res.push_back(pm.logical);
+    }
+    return res;
 }
 
 // --- Delete / rename ---------------------------------------------------------

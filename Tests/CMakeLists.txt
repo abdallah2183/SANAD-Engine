@@ -169,6 +169,7 @@ add_executable(AssetTests
     AssetTests/test_gltf_import.cpp
     AssetTests/test_gltf_character_import.cpp
     AssetTests/test_mesh_import.cpp
+    AssetTests/test_package_archive.cpp
 )
 target_include_directories(AssetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AssetTests PRIVATE NFCore NFAssets NFRHI NFRendering NFProjectTool)

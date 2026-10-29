@@ -15,6 +15,7 @@ set(NFASSETS_SOURCES
     src/AnimationImport.cpp
     src/MeshExport.cpp
     src/CgltfImpl.cpp
+    src/PackageArchive.cpp
 )
 
 nf_engine_library(NFAssets

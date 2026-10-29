@@ -3,6 +3,7 @@
 #include <NF/Core/Types.hpp>
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -11,6 +12,8 @@
 #include <vector>
 
 namespace nf::assets {
+
+class PackageArchive;
 
 // Simple Result type for VFS operations
 template<typename T>
@@ -86,12 +89,24 @@ public:
     // For testing: list mounts
     std::vector<std::string> mounts() const;
 
+    // --- Package Archive Mounts (.nfpak) -----------------------------------
+    VFSResult<void> mount_package(std::string_view logical, const std::filesystem::path& package_path);
+    VFSResult<void> mount_package(std::string_view logical, std::shared_ptr<PackageArchive> package);
+    void unmount_package(std::string_view logical);
+    std::vector<std::string> package_mounts() const;
+
 private:
     struct Mount {
         std::string logical; // e.g. "content://"
         std::filesystem::path physical; // canonical physical path
     };
     std::vector<Mount> m_mounts;
+
+    struct PackageMount {
+        std::string logical;
+        std::shared_ptr<PackageArchive> archive;
+    };
+    std::vector<PackageMount> m_package_mounts;
 
     std::string normalize_logical(std::string_view path) const;
     bool is_within_mount(const std::filesystem::path& mount_physical, const std::filesystem::path& target) const;
