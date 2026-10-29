@@ -24,6 +24,8 @@ set(NFCORE_SOURCES
     src/StateMachine.cpp
     src/StringId.cpp
     src/TimerManager.cpp
+    src/Compression.cpp
+    src/CommandLine.cpp
 )
 
 nf_engine_library(NFCore

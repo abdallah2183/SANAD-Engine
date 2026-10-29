@@ -33,6 +33,7 @@ add_executable(CoreTests
     CoreTests/test_string_id.cpp
     CoreTests/test_bitset.cpp
     CoreTests/test_timer_manager.cpp
+    CoreTests/test_compression_and_commandline.cpp
 )
 target_include_directories(CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CoreTests PRIVATE NFCore)
