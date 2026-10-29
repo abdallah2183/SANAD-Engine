@@ -7,6 +7,8 @@
 # the editor, or the runtime.
 
 set(NFANIMATION_SOURCES
+    src/AnimMontage.cpp
+    src/AnimNotify.cpp
     src/Skeleton.cpp
     src/AnimationClip.cpp
     src/AnimationPlayer.cpp

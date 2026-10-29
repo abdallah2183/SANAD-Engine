@@ -356,6 +356,7 @@ add_executable(AnimationTests
     AnimationTests/test_root_motion.cpp
     AnimationTests/test_skinning.cpp
     AnimationTests/test_blend_space_and_fabrik.cpp
+    AnimationTests/test_notifies_and_montage.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
