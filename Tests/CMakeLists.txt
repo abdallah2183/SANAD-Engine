@@ -474,6 +474,7 @@ add_executable(NetworkTests
     # client to it over real UDP — the only place the headless host is proven
     # as a process, not just as a library.
     NetworkTests/test_dedicated_server.cpp
+    NetworkTests/test_bitstream_and_rpc.cpp
 )
 target_include_directories(NetworkTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(NetworkTests PRIVATE NFCore NFNetworking)

@@ -4,6 +4,9 @@
 # replication builds on UdpSocket one layer up.
 
 set(NFNETWORKING_SOURCES
+    src/BitStream.cpp
+    src/NetQuantizer.cpp
+    src/RpcDispatcher.cpp
     src/ReliableChannel.cpp
     src/Snapshot.cpp
     src/Authoritative.cpp
