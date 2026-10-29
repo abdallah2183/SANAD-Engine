@@ -341,6 +341,7 @@ add_executable(PhysicsTests
     # Cloth is first-party (Jolt has no deformable solver), so it lives in its own
     # file rather than next to the Jolt cases.
     PhysicsTests/test_cloth.cpp
+    PhysicsTests/test_collision_materials_and_buoyancy.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)

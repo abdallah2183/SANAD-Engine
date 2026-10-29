@@ -10,6 +10,9 @@
 #     0xC0000374 crash when the vehicle built its Body*/constraint in its own TU.
 
 set(NFPHYSICS_SOURCES
+    src/BuoyancySolver.cpp
+    src/CollisionFilter.cpp
+    src/PhysicsMaterial.cpp
     src/Shapes.cpp
     src/Broadphase.cpp
     src/Narrowphase.cpp
