@@ -14,6 +14,8 @@ set(NFGAMEPLAY_SOURCES
     src/Quest.cpp
     src/Inventory.cpp
     src/Dialogue.cpp
+    src/GameplayAttributes.cpp
+    src/SaveGame.cpp
 )
 
 nf_engine_library(NFGameplay
