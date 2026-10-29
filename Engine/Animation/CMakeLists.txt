@@ -15,6 +15,9 @@ set(NFANIMATION_SOURCES
     src/Retarget.cpp
     src/RootMotion.cpp
     src/Skinning.cpp
+    src/BlendSpace.cpp
+    src/FABRIK.cpp
+    src/BoneMask.cpp
 )
 
 nf_engine_library(NFAnimation
