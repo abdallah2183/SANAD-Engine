@@ -500,6 +500,7 @@ add_executable(AITests
     AITests/test_state_machine.cpp
     AITests/test_utility_ai.cpp
     AITests/test_ai_world.cpp
+    AITests/test_eqs_and_advanced_bt.cpp
 )
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)

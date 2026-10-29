@@ -137,6 +137,89 @@ private:
     std::function<bool(const Blackboard&)> m_fn;
 };
 
+/// Policy for BTParallel completion.
+enum class BTParallelPolicy : u8 {
+    RequireAll, // Fails if any child fails, succeeds if all succeed
+    RequireOne  // Succeeds if any child succeeds, fails if all fail
+};
+
+/// Executes all children concurrently each tick.
+class BTParallel : public BTNode {
+public:
+    explicit BTParallel(BTParallelPolicy policy = BTParallelPolicy::RequireAll) : m_policy(policy) {}
+    void add(std::unique_ptr<BTNode> child) { m_children.push_back(std::move(child)); }
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    BTParallelPolicy m_policy = BTParallelPolicy::RequireAll;
+    std::vector<std::unique_ptr<BTNode>> m_children;
+};
+
+/// Prevents execution of child until cooldown seconds have elapsed since last Success.
+class BTCooldown : public BTNode {
+public:
+    BTCooldown(std::unique_ptr<BTNode> child, float cooldown_seconds)
+        : m_child(std::move(child)), m_cooldown(cooldown_seconds) {}
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+    float m_cooldown = 0.0f;
+    float m_time_since_last_success = 1e9f;
+};
+
+/// Retries a failing child node up to max_retries before propagating Failure.
+class BTRetry : public BTNode {
+public:
+    BTRetry(std::unique_ptr<BTNode> child, int max_retries)
+        : m_child(std::move(child)), m_max_retries(max_retries) {}
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+    int m_max_retries = 3;
+    int m_current_retries = 0;
+};
+
+/// Limits child execution to max_seconds; if exceeded, child is reset and returns Failure.
+class BTTimeLimit : public BTNode {
+public:
+    BTTimeLimit(std::unique_ptr<BTNode> child, float max_seconds)
+        : m_child(std::move(child)), m_max_seconds(max_seconds) {}
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+    float m_max_seconds = 0.0f;
+    float m_elapsed = 0.0f;
+};
+
+/// Executes child; returns Success unless child is Running.
+class BTForceSuccess : public BTNode {
+public:
+    explicit BTForceSuccess(std::unique_ptr<BTNode> child) : m_child(std::move(child)) {}
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+};
+
+/// Executes child; returns Failure unless child is Running.
+class BTForceFailure : public BTNode {
+public:
+    explicit BTForceFailure(std::unique_ptr<BTNode> child) : m_child(std::move(child)) {}
+    BTStatus tick(Blackboard& bb, float dt) override;
+    void reset() override;
+
+private:
+    std::unique_ptr<BTNode> m_child;
+};
+
 class BehaviorTree {
 public:
     explicit BehaviorTree(std::unique_ptr<BTNode> root) : m_root(std::move(root)) {}
@@ -145,6 +228,57 @@ public:
 
 private:
     std::unique_ptr<BTNode> m_root;
+};
+
+/// Fluent builder for declarative behavior tree authoring.
+class BTBuilder {
+public:
+    BTBuilder();
+    ~BTBuilder() = default;
+
+    BTBuilder& sequence();
+    BTBuilder& selector();
+    BTBuilder& parallel(BTParallelPolicy policy = BTParallelPolicy::RequireAll);
+    BTBuilder& inverter();
+    BTBuilder& repeat(int times);
+    BTBuilder& cooldown(float seconds);
+    BTBuilder& retry(int max_retries);
+    BTBuilder& time_limit(float max_seconds);
+    BTBuilder& force_success();
+    BTBuilder& force_failure();
+    BTBuilder& wait(float seconds);
+    BTBuilder& action(std::function<BTStatus(Blackboard&, float)> fn);
+    BTBuilder& condition(std::function<bool(const Blackboard&)> fn);
+    BTBuilder& end();
+
+    std::unique_ptr<BehaviorTree> build();
+
+private:
+    enum class FrameType {
+        Sequence,
+        Selector,
+        ParallelAll,
+        ParallelOne,
+        Inverter,
+        Repeat,
+        Cooldown,
+        Retry,
+        TimeLimit,
+        ForceSuccess,
+        ForceFailure
+    };
+
+    struct StackFrame {
+        FrameType type;
+        float param_f = 0.0f;
+        int param_i = 0;
+        std::vector<std::unique_ptr<BTNode>> children;
+    };
+
+    std::vector<StackFrame> m_stack;
+    std::unique_ptr<BTNode> m_root;
+
+    void add_child(std::unique_ptr<BTNode> child);
 };
 
 } // namespace nf::ai

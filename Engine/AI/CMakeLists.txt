@@ -14,6 +14,7 @@ set(NFAI_SOURCES
     src/StateMachine.cpp
     src/UtilityAI.cpp
     src/AIWorld.cpp
+    src/EQS.cpp
 )
 
 nf_engine_library(NFAI
