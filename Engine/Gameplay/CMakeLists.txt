@@ -8,6 +8,7 @@
 # through GameplayContext.
 
 set(NFGAMEPLAY_SOURCES
+    src/GameplayAbility.cpp
     src/GameplayModuleRegistry.cpp
     src/GameplayState.cpp
     src/Tags.cpp

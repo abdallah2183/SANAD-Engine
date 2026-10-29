@@ -397,6 +397,7 @@ add_executable(GameplayTests
     GameplayTests/test_tags_quest_inventory.cpp
     GameplayTests/test_dialogue.cpp
     GameplayTests/test_attributes_and_savegame.cpp
+    GameplayTests/test_abilities.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
