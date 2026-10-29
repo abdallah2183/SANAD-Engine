@@ -19,6 +19,9 @@ set(NFCORE_SOURCES
     src/Profiler.cpp
     src/EventBus.cpp
     src/CrashHandler.cpp
+    src/Curve.cpp
+    src/Tween.cpp
+    src/StateMachine.cpp
 )
 
 nf_engine_library(NFCore

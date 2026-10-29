@@ -2300,6 +2300,36 @@ Vulkan ولا يلمس العارض: يأكل زمن الإطار بالثوان
 
 ---
 
+### المرحلة 75: دوال التنعيم ومنحنيات التحريك ومحرك البينيات وآلات الحالة الهرمية (Easing, Keyframe Curves, Tween Engine & HFSM)
+
+تطوير عميق لطبقات التحريك الرياضي، والانتقالات البينية (Tweening)، وآلات الحالة الهرمية العامة داخل النواة (`NFCore`):
+
+- [x] **مكتبة دوال التنعيم الرياضية الشاملة (`Easing.hpp`)**:
+      - ملف الهيكل: `Engine/Core/include/NF/Core/Easing.hpp`.
+      - تضمين أكثر من 30 دالة تنعيم قياسية وفق معادلات Penner: `Linear`، `Quad`، `Cubic`، `Quart`، `Quint`، `Sine`، `Expo`، `Circ`، `Elastic`، `Back`، و `Bounce` بنسخها الثلاث (In / Out / InOut).
+      - واجهة تقييم موحدة `evaluate_ease(EaseType, float t)` مع معالجة الحدود التلقائية لمجال `[0, 1]`.
+- [x] **منحنيات التحريك بالنقاط المفتاحية (`FloatCurve`)**:
+      - ملفات الهيكل: `Engine/Core/include/NF/Core/Curve.hpp` و `Engine/Core/src/Curve.cpp`.
+      - نقاط مفتاحية متعددة مع وسائط مماسات مختلفة: `Linear`، `Constant` (القفز اللحظي)، و `Smooth` (منحنيات Hermite المكعبة).
+      - حساب آلي وسلس للمماسات باستخدام خوارزمية Catmull-Rom (`auto_smooth_tangents`).
+      - أوضاع استقراء وتكرار متطورة خارج النطاق: `Clamp`، `Loop`، و `PingPong`.
+- [x] **محرك التحريك البيني المركزي (`Tween` و `TweenManager`)**:
+      - ملفات الهيكل: `Engine/Core/include/NF/Core/Tween.hpp` و `Engine/Core/src/Tween.cpp`.
+      - دعم كامل لتحريك القيم القياسية (`ScalarTween`) والمتجهية (`Vector3Tween`) مع الربط المباشر بالمؤشرات أو ردود النداء (Callbacks).
+      - خيارات تحكم مرنة: التأخير الزمني (`delay`)، التكرار المحدود أو اللانهائي (`loops`)، الانعكاس المتأرجح (`ping_pong`)، وأحداث الإنجاز (`on_complete`).
+      - مدير مركزي `TweenManager` لإدارة وتحديث وإلغاء وتجميد واستئناف كافة الحركات البينية النشطة في الإطار.
+- [x] **آلة الحالة الهرمية العامة (`HierarchicalStateMachine`)**:
+      - ملفات الهيكل: `Engine/Core/include/NF/Core/StateMachine.hpp` و `Engine/Core/src/StateMachine.cpp`.
+      - دعم الحالات الهرمية المتداخلة (Parent/Sub-states) مع استدعاء سليم لدوال الدخول والخروج حسب السلف المشترك الأدنى (LCA).
+      - انتقالات مشروطة ومحمية بحراس (`Guarded Transitions`)، وانتقالات موجهة بالأحداث (`dispatch_event`)، مع استعادة الحالة السابقة (`restore_previous`).
+- [x] **التحقق والاستقرار**:
+      - إضافة 10 اختبارات جديدة في `test_curve_and_easing.cpp` و `test_tween.cpp` و `test_state_machine.cpp`.
+      - اجتياز 100% لكافة الاختبارات (102/102 في `CoreTests`).
+      - إجمالي اختبارات المحرك يرتفع إلى **1,075 اختباراً مؤكداً بنسبة نجاح 100%**.
+      - بناء كامل وخالٍ من التحذيرات تحت `/W4 /WX` وتوقيع 47 ثنائياً تنفيذياً.
+
+---
+
 ## آلية المشاركة والمساهمة
 
 1. اختيار إحدى النقاط المفتوحة في الجدول أعلاه أو في قسم الـ [Issues](https://github.com/abdallah2183/SANAD-Engine/issues).
