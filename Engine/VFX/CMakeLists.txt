@@ -5,6 +5,9 @@
 
 set(NFVFX_SOURCES
     src/Particles.cpp
+    src/ParticleEmitterShape.cpp
+    src/ForceField.cpp
+    src/RibbonTrail.cpp
 )
 
 nf_engine_library(NFVfx

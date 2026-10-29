@@ -568,6 +568,7 @@ nf_target_set_warnings(WaterTests)
 add_executable(VFXTests
     TestFramework.cpp
     VFXTests/test_particles.cpp
+    VFXTests/test_vfx_advanced.cpp
 )
 target_include_directories(VFXTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(VFXTests PRIVATE NFCore NFVfx)
