@@ -119,6 +119,15 @@ bool Window::create(const WindowDesc& desc) {
     wc.lpfnWndProc = window_proc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
+    // The executable's application icon (resource id 1), large for Alt-Tab /
+    // taskbar and small for the title bar. An exe without that resource gets
+    // nullptr, which is the stock default - so this is safe for every host.
+    wc.hIcon = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXICON),
+                                             GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                               GetSystemMetrics(SM_CXSMICON),
+                                               GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
     wc.hbrBackground = nullptr;
     wc.lpszClassName = L"SANADWindowClass";
 

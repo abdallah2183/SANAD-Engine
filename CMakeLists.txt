@@ -33,7 +33,7 @@ cmake_minimum_required(VERSION 3.24)
 # Docs/Demo_Release.md says exactly that. Advertising "cross-platform" for a
 # Windows-only product is a claim the repository cannot back.
 project(SANAD
-    VERSION 0.6.0
+    VERSION 0.7.0
     LANGUAGES C CXX
     DESCRIPTION "SANAD Engine - High-performance Windows x64 game engine"
 )

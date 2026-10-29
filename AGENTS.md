@@ -305,6 +305,17 @@ Games/MyGame/
   `enabled=false` is inert; the validator names an out-of-range field, an inert
   field and a field with no Transform, and the editor has a Radio jammer
   section.
+- A squad radio can be directional (Phase 71). Add `cone=<degrees>` to the same
+  `Squad:` line. Zero (the default) is omnidirectional and keeps Phase 70
+  exactly; a positive half-angle in `[0, 180]` makes the antenna talk and listen
+  only inside its cone. A delivery needs the receiver inside the reporter's cone
+  and the reporter inside the receiver's cone when that end has one, and it
+  composes with the range and jammer gates. The antenna points along the
+  Transform yaw, or a `CombatAgent`'s live aim, and the test is horizontal. Live
+  reports and lost callouts obey it; the Phase 67 `squad=` board, personal
+  senses, detection and lost tracking do not, and a received report is still
+  never relayed. The validator names a cone outside `[0, 180]`, the Squad radio
+  section has the slider, and Terrain's WalkerC uses `cone=150`.
 - `nf build` cooks assets and writes `dist/`; `nf run` builds then launches
   `dist/NFPlayer.exe`.
 - Rebinding is a file, and it is optional. `Content/Input/bindings.nfinput`

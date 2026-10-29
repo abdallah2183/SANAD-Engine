@@ -156,20 +156,380 @@ inline std::string shell_tr(const char* key) {
     return nf::ui::tr(key);
 }
 
-// Display-ready UTF-16 for HAND-DRAWN text: translate, shape Arabic to visual
-// order, then widen. DrawTextW used to do the joining natively, but it drops
-// text on some Windows sessions; ExtTextOutW is the reliable primitive and
-// does not shape, so this function owns the shaping now. Pure Latin is
-// returned byte-identical by shape_arabic, so paths, versions and dates share
-// this path safely.
-inline std::wstring shell_w_str(const std::string& logical_utf8) {
-    // ExtTextOutW draws glyphs left-to-right and does not run Uniscribe's
-    // Arabic joining. Convert to visual order here; pure Latin is returned
-    // byte-identical by shape_arabic, so LTR labels cost nothing.
-    if (nf::ui::needs_shaping(logical_utf8)) {
-        return widen(nf::ui::shape_arabic(logical_utf8));
+// --- GDI visual-order shaping + bidi for ExtTextOutW ------------------------
+//
+// Why this exists in ProjectLauncher.cpp instead of calling shape_arabic()
+// raw:
+//   1. Windows gdi32!ExtTextOutW inspects the UTF-16 buffer for complex-script
+//      codepoints (U+0590..U+08FF, bidi controls). Pure Presentation Forms-B
+//      (U+FE70..U+FEFF) take GDI's plain LTR glyph path and render in the
+//      exact visual order we computed. ANY remaining base-Arabic codepoint —
+//      combining harakat/shadda/tanween (U+064B..U+065F) or Arabic punctuation
+//      such as '۔' (U+06D4) at the end of subtitles — routes the whole string
+//      through LpkExtTextOut (Uniscribe), which sees Bidi Class AL on
+//      U+FE70..U+FEFF and reverses our already-visual string a SECOND time!
+//   2. shape_arabic() assumes an LTR base paragraph when multiple runs exist
+//      (pinned by UITests/EditorTests), which swaps clauses across ' — ', ': ',
+//      parentheses, and embedded Latin words in RTL launcher sentences.
+//   3. Multi-line status strings ('\n') must shape line-by-line so lines never
+//      reverse across a newline boundary.
+namespace gdi_bidi {
+
+inline bool decode_u8(const std::string& s, std::vector<char32_t>& out) {
+    out.clear();
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size();) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        char32_t cp = 0;
+        std::size_t len = 0;
+        if (c < 0x80) {
+            cp = c;
+            len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            len = 4;
+        } else {
+            return false;
+        }
+        if (i + len > s.size()) {
+            return false;
+        }
+        for (std::size_t k = 1; k < len; ++k) {
+            const unsigned char d = static_cast<unsigned char>(s[i + k]);
+            if ((d & 0xC0) != 0x80) {
+                return false;
+            }
+            cp = (cp << 6) | (d & 0x3F);
+        }
+        if ((len == 2 && cp < 0x80) || (len == 3 && cp < 0x800) ||
+            (len == 4 && (cp < 0x10000 || cp > 0x10FFFF)) || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            return false;
+        }
+        out.push_back(cp);
+        i += len;
     }
-    return widen(logical_utf8);
+    return true;
+}
+
+inline std::string encode_u8(const std::vector<char32_t>& cps, std::size_t b, std::size_t e) {
+    std::string out;
+    out.reserve((e - b) * 3);
+    for (std::size_t i = b; i < e; ++i) {
+        const char32_t cp = cps[i];
+        if (cp < 0x80) {
+            out.push_back(static_cast<char>(cp));
+        } else if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        }
+    }
+    return out;
+}
+
+inline void append_u16(std::wstring& out, char32_t cp) {
+    if (cp <= 0xFFFF) {
+        out.push_back(static_cast<wchar_t>(cp));
+    } else if (cp <= 0x10FFFF) {
+        const char32_t v = cp - 0x10000;
+        out.push_back(static_cast<wchar_t>(0xD800 | (v >> 10)));
+        out.push_back(static_cast<wchar_t>(0xDC00 | (v & 0x3FF)));
+    }
+}
+
+inline bool is_combining_or_bidi_ctrl(char32_t cp) {
+    return nf::ui::is_arabic_mark(cp) || (cp >= 0x0610 && cp <= 0x061A) ||
+           (cp >= 0x064B && cp <= 0x065F) || cp == 0x0670 || (cp >= 0x06D6 && cp <= 0x06ED) ||
+           cp == 0x200E || cp == 0x200F || (cp >= 0x202A && cp <= 0x202E) ||
+           (cp >= 0x2066 && cp <= 0x2069);
+}
+
+inline bool is_strong_rtl(char32_t cp) {
+    if (nf::ui::is_digit(cp) || is_combining_or_bidi_ctrl(cp)) {
+        return false;
+    }
+    return (cp >= 0x0600 && cp <= 0x06FF) || (cp >= 0x0750 && cp <= 0x077F) ||
+           (cp >= 0x08A0 && cp <= 0x08FF) || (cp >= 0xFB50 && cp <= 0xFDFF) ||
+           (cp >= 0xFE70 && cp <= 0xFEFF);
+}
+
+inline bool is_strong_ltr(char32_t cp) {
+    return (cp >= U'A' && cp <= U'Z') || (cp >= U'a' && cp <= U'z') ||
+           (cp >= 0x00C0 && cp <= 0x024F && cp != 0x00D7 && cp != 0x00F7);
+}
+
+inline char32_t mirror_bracket(char32_t cp) {
+    switch (cp) {
+        case U'(': return U')';
+        case U')': return U'(';
+        case U'[': return U']';
+        case U']': return U'[';
+        case U'{': return U'}';
+        case U'}': return U'{';
+        case 0x00AB: return 0x00BB; // « -> »
+        case 0x00BB: return 0x00AB; // » -> «
+        case 0x2039: return 0x203A; // ‹ -> ›
+        case 0x203A: return 0x2039; // › -> ‹
+        default: return cp;
+    }
+}
+
+// Emits a shaped codepoint for GDI while guaranteeing zero U+0590..U+08FF
+// codepoints remain in the output buffer (preventing LpkExtTextOut from
+// double-reversing Presentation Forms-B).
+inline void append_gdi_safe(std::wstring& out, char32_t cp) {
+    if (is_combining_or_bidi_ctrl(cp) || cp == 0x0640) {
+        return; // marks/tatweel already participated in contextual joining
+    }
+    if (cp >= 0x0660 && cp <= 0x0669) {
+        out.push_back(static_cast<wchar_t>(L'0' + (cp - 0x0660)));
+        return;
+    }
+    if (cp >= 0x06F0 && cp <= 0x06F9) {
+        out.push_back(static_cast<wchar_t>(L'0' + (cp - 0x06F0)));
+        return;
+    }
+    switch (cp) {
+        case 0x06D4: // ۔ Arabic full stop
+        case 0x066B: // ٫ Arabic decimal separator
+            out.push_back(L'.');
+            return;
+        case 0x060C: // ، Arabic comma
+        case 0x066C: // ٬ Arabic thousands separator
+            out.push_back(L',');
+            return;
+        case 0x061B: // ؛ Arabic semicolon
+            out.push_back(L';');
+            return;
+        case 0x061F: // ؟ Arabic question mark
+            out.push_back(L'?');
+            return;
+        case 0x066A: // ٪ Arabic percent sign
+            out.push_back(L'%');
+            return;
+        default:
+            break;
+    }
+    if (cp >= 0x0590 && cp <= 0x08FF) {
+        return; // never let an unmapped complex-script codepoint flip the line
+    }
+    append_u16(out, cp);
+}
+
+inline std::wstring sanitize_shaped_utf8(const std::string& shaped_utf8) {
+    std::vector<char32_t> cps;
+    if (!decode_u8(shaped_utf8, cps)) {
+        return widen(shaped_utf8);
+    }
+    std::wstring out;
+    out.reserve(cps.size());
+    for (char32_t cp : cps) {
+        append_gdi_safe(out, cp);
+    }
+    return out;
+}
+
+inline bool is_num_bridge(char32_t cp) {
+    return cp == U'.' || cp == U',' || cp == U':' || cp == U'-' || cp == U'/' || cp == U'%';
+}
+
+inline bool is_phrase_bridge(char32_t cp) {
+    return cp == U' ' || cp == U'.' || cp == U',' || cp == U':' || cp == U'-' || cp == U'_' ||
+           cp == U'/' || cp == U'\\' || cp == U'+' || cp == U'#' || cp == 0x00B7;
+}
+
+inline std::wstring shape_line_for_gdi(const std::string& line) {
+    if (!nf::ui::needs_shaping(line)) {
+        return widen(line);
+    }
+    std::vector<char32_t> cps;
+    if (!decode_u8(line, cps) || cps.empty()) {
+        return widen(line);
+    }
+
+    // UAX #9 P2/P3: first strong directional letter sets the paragraph base.
+    bool base_rtl = false;
+    bool found_strong = false;
+    for (char32_t cp : cps) {
+        if (is_strong_rtl(cp)) {
+            base_rtl = true;
+            found_strong = true;
+            break;
+        }
+        if (is_strong_ltr(cp)) {
+            base_rtl = false;
+            found_strong = true;
+            break;
+        }
+    }
+    if (!found_strong || !base_rtl) {
+        return sanitize_shaped_utf8(nf::ui::shape_arabic(line));
+    }
+
+    // RTL base paragraph: identify embedded LTR tokens (Latin words, file
+    // paths/extensions like .nfproj / C:\..., and numbers like 20 / 0.1.0).
+    const std::size_t n = cps.size();
+    std::vector<bool> ltr(n, false);
+    for (std::size_t i = 0; i < n; ++i) {
+        const char32_t cp = cps[i];
+        if (is_strong_ltr(cp) || nf::ui::is_digit(cp)) {
+            ltr[i] = true;
+        } else if (cp == U'.' && i + 1 < n && is_strong_ltr(cps[i + 1])) {
+            ltr[i] = true; // leading dot in ".nfproj"
+        } else if ((cp == U'-' || cp == U'+') && i + 1 < n && nf::ui::is_digit(cps[i + 1]) &&
+                   (i == 0 || cps[i - 1] == U' ' || cps[i - 1] == U'(')) {
+            ltr[i] = true; // leading sign on "-5"
+        } else if ((cp == U'#' || cp == U'+') && i > 0 && ltr[i - 1] && is_strong_ltr(cps[i - 1])) {
+            ltr[i] = true; // trailing symbol on "C#" / "C++"
+        }
+    }
+
+    // Bridge punctuation inside numbers ("0.1.0", "16:9", "1-10", "2D/3D").
+    for (std::size_t i = 1; i + 1 < n; ++i) {
+        if (!ltr[i] && is_num_bridge(cps[i]) && ltr[i - 1] && ltr[i + 1]) {
+            ltr[i] = true;
+        }
+    }
+
+    // Bridge neutral connectors/spaces between LTR runs when at least one side
+    // carries Latin letters (keeps "C:\...\SANAD Projects" and "Visual Studio"
+    // intact as one LTR run without gluing separate Arabic-context numbers).
+    for (std::size_t i = 0; i < n;) {
+        if (!ltr[i]) {
+            ++i;
+            continue;
+        }
+        std::size_t left_begin = i;
+        bool left_has_latin = false;
+        while (i < n && ltr[i]) {
+            if (is_strong_ltr(cps[i])) {
+                left_has_latin = true;
+            }
+            ++i;
+        }
+        std::size_t bridge_begin = i;
+        while (i < n && !ltr[i] && is_phrase_bridge(cps[i])) {
+            ++i;
+        }
+        if (i > bridge_begin && i < n && ltr[i]) {
+            bool right_has_latin = false;
+            for (std::size_t k = i; k < n && ltr[k]; ++k) {
+                if (is_strong_ltr(cps[k])) {
+                    right_has_latin = true;
+                }
+            }
+            if (left_has_latin || right_has_latin) {
+                for (std::size_t k = bridge_begin; k < i; ++k) {
+                    ltr[k] = true;
+                }
+                i = left_begin; // re-scan to chain multiple segments ("C:\a\b c")
+                continue;
+            }
+        }
+    }
+
+    struct Run {
+        std::size_t begin = 0;
+        std::size_t end = 0;
+        bool is_ltr = false;
+    };
+    std::vector<Run> runs;
+    for (std::size_t i = 0; i < n;) {
+        const bool cur = ltr[i];
+        std::size_t j = i + 1;
+        while (j < n && ltr[j] == cur) {
+            ++j;
+        }
+        runs.push_back({i, j, cur});
+        i = j;
+    }
+
+    // Emit runs in RTL visual order (last logical run leftmost, first rightmost).
+    std::wstring visual;
+    visual.reserve(n);
+    for (std::size_t r = runs.size(); r > 0; --r) {
+        const Run& run = runs[r - 1];
+        if (run.is_ltr) {
+            for (std::size_t i = run.begin; i < run.end; ++i) {
+                append_gdi_safe(visual, cps[i]);
+            }
+            continue;
+        }
+        // RTL run: shape each contiguous Arabic word via shape_arabic(), mirror
+        // paired brackets, and reverse the chunk list right-to-left.
+        std::vector<std::wstring> chunks;
+        for (std::size_t i = run.begin; i < run.end;) {
+            if (is_strong_rtl(cps[i]) || is_combining_or_bidi_ctrl(cps[i])) {
+                std::size_t j = i + 1;
+                while (j < run.end &&
+                       (is_strong_rtl(cps[j]) || is_combining_or_bidi_ctrl(cps[j]))) {
+                    ++j;
+                }
+                const std::string word_u8 = encode_u8(cps, i, j);
+                chunks.push_back(sanitize_shaped_utf8(nf::ui::shape_arabic(word_u8)));
+                i = j;
+            } else {
+                std::wstring ch;
+                append_gdi_safe(ch, mirror_bracket(cps[i]));
+                if (!ch.empty()) {
+                    chunks.push_back(std::move(ch));
+                }
+                ++i;
+            }
+        }
+        for (std::size_t c = chunks.size(); c > 0; --c) {
+            visual += chunks[c - 1];
+        }
+    }
+    return visual;
+}
+
+inline bool has_visual_rtl_forms(const std::wstring& s) {
+    for (wchar_t ch : s) {
+        const unsigned int u = static_cast<unsigned int>(ch);
+        if ((u >= 0xFB50u && u <= 0xFDFFu) || (u >= 0xFE70u && u <= 0xFEFFu)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace gdi_bidi
+
+// Display-ready UTF-16 for HAND-DRAWN text: translate, shape Arabic to visual
+// order per line, and sanitize complex-script triggers so ExtTextOutW draws
+// clean left-to-right Presentation Forms without Uniscribe double-reversal.
+inline std::wstring shell_w_str(const std::string& logical_utf8) {
+    if (!nf::ui::needs_shaping(logical_utf8)) {
+        return widen(logical_utf8);
+    }
+    std::wstring out;
+    std::size_t begin = 0;
+    while (begin <= logical_utf8.size()) {
+        std::size_t end = logical_utf8.find('\n', begin);
+        if (end == std::string::npos) {
+            out += gdi_bidi::shape_line_for_gdi(logical_utf8.substr(begin));
+            break;
+        }
+        out += gdi_bidi::shape_line_for_gdi(logical_utf8.substr(begin, end - begin));
+        out.push_back(L'\n');
+        begin = end + 1;
+    }
+    return out;
 }
 
 inline std::wstring shell_w_key(const char* key) {
@@ -403,11 +763,15 @@ struct LauncherState {
     // already contains a ground, a controllable character and crates answers
     // "how do I make a game" better than an empty scene does.
     int selected_template = 3; // template gallery index (3 = ThirdPerson)
+    int project_dim = 0; // 0 = All/Both (2D+3D), 1 = 2D, 2 = 3D
     bool arabic_ui = false;  // Settings choice, returned in result
     // Thumbnails: engine screenshots shipped in Docs/images, resolved at
     // startup by walking up from the module path. Order: game, vehicle,
     // editor_en, editor_ar. Empty entries = missing file (gradient fallback).
     Thumb thumbs[4];
+    // The brand mark (Editor/resources/SANAD.png, or SANAD.png beside the exe
+    // in a package). Drawn in the sidebar header; null = text-only header.
+    Thumb logo;
     ULONG_PTR gdiplus_token = 0;
 };
 
@@ -827,7 +1191,15 @@ void draw_text_ext(HDC dc, const wchar_t* text, int x, int y, int w, int h, HFON
             tx = x + w - sz.cx;
         }
         const int ty = vcenter ? top + (h - sz.cy) / 2 : top;
-        ::ExtTextOutW(dc, tx, ty, eto, &clip, line.c_str(),
+        // Clip horizontally to the box, but never cut the glyph cell
+        // vertically. Amiri (the display face) has a tall ascent+descent, so a
+        // 26 pt heading's cell is taller than the layout boxes it is centred
+        // in; clipping to the box sliced off every descender - "مشروع" lost
+        // the tails of ر/و/ع and "projects yet" lost p/j/y. Horizontal
+        // overflow is still clipped (end-ellipsis already fits it to w).
+        const RECT line_clip{x, std::min(y, ty), x + w,
+                             std::max(y + h, ty + static_cast<int>(sz.cy))};
+        ::ExtTextOutW(dc, tx, ty, eto, &line_clip, line.c_str(),
                       static_cast<UINT>(line.size()), nullptr);
     };
 
@@ -837,14 +1209,27 @@ void draw_text_ext(HDC dc, const wchar_t* text, int x, int y, int w, int h, HFON
         if ((fmt & DT_END_ELLIPSIS) != 0 && sz.cx > w) {
             constexpr wchar_t kEllipsis = L'\u2026';
             const SIZE ell = extent(&kEllipsis, 1);
+            // In visual-order RTL strings, the start of the sentence is on the
+            // RIGHT (all.back()) and the end is on the LEFT (all.front()).
+            // Popping from the back truncated the FIRST Arabic words instead
+            // of the trailing ones.
+            const bool rtl_vis = gdi_bidi::has_visual_rtl_forms(all);
             while (!all.empty()) {
                 const SIZE cur = extent(all.c_str(), static_cast<int>(all.size()));
                 if (cur.cx + ell.cx <= w) {
                     break;
                 }
-                all.pop_back();
+                if (rtl_vis) {
+                    all.erase(0, 1);
+                } else {
+                    all.pop_back();
+                }
             }
-            all.push_back(kEllipsis);
+            if (rtl_vis) {
+                all.insert(0, 1, kEllipsis);
+            } else {
+                all.push_back(kEllipsis);
+            }
         }
         draw_line(all, y, (fmt & DT_VCENTER) != 0);
         ::RestoreDC(dc, saved);
@@ -852,7 +1237,9 @@ void draw_text_ext(HDC dc, const wchar_t* text, int x, int y, int w, int h, HFON
     }
 
     // Word wrap: split paragraphs on newlines, then words on spaces. A single
-    // word wider than the box is drawn clipped rather than dropped.
+    // word wider than the box is drawn clipped rather than dropped. Visual-RTL
+    // paragraphs carry their first reading-order words on the RIGHT end, so
+    // wrap them right-to-left to keep top-to-bottom Arabic reading order.
     const SIZE metrics = extent(L"Ag", 2);
     const int line_h = metrics.cy > 0 ? metrics.cy : h;
     int top = y;
@@ -863,32 +1250,63 @@ void draw_text_ext(HDC dc, const wchar_t* text, int x, int y, int w, int h, HFON
             ++end;
         }
         const std::wstring paragraph = all.substr(begin, end - begin);
+        const bool rtl_para = gdi_bidi::has_visual_rtl_forms(paragraph);
         std::wstring line;
-        std::size_t i = 0;
-        while (i < paragraph.size()) {
-            while (i < paragraph.size() && paragraph[i] == L' ') {
-                ++i;
-            }
-            const std::size_t word_begin = i;
-            while (i < paragraph.size() && paragraph[i] != L' ') {
-                ++i;
-            }
-            if (word_begin == i) {
-                break;
-            }
-            const std::wstring word = paragraph.substr(word_begin, i - word_begin);
-            const std::wstring candidate = line.empty() ? word : (line + L" " + word);
-            const SIZE candidate_size =
-                extent(candidate.c_str(), static_cast<int>(candidate.size()));
-            if (!line.empty() && candidate_size.cx > w) {
-                draw_line(line, top, false);
-                top += line_h;
-                line = word;
-                if (top >= y + h) {
+        if (rtl_para) {
+            std::size_t j = paragraph.size();
+            while (j > 0) {
+                while (j > 0 && paragraph[j - 1] == L' ') {
+                    --j;
+                }
+                const std::size_t word_end = j;
+                while (j > 0 && paragraph[j - 1] != L' ') {
+                    --j;
+                }
+                if (j == word_end) {
                     break;
                 }
-            } else {
-                line = candidate;
+                const std::wstring word = paragraph.substr(j, word_end - j);
+                const std::wstring candidate = line.empty() ? word : (word + L" " + line);
+                const SIZE candidate_size =
+                    extent(candidate.c_str(), static_cast<int>(candidate.size()));
+                if (!line.empty() && candidate_size.cx > w) {
+                    draw_line(line, top, false);
+                    top += line_h;
+                    line = word;
+                    if (top >= y + h) {
+                        break;
+                    }
+                } else {
+                    line = candidate;
+                }
+            }
+        } else {
+            std::size_t i = 0;
+            while (i < paragraph.size()) {
+                while (i < paragraph.size() && paragraph[i] == L' ') {
+                    ++i;
+                }
+                const std::size_t word_begin = i;
+                while (i < paragraph.size() && paragraph[i] != L' ') {
+                    ++i;
+                }
+                if (word_begin == i) {
+                    break;
+                }
+                const std::wstring word = paragraph.substr(word_begin, i - word_begin);
+                const std::wstring candidate = line.empty() ? word : (line + L" " + word);
+                const SIZE candidate_size =
+                    extent(candidate.c_str(), static_cast<int>(candidate.size()));
+                if (!line.empty() && candidate_size.cx > w) {
+                    draw_line(line, top, false);
+                    top += line_h;
+                    line = word;
+                    if (top >= y + h) {
+                        break;
+                    }
+                } else {
+                    line = candidate;
+                }
             }
         }
         if (!line.empty() && top < y + h) {
@@ -1109,6 +1527,55 @@ HBITMAP load_thumb(const std::wstring& path, int& out_w, int& out_h) {
     out_w = static_cast<int>(w);
     out_h = static_cast<int>(h);
     return hbmp;
+}
+
+/// Locate the brand mark. A package ships it beside the exe (SANAD.png, the
+/// dist layout) or under Resources/; a source-tree run finds the committed
+/// Editor/resources/SANAD.png by walking up. Empty when absent.
+std::wstring find_logo_image() {
+    wchar_t mod[MAX_PATH * 2] = {};
+    const DWORD n = ::GetModuleFileNameW(nullptr, mod, MAX_PATH * 2);
+    if (n == 0 || n >= MAX_PATH * 2) {
+        return {};
+    }
+    std::filesystem::path dir = std::filesystem::path(mod).parent_path();
+    for (int i = 0; i < 8; ++i) {
+        std::error_code ec;
+        for (const std::filesystem::path& cand :
+             {dir / "SANAD.png", dir / "Resources" / "SANAD.png",
+              dir / "Editor" / "resources" / "SANAD.png"}) {
+            if (std::filesystem::exists(cand, ec)) {
+                return cand.wstring();
+            }
+        }
+        if (!dir.has_parent_path() || dir.parent_path() == dir) {
+            break;
+        }
+        dir = dir.parent_path();
+    }
+    return {};
+}
+
+/// Draws the brand mark into a rounded square. Unlike paint_thumb this keeps
+/// the whole image (no crop, no title-bar skip) and filters with HALFTONE, so
+/// a 256 px logo shrunk to ~36 px stays smooth instead of aliased.
+void paint_logo(HDC dc, const Thumb& th, int x, int y, int s, int radius) {
+    if (th.bmp == nullptr || th.w <= 0 || th.h <= 0 || s <= 0) {
+        return;
+    }
+    HDC mem = ::CreateCompatibleDC(dc);
+    HGDIOBJ old = ::SelectObject(mem, th.bmp);
+    const int saved = ::SaveDC(dc);
+    HRGN rgn = ::CreateRoundRectRgn(x, y, x + s + 1, y + s + 1, radius, radius);
+    ::SelectClipRgn(dc, rgn);
+    ::SetStretchBltMode(dc, HALFTONE);
+    ::SetBrushOrgEx(dc, 0, 0, nullptr);
+    ::StretchBlt(dc, x, y, s, s, mem, 0, 0, th.w, th.h, SRCCOPY);
+    ::RestoreDC(dc, saved);
+    ::DeleteObject(rgn);
+    ::SelectObject(mem, old);
+    ::DeleteDC(mem);
+    frame_round(dc, {x, y, x + s, y + s}, theme::border, radius);
 }
 
 /// Human "edited" stamp from an .nfproj mtime ("2 hours ago"). Pure string
@@ -1382,16 +1849,27 @@ void paint_sidebar(HDC dc, LauncherState* st, int W, int H) {
     ::SelectObject(dc, op);
     ::DeleteObject(sep);
 
-    // Brand: gear dot + Arabic wordmark, exactly like the product mockups.
-    // The wordmark is already Arabic (shaped with everything else); the
-    // tagline translates with the shell.
-    paint_text(dc, L"\u2699", sx + S(st, 16), S(st, 14), S(st, 28), S(st, 28), st->font_title,
-              theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    // Brand: the real logo + Arabic wordmark + tagline. The mark used to be a
+    // "\u2699" gear glyph drawn at a fixed LEFT offset in the Amiri face: Amiri
+    // has no such glyph (it fell back at wrong metrics and clipped), and in the
+    // RTL layout it stayed on the left while the wordmark moved right, so the
+    // header read as a broken symbol detached from the name. Now the mark is
+    // the brand PNG, docked on the bar's outer side with the text beside it
+    // (mirrored for RTL like every other row). No PNG -> text-only header.
+    const int logo_s = S(st, 40);
+    const bool has_logo = st->logo.bmp != nullptr;
+    const int logo_x = g_shell_rtl ? (sx + sw - S(st, 16) - logo_s) : (sx + S(st, 16));
+    if (has_logo) {
+        paint_logo(dc, st->logo, logo_x, S(st, 14), logo_s, S(st, 10));
+    }
+    const int text_gap = has_logo ? (logo_s + S(st, 26)) : S(st, 16);
+    const int text_x = g_shell_rtl ? (sx + S(st, 12)) : (sx + text_gap);
+    const int text_w = sw - text_gap - S(st, 12);
     const std::wstring brand = shell_w_str("\xD8\xB3\xD9\x86\xD8\xAF"); // "سند"
-    paint_text(dc, brand.c_str(), sx + S(st, 46), S(st, 12), S(st, 120), S(st, 26),
-              st->font_title, theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    paint_text_key(dc, "sh_tagline", sx + S(st, 46), S(st, 36), S(st, 120), S(st, 16),
-                   st->font_small, theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    paint_text(dc, brand.c_str(), text_x, S(st, 10), text_w, S(st, 28), st->font_title,
+               theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    paint_text_key(dc, "sh_tagline", text_x, S(st, 38), text_w, S(st, 16), st->font_small,
+                   theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     for (int i = 0; i < 6; ++i) {
         const int iy = S(st, 84) + i * S(st, 42);
@@ -1443,6 +1921,8 @@ struct Hit {
         ProjectCard,    // index = filtered recent index
         FeaturedOpen,   // open the featured (first filtered) project
         FeaturedFolder, // reveal it in Explorer
+        DimTab,         // index = 0 (All/Both), 1 (2D), 2 (3D)
+        DimBtn,         // index = 0 (All/Both), 1 (2D), 2 (3D)
         TemplateCard,   // index = template index
         Create,         // create project from the form
         Browse,         // location browse button
@@ -1546,18 +2026,94 @@ void paint_project_card(HDC dc, LauncherState* st, const std::string& path, int 
 // on the Projects page (real game art); template/store art does not exist
 // yet, and editor-UI screenshots as card art read as broken UI, so these
 // pages get clean drawn cards instead.
-void paint_mono_card(HDC dc, LauncherState* st, int x, int y, int w, int h, wchar_t glyph,
-                     bool dim) {
+// Template card banner: subtle gradient + crisp geometric illustration per
+// template index (0=Nature, 1=Platformer, 2=Arena FPS, 3=ThirdPerson,
+// 4=Starter Scene, 5=Marine). Previously this drew `wn[0]`, which in RTL was
+// the LAST letter of the shaped title rather than an initial, and read as
+// random isolated letters floating in empty boxes.
+void paint_template_art(HDC dc, LauncherState* st, int x, int y, int w, int h, int tpl_idx,
+                        bool dim) {
     for (int i = 0; i < h; ++i) {
         const int t = (h > 1) ? (i * 255 / (h - 1)) : 0;
-        HBRUSH br = ::CreateSolidBrush(RGB(34 + t / 10, 34 + t / 10, 46 + t / 8));
+        HBRUSH br = ::CreateSolidBrush(RGB(28 + t / 12, 32 + t / 10, 44 + t / 7));
         RECT row{x, y + i, x + w, y + i + 1};
         ::FillRect(dc, &row, br);
         ::DeleteObject(br);
     }
-    wchar_t g[2] = {glyph, L'\0'};
-    paint_text(dc, g, x, y + h / 2 - S(st, 30), w, S(st, 60), st->font_big,
-              dim ? RGB(120, 120, 140) : theme::accent, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    const COLORREF col = dim ? RGB(105, 112, 128) : theme::accent;
+    const int cx = x + w / 2;
+    const int cy = y + h / 2;
+    const int r = std::min(w, h) * 28 / 100;
+    HPEN pen = ::CreatePen(PS_SOLID, std::max(2, S(st, 2)), col);
+    HGDIOBJ old_pen = ::SelectObject(dc, pen);
+    HGDIOBJ old_br = ::SelectObject(dc, ::GetStockObject(NULL_BRUSH));
+    switch (tpl_idx) {
+        case 0: { // Nature: twin mountain peaks + horizon line
+            POINT p1[4] = {{cx - r, cy + r * 2 / 3},
+                           {cx - r / 4, cy - r * 2 / 3},
+                           {cx + r / 2, cy + r * 2 / 3},
+                           {cx - r, cy + r * 2 / 3}};
+            POINT p2[4] = {{cx - r / 6, cy + r * 2 / 3},
+                           {cx + r / 2, cy - r / 3},
+                           {cx + r, cy + r * 2 / 3},
+                           {cx - r / 6, cy + r * 2 / 3}};
+            ::Polyline(dc, p1, 4);
+            ::Polyline(dc, p2, 4);
+            break;
+        }
+        case 1: { // Platformer: three ascending platform blocks
+            ::RoundRect(dc, cx - r, cy + r / 3, cx - r / 4, cy + r * 2 / 3, S(st, 3), S(st, 3));
+            ::RoundRect(dc, cx - r / 3, cy - r / 6, cx + r / 3, cy + r / 6, S(st, 3), S(st, 3));
+            ::RoundRect(dc, cx + r / 4, cy - r * 2 / 3, cx + r, cy - r / 3, S(st, 3), S(st, 3));
+            break;
+        }
+        case 2: { // FPS Arena: crosshair reticle
+            ::Ellipse(dc, cx - r * 2 / 3, cy - r * 2 / 3, cx + r * 2 / 3, cy + r * 2 / 3);
+            ::MoveToEx(dc, cx - r, cy, nullptr);
+            ::LineTo(dc, cx - r / 4, cy);
+            ::MoveToEx(dc, cx + r / 4, cy, nullptr);
+            ::LineTo(dc, cx + r, cy);
+            ::MoveToEx(dc, cx, cy - r, nullptr);
+            ::LineTo(dc, cx, cy - r / 4);
+            ::MoveToEx(dc, cx, cy + r / 4, nullptr);
+            ::LineTo(dc, cx, cy + r);
+            break;
+        }
+        case 3: { // Third-Person: character silhouette (head + shoulders + orbit arc)
+            ::Ellipse(dc, cx - r / 3, cy - r * 3 / 4, cx + r / 3, cy - r / 12);
+            ::RoundRect(dc, cx - r * 2 / 3, cy, cx + r * 2 / 3, cy + r * 3 / 4, S(st, 6), S(st, 6));
+            break;
+        }
+        case 4: { // Starter Scene: isometric 3D cube
+            const int dx = r * 4 / 5;
+            const int dy = r * 2 / 5;
+            POINT top[5] = {{cx, cy - r}, {cx + dx, cy - r + dy}, {cx, cy - r + dy * 2},
+                            {cx - dx, cy - r + dy}, {cx, cy - r}};
+            ::Polyline(dc, top, 5);
+            ::MoveToEx(dc, cx - dx, cy - r + dy, nullptr);
+            ::LineTo(dc, cx - dx, cy + r - dy);
+            ::LineTo(dc, cx, cy + r);
+            ::LineTo(dc, cx + dx, cy + r - dy);
+            ::LineTo(dc, cx + dx, cy - r + dy);
+            ::MoveToEx(dc, cx, cy - r + dy * 2, nullptr);
+            ::LineTo(dc, cx, cy + r);
+            break;
+        }
+        default: { // Marine: two wave arcs
+            for (int row = -1; row <= 1; row += 2) {
+                const int wy = cy + row * (r / 3);
+                ::MoveToEx(dc, cx - r, wy, nullptr);
+                ::LineTo(dc, cx - r / 2, wy - r / 4);
+                ::LineTo(dc, cx, wy);
+                ::LineTo(dc, cx + r / 2, wy + r / 4);
+                ::LineTo(dc, cx + r, wy);
+            }
+            break;
+        }
+    }
+    ::SelectObject(dc, old_br);
+    ::SelectObject(dc, old_pen);
+    ::DeleteObject(pen);
 }
 void paint_shell_btn(HDC dc, LauncherState* st, int x, int y, int w, int h, const wchar_t* label,
                      bool primary, bool hov) {
@@ -1599,8 +2155,43 @@ inline void card_x_rect(const LauncherState* st, const RECT& cell, RECT& out) {
 
 // Disabled card overlay ribbon ("soon").
 void paint_soon(HDC dc, LauncherState* st, int x, int y, int w, int h) {
-    paint_text_key(dc, "sh_soon", x, y + h / 2 - S(st, 12), w, S(st, 24), st->font_body,
+    const int bh = S(st, 22);
+    const int by = y + (h - bh) / 2;
+    paint_round(dc, x, by, w, bh, S(st, 6), theme::bg, theme::border);
+    paint_text_key(dc, "sh_soon", x + S(st, 4), by, w - S(st, 8), bh, st->font_small,
                    theme::text_dim, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+}
+
+// Dimension badge on template cards (2D, 3D, or 2D / 3D).
+void paint_dim_badge(HDC dc, LauncherState* st, int x, int y, int tpl_idx) {
+    const int bh = S(st, 20);
+    const int bw = S(st, (tpl_idx == 4) ? 58 : 42);
+    COLORREF bg_col = RGB(24, 32, 48);
+    COLORREF border_col = RGB(59, 130, 246);
+    COLORREF text_col = RGB(96, 165, 250);
+    const wchar_t* label = L"3D";
+
+    if (tpl_idx == 1) { // Platformer2D
+        bg_col = RGB(16, 44, 36);
+        border_col = RGB(16, 185, 129);
+        text_col = RGB(52, 211, 153);
+        label = L"2D";
+    } else if (tpl_idx == 4) { // Default / Starter (2D / 3D Hybrid)
+        bg_col = RGB(38, 20, 68);
+        border_col = RGB(139, 92, 246);
+        text_col = RGB(192, 132, 252);
+        label = L"2D / 3D";
+    }
+
+    paint_round(dc, x, y, bw, bh, S(st, 5), bg_col, border_col);
+    HFONT old_font = static_cast<HFONT>(::SelectObject(dc, st->font_small));
+    COLORREF old_txt = ::SetTextColor(dc, text_col);
+    const int old_bk = ::SetBkMode(dc, TRANSPARENT);
+    RECT rc{x, y, x + bw, y + bh};
+    ::DrawTextW(dc, label, -1, &rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    ::SetBkMode(dc, old_bk);
+    ::SetTextColor(dc, old_txt);
+    ::SelectObject(dc, old_font);
 }
 
 // Generic info card: optional monogram glyph, title, two dim lines, optional
@@ -1634,18 +2225,22 @@ void paint_info_card(HDC dc, LauncherState* st, int x, int y, int w, int h, cons
         paint_text(dc, glyph, gx, y + yo + S(st, 16), gw, S(st, 44), st->font_sym, fg,
                   DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     }
-    const int tx = g_shell_rtl ? (x + S(st, 16)) : (x + S(st, 68));
-    const int tw = w - S(st, 84);
+    const int soon_pad = disabled ? S(st, 62) : 0;
+    const int tx = g_shell_rtl ? (x + S(st, 16) + soon_pad) : (x + S(st, 68));
+    const int tw = w - S(st, 84) - soon_pad;
     paint_text(dc, title, tx, y + yo + S(st, 12), tw, S(st, 22), st->font_body, fg,
-              DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    paint_text(dc, line1, tx, y + yo + S(st, 40), tw, S(st, 18), st->font_small, dim,
-              DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    if (line2 != nullptr) {
+              DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    if (line2 == nullptr) {
+        paint_text(dc, line1, tx, y + yo + S(st, 40), tw, S(st, 38), st->font_small, dim,
+                  DT_LEFT | DT_WORDBREAK);
+    } else {
+        paint_text(dc, line1, tx, y + yo + S(st, 40), tw, S(st, 18), st->font_small, dim,
+                  DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         paint_text(dc, line2, tx, y + S(st, 62), tw, S(st, 18), st->font_small, dim,
-                  DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                  DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     }
     if (disabled) {
-        paint_soon(dc, st, g_shell_rtl ? (x + S(st, 8)) : (x + w - S(st, 70)), y, S(st, 62), h);
+        paint_soon(dc, st, g_shell_rtl ? (x + S(st, 10)) : (x + w - S(st, 68)), y, S(st, 58), h);
     }
     frame_round(dc, {x, y, x + w, y + h}, hov && !disabled ? theme::accent : theme::border,
                 S(st, 10));
@@ -1702,10 +2297,11 @@ void paint_page_head(HDC dc, LauncherState* st, int W, const char* title_key, co
     // with marks overflow tight boxes and visually merge with the subtitle.
     const int x = content_x(st);
     const int cw = content_w(st, W);
-    paint_text_key(dc, title_key, x, S(st, 24), cw, S(st, 36), st->font_big, theme::text,
+    const int title_y = (sub_key != nullptr) ? S(st, 16) : S(st, 22);
+    paint_text_key(dc, title_key, x, title_y, cw, S(st, 36), st->font_big, theme::text,
                    DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     if (sub_key != nullptr) {
-        paint_text_key(dc, sub_key, x, S(st, 64), cw, S(st, 20), st->font_small,
+        paint_text_key(dc, sub_key, x, S(st, 68), cw, S(st, 20), st->font_small,
                        theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
     paint_head_rule(dc, st, W); // every page head, one place
@@ -1947,7 +2543,9 @@ void paint_projects(HDC dc, LauncherState* st, int W, int H, const ProjectsLayou
 
 // --- new project page -------------------------------------------------------
 struct NewLayout {
+    RECT dim_tabs[3]; // 0 = All (2D+3D), 1 = 2D, 2 = 3D
     RECT cards[6];
+    RECT dim_btns[3]; // In project setup form: 0 = All/Hybrid, 1 = 2D, 2 = 3D
     RECT name_edit{0, 0, 0, 0};
     RECT loc_edit{0, 0, 0, 0};
     RECT browse{0, 0, 0, 0};
@@ -1960,6 +2558,24 @@ NewLayout layout_new(const LauncherState* st, int W) {
     NewLayout L{};
     const int x = content_x_ltr(st);
     const int cw = content_w(st, W);
+
+    // Dimension filter tabs at the top (All / 2D / 3D)
+    // Placed on the opposite side of the page title (like Projects buttons on the header row)
+    const int tab_h = S(st, 32);
+    const int tab_y = S(st, 26);
+    const int tw0 = S(st, 190);
+    const int tw1 = S(st, 140);
+    const int tw2 = S(st, 140);
+    const int tgap = S(st, 8);
+    const int total_tw = tw0 + tw1 + tw2 + tgap * 2;
+    const int tab_start_x = x + cw - total_tw;
+    L.dim_tabs[0] = {tab_start_x, tab_y, tab_start_x + tw0, tab_y + tab_h};
+    L.dim_tabs[1] = {tab_start_x + tw0 + tgap, tab_y, tab_start_x + tw0 + tgap + tw1, tab_y + tab_h};
+    L.dim_tabs[2] = {tab_start_x + tw0 + tgap + tw1 + tgap, tab_y, tab_start_x + total_tw, tab_y + tab_h};
+    mirror_rect(st, W, L.dim_tabs[0]);
+    mirror_rect(st, W, L.dim_tabs[1]);
+    mirror_rect(st, W, L.dim_tabs[2]);
+
     const int cols = grid_cols(st, W, 1), gap = S(st, 16);
     const int gw = (cw - gap * (cols - 1)) / cols;
     const int gh = S(st, 150);
@@ -1970,46 +2586,36 @@ NewLayout layout_new(const LauncherState* st, int W) {
         L.cards[i] = {x + c * (gw + gap), gy + r * (gh + gap), x + c * (gw + gap) + gw,
                       gy + r * (gh + gap) + gh};
         rows = std::max(rows, r + 1);
-        // One transform for origin + column order (see grid_cell): a bare
-        // column swap would keep the LTR origin and slide the row under the
-        // RTL sidebar.
         mirror_rect(st, W, L.cards[i]);
     }
-    // The form sits BELOW the last card row, not below a fixed two rows: on a
-    // narrow window the grid reflows to 3+ rows and a hardcoded two-row offset
-    // dropped the name/location fields straight on top of the third row of
-    // cards. Deriving the offset from the actual row count keeps the fields
-    // under the grid at every width.
     const int fy = gy + rows * (gh + gap) + S(st, 24);
-    // On a narrow window the fixed label + Browse widths can push a field's
-    // right edge past its left edge (negative width), and Win32 renders an
-    // inverted rect as a full-width box that spills over its neighbours — the
-    // overlap seen when the launcher is shrunk. Clamp every field to a minimum
-    // usable width and let the fixed chrome (label, Browse) shrink first.
     int label_w = S(st, 130);
     int bw = S(st, 110);
-    // Space left of Browse after the label column. If the window is too narrow
-    // for label+field+Browse side by side, shrink the label (never below 0)
-    // so the field keeps a usable width instead of going negative.
     const int avail = cw - label_w - S(st, 10) - bw - S(st, 10);
     if (avail < S(st, 120)) {
         label_w = std::max(0, cw - bw - S(st, 10) - S(st, 120));
         bw = std::max(S(st, 60), bw);
     }
     const int field_x = x + label_w + S(st, 10);
-    // Fields run to the right margin (same edge the Cancel button uses) —
-    // stopping them 220 px short left a dead strip next to Browse.
     L.name_edit = {field_x, fy, x + cw, fy + S(st, 28)};
     L.loc_edit = {field_x, fy + S(st, 38), x + cw - bw - S(st, 10), fy + S(st, 66)};
-    // Final clamp: never emit an inverted rect (right <= left).
     if (L.loc_edit.right <= L.loc_edit.left) L.loc_edit.right = L.loc_edit.left + S(st, 120);
     if (L.name_edit.right <= L.name_edit.left) L.name_edit.right = L.name_edit.left + S(st, 120);
     L.browse = {x + cw - bw, fy + S(st, 38), x + cw, fy + S(st, 66)};
-    L.create = {x + cw - S(st, 300), fy + S(st, 110), x + cw - S(st, 150), fy + S(st, 142)};
-    L.cancel = {x + cw - S(st, 140), fy + S(st, 110), x + cw, fy + S(st, 142)};
+
+    // Dimension toggle pills in project setup form
+    const int dim_fy = fy + S(st, 76);
+    const int db_w = S(st, 140);
+    L.dim_btns[1] = {field_x, dim_fy, field_x + db_w, dim_fy + S(st, 26)};
+    L.dim_btns[2] = {field_x + db_w + S(st, 8), dim_fy, field_x + db_w * 2 + S(st, 8), dim_fy + S(st, 26)};
+    L.dim_btns[0] = {field_x + (db_w + S(st, 8)) * 2, dim_fy, field_x + (db_w + S(st, 8)) * 2 + db_w, dim_fy + S(st, 26)};
+    mirror_rect(st, W, L.dim_btns[0]);
+    mirror_rect(st, W, L.dim_btns[1]);
+    mirror_rect(st, W, L.dim_btns[2]);
+
+    L.create = {x + cw - S(st, 300), fy + S(st, 148), x + cw - S(st, 150), fy + S(st, 180)};
+    L.cancel = {x + cw - S(st, 140), fy + S(st, 148), x + cw, fy + S(st, 180)};
     L.label_w = label_w;
-    // RTL mirror: label column swaps with the fields, buttons flip to the far
-    // edge. Same rects hit_test consumes, so clicks follow the paint.
     mirror_rect(st, W, L.name_edit);
     mirror_rect(st, W, L.loc_edit);
     mirror_rect(st, W, L.browse);
@@ -2020,6 +2626,22 @@ NewLayout layout_new(const LauncherState* st, int W) {
 
 void paint_new(HDC dc, LauncherState* st, int W, const NewLayout& L) {
     paint_page_head(dc, st, W, "sh_new_title", nullptr);
+
+    // Dimension filter tabs at the top (All / 2D / 3D)
+    static const char* const kDimTabKeys[3] = {"sh_dim_all", "sh_dim_2d", "sh_dim_3d"};
+    for (int t = 0; t < 3; ++t) {
+        const RECT& r = L.dim_tabs[t];
+        const int rw = r.right - r.left, rh = r.bottom - r.top;
+        const bool active = (st->project_dim == t);
+        const bool hov = (st->hover_btn == (20 + t));
+        paint_round(dc, r.left, r.top, rw, rh, S(st, 6),
+                    active ? theme::accent : (hov ? theme::surface_hi : theme::surface),
+                    active ? theme::accent : (hov ? theme::accent : theme::border));
+        paint_text_key(dc, kDimTabKeys[t], r.left + S(st, 4), r.top, rw - S(st, 8), rh,
+                       st->font_btn, active ? theme::on_accent : (hov ? theme::accent : theme::text),
+                       DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    }
+
     for (int i = 0; i < 6; ++i) {
         const RECT& c = L.cards[i];
         const int cw = c.right - c.left, ch = c.bottom - c.top;
@@ -2027,28 +2649,34 @@ void paint_new(HDC dc, LauncherState* st, int W, const NewLayout& L) {
         const bool hov = st->hover_card == i && en;
         paint_round(dc, c.left, c.top, cw, ch, S(st, 10), hov ? theme::surface_hi : theme::surface,
                     hov ? theme::accent : theme::border);
-        // Art area above a two-line title strip (name + blurb — titles never
-        // sit on the image).
         const int strip = S(st, 52);
         const std::wstring wn = shell_w_key(kTemplates[i].name_key);
         const std::wstring wd = shell_w_key(kTemplates[i].desc_key);
-        paint_mono_card(dc, st, c.left + 1, c.top + 1, cw - 2, ch - strip - 1, wn[0], !en);
+        paint_template_art(dc, st, c.left + 1, c.top + 1, cw - 2, ch - strip - 1, i, !en);
         HBRUSH sb = ::CreateSolidBrush(hov ? theme::surface_hi : theme::surface);
         RECT sr{c.left + 1, c.bottom - strip, c.right - 1, c.bottom - 1};
         ::FillRect(dc, &sr, sb);
         ::DeleteObject(sb);
         paint_text(dc, wn.c_str(), c.left + S(st, 10), c.bottom - strip, cw - S(st, 20),
                    S(st, 24), st->font_body, en ? theme::text : theme::text_dim,
-                   DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                   DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         paint_text(dc, wd.c_str(), c.left + S(st, 10), c.bottom - strip + S(st, 24),
                    cw - S(st, 20), S(st, 20), st->font_small, theme::text_dim,
-                   DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                   DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         if (!en) {
             paint_soon(dc, st, g_shell_rtl ? (c.left + S(st, 8)) : (c.right - S(st, 70)),
                        c.top + S(st, 6), S(st, 62), S(st, 24));
         }
+        // Dimension badge in top corner
+        {
+            const int bw = S(st, (i == 4) ? 58 : 42);
+            const int bx = g_shell_rtl ? (c.right - bw - S(st, 8)) : (c.left + S(st, 8));
+            paint_dim_badge(dc, st, bx, c.top + S(st, 6), i);
+        }
+
         if (st->selected_template == i && en) {
-            frame_round(dc, c, theme::accent, S(st, 10), 2);
+            const COLORREF frame_col = (i == 1) ? RGB(16, 185, 129) : theme::accent;
+            frame_round(dc, c, frame_col, S(st, 10), 2);
         } else {
             frame_round(dc, c, theme::border, S(st, 10));
         }
@@ -2056,30 +2684,48 @@ void paint_new(HDC dc, LauncherState* st, int W, const NewLayout& L) {
     const int x = content_x(st);
     const int cw = content_w(st, W);
     const int fy = L.name_edit.top;
-    paint_text_key(dc, "sh_setup", x, fy - S(st, 30), S(st, 300), S(st, 22), st->font_body,
+    paint_text_key(dc, "sh_setup", x, fy - S(st, 30), cw, S(st, 22), st->font_body,
                    theme::text, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    // Label column mirrors with the fields (right side in RTL). Use the same
-    // label width the layout computed (it shrinks on a narrow window), so the
-    // labels and their fields stay aligned at every size.
     const int lab_w = L.label_w;
     const int lab_x = g_shell_rtl ? (x + cw - lab_w) : x;
     paint_text_key(dc, "sh_name_label", lab_x, L.name_edit.top, lab_w, S(st, 28), st->font_body,
                    theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     paint_text_key(dc, "sh_loc_label", lab_x, L.loc_edit.top, lab_w, S(st, 28), st->font_body,
                    theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    paint_text_key(dc, "sh_renderer_label", lab_x, L.loc_edit.top + S(st, 38), lab_w, S(st, 20),
+
+    // Dimension Choice Buttons in setup form
+    const int dim_fy = fy + S(st, 76);
+    paint_text_key(dc, "sh_dim_label", lab_x, dim_fy, lab_w, S(st, 26), st->font_body,
+                   theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    static const int kDimBtnIdx[3] = {1, 2, 0}; // 2D, 3D, All
+    static const char* const kDimBtnKeys[3] = {"sh_dim_opt_2d", "sh_dim_opt_3d", "sh_dim_opt_all"};
+    for (int b = 0; b < 3; ++b) {
+        const int d_idx = kDimBtnIdx[b];
+        const RECT& br = L.dim_btns[d_idx];
+        const int bw = br.right - br.left, bh = br.bottom - br.top;
+        const bool active = (st->project_dim == d_idx);
+        const bool hov = (st->hover_btn == (30 + d_idx));
+        COLORREF act_col = (d_idx == 1) ? RGB(16, 185, 129) : ((d_idx == 2) ? RGB(59, 130, 246) : RGB(139, 92, 246));
+        paint_round(dc, br.left, br.top, bw, bh, S(st, 6),
+                    active ? act_col : (hov ? theme::surface_hi : theme::surface),
+                    active ? act_col : (hov ? theme::accent : theme::border));
+        paint_text_key(dc, kDimBtnKeys[b], br.left + S(st, 4), br.top, bw - S(st, 8), bh,
+                       st->font_small, active ? theme::on_accent : (hov ? theme::accent : theme::text),
+                       DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    // Target Renderer (moved down below dimension buttons)
+    const int rend_y = dim_fy + S(st, 38);
+    paint_text_key(dc, "sh_renderer_label", lab_x, rend_y, lab_w, S(st, 20),
                    st->font_body, theme::text_dim, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    // Renderer value: never a fixed 420 px — on a narrow window that width
-    // runs past the content edge and overlaps the next column. Bound it to the
-    // real space left of the field (name/loc edit share the same right edge),
-    // so it always ends where the input box ends.
-    const int value_right = L.name_edit.right; // same right edge as the fields
+    const int value_right = L.name_edit.right;
     const int value_w = (value_right > L.loc_edit.left)
                             ? (value_right - L.loc_edit.left)
                             : S(st, 120);
-    paint_text_key(dc, "sh_renderer_value", L.loc_edit.left, L.loc_edit.top + S(st, 38),
+    paint_text_key(dc, "sh_renderer_value", L.loc_edit.left, rend_y,
                    value_w, S(st, 20), st->font_small, theme::text,
                    DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+
     paint_shell_btn(dc, st, L.browse.left, L.browse.top, L.browse.right - L.browse.left,
                     L.browse.bottom - L.browse.top, shell_w_key("sh_btn_browse").c_str(), false,
                     st->hover_btn == 11);
@@ -2103,8 +2749,8 @@ constexpr LearnCard kLearn[6] = {
     {L"\U0001F9ED", "sh_learn_script", "sh_learn_script_sub", false},
     {L"\U0001F4E6", "sh_learn_pipeline", "sh_learn_pipeline_sub", true},
     {L"</>", "sh_learn_api", "sh_learn_api_sub", true},
-    {L"\u25EF", "sh_learn_physics", "sh_learn_physics_sub", true},
-    {L"\u25C8", "sh_learn_gfx", "sh_learn_gfx_sub", true},
+    {L"\u269B", "sh_learn_physics", "sh_learn_physics_sub", true},
+    {L"\u2728", "sh_learn_gfx", "sh_learn_gfx_sub", true},
 };
 
 constexpr LearnCard kHelp[6] = {
@@ -2262,7 +2908,8 @@ void paint_store(HDC dc, LauncherState* st, int W) {
         paint_round(dc, cx, cy, gw, gh, S(st, 10), theme::surface, theme::border);
         // Inset by 1 px so the square gradient never bleeds over the card's
         // rounded top corners before the border is re-framed on top.
-        paint_mono_card(dc, st, cx + 1, cy + 1, gw - 2, gh - S(st, 53), glyphs[i], true);
+        paint_template_art(dc, st, cx + 1, cy + 1, gw - 2, gh - S(st, 53), i, true);
+        (void)glyphs;
         paint_text_key(dc, cat_keys[i], cx + S(st, 12), cy + gh - S(st, 42), gw - S(st, 24),
                        S(st, 20), st->font_body, theme::text_dim,
                        DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -2401,6 +3048,18 @@ Hit hit_test(LauncherState* st, int x, int y, int W, int H) {
     }
     if (st->page == ShellPage::NewProject) {
         NewLayout L = layout_new(st, W);
+        for (int i = 0; i < 3; ++i) {
+            if (in_rect(L.dim_tabs[i], x, y)) {
+                h.kind = Hit::Kind::DimTab;
+                h.index = i;
+                return h;
+            }
+            if (in_rect(L.dim_btns[i], x, y)) {
+                h.kind = Hit::Kind::DimBtn;
+                h.index = i;
+                return h;
+            }
+        }
         for (int i = 0; i < 6; ++i) {
             if (kTemplates[i].enabled && in_rect(L.cards[i], x, y)) {
                 h.kind = Hit::Kind::TemplateCard;
@@ -2766,8 +3425,27 @@ void do_action(HWND hwnd, LauncherState* st, const Hit& h) {
             }
             return;
         }
+        case Hit::Kind::DimTab:
+        case Hit::Kind::DimBtn:
+            st->project_dim = h.index;
+            if (h.index == 1) { // 2D
+                st->selected_template = 1; // Platformer2D
+            } else if (h.index == 2) { // 3D
+                if (st->selected_template == 1) {
+                    st->selected_template = 3; // ThirdPerson
+                }
+            }
+            ::InvalidateRect(hwnd, nullptr, TRUE);
+            return;
         case Hit::Kind::TemplateCard:
             st->selected_template = h.index;
+            if (h.index == 1) {
+                st->project_dim = 1; // 2D
+            } else if (h.index == 2 || h.index == 3) {
+                st->project_dim = 2; // 3D
+            } else if (h.index == 4) {
+                st->project_dim = 0; // Hybrid
+            }
             ::InvalidateRect(hwnd, nullptr, TRUE);
             return;
         case Hit::Kind::Browse: {
@@ -3011,6 +3689,10 @@ LRESULT CALLBACK shell_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                        h.kind == shell::Hit::Kind::LearnCard ||
                        h.kind == shell::Hit::Kind::HelpCard) {
                 card = h.index;
+            } else if (h.kind == shell::Hit::Kind::DimTab) {
+                btn = 20 + h.index;
+            } else if (h.kind == shell::Hit::Kind::DimBtn) {
+                btn = 30 + h.index;
             } else if (h.kind == shell::Hit::Kind::LangEn || h.kind == shell::Hit::Kind::LangAr) {
                 card = 100; // the General Preferences card highlights with its radios
             } else {
@@ -3209,7 +3891,8 @@ LRESULT CALLBACK edit_subclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_P
             return 0;
         }
     }
-    if (msg == WM_CHAR || msg == WM_KEYDOWN || msg == WM_SETTEXT || msg == WM_PASTE) {
+    if (msg == WM_CHAR || msg == WM_KEYDOWN || msg == WM_SETTEXT || msg == WM_PASTE ||
+        msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
         const LRESULT r = ::DefSubclassProc(hwnd, msg, wp, lp);
         ::InvalidateRect(hwnd, nullptr, TRUE);
         return r;
@@ -3229,6 +3912,10 @@ LRESULT CALLBACK edit_subclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_P
             HBRUSH bg = ::CreateSolidBrush(theme::list_bg);
             ::FillRect(dc, &rc, bg);
             ::DeleteObject(bg);
+            const bool focused = (::GetFocus() == hwnd);
+            HBRUSH frame_br = ::CreateSolidBrush(focused ? theme::accent : theme::border);
+            ::FrameRect(dc, &rc, frame_br);
+            ::DeleteObject(frame_br);
 
             wchar_t text[1024] = {};
             const int len = ::GetWindowTextW(hwnd, text, 1024);
@@ -3236,7 +3923,7 @@ LRESULT CALLBACK edit_subclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_P
             COLORREF color = theme::text;
             if (len > 0) {
                 shown = shell_w_str(narrow(text));
-            } else if (::GetFocus() != hwnd) {
+            } else {
                 wchar_t cue[256] = {};
                 if (::SendMessageW(hwnd, EM_GETCUEBANNER,
                                    reinterpret_cast<WPARAM>(cue), 256) != FALSE) {
@@ -3316,6 +4003,16 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
     // (the engine is ANSI-agnostic and nothing else needs it), so the IDC_* macro
     // would expand to the A form and LoadCursorW would reject it.
     wc.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)); // IDC_ARROW
+    // Application icon (resource id 1, see Editor/resources/version.rc.in) for
+    // the title bar, taskbar and Alt-Tab. Without these the launcher showed the
+    // blank default glyph even though the exe carries the SANAD logo.
+    wc.hIcon = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                               ::GetSystemMetrics(SM_CXICON),
+                                               ::GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+    wc.hIconSm = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                                 ::GetSystemMetrics(SM_CXSMICON),
+                                                 ::GetSystemMetrics(SM_CYSMICON),
+                                                 LR_DEFAULTCOLOR));
     wc.hbrBackground = nullptr;                                  // painted in WM_PAINT
     wc.lpszClassName = kClass;
     ::RegisterClassExW(&wc);
@@ -3476,6 +4173,11 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
             const std::wstring p = shell::find_doc_image(files[i]);
             state.thumbs[i].bmp = shell::load_thumb(p, state.thumbs[i].w, state.thumbs[i].h);
         }
+        state.logo.bmp =
+            shell::load_thumb(shell::find_logo_image(), state.logo.w, state.logo.h);
+        // The window was shown (and painted once) before GDI+ came up; repaint
+        // so the first visible frame already carries the logo and thumbnails.
+        ::InvalidateRect(hwnd, nullptr, FALSE);
     }
 
     // Shell controls: three text inputs (search on Projects, name + location
@@ -3634,6 +4336,10 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
             ::DeleteObject(state.thumbs[i].bmp);
             state.thumbs[i].bmp = nullptr;
         }
+    }
+    if (state.logo.bmp != nullptr) {
+        ::DeleteObject(state.logo.bmp);
+        state.logo.bmp = nullptr;
     }
     if (state.gdiplus_token != 0) {
         Gdiplus::GdiplusShutdown(state.gdiplus_token);

@@ -92,6 +92,42 @@ constexpr f32 kMinimumNoiseSeconds = 1.0e-4f;
 constexpr usize kMaxPerceptionNoises = 64u;
 constexpr usize kMaxPerceptionPain = 64u;
 
+constexpr f32 kDegreesToRadians = 0.017453292519943295f;
+
+/// Phase 71: the yaw a radio antenna points along. A brain turns its body in
+/// `CombatAgentComponent::state` and never writes `rot_y`, so an agent points
+/// where it aims — the same rule `step_perception` applies to its sight. Any
+/// other entity points down its authored Transform yaw.
+f32 radio_antenna_yaw(const ecs::World& world, ecs::Entity entity,
+                      const scene::Transform& transform) {
+    const auto* agent = world.get<CombatAgentComponent>(entity);
+    return agent != nullptr ? agent->state.yaw_deg : transform.rot_y;
+}
+
+/// Phase 71: true when `to` lies inside the horizontal cone of an antenna at
+/// `from`. Zero (omnidirectional) and 180 (a full circle) cover every bearing,
+/// which keeps the default exact. The test is horizontal on purpose: a radio
+/// link is not a sight ray, so a ridge or a floor does not stop it, only the
+/// direction the antenna is pointed.
+bool radio_antenna_covers(f32 yaw_deg, f32 cone_deg, Vec3 from, Vec3 to) {
+    if (!(cone_deg > 0.0f) || cone_deg >= 180.0f) {
+        return true;
+    }
+    const f32 dx = to.x - from.x;
+    const f32 dz = to.z - from.z;
+    const f32 length_sq = dx * dx + dz * dz;
+    if (!(length_sq > 1.0e-8f)) {
+        return true; // stacked antennas are not "behind" each other
+    }
+    const f32 inv_length = 1.0f / std::sqrt(length_sq);
+    const f32 yaw = yaw_deg * kDegreesToRadians;
+    const f32 dot = -std::sin(yaw) * (dx * inv_length) -
+                    std::cos(yaw) * (dz * inv_length);
+    // The epsilon keeps an antenna exactly on the edge inside its beam, where
+    // floating-point cosine would otherwise make a 90-degree mate a coin toss.
+    return dot >= std::cos(cone_deg * kDegreesToRadians) - 1.0e-6f;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -275,6 +311,11 @@ void Runtime::exchange_squad_radio() {
         std::string token;
         f32 radio = 0.0f;
         Vec3 origin{};
+        /// Phase 71: the reporter antenna's snapshot. The direction is copied
+        /// with the range so delivery cannot read a component the report was
+        /// built against — the same reason `radio` and `origin` are copies.
+        f32 cone = 0.0f;
+        f32 yaw = 0.0f;
         u32 target_shared_id = 0;
         Vec3 position{};
         /// A lost-contact callout (Phase 69): the receiver's own `lost` window
@@ -312,6 +353,8 @@ void Runtime::exchange_squad_radio() {
         report.token = squad->token;
         report.radio = squad->radio;
         report.origin = Vec3{transform->world_x, transform->world_y, transform->world_z};
+        report.cone = squad->cone;
+        report.yaw = radio_antenna_yaw(world, callout.reporter, *transform);
         report.target_shared_id = shared;
         report.position = callout.position;
         report.lost = true;
@@ -352,6 +395,8 @@ void Runtime::exchange_squad_radio() {
             report.token = squad->token;
             report.radio = squad->radio;
             report.origin = Vec3{transform->world_x, transform->world_y, transform->world_z};
+            report.cone = squad->cone;
+            report.yaw = radio_antenna_yaw(world, binding.entity, *transform);
             report.target_shared_id = shared;
             report.position = memory.last_known_position;
             report.lost = false;
@@ -389,6 +434,14 @@ void Runtime::exchange_squad_radio() {
             }
             const Vec3 origin{transform->world_x, transform->world_y, transform->world_z};
             const Vec3 delta = origin - report.origin;
+            // Phase 71: a directional antenna only talks into its own cone, and
+            // it only listens inside that same cone. Both ends therefore have
+            // to face each other; zero (the default) covers every bearing.
+            if (!radio_antenna_covers(report.yaw, report.cone, report.origin, origin) ||
+                !radio_antenna_covers(radio_antenna_yaw(world, receiver.entity, *transform),
+                                      squad->cone, origin, report.origin)) {
+                continue;
+            }
             // A link needs BOTH radios to reach: a scout with a short antenna
             // cannot shout past it even when the listener could hear farther.
             // Phase 70 multiplies each antenna by its jammer field first, so a

@@ -88,200 +88,420 @@ enum class Icon {
 };
 
 void draw_icon(ImDrawList* dl, ImVec2 c, float s, Icon icon, ImU32 col) {
-    const float t = std::max(1.4f, s * 0.085f); // a stroke that survives DPI
-    const float h = s * 0.5f;                   // half extent
-    const float d = s * 0.16f;                  // arrow head (move icon)
+    if (dl == nullptr || s <= 0.0f) {
+        return;
+    }
+    const float t = std::max(1.35f, s * 0.082f); // responsive line thickness
+    const float h = s * 0.5f;                    // half extent
+    const float d = s * 0.16f;                   // arrowhead extent
+
+    // Shading helpers derived from input color: adapts dynamically to idle / hover / active
+    const ImVec4 c4 = ImGui::ColorConvertU32ToFloat4(col);
+    auto make_shade = [&](float rgb_scale, float a_scale) -> ImU32 {
+        return ImGui::ColorConvertFloat4ToU32(ImVec4(
+            std::min(1.0f, c4.x * rgb_scale),
+            std::min(1.0f, c4.y * rgb_scale),
+            std::min(1.0f, c4.z * rgb_scale),
+            std::min(1.0f, c4.w * a_scale)));
+    };
+    const ImU32 col_subtle = make_shade(1.0f, 0.20f);
+    const ImU32 col_mid = make_shade(0.78f, 0.85f);
+    const ImU32 col_dark = make_shade(0.48f, 0.90f);
+    const ImU32 col_bright = make_shade(1.22f, 1.0f);
+
     switch (icon) {
         case Icon::New: {
-            const float f = s * 0.28f; // folded corner, like a new document
-            dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col, 1.5f, 0, t);
-            dl->AddLine(ImVec2(c.x + h - f, c.y - h), ImVec2(c.x + h, c.y - h + f), col, t);
-            dl->AddLine(ImVec2(c.x + h - f, c.y - h), ImVec2(c.x + h - f, c.y - h + f), col, t);
-            dl->AddLine(ImVec2(c.x + h - f, c.y - h + f), ImVec2(c.x + h, c.y - h + f), col, t);
+            // Document with folded top-right corner and interior lines
+            const float f = s * 0.26f;
+            const ImVec2 p0(c.x - h * 0.65f, c.y - h * 0.90f);
+            const ImVec2 p1(c.x + h * 0.65f - f, c.y - h * 0.90f);
+            const ImVec2 p2(c.x + h * 0.65f, c.y - h * 0.90f + f);
+            const ImVec2 p3(c.x + h * 0.65f, c.y + h * 0.90f);
+            const ImVec2 p4(c.x - h * 0.65f, c.y + h * 0.90f);
+
+            // Shaded sheet background
+            dl->AddQuadFilled(p0, p1, ImVec2(c.x - h * 0.65f, c.y - h * 0.90f + f), p4, col_subtle);
+            dl->AddQuadFilled(ImVec2(c.x - h * 0.65f, c.y - h * 0.90f + f), p2, p3, p4, col_subtle);
+
+            // Outer contour
+            dl->AddLine(p0, p1, col, t);
+            dl->AddLine(p2, p3, col, t);
+            dl->AddLine(p3, p4, col, t);
+            dl->AddLine(p4, p0, col, t);
+
+            // Fold flap (triangle)
+            const ImVec2 f_inner(c.x + h * 0.65f - f, c.y - h * 0.90f + f);
+            dl->AddTriangleFilled(p1, p2, f_inner, col_mid);
+            dl->AddLine(p1, f_inner, col, t * 0.85f);
+            dl->AddLine(f_inner, p2, col, t * 0.85f);
+
+            // Interior document text lines
+            dl->AddLine(ImVec2(c.x - h * 0.35f, c.y - h * 0.10f),
+                        ImVec2(c.x + h * 0.35f, c.y - h * 0.10f), col, t * 0.85f);
+            dl->AddLine(ImVec2(c.x - h * 0.35f, c.y + h * 0.25f),
+                        ImVec2(c.x + h * 0.35f, c.y + h * 0.25f), col, t * 0.85f);
+            dl->AddLine(ImVec2(c.x - h * 0.35f, c.y + h * 0.60f),
+                        ImVec2(c.x + h * 0.05f, c.y + h * 0.60f), col, t * 0.85f);
             break;
         }
         case Icon::Open: {
-            dl->AddRect(ImVec2(c.x - h, c.y - h * 0.55f), ImVec2(c.x + h, c.y + h * 0.6f), col, 1.5f, 0,
-                        t);
-            dl->AddLine(ImVec2(c.x - h, c.y - h * 0.55f), ImVec2(c.x - h * 0.25f, c.y - h * 0.95f),
-                        col, t);
-            dl->AddLine(ImVec2(c.x - h * 0.25f, c.y - h * 0.95f),
-                        ImVec2(c.x + h * 0.1f, c.y - h * 0.55f), col, t);
+            // Folder: Back flap with tab + tilted 3D front pocket
+            dl->AddRectFilled(ImVec2(c.x - h * 0.85f, c.y - h * 0.85f),
+                              ImVec2(c.x - h * 0.15f, c.y - h * 0.45f), col_mid, 1.5f);
+            dl->AddRectFilled(ImVec2(c.x - h * 0.85f, c.y - h * 0.55f),
+                              ImVec2(c.x + h * 0.85f, c.y + h * 0.70f), col_subtle, 1.5f);
+            dl->AddRect(ImVec2(c.x - h * 0.85f, c.y - h * 0.55f),
+                        ImVec2(c.x + h * 0.85f, c.y + h * 0.70f), col, 1.5f, 0, t * 0.85f);
+
+            // Front pocket tilted forward (isometric 3D perspective)
+            const ImVec2 f1(c.x - h * 0.90f, c.y - h * 0.15f);
+            const ImVec2 f2(c.x + h * 0.70f, c.y - h * 0.15f);
+            const ImVec2 f3(c.x + h * 0.88f, c.y + h * 0.75f);
+            const ImVec2 f4(c.x - h * 0.72f, c.y + h * 0.75f);
+            dl->AddQuadFilled(f1, f2, f3, f4, col_dark);
+            dl->AddQuad(f1, f2, f3, f4, col, t);
             break;
         }
         case Icon::Save: {
-            dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col, 1.5f, 0, t);
-            dl->AddRectFilled(ImVec2(c.x - h * 0.45f, c.y - h),
-                              ImVec2(c.x + h * 0.45f, c.y - h * 0.15f), col, 1.0f);
-            dl->AddRect(ImVec2(c.x - h * 0.6f, c.y + h * 0.25f), ImVec2(c.x + h * 0.6f, c.y + h), col,
-                        1.0f, 0, t);
+            // Floppy disk: 3.5" diskette with metallic shutter and label
+            dl->AddRectFilled(ImVec2(c.x - h * 0.80f, c.y - h * 0.85f),
+                              ImVec2(c.x + h * 0.80f, c.y + h * 0.85f), col_subtle, 2.0f);
+            dl->AddRect(ImVec2(c.x - h * 0.80f, c.y - h * 0.85f),
+                        ImVec2(c.x + h * 0.80f, c.y + h * 0.85f), col, 2.0f, 0, t);
+
+            // Shutter slider at top
+            dl->AddRectFilled(ImVec2(c.x - h * 0.45f, c.y - h * 0.85f),
+                              ImVec2(c.x + h * 0.45f, c.y - h * 0.20f), col_mid, 1.0f);
+            dl->AddRect(ImVec2(c.x - h * 0.45f, c.y - h * 0.85f),
+                        ImVec2(c.x + h * 0.45f, c.y - h * 0.20f), col, 1.0f, 0, t * 0.85f);
+            // Shutter cutout window
+            dl->AddRectFilled(ImVec2(c.x - h * 0.18f, c.y - h * 0.70f),
+                              ImVec2(c.x + h * 0.12f, c.y - h * 0.35f), col_dark, 0.5f);
+
+            // Label at bottom
+            dl->AddRectFilled(ImVec2(c.x - h * 0.55f, c.y + h * 0.15f),
+                              ImVec2(c.x + h * 0.55f, c.y + h * 0.70f), col_bright, 1.0f);
+            dl->AddLine(ImVec2(c.x - h * 0.38f, c.y + h * 0.35f),
+                        ImVec2(c.x + h * 0.38f, c.y + h * 0.35f), col_dark, t * 0.75f);
+            dl->AddLine(ImVec2(c.x - h * 0.38f, c.y + h * 0.52f),
+                        ImVec2(c.x + h * 0.18f, c.y + h * 0.52f), col_dark, t * 0.75f);
             break;
         }
-        case Icon::Play:
-            dl->AddTriangleFilled(ImVec2(c.x - h * 0.6f, c.y - h * 0.85f),
-                                  ImVec2(c.x - h * 0.6f, c.y + h * 0.85f), ImVec2(c.x + h * 0.8f, c.y),
-                                  col);
+        case Icon::Play: {
+            dl->AddTriangleFilled(ImVec2(c.x - h * 0.60f, c.y - h * 0.82f),
+                                  ImVec2(c.x - h * 0.60f, c.y + h * 0.82f),
+                                  ImVec2(c.x + h * 0.85f, c.y), col);
             break;
-        case Icon::Stop:
-            dl->AddRectFilled(ImVec2(c.x - h * 0.8f, c.y - h * 0.8f),
-                              ImVec2(c.x + h * 0.8f, c.y + h * 0.8f), col, 1.5f);
+        }
+        case Icon::Stop: {
+            dl->AddRectFilled(ImVec2(c.x - h * 0.75f, c.y - h * 0.75f),
+                              ImVec2(c.x + h * 0.75f, c.y + h * 0.75f), col, 2.0f);
             break;
+        }
         case Icon::Move: {
-            dl->AddLine(ImVec2(c.x - h, c.y), ImVec2(c.x + h, c.y), col, t);
-            dl->AddLine(ImVec2(c.x, c.y - h), ImVec2(c.x, c.y + h), col, t);
-            dl->AddTriangleFilled(ImVec2(c.x + h, c.y), ImVec2(c.x + h - d, c.y - d),
-                                  ImVec2(c.x + h - d, c.y + d), col);
-            dl->AddTriangleFilled(ImVec2(c.x - h, c.y), ImVec2(c.x - h + d, c.y - d),
-                                  ImVec2(c.x - h + d, c.y + d), col);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y - h), ImVec2(c.x - d, c.y - h + d),
-                                  ImVec2(c.x + d, c.y - h + d), col);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y + h), ImVec2(c.x - d, c.y + h - d),
-                                  ImVec2(c.x + d, c.y + h - d), col);
+            // 4-way translation cross with center anchor
+            dl->AddLine(ImVec2(c.x - h * 0.88f, c.y), ImVec2(c.x + h * 0.88f, c.y), col, t * 1.1f);
+            dl->AddLine(ImVec2(c.x, c.y - h * 0.88f), ImVec2(c.x, c.y + h * 0.88f), col, t * 1.1f);
+            // Sharp arrowheads
+            dl->AddTriangleFilled(ImVec2(c.x + h, c.y), ImVec2(c.x + h - d * 1.1f, c.y - d * 0.75f),
+                                  ImVec2(c.x + h - d * 1.1f, c.y + d * 0.75f), col);
+            dl->AddTriangleFilled(ImVec2(c.x - h, c.y), ImVec2(c.x - h + d * 1.1f, c.y - d * 0.75f),
+                                  ImVec2(c.x - h + d * 1.1f, c.y + d * 0.75f), col);
+            dl->AddTriangleFilled(ImVec2(c.x, c.y - h), ImVec2(c.x - d * 0.75f, c.y - h + d * 1.1f),
+                                  ImVec2(c.x + d * 0.75f, c.y - h + d * 1.1f), col);
+            dl->AddTriangleFilled(ImVec2(c.x, c.y + h), ImVec2(c.x - d * 0.75f, c.y + h - d * 1.1f),
+                                  ImVec2(c.x + d * 0.75f, c.y + h - d * 1.1f), col);
+            // Center ring
+            dl->AddCircleFilled(c, s * 0.10f, col);
             break;
         }
         case Icon::Rotate: {
-            // Three-quarter arc plus a head: "turn about an axis".
-            dl->PathArcTo(c, h * 0.85f, 0.35f * kPi, 1.85f * kPi, 28);
-            dl->PathStroke(col, 0, t);
-            const ImVec2 tip(c.x + h * 0.85f * std::cos(0.35f * kPi),
-                             c.y + h * 0.85f * std::sin(0.35f * kPi));
-            const float a = s * 0.2f;
-            dl->AddTriangleFilled(ImVec2(tip.x + a, tip.y - a * 0.2f),
-                                  ImVec2(tip.x - a * 0.6f, tip.y - a),
-                                  ImVec2(tip.x + a * 0.2f, tip.y + a), col);
+            // Sweeping 270-degree rotation arc with sharp arrowhead and pivot center
+            dl->PathArcTo(c, h * 0.78f, 0.28f * kPi, 1.82f * kPi, 28);
+            dl->PathStroke(col, 0, t * 1.15f);
+            const ImVec2 tip(c.x + h * 0.78f * std::cos(0.28f * kPi),
+                             c.y + h * 0.78f * std::sin(0.28f * kPi));
+            const float a = s * 0.22f;
+            dl->AddTriangleFilled(ImVec2(tip.x + a * 1.05f, tip.y - a * 0.15f),
+                                  ImVec2(tip.x - a * 0.55f, tip.y - a * 0.95f),
+                                  ImVec2(tip.x + a * 0.15f, tip.y + a * 0.95f), col);
+            dl->AddCircleFilled(c, s * 0.08f, col_mid);
             break;
         }
         case Icon::Scale: {
-            dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h * 0.1f, c.y + h * 0.1f), col, 1.0f, 0,
-                        t);
-            dl->AddRectFilled(ImVec2(c.x + h * 0.2f, c.y + h * 0.2f), ImVec2(c.x + h, c.y + h), col,
-                              1.0f);
-            dl->AddLine(ImVec2(c.x - h * 0.1f, c.y - h * 0.1f),
-                        ImVec2(c.x + h * 0.35f, c.y + h * 0.35f), col, t);
+            // Dual box scale: small box at bottom-left, large box at top-right, diagonal arrow
+            const ImVec2 sm_min(c.x - h * 0.85f, c.y + h * 0.20f);
+            const ImVec2 sm_max(c.x - h * 0.25f, c.y + h * 0.80f);
+            dl->AddRectFilled(sm_min, sm_max, col_subtle, 1.0f);
+            dl->AddRect(sm_min, sm_max, col, 1.0f, 0, t * 0.85f);
+
+            const ImVec2 lg_min(c.x - h * 0.15f, c.y - h * 0.80f);
+            const ImVec2 lg_max(c.x + h * 0.85f, c.y + h * 0.20f);
+            dl->AddRectFilled(lg_min, lg_max, col_mid, 1.0f);
+            dl->AddRect(lg_min, lg_max, col, 1.0f, 0, t * 0.85f);
+
+            // Diagonal connecting arrow
+            const ImVec2 a_start(c.x - h * 0.10f, c.y + h * 0.10f);
+            const ImVec2 a_end(c.x + h * 0.50f, c.y - h * 0.50f);
+            dl->AddLine(a_start, a_end, col, t * 1.1f);
+            dl->AddTriangleFilled(ImVec2(a_end.x + s * 0.05f, a_end.y - s * 0.05f),
+                                  ImVec2(a_end.x - s * 0.18f, a_end.y),
+                                  ImVec2(a_end.x, a_end.y + s * 0.18f), col);
             break;
         }
         case Icon::Snap: {
-            for (int i = 0; i <= 2; ++i) {
-                const float o = -h + (2.0f * h) * (static_cast<float>(i) / 2.0f);
-                dl->AddLine(ImVec2(c.x - h, c.y + o), ImVec2(c.x + h, c.y + o), col, t * 0.7f);
-                dl->AddLine(ImVec2(c.x + o, c.y - h), ImVec2(c.x + o, c.y + h), col, t * 0.7f);
-            }
-            dl->AddCircleFilled(ImVec2(c.x + h * 0.5f, c.y - h * 0.5f), s * 0.12f, col);
+            // Horseshoe magnet with distinct North/South pole tips
+            const float u_r = h * 0.55f;
+            const float u_thick = s * 0.16f;
+            // Arc at top
+            dl->PathArcTo(ImVec2(c.x, c.y - h * 0.15f), u_r, 1.0f * kPi, 2.0f * kPi, 18);
+            dl->PathLineTo(ImVec2(c.x + u_r, c.y + h * 0.65f));
+            dl->PathLineTo(ImVec2(c.x + u_r - u_thick, c.y + h * 0.65f));
+            dl->PathArcTo(ImVec2(c.x, c.y - h * 0.15f), u_r - u_thick, 2.0f * kPi, 1.0f * kPi, 18);
+            dl->PathLineTo(ImVec2(c.x - u_r, c.y + h * 0.65f));
+            dl->PathFillConvex(col_mid);
+
+            // Outer stroke
+            dl->PathArcTo(ImVec2(c.x, c.y - h * 0.15f), u_r, 1.0f * kPi, 2.0f * kPi, 18);
+            dl->PathLineTo(ImVec2(c.x + u_r, c.y + h * 0.65f));
+            dl->PathLineTo(ImVec2(c.x + u_r - u_thick, c.y + h * 0.65f));
+            dl->PathArcTo(ImVec2(c.x, c.y - h * 0.15f), u_r - u_thick, 2.0f * kPi, 1.0f * kPi, 18);
+            dl->PathLineTo(ImVec2(c.x - u_r, c.y + h * 0.65f));
+            dl->PathStroke(col, ImDrawFlags_Closed, t * 0.85f);
+
+            // Pole tips at bottom
+            dl->AddRectFilled(ImVec2(c.x - u_r, c.y + h * 0.38f),
+                              ImVec2(c.x - u_r + u_thick, c.y + h * 0.65f), col_bright, 0.5f);
+            dl->AddRectFilled(ImVec2(c.x + u_r - u_thick, c.y + h * 0.38f),
+                              ImVec2(c.x + u_r, c.y + h * 0.65f), col_bright, 0.5f);
             break;
         }
         case Icon::Ground: {
-            dl->AddLine(ImVec2(c.x - h, c.y + h * 0.2f), ImVec2(c.x + h, c.y + h * 0.2f), col, t);
-            dl->AddLine(ImVec2(c.x - h, c.y + h * 0.7f), ImVec2(c.x + h, c.y + h * 0.7f), col, t * 0.6f);
-            dl->AddLine(ImVec2(c.x - h * 0.5f, c.y + h * 0.2f), ImVec2(c.x - h * 0.1f, c.y - h * 0.6f),
-                        col, t * 0.7f);
-            dl->AddLine(ImVec2(c.x + h * 0.5f, c.y + h * 0.2f), ImVec2(c.x + h * 0.1f, c.y - h * 0.6f),
-                        col, t * 0.7f);
+            // True 3D perspective ground plane with converging grid lines & horizon
+            dl->AddLine(ImVec2(c.x - h * 0.95f, c.y - h * 0.40f),
+                        ImVec2(c.x + h * 0.95f, c.y - h * 0.40f), col_dark, t * 0.75f);
+
+            const ImVec2 tl(c.x - h * 0.48f, c.y - h * 0.30f);
+            const ImVec2 tr(c.x + h * 0.48f, c.y - h * 0.30f);
+            const ImVec2 br(c.x + h * 0.95f, c.y + h * 0.75f);
+            const ImVec2 bl(c.x - h * 0.95f, c.y + h * 0.75f);
+            dl->AddQuadFilled(tl, tr, br, bl, col_subtle);
+            dl->AddQuad(tl, tr, br, bl, col, t);
+
+            // Perspective converging lines
+            dl->AddLine(ImVec2(c.x, c.y - h * 0.30f), ImVec2(c.x, c.y + h * 0.75f), col, t * 0.85f);
+            dl->AddLine(ImVec2(c.x - h * 0.24f, c.y - h * 0.30f),
+                        ImVec2(c.x - h * 0.50f, c.y + h * 0.75f), col_mid, t * 0.75f);
+            dl->AddLine(ImVec2(c.x + h * 0.24f, c.y - h * 0.30f),
+                        ImVec2(c.x + h * 0.50f, c.y + h * 0.75f), col_mid, t * 0.75f);
+
+            // Horizontal perspective lines
+            dl->AddLine(ImVec2(c.x - h * 0.70f, c.y + h * 0.20f),
+                        ImVec2(c.x + h * 0.70f, c.y + h * 0.20f), col_mid, t * 0.75f);
             break;
         }
         case Icon::Cube: {
-            // Isometric cube: the silhouette every 3D tool uses for "mesh".
-            const ImVec2 top(c.x, c.y - h);
-            const ImVec2 right(c.x + h, c.y - h * 0.45f);
-            const ImVec2 mid(c.x, c.y + h * 0.1f);
-            const ImVec2 left(c.x - h, c.y - h * 0.45f);
-            const ImVec2 bottom(c.x, c.y + h);
-            dl->AddQuad(top, right, mid, left, col, t);
-            dl->AddQuad(left, mid, bottom, ImVec2(c.x - h, c.y + h * 0.45f), col, t);
-            dl->AddQuad(mid, right, ImVec2(c.x + h, c.y + h * 0.45f), bottom, col, t);
+            // Isometric 3D shaded cube (top light, left mid, right shadow)
+            const ImVec2 top_pt(c.x, c.y - h * 0.95f);
+            const ImVec2 right_pt(c.x + h * 0.85f, c.y - h * 0.45f);
+            const ImVec2 mid_pt(c.x, c.y + h * 0.05f);
+            const ImVec2 left_pt(c.x - h * 0.85f, c.y - h * 0.45f);
+            const ImVec2 bot_pt(c.x, c.y + h * 0.95f);
+            const ImVec2 bot_left(c.x - h * 0.85f, c.y + h * 0.45f);
+            const ImVec2 bot_right(c.x + h * 0.85f, c.y + h * 0.45f);
+
+            // Shaded faces
+            dl->AddQuadFilled(top_pt, right_pt, mid_pt, left_pt, col_bright);
+            dl->AddQuadFilled(left_pt, mid_pt, bot_pt, bot_left, col_mid);
+            dl->AddQuadFilled(mid_pt, right_pt, bot_right, bot_pt, col_dark);
+
+            // Crisp outlines
+            dl->AddQuad(top_pt, right_pt, mid_pt, left_pt, col, t * 0.85f);
+            dl->AddQuad(left_pt, mid_pt, bot_pt, bot_left, col, t * 0.85f);
+            dl->AddQuad(mid_pt, right_pt, bot_right, bot_pt, col, t * 0.85f);
             break;
         }
         case Icon::Sun: {
-            dl->AddCircle(ImVec2(c.x, c.y), h * 0.45f, col, 20, t);
+            // Luminous sun: filled core + glow ring + 8 tapered radial rays
+            dl->AddCircleFilled(c, h * 0.40f, col, 20);
+            dl->AddCircle(c, h * 0.55f, col_subtle, 20, t * 0.8f);
             for (int i = 0; i < 8; ++i) {
                 const float ang = (static_cast<float>(i) / 8.0f) * 2.0f * kPi;
                 dl->AddLine(ImVec2(c.x + std::cos(ang) * h * 0.62f, c.y + std::sin(ang) * h * 0.62f),
-                            ImVec2(c.x + std::cos(ang) * h, c.y + std::sin(ang) * h), col, t);
+                            ImVec2(c.x + std::cos(ang) * h * 0.95f, c.y + std::sin(ang) * h * 0.95f),
+                            col, t * 1.1f);
             }
             break;
         }
         case Icon::Camera: {
-            dl->AddRect(ImVec2(c.x - h, c.y - h * 0.55f), ImVec2(c.x + h, c.y + h * 0.7f), col, 2.0f, 0,
-                        t);
-            dl->AddTriangleFilled(ImVec2(c.x + h, c.y + h * 0.1f),
-                                  ImVec2(c.x + h * 1.6f, c.y - h * 0.5f),
-                                  ImVec2(c.x + h * 1.6f, c.y + h * 0.7f), col);
+            // Cinema camera: rounded body + film reels + lens cone
+            dl->AddRectFilled(ImVec2(c.x - h * 0.85f, c.y - h * 0.45f),
+                              ImVec2(c.x + h * 0.35f, c.y + h * 0.55f), col, 2.0f);
+            // Lens cone
+            dl->AddTriangleFilled(ImVec2(c.x + h * 0.35f, c.y),
+                                  ImVec2(c.x + h * 0.95f, c.y - h * 0.48f),
+                                  ImVec2(c.x + h * 0.95f, c.y + h * 0.48f), col);
+            // Dual film reels on top
+            dl->AddCircleFilled(ImVec2(c.x - h * 0.45f, c.y - h * 0.65f), h * 0.24f, col_bright, 14);
+            dl->AddCircle(ImVec2(c.x - h * 0.45f, c.y - h * 0.65f), h * 0.24f, col, 14, t * 0.8f);
+            dl->AddCircleFilled(ImVec2(c.x + h * 0.05f, c.y - h * 0.65f), h * 0.24f, col_bright, 14);
+            dl->AddCircle(ImVec2(c.x + h * 0.05f, c.y - h * 0.65f), h * 0.24f, col, 14, t * 0.8f);
             break;
         }
-case Icon::Sky: {
+        case Icon::Sky: {
+            // Fluffy cloud with flat base and 3 soft puffs
             const float r = s * 0.26f;
-            dl->AddCircle(ImVec2(c.x - r * 0.7f, c.y), r, col, 16, t);
-            dl->AddCircle(ImVec2(c.x + r * 0.55f, c.y - r * 0.25f), r * 1.15f, col, 16, t);
-            dl->AddCircle(ImVec2(c.x + r * 1.5f, c.y), r * 0.8f, col, 16, t);
-            dl->AddLine(ImVec2(c.x - r * 1.7f, c.y + r), ImVec2(c.x + r * 2.3f, c.y + r), col, t);
+            dl->AddRectFilled(ImVec2(c.x - r * 1.6f, c.y + r * 0.1f),
+                              ImVec2(c.x + r * 1.9f, c.y + r * 0.95f), col, 3.0f);
+            dl->AddCircleFilled(ImVec2(c.x - r * 0.70f, c.y + r * 0.15f), r * 0.85f, col, 16);
+            dl->AddCircleFilled(ImVec2(c.x + r * 0.35f, c.y - r * 0.20f), r * 1.15f, col, 18);
+            dl->AddCircleFilled(ImVec2(c.x + r * 1.35f, c.y + r * 0.20f), r * 0.75f, col, 14);
             break;
         }
         case Icon::Import: {
-            dl->AddLine(ImVec2(c.x, c.y - h), ImVec2(c.x, c.y + h * 0.2f), col, t);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y + h * 0.5f), ImVec2(c.x - s * 0.2f, c.y - h * 0.05f),
-                                  ImVec2(c.x + s * 0.2f, c.y - h * 0.05f), col);
-            dl->AddLine(ImVec2(c.x - h, c.y + h * 0.85f), ImVec2(c.x + h, c.y + h * 0.85f), col, t);
+            // Open receiving dock + downward arrow
+            dl->AddLine(ImVec2(c.x - h * 0.85f, c.y + h * 0.30f),
+                        ImVec2(c.x - h * 0.85f, c.y + h * 0.80f), col, t);
+            dl->AddLine(ImVec2(c.x - h * 0.85f, c.y + h * 0.80f),
+                        ImVec2(c.x + h * 0.85f, c.y + h * 0.80f), col, t);
+            dl->AddLine(ImVec2(c.x + h * 0.85f, c.y + h * 0.80f),
+                        ImVec2(c.x + h * 0.85f, c.y + h * 0.30f), col, t);
+            // Arrow pointing down into dock
+            dl->AddLine(ImVec2(c.x, c.y - h * 0.90f), ImVec2(c.x, c.y + h * 0.40f), col, t * 1.15f);
+            dl->AddTriangleFilled(ImVec2(c.x, c.y + h * 0.55f),
+                                  ImVec2(c.x - s * 0.20f, c.y + h * 0.05f),
+                                  ImVec2(c.x + s * 0.20f, c.y + h * 0.05f), col);
             break;
         }
         case Icon::Export: {
-            dl->AddLine(ImVec2(c.x, c.y + h), ImVec2(c.x, c.y - h * 0.2f), col, t);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y - h * 0.5f), ImVec2(c.x - s * 0.2f, c.y + h * 0.05f),
-                                  ImVec2(c.x + s * 0.2f, c.y + h * 0.05f), col);
-            dl->AddLine(ImVec2(c.x - h, c.y + h * 0.85f), ImVec2(c.x + h, c.y + h * 0.85f), col, t);
+            // Open dock + upward launch arrow
+            dl->AddLine(ImVec2(c.x - h * 0.85f, c.y + h * 0.30f),
+                        ImVec2(c.x - h * 0.85f, c.y + h * 0.80f), col, t);
+            dl->AddLine(ImVec2(c.x - h * 0.85f, c.y + h * 0.80f),
+                        ImVec2(c.x + h * 0.85f, c.y + h * 0.80f), col, t);
+            dl->AddLine(ImVec2(c.x + h * 0.85f, c.y + h * 0.80f),
+                        ImVec2(c.x + h * 0.85f, c.y + h * 0.30f), col, t);
+            // Arrow pointing up
+            dl->AddLine(ImVec2(c.x, c.y + h * 0.40f), ImVec2(c.x, c.y - h * 0.50f), col, t * 1.15f);
+            dl->AddTriangleFilled(ImVec2(c.x, c.y - h * 0.85f),
+                                  ImVec2(c.x - s * 0.20f, c.y - h * 0.25f),
+                                  ImVec2(c.x + s * 0.20f, c.y - h * 0.25f), col);
             break;
         }
         case Icon::Settings: {
-            dl->AddCircle(ImVec2(c.x, c.y), h * 0.45f, col, 18, t);
+            // Mechanical cog gear: outer ring with 6 sturdy gear teeth & cutout center
+            const float r_outer = h * 0.90f;
+            const float r_inner = h * 0.60f;
+            const float r_hole = h * 0.30f;
             for (int i = 0; i < 6; ++i) {
                 const float ang = (static_cast<float>(i) / 6.0f) * 2.0f * kPi;
-                dl->AddLine(ImVec2(c.x + std::cos(ang) * h * 0.62f, c.y + std::sin(ang) * h * 0.62f),
-                            ImVec2(c.x + std::cos(ang) * h, c.y + std::sin(ang) * h), col, t);
+                dl->AddLine(ImVec2(c.x + std::cos(ang) * (r_inner - 1.0f),
+                                   c.y + std::sin(ang) * (r_inner - 1.0f)),
+                            ImVec2(c.x + std::cos(ang) * r_outer,
+                                   c.y + std::sin(ang) * r_outer),
+                            col, s * 0.26f);
             }
+            dl->AddCircleFilled(c, r_inner, col, 20);
+            dl->AddCircleFilled(c, r_hole, IM_COL32(26, 32, 44, 255), 16);
+            dl->AddCircle(c, r_hole, col_mid, 16, t * 0.75f);
             break;
         }
         case Icon::Undo:
         case Icon::Redo: {
-            // Mirror images of one another: an arc over an arrow head.
             const float dir = (icon == Icon::Undo) ? 1.0f : -1.0f;
-            dl->PathArcTo(ImVec2(c.x, c.y + h * 0.35f), h * 0.8f, 1.1f * kPi, 1.9f * kPi, 20);
-            dl->PathStroke(col, 0, t);
-            const ImVec2 tip(c.x - dir * h * 0.8f, c.y + h * 0.3f);
-            dl->AddTriangleFilled(ImVec2(tip.x, tip.y + s * 0.17f),
-                                  ImVec2(tip.x + dir * s * 0.2f, tip.y - s * 0.02f),
-                                  ImVec2(tip.x - dir * s * 0.3f, tip.y + s * 0.32f), col);
+            dl->PathArcTo(ImVec2(c.x, c.y + h * 0.25f), h * 0.75f, 1.10f * kPi, 1.90f * kPi, 24);
+            dl->PathStroke(col, 0, t * 1.2f);
+            const ImVec2 tip(c.x - dir * h * 0.75f, c.y + h * 0.22f);
+            dl->AddTriangleFilled(ImVec2(tip.x, tip.y + s * 0.22f),
+                                  ImVec2(tip.x + dir * s * 0.22f, tip.y - s * 0.05f),
+                                  ImVec2(tip.x - dir * s * 0.22f, tip.y + s * 0.32f), col);
             break;
         }
         case Icon::Delete: {
-            dl->AddRect(ImVec2(c.x - h * 0.7f, c.y - h * 0.4f), ImVec2(c.x + h * 0.7f, c.y + h), col,
-                        1.0f, 0, t);
-            dl->AddLine(ImVec2(c.x - h, c.y - h * 0.4f), ImVec2(c.x + h, c.y - h * 0.4f), col, t);
-            dl->AddLine(ImVec2(c.x - h * 0.3f, c.y - h * 0.7f), ImVec2(c.x + h * 0.3f, c.y - h * 0.7f),
-                        col, t);
+            // Modern waste bin: tapered body with interior ribs & handle lid
+            const ImVec2 p1(c.x - h * 0.60f, c.y - h * 0.35f);
+            const ImVec2 p2(c.x + h * 0.60f, c.y - h * 0.35f);
+            const ImVec2 p3(c.x + h * 0.48f, c.y + h * 0.85f);
+            const ImVec2 p4(c.x - h * 0.48f, c.y + h * 0.85f);
+            dl->AddQuadFilled(p1, p2, p3, p4, col_subtle);
+            dl->AddQuad(p1, p2, p3, p4, col, t);
+
+            // Vertical ribs
+            dl->AddLine(ImVec2(c.x - h * 0.20f, c.y - h * 0.20f),
+                        ImVec2(c.x - h * 0.16f, c.y + h * 0.70f), col, t * 0.75f);
+            dl->AddLine(ImVec2(c.x + h * 0.20f, c.y - h * 0.20f),
+                        ImVec2(c.x + h * 0.16f, c.y + h * 0.70f), col, t * 0.75f);
+
+            // Lid & handle
+            dl->AddLine(ImVec2(c.x - h * 0.80f, c.y - h * 0.38f),
+                        ImVec2(c.x + h * 0.80f, c.y - h * 0.38f), col, t * 1.15f);
+            dl->AddRect(ImVec2(c.x - h * 0.25f, c.y - h * 0.65f),
+                        ImVec2(c.x + h * 0.25f, c.y - h * 0.38f), col, 1.0f, 0, t * 0.85f);
             break;
         }
     }
 }
 
+/// Draws the SANAD brand emblem (dark rounded badge + stylized geometric S
+/// wings and golden/accent core ribbon, matching the app icon and logo).
+void draw_brand_badge(ImDrawList* dl, ImVec2 p, float size) {
+    const ImVec2 b(p.x + size, p.y + size);
+    const float r = size * 0.22f;
+    dl->AddRectFilled(p, b, IM_COL32(24, 28, 36, 255), r);
+    dl->AddRect(p, b, ImGui::GetColorU32(theme::alpha(theme::accent(), 0.65f)), r, 0, 1.2f);
+
+    const ImVec2 c(p.x + size * 0.5f, p.y + size * 0.5f);
+    const float u = size * 0.34f;
+    const float stroke = std::max(1.8f, size * 0.11f);
+    const ImU32 wing_col = IM_COL32(200, 210, 226, 255);
+    const ImU32 gold_col = IM_COL32(245, 172, 48, 255);
+
+    // Upper wing (slate silver)
+    dl->AddLine(ImVec2(c.x - u * 0.85f, c.y - u * 0.10f),
+                ImVec2(c.x - u * 0.35f, c.y - u * 0.65f), wing_col, stroke);
+    dl->AddLine(ImVec2(c.x - u * 0.35f, c.y - u * 0.65f),
+                ImVec2(c.x + u * 0.85f, c.y - u * 0.85f), wing_col, stroke);
+    // Center S-ribbon (warm gold)
+    dl->AddLine(ImVec2(c.x + u * 0.75f, c.y - u * 0.40f),
+                ImVec2(c.x - u * 0.75f, c.y + u * 0.40f), gold_col, stroke * 1.1f);
+    // Lower wing (slate silver)
+    dl->AddLine(ImVec2(c.x - u * 0.85f, c.y + u * 0.85f),
+                ImVec2(c.x + u * 0.35f, c.y + u * 0.65f), wing_col, stroke);
+    dl->AddLine(ImVec2(c.x + u * 0.35f, c.y + u * 0.65f),
+                ImVec2(c.x + u * 0.85f, c.y + u * 0.10f), wing_col, stroke);
+}
+
 /// An icon button. `id` keeps widget identity stable while the label changes
-/// with the language; the tooltip carries the translated, shaped name. The
-/// padding between buttons is explicit, because "the buttons at the top left are
-/// stuck together" was a real report about the previous text-only toolbar.
+/// with the language; the tooltip carries the translated, shaped name.
 bool icon_button(const char* id, Icon icon, const std::string& tooltip, bool active,
-                 float size = 26.0f) {
+                 float size = 28.0f) {
     ImGui::PushID(id);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##btn", ImVec2(size, size));
     const bool clicked = ImGui::IsItemActivated() && ImGui::IsItemHovered();
     const bool hovered = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 bg = active ? ImGui::GetColorU32(ImGuiCol_ButtonActive)
-                            : (hovered ? ImGui::GetColorU32(ImGuiCol_ButtonHovered)
-                                       : ImGui::GetColorU32(ImGuiCol_FrameBg));
-    dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), bg, 3.0f);
+
+    ImU32 bg = 0;
+    ImU32 border = 0;
     if (active) {
-        dl->AddRect(p, ImVec2(p.x + size, p.y + size), ImGui::GetColorU32(ImGuiCol_CheckMark), 3.0f, 0,
-                    1.5f);
+        bg = ImGui::GetColorU32(theme::alpha(theme::accent(), 0.28f));
+        border = ImGui::GetColorU32(theme::accent());
+    } else if (hovered) {
+        bg = IM_COL32(46, 54, 70, 240);
+        border = IM_COL32(75, 88, 114, 200);
+    } else {
+        bg = IM_COL32(31, 36, 47, 180);
+        border = IM_COL32(44, 52, 68, 140);
     }
-    const ImU32 fg = ImGui::GetColorU32(active ? ImGuiCol_CheckMark : ImGuiCol_Text);
+
+    const float rounding = 4.0f;
+    dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), bg, rounding);
+    dl->AddRect(p, ImVec2(p.x + size, p.y + size), border, rounding, 0, active ? 1.5f : 1.0f);
+
+    const ImU32 fg = active ? ImGui::GetColorU32(theme::accent())
+                            : (hovered ? IM_COL32(250, 252, 255, 255)
+                                       : ImGui::GetColorU32(theme::text_primary()));
     draw_icon(dl, ImVec2(p.x + size * 0.5f, p.y + size * 0.5f), size * 0.52f, icon, fg);
     if (!tooltip.empty() && hovered) {
         ImGui::SetTooltip("%s", tooltip.c_str());
@@ -292,16 +512,106 @@ bool icon_button(const char* id, Icon icon, const std::string& tooltip, bool act
 
 /// Same button, text label: for actions whose meaning a glyph cannot carry
 /// (Local/World is a state, not an icon).
-bool text_toolbar_button(const char* id, const std::string& label, bool active) {
+bool text_toolbar_button(const char* id, const std::string& label, bool active,
+                         float height = 28.0f) {
     ImGui::PushID(id);
+    const ImVec2 text_sz = ImGui::CalcTextSize(label.c_str());
+    const float w = text_sz.x + 20.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##btn", ImVec2(w, height));
+    const bool clicked = ImGui::IsItemActivated() && ImGui::IsItemHovered();
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    ImU32 bg = 0;
+    ImU32 border = 0;
     if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        bg = ImGui::GetColorU32(theme::alpha(theme::accent(), 0.28f));
+        border = ImGui::GetColorU32(theme::accent());
+    } else if (hovered) {
+        bg = IM_COL32(46, 54, 70, 240);
+        border = IM_COL32(75, 88, 114, 200);
+    } else {
+        bg = IM_COL32(31, 36, 47, 180);
+        border = IM_COL32(44, 52, 68, 140);
     }
-    const bool clicked = ImGui::Button(label.c_str(), ImVec2(0.0f, 26.0f));
-    if (active) {
-        ImGui::PopStyleColor();
+
+    const float rounding = 4.0f;
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + height), bg, rounding);
+    dl->AddRect(p, ImVec2(p.x + w, p.y + height), border, rounding, 0, active ? 1.5f : 1.0f);
+
+    const ImU32 fg = active ? ImGui::GetColorU32(theme::accent())
+                            : (hovered ? IM_COL32(250, 252, 255, 255)
+                                       : ImGui::GetColorU32(theme::text_primary()));
+    const ImVec2 text_pos(p.x + (w - text_sz.x) * 0.5f, p.y + (height - text_sz.y) * 0.5f);
+    dl->AddText(text_pos, fg, label.c_str());
+
+    if (!label.empty() && hovered) {
+        ImGui::SetTooltip("%s", label.c_str());
+    }
+
+    ImGui::PopID();
+    return clicked;
+}
+
+void toolbar_divider(float btn_sz) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = 18.0f;
+    const float y0 = p.y + (btn_sz - h) * 0.5f;
+    dl->AddLine(ImVec2(p.x + 5.0f, y0), ImVec2(p.x + 5.0f, y0 + h), IM_COL32(52, 60, 78, 200), 1.0f);
+    ImGui::Dummy(ImVec2(11.0f, btn_sz));
+    ImGui::SameLine();
+}
+
+bool play_button(EditorApp& app, float btn_sz = 28.0f) {
+    const bool playing = app.playing();
+    const float btn_w = 34.0f;
+    ImGui::PushID("##tb_playstop");
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##btn", ImVec2(btn_w, btn_sz));
+    const bool clicked = ImGui::IsItemActivated() && ImGui::IsItemHovered();
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    ImU32 bg = 0;
+    ImU32 border = 0;
+    ImU32 fg = 0;
+
+    if (playing) {
+        bg = hovered ? IM_COL32(195, 48, 56, 255) : IM_COL32(150, 36, 42, 220);
+        border = IM_COL32(235, 80, 88, 255);
+        fg = IM_COL32(255, 255, 255, 255);
+    } else {
+        bg = hovered ? IM_COL32(38, 128, 68, 255) : IM_COL32(28, 86, 48, 210);
+        border = hovered ? IM_COL32(65, 195, 105, 255) : IM_COL32(48, 142, 78, 180);
+        fg = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(210, 250, 225, 255);
+    }
+
+    const float rounding = 4.0f;
+    dl->AddRectFilled(p, ImVec2(p.x + btn_w, p.y + btn_sz), bg, rounding);
+    dl->AddRect(p, ImVec2(p.x + btn_w, p.y + btn_sz), border, rounding, 0, 1.2f);
+
+    draw_icon(dl, ImVec2(p.x + btn_w * 0.5f, p.y + btn_sz * 0.5f), btn_sz * 0.54f,
+              playing ? Icon::Stop : Icon::Play, fg);
+
+    if (hovered) {
+        ImGui::SetTooltip("%s", playing ? AV("stop").c_str() : AV("play").c_str());
     }
     ImGui::PopID();
+
+    if (clicked) {
+        std::string err;
+        if (playing) {
+            if (!app.stop(err)) {
+                push_error_console(app, "Stop failed", err);
+            }
+        } else {
+            if (!app.launch_game(err)) {
+                push_error_console(app, "Play failed", err);
+            }
+        }
+    }
     return clicked;
 }
 // --- native file dialogs -----------------------------------------------------
@@ -600,17 +910,17 @@ void gizmo_mode_menu(EditorApp& app, GizmoMode mode, const char* key, const char
 
 /// Same action as gizmo_mode_menu, as a held-accent icon button.
 void gizmo_mode_button(EditorApp& app, const char* id, Icon icon, const char* key,
-                       const char* shortcut_suffix, GizmoMode mode) {
+                       const char* shortcut_suffix, GizmoMode mode, float size = 28.0f) {
     const bool on = (app.gizmo_mode() == mode);
-    if (icon_button(id, icon, AV(key) + shortcut_suffix, on)) {
+    if (icon_button(id, icon, AV(key) + shortcut_suffix, on, size)) {
         app.set_gizmo_mode(mode);
     }
 }
 
 /// Create-menu primitive as a toolbar button (asset cook + entity, one undo).
 void create_primitive_button(EditorApp& app, const char* id, Icon icon, PrimitiveKind kind,
-                             const char* key) {
-    if (icon_button(id, icon, AV(key), false)) {
+                             const char* key, float size = 28.0f) {
+    if (icon_button(id, icon, AV(key), false, size)) {
         std::string err;
         if (!app.create_primitive(kind, ecs::kInvalidEntity, err)) {
             push_error_console(app, std::string("Create ") + key + " failed", err);
@@ -668,8 +978,11 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     EditorUiSettings& st = ui_settings();
 
     // --- Menu bar -------------------------------------------------------------
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, IM_COL32(18, 21, 27, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(16.0f, 6.0f));
     if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu(("  " + AV("file")).c_str())) {
+        if (ImGui::BeginMenu(AV("file").c_str())) {
             if (ImGui::MenuItem(AV("new_scene").c_str(), "Ctrl+N")) {
                 std::string err;
                 if (!app.new_scene(err)) {
@@ -720,7 +1033,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(("  " + AV("edit")).c_str())) {
+        if (ImGui::BeginMenu(AV("edit").c_str())) {
             const bool can_undo = app.stack().undo_size() > 0;
             const bool can_redo = app.stack().redo_size() > 0;
             if (ImGui::MenuItem(AV("undo").c_str(), "Ctrl+Z", false, can_undo)) {
@@ -767,7 +1080,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(("  " + AV("view")).c_str())) {
+        if (ImGui::BeginMenu(AV("view").c_str())) {
             ImGui::MenuItem(AV("grid_step").c_str(), nullptr, &st.show_grid);
             ImGui::MenuItem(AV("show_navmesh").c_str(), nullptr, &st.show_navmesh);
             ImGui::MenuItem(AV("fps").c_str(), nullptr, &st.show_fps);
@@ -798,17 +1111,17 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(("  " + AV("create")).c_str())) {
+        if (ImGui::BeginMenu(AV("create").c_str())) {
             create_menu_contents(app);
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(("  " + AV("game")).c_str())) {
+        if (ImGui::BeginMenu(AV("game").c_str())) {
             game_menu_contents(app);
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(("  " + AV("settings")).c_str())) {
+        if (ImGui::BeginMenu(AV("settings").c_str())) {
             if (ImGui::MenuItem(AV("preferences").c_str())) {
                 st.show_settings = true;
             }
@@ -841,7 +1154,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(("  " + AV("help")).c_str())) {
+        if (ImGui::BeginMenu(AV("help").c_str())) {
             if (ImGui::MenuItem(AV("start_here_menu").c_str())) {
                 st.show_start_here = true;
             }
@@ -858,191 +1171,203 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         // Right-hand side: the live status. The numbers that used to sit in the
         // middle of the bar are still here, just not on top of the buttons.
         const EditorStatus status = app.status();
-        const float right_start = status_block_start();
-        if (ImGui::GetCursorPosX() < right_start) {
-            ImGui::SetCursorPosX(right_start);
+        std::string status_str;
+        const auto sep = [&]() -> const char* { return status_str.empty() ? "" : " | "; };
+        if (st.show_fps) {
+            char fb[64] = {};
+            std::snprintf(fb, sizeof(fb), "%.1f %s (%.1f ms)", status.fps,
+                          ui::tr("fps").c_str(), status.frame_ms);
+            status_str += fb;
         }
-        if (rt_active()) {
-            // RTL: one shaped line, right-aligned (SameLine chains cannot
-            // mirror per item, so the whole block becomes a single string).
-            // Parts compose in LOGICAL order, then shape once — the shaper
-            // keeps the Latin/digit runs (paths, numbers) in order.
-            std::string line;
-            const auto sep = [&]() -> const char* { return line.empty() ? "" : " | "; };
-            if (st.show_fps) {
-                char fb[64] = {};
-                std::snprintf(fb, sizeof(fb), "%.1f %s | %.2f ms", status.fps,
-                              ui::tr("fps").c_str(), status.frame_ms);
-                line += fb;
-            }
-            if (stats.validation_on && st.show_validation) {
-                char vb[64] = {};
-                std::snprintf(vb, sizeof(vb), "%s%s %u", sep(), ui::tr("validation").c_str(),
-                              stats.validation_errors);
-                line += vb;
-            }
-            {
-                char eb[64] = {};
-                std::snprintf(eb, sizeof(eb), "%s%zu %s", sep(), status.entity_count,
-                              ui::tr("entities").c_str());
-                line += eb;
-            }
-            if (app.has_project()) {
-                line += sep();
-                line += ui::tr("project") + " " + app.project_name();
-            }
-            rt_disabled_str(ui::shape_arabic(line));
-        } else {
-            if (st.show_fps) {
-                ImGui::TextDisabled("%.1f %s | %.2f ms", status.fps, ui::tr("fps").c_str(),
-                                    status.frame_ms);
-            }
-            if (stats.validation_on && st.show_validation) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("| %s %u", AV("validation").c_str(), stats.validation_errors);
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled("| %zu %s", status.entity_count, AV("entities").c_str());
-            if (app.has_project()) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("| %s %s", AV("project").c_str(), app.project_name().c_str());
-            }
+        if (stats.validation_on && st.show_validation) {
+            char vb[64] = {};
+            std::snprintf(vb, sizeof(vb), "%s%s: %u", sep(), ui::tr("validation").c_str(),
+                          stats.validation_errors);
+            status_str += vb;
         }
+        {
+            char eb[64] = {};
+            std::snprintf(eb, sizeof(eb), "%s%zu %s", sep(), status.entity_count,
+                          ui::tr("entities").c_str());
+            status_str += eb;
+        }
+        if (app.has_project()) {
+            status_str += sep();
+            status_str += ui::tr("project") + ": " + app.project_name();
+        }
+
+        const std::string shaped_status = rt_active() ? ui::shape_arabic(status_str) : status_str;
+        const float status_w = ImGui::CalcTextSize(shaped_status.c_str()).x;
+        const float target_x = ImGui::GetWindowWidth() - status_w - 18.0f;
+        if (target_x > ImGui::GetCursorPosX()) {
+            ImGui::SetCursorPosX(target_x);
+        }
+        ImGui::TextDisabled("%s", shaped_status.c_str());
+
+        // 1px border line under the main menu bar
+        const ImVec2 bar_pos = ImGui::GetWindowPos();
+        const ImVec2 bar_sz = ImGui::GetWindowSize();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddLine(ImVec2(bar_pos.x, bar_pos.y + bar_sz.y - 1.0f),
+                    ImVec2(bar_pos.x + bar_sz.x, bar_pos.y + bar_sz.y - 1.0f),
+                    IM_COL32(36, 42, 54, 255), 1.0f);
+
         ImGui::EndMainMenuBar();
     }
-// --- Toolbar row ----------------------------------------------------------
-    //
-    // BeginViewportSideBar reserves the strip above the dockspace, so the panels
-    // start BELOW the toolbar. Painting the buttons over the first docked panel
-    // (which is what a plain window at y = 0 does) is the other classic way to
-    // make a toolbar feel broken.
-    const float toolbar_h = ImGui::GetFrameHeight() + 10.0f;
-    // ImGuiWindowFlags_MenuBar is REQUIRED: BeginMenuBar() returns false on a
-    // window without it (imgui_widgets.cpp: `if (!(window->Flags &
-    // ImGuiWindowFlags_MenuBar)) return false;`). Without the flag the strip was
-    // reserved but every button — New, Open, Ground, Play — silently never
-    // drew, which is why the editor looked like a viewport with no tools.
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(1);
+
+    // --- Toolbar row ----------------------------------------------------------
+    const float toolbar_h = 44.0f;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(23, 26, 33, 255));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(36, 42, 54, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
     if (ImGui::BeginViewportSideBar("##NFToolbar", ImGui::GetMainViewport(), ImGuiDir_Up, toolbar_h,
-                                    ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar |
-                                        ImGuiWindowFlags_NoSavedSettings)) {
-        if (ImGui::BeginMenuBar()) {
-            // Neutral wordmark: the brand was the last gold hold-out, and a
-            // colored label competed with the actual state (Play, active tool).
-            ImGui::TextColored(theme::text_primary(), "SANAD ENGINE");
-            ImGui::SameLine();
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-            ImGui::SameLine();
+                                    ImGuiWindowFlags_NoScrollbar |
+                                    ImGuiWindowFlags_NoSavedSettings |
+                                    ImGuiWindowFlags_NoNav |
+                                    ImGuiWindowFlags_NoTitleBar |
+                                    ImGuiWindowFlags_NoResize |
+                                    ImGuiWindowFlags_NoMove)) {
+        const float btn_sz = 28.0f;
+        const float y_pos = (toolbar_h - btn_sz) * 0.5f;
+        ImGui::SetCursorPosY(y_pos);
 
-            if (icon_button("##tb_new", Icon::New, AV("new_scene"), false)) {
-                std::string err;
-                if (!app.new_scene(err)) {
-                    push_error_console(app, "New scene failed", err);
-                }
-            }
-            ImGui::SameLine();
-            if (icon_button("##tb_open", Icon::Open, AV("open_scene"), false)) {
-                std::string picked;
-                if (open_file_dialog(AV("open_scene"), scene_filter(), picked)) {
-                    intents.open_scene_dialog_confirm = true;
-                    intents.open_scene_path = picked;
-                }
-            }
-            ImGui::SameLine();
-            if (icon_button("##tb_save", Icon::Save, AV("save_scene"), false)) {
-                std::string err;
-                if (!app.save(err)) {
-                    push_error_console(app, "Save failed", err);
-                }
-            }
-            ImGui::SameLine();
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-            ImGui::SameLine();
+        const ImVec2 tb_pos = ImGui::GetWindowPos();
+        const ImVec2 tb_sz = ImGui::GetWindowSize();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
 
-            // Gizmo mode: held-accent buttons, and W/E/R keep working.
-            gizmo_mode_button(app, "##tb_move", Icon::Move, "move", "   (W)",
-                              GizmoMode::Translate);
-            ImGui::SameLine();
-            gizmo_mode_button(app, "##tb_rotate", Icon::Rotate, "rotate", "   (E)",
-                              GizmoMode::Rotate);
-            ImGui::SameLine();
-            gizmo_mode_button(app, "##tb_scale", Icon::Scale, "scale_tool", "   (R)",
-                              GizmoMode::Scale);
-            ImGui::SameLine();
+        // 1px bottom border line for the toolbar
+        dl->AddLine(ImVec2(tb_pos.x, tb_pos.y + toolbar_h - 1.0f),
+                    ImVec2(tb_pos.x + tb_sz.x, tb_pos.y + toolbar_h - 1.0f),
+                    IM_COL32(34, 40, 52, 255), 1.0f);
 
-            // Local/World reads as a labelled state, so the glyph does not have
-            // to carry the meaning on its own.
-            const bool local_space = (app.gizmo_space() == GizmoSpace::Local);
-            if (text_toolbar_button("##tb_space", local_space ? AV("local_space") : AV("world_space"),
-                                    local_space)) {
-                app.set_gizmo_space(local_space ? GizmoSpace::World : GizmoSpace::Local);
+        // Brand mark + localised engine name pill
+        {
+            const float badge_sz = 22.0f;
+            const std::string name = AV("engine_name");
+            const ImVec2 text_sz = ImGui::CalcTextSize(name.c_str());
+            const float pill_w = badge_sz + 8.0f + text_sz.x + 14.0f;
+            const ImVec2 cur = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##tb_brand", ImVec2(pill_w, btn_sz));
+            const bool brand_hovered = ImGui::IsItemHovered();
+            if (ImGui::IsItemClicked()) {
+                st.show_about = true;
             }
-            ImGui::SameLine();
-            if (icon_button("##tb_snap", Icon::Snap, AV("snap"), st.snap_enabled)) {
-                st.snap_enabled = !st.snap_enabled;
-                sync_snap_from_settings(app, st);
+            if (brand_hovered) {
+                dl->AddRectFilled(cur, ImVec2(cur.x + pill_w, cur.y + btn_sz),
+                                  IM_COL32(40, 48, 64, 180), 4.0f);
+                dl->AddRect(cur, ImVec2(cur.x + pill_w, cur.y + btn_sz),
+                            IM_COL32(65, 78, 102, 160), 4.0f);
+                ImGui::SetTooltip("%s", AV("about").c_str());
             }
-            ImGui::SameLine();
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-            ImGui::SameLine();
-            // Decluttered row (G9): only actions used while a scene is being
-            // shaped keep a slot. The once-per-scene creates (light, camera,
-            // sky) live in Create, and Import/Export live in File with their
-            // Ctrl+I / Ctrl+E shortcuts — a button that is clicked twice per
-            // project does not earn permanent space in the bar.
-            create_primitive_button(app, "##tb_ground", Icon::Ground, PrimitiveKind::Ground, "add_ground");
-            ImGui::SameLine();
-            create_primitive_button(app, "##tb_cube", Icon::Cube, PrimitiveKind::Cube, "add_cube");
-            ImGui::SameLine();
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-            ImGui::SameLine();
-
-            if (icon_button("##tb_undo", Icon::Undo, AV("undo"), false)) {
-                std::string err;
-                if (!app.undo(err)) {
-                    push_error_console(app, "Undo failed", err);
-                }
-            }
-            ImGui::SameLine();
-            if (icon_button("##tb_redo", Icon::Redo, AV("redo"), false)) {
-                std::string err;
-                if (!app.redo(err)) {
-                    push_error_console(app, "Redo failed", err);
-                }
-            }
-            ImGui::SameLine();
-            if (icon_button("##tb_settings", Icon::Settings, AV("settings"), st.show_settings)) {
-                st.show_settings = !st.show_settings;
-            }
-
-            // Play/Stop sit on the right edge: the one pair whose state has to be
-            // legible at a glance.
-            const float play_x = ImGui::GetWindowWidth() - (ImGui::GetFrameHeight() + 30.0f);
-            if (ImGui::GetCursorPosX() < play_x) {
-                ImGui::SetCursorPosX(play_x);
-            }
-            if (!app.playing()) {
-                if (icon_button("##tb_play", Icon::Play, AV("play"), false)) {
-                    std::string err;
-                    // Play launches the game in its own window: a real
-                    // Runtime loop with real keyboard input, independent of
-                    // the editor (which stays editable meanwhile).
-                    if (!app.launch_game(err)) {
-                        push_error_console(app, "Play failed", err);
-                    }
-                }
-            } else if (icon_button("##tb_stop", Icon::Stop, AV("stop"), true)) {
-                std::string err;
-                if (!app.stop(err)) {
-                    push_error_console(app, "Stop failed", err);
-                }
-            }
-            ImGui::EndMenuBar();
+            const float badge_y = cur.y + (btn_sz - badge_sz) * 0.5f;
+            draw_brand_badge(dl, ImVec2(cur.x + 6.0f, badge_y), badge_sz);
+            const float text_y = cur.y + (btn_sz - text_sz.y) * 0.5f;
+            dl->AddText(ImVec2(cur.x + badge_sz + 12.0f, text_y),
+                        ImGui::GetColorU32(theme::text_primary()), name.c_str());
         }
+
+        ImGui::SameLine(0.0f, 10.0f);
+        toolbar_divider(btn_sz);
+
+        // 1. Scene / Project actions
+        if (icon_button("##tb_new", Icon::New, AV("new_scene") + " (Ctrl+N)", false, btn_sz)) {
+            std::string err;
+            if (!app.new_scene(err)) {
+                push_error_console(app, "New scene failed", err);
+            }
+        }
+        ImGui::SameLine();
+        if (icon_button("##tb_open", Icon::Open, AV("open_scene") + " (Ctrl+O)", false, btn_sz)) {
+            std::string picked;
+            if (open_file_dialog(AV("open_scene"), scene_filter(), picked)) {
+                intents.open_scene_dialog_confirm = true;
+                intents.open_scene_path = picked;
+            }
+        }
+        ImGui::SameLine();
+        if (icon_button("##tb_save", Icon::Save, AV("save_scene") + " (Ctrl+S)", false, btn_sz)) {
+            std::string err;
+            if (!app.save(err)) {
+                push_error_console(app, "Save failed", err);
+            }
+        }
+
+        ImGui::SameLine(0.0f, 8.0f);
+        toolbar_divider(btn_sz);
+
+        // 2. Gizmo modes
+        gizmo_mode_button(app, "##tb_move", Icon::Move, "move", " (W)", GizmoMode::Translate, btn_sz);
+        ImGui::SameLine();
+        gizmo_mode_button(app, "##tb_rotate", Icon::Rotate, "rotate", " (E)", GizmoMode::Rotate, btn_sz);
+        ImGui::SameLine();
+        gizmo_mode_button(app, "##tb_scale", Icon::Scale, "scale_tool", " (R)", GizmoMode::Scale, btn_sz);
+        ImGui::SameLine();
+
+        const bool local_space = (app.gizmo_space() == GizmoSpace::Local);
+        if (text_toolbar_button("##tb_space", local_space ? AV("local_space") : AV("world_space"),
+                                local_space, btn_sz)) {
+            app.set_gizmo_space(local_space ? GizmoSpace::World : GizmoSpace::Local);
+        }
+        ImGui::SameLine();
+        if (icon_button("##tb_snap", Icon::Snap, AV("snap"), st.snap_enabled, btn_sz)) {
+            st.snap_enabled = !st.snap_enabled;
+            sync_snap_from_settings(app, st);
+        }
+
+        ImGui::SameLine(0.0f, 8.0f);
+        toolbar_divider(btn_sz);
+
+        // 3. Quick primitives
+        create_primitive_button(app, "##tb_ground", Icon::Ground, PrimitiveKind::Ground, "add_ground", btn_sz);
+        ImGui::SameLine();
+        create_primitive_button(app, "##tb_cube", Icon::Cube, PrimitiveKind::Cube, "add_cube", btn_sz);
+
+        ImGui::SameLine(0.0f, 8.0f);
+        toolbar_divider(btn_sz);
+
+        // 4. Undo / Redo & Settings
+        if (icon_button("##tb_undo", Icon::Undo, AV("undo") + " (Ctrl+Z)", false, btn_sz)) {
+            std::string err;
+            if (!app.undo(err)) {
+                push_error_console(app, "Undo failed", err);
+            }
+        }
+        ImGui::SameLine();
+        if (icon_button("##tb_redo", Icon::Redo, AV("redo") + " (Ctrl+Y)", false, btn_sz)) {
+            std::string err;
+            if (!app.redo(err)) {
+                push_error_console(app, "Redo failed", err);
+            }
+        }
+        ImGui::SameLine();
+        if (icon_button("##tb_settings", Icon::Settings, AV("settings"), st.show_settings, btn_sz)) {
+            st.show_settings = !st.show_settings;
+        }
+
+        // 5. Play / Stop (right-aligned)
+        const float play_btn_w = 34.0f;
+        const float play_x = ImGui::GetWindowWidth() - play_btn_w - 18.0f;
+        if (ImGui::GetCursorPosX() < play_x) {
+            ImGui::SetCursorPosX(play_x);
+        }
+        ImGui::SetCursorPosY(y_pos);
+        play_button(app, btn_sz);
     }
     ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
 // --- Settings window ------------------------------------------------------
     if (st.show_settings) {
-        ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("settings") + "###NFSettings").c_str(), &st.show_settings)) {
             if (settings_section("viewport", true)) {
                 ImGui::Checkbox(AV("grid_step").c_str(), &st.show_grid);
@@ -1206,7 +1531,11 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     }
 // --- Import dialog --------------------------------------------------------
     if (st.show_import) {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowSize(ImVec2(580.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("import_model") + "###NFImport").c_str(), &st.show_import)) {
             static char src[MAX_PATH * 2] = {};
             static char dst[128] = "content://Meshes";
@@ -1220,10 +1549,9 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                     std::snprintf(src, sizeof(src), "%s", picked.c_str());
                 }
             }
-            ImGui::SetNextItemWidth(300.0f);
+            ImGui::TextDisabled("%s", AV("import_to").c_str());
+            ImGui::SetNextItemWidth(-140.0f);
             ImGui::InputText("###dst", dst, sizeof(dst));
-            ImGui::SameLine();
-            ImGui::TextDisabled("content://");
             ImGui::Separator();
             ImGui::BeginDisabled(src[0] == '\0');
             if (ImGui::Button(AV("import_model").c_str(), ImVec2(160.0f, 0.0f))) {
@@ -1277,7 +1605,11 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     }
 // --- Export dialog --------------------------------------------------------
     if (st.show_export) {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowSize(ImVec2(620.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("export") + "###NFExport").c_str(), &st.show_export)) {
             static char path[MAX_PATH * 2] = {};
             const std::vector<assets::MeshFormat>& formats = assets::mesh_formats();
@@ -1355,15 +1687,103 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         ImGui::End();
     }
 
+    // --- Keyboard shortcuts modal (F1 / Help > Shortcuts) ---------------------
+    if (st.show_shortcuts) {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 530.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (ImGui::Begin((AV("shortcuts") + "###NFShortcuts").c_str(), &st.show_shortcuts)) {
+            auto shortcut_row = [](const std::string& action, const char* key) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                rt_text_str(action);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f, 0.72f, 1.0f, 1.0f));
+                ImGui::TextUnformatted(key);
+                ImGui::PopStyleColor();
+            };
+
+            auto category_header = [](const std::string& title) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Spacing();
+                rt_colored_str(theme::accent(), title);
+                ImGui::Separator();
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Spacing();
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ImGui::Separator();
+            };
+
+            if (ImGui::BeginTable("##shortcuts_table", 2,
+                                  ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn(AV("shortcut_action").c_str(), ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(AV("shortcut_key").c_str(), ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                ImGui::TableHeadersRow();
+
+                category_header(AV("shortcut_general"));
+                shortcut_row(AV("shortcuts"), "F1");
+                shortcut_row(AV("shortcut_f5"), "F5");
+                shortcut_row(AV("save_scene"), "Ctrl + S");
+                shortcut_row(AV("open_scene"), "Ctrl + O");
+                shortcut_row(AV("new_scene"), "Ctrl + N");
+                shortcut_row(AV("undo"), "Ctrl + Z");
+                shortcut_row(AV("redo"), "Ctrl + Y / Ctrl+Shift+Z");
+                shortcut_row(AV("close"), "Esc");
+
+                category_header(AV("shortcut_viewport"));
+                shortcut_row(AV("shortcut_select"), "Q");
+                shortcut_row(AV("move"), "W");
+                shortcut_row(AV("rotate"), "E");
+                shortcut_row(AV("scale_tool"), "R");
+                shortcut_row(AV("shortcut_focus"), "F");
+                shortcut_row(AV("shortcut_fly_cam"), "RMB + WASD");
+
+                category_header(AV("entities"));
+                shortcut_row(AV("delete"), "Delete");
+                shortcut_row(AV("duplicate"), "Ctrl + D");
+
+                category_header(AV("assets"));
+                shortcut_row(AV("import_model"), "Ctrl + I");
+                shortcut_row(AV("export"), "Ctrl + E");
+
+                ImGui::EndTable();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            if (ImGui::Button(AV("close").c_str(), ImVec2(120.0f, 0.0f))) {
+                st.show_shortcuts = false;
+            }
+        }
+        ImGui::End();
+    }
+
     // --- About ----------------------------------------------------------------
     if (st.show_about) {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowSize(ImVec2(500.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("about") + "###NFAbout").c_str(), &st.show_about)) {
-            // Compose LOGICAL then shape once: concatenating two already-shaped
-            // strings would freeze the LTR order instead of the visual RTL one.
-            rt_colored_str(ImVec4(1.0f, 0.62f, 0.15f, 1.0f),
-                           ui::shape_arabic(ui::tr("engine_name") + " - " + ui::tr("engine_name")));
-            rt_text_str(ui::shape_arabic(ui::tr("founder") + ": " + ui::tr("founder")));
+#ifndef NF_ENGINE_VERSION
+#define NF_ENGINE_VERSION "0.6.0"
+#endif
+            const float badge_sz = 44.0f;
+            const ImVec2 cur = ImGui::GetCursorScreenPos();
+            draw_brand_badge(ImGui::GetWindowDrawList(), cur, badge_sz);
+            ImGui::Dummy(ImVec2(badge_sz, badge_sz));
+            ImGui::SameLine(0.0f, 12.0f);
+            ImGui::BeginGroup();
+            rt_colored_str(ImVec4(1.0f, 0.68f, 0.22f, 1.0f),
+                           ui::shape_arabic(ui::tr("engine_name") + "  v" + NF_ENGINE_VERSION));
+            rt_text_str(AV("founder"));
+            ImGui::EndGroup();
+            ImGui::Spacing();
             rt_wrapped_key("about_tagline");
             ImGui::Separator();
             rt_text_str(ui::shape_arabic(

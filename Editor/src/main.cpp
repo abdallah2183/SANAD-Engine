@@ -122,6 +122,12 @@ struct EditorConfig {
     // --no-start-here: suppress the first-run guide. Deterministic captures and
     // automation runs want the scene, not an onboarding card on top of it.
     bool no_start_here = false;
+    bool open_settings = false;
+    bool open_shortcuts = false;
+    bool open_about = false;
+    bool open_import = false;
+    bool open_export = false;
+    bool open_start_here = false;
 };
 
 // Writes an RGBA8 buffer as a 24-bit BMP.
@@ -228,6 +234,18 @@ EditorConfig parse_args(int argc, char** argv) {
             c.no_ssao = true;
         } else if (arg == "--no-start-here") {
             c.no_start_here = true;
+        } else if (arg == "--open-settings") {
+            c.open_settings = true;
+        } else if (arg == "--open-shortcuts") {
+            c.open_shortcuts = true;
+        } else if (arg == "--open-about") {
+            c.open_about = true;
+        } else if (arg == "--open-import") {
+            c.open_import = true;
+        } else if (arg == "--open-export") {
+            c.open_export = true;
+        } else if (arg == "--open-start-here") {
+            c.open_start_here = true;
         } else if (arg == "--help" || arg == "-h") {
             std::printf("SANADEditor (Phase 5)\n"
                         "  --project <file>    Open inside a .nfproj (mounts come from it)\n"
@@ -426,7 +444,7 @@ public:
 // Controls: right-drag orbits, wheel zooms, right-hold + WASD/QE flies
 // (WASD stays gizmo shortcuts when right is not held).
 void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::UiIntents& in,
-                               float dt, bool fast, const float* pivot) {
+                               float dt, bool fast, const float* pivot, bool is_2d = false) {
     nf::scene::Scene* scene = runtime.edit_scene();
     if (scene == nullptr) {
         return;
@@ -457,23 +475,54 @@ void apply_viewport_navigation(nf::runtime::Runtime& runtime, const nf::editor::
     if (tr == nullptr) {
         return;
     }
-    constexpr float kDeg = 3.14159265359f / 180.0f;
-    // The orbit centre is the VIEW PIVOT, not the world origin. Framing sets it,
-    // so content anywhere in the level is reachable by orbit + zoom; with the
-    // origin hardcoded, a level authored at x = 50 could not be looked at at
-    // all, however the user dragged. `pivot` may be null (headless path), in
-    // which case this is the old origin-centred behaviour.
+
     const float pvx = (pivot != nullptr) ? pivot[0] : 0.0f;
     const float pvy = (pivot != nullptr) ? pivot[1] : 0.0f;
     const float pvz = (pivot != nullptr) ? pivot[2] : 0.0f;
+
+    if (is_2d) {
+        // 2D Orthogonal Viewport Mode: locked front-facing plane (yaw 0, pitch 0).
+        // Dragging pans the 2D camera plane instead of rotating.
+        float dist = tr->local_z - pvz;
+        if (dist < 1.0f) {
+            dist = 5.0f;
+        }
+        bool moved_2d = false;
+        if (in.nav_orbit && (in.nav_dx != 0.0f || in.nav_dy != 0.0f)) {
+            const float pan_factor = (fast ? 0.005f : 0.002f) * dist;
+            tr->local_x -= in.nav_dx * pan_factor;
+            tr->local_y += in.nav_dy * pan_factor;
+            moved_2d = true;
+        }
+        if (in.nav_wheel != 0.0f) {
+            dist *= std::exp(-in.nav_wheel * 0.15f);
+            moved_2d = true;
+        }
+        if (dt > 0.0f) {
+            const float pan_speed = (fast ? 12.0f : 5.0f) * (dist > 2.0f ? dist * 0.15f : 1.0f);
+            if (in.nav_f || in.nav_u) { tr->local_y += pan_speed * dt; moved_2d = true; }
+            if (in.nav_b || in.nav_d) { tr->local_y -= pan_speed * dt; moved_2d = true; }
+            if (in.nav_l) { tr->local_x -= pan_speed * dt; moved_2d = true; }
+            if (in.nav_r) { tr->local_x += pan_speed * dt; moved_2d = true; }
+        }
+        if (dist < 0.5f) { dist = 0.5f; }
+        else if (dist > 500.0f) { dist = 500.0f; }
+        tr->local_z = pvz + dist;
+        tr->rot_x = 0.0f;
+        tr->rot_y = 0.0f;
+        tr->rot_z = 0.0f;
+        if (moved_2d) {
+            tr->dirty = true;
+            nf::scene::propagate_transforms(world);
+        }
+        return;
+    }
+
+    constexpr float kDeg = 3.14159265359f / 180.0f;
     // Eye -> spherical around the pivot.
     float dx = tr->world_x - pvx, dy = tr->world_y - pvy, dz = tr->world_z - pvz;
     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (!(dist > 1e-3f)) {
-        // The eye is exactly ON the pivot (which is what a frame on a tiny
-        // object, or a scene whose origin is its centre, produces). The
-        // direction is undefined there, so fall back to a readable default
-        // rather than dividing by zero and producing NaN transforms.
         dx = 0.0f;
         dy = 2.0f;
         dz = 5.0f;
@@ -845,6 +894,24 @@ int main(int argc, char** argv) {
         nf::editor::ui_settings().show_start_here = nf::editor::load_settings().start_here;
         if (cfg.no_start_here) {
             nf::editor::ui_settings().show_start_here = false;
+        }
+        if (cfg.open_settings) {
+            nf::editor::ui_settings().show_settings = true;
+        }
+        if (cfg.open_shortcuts) {
+            nf::editor::ui_settings().show_shortcuts = true;
+        }
+        if (cfg.open_about) {
+            nf::editor::ui_settings().show_about = true;
+        }
+        if (cfg.open_import) {
+            nf::editor::ui_settings().show_import = true;
+        }
+        if (cfg.open_export) {
+            nf::editor::ui_settings().show_export = true;
+        }
+        if (cfg.open_start_here) {
+            nf::editor::ui_settings().show_start_here = true;
         }
         if (app.has_project()) {
             NF_LOG_INFO(nf::LogCategory::Editor, "Editor opened in project '{}'", app.project_name());
@@ -1367,6 +1434,13 @@ int main(int argc, char** argv) {
                     }
                     if (key_edge('R')) {
                         app.set_gizmo_mode(nf::editor::GizmoMode::Scale);
+                    }
+                    // F focuses/frames the camera on the currently selected entity
+                    if (key_edge('F') && !key_down(VK_CONTROL) && !key_down(VK_SHIFT) && app.selection().has_selection()) {
+                        std::string ferr;
+                        if (!app.frame_selection(ferr)) {
+                            NF_LOG_WARN(nf::LogCategory::Editor, "Frame selection: {}", ferr);
+                        }
                     }
                     // X toggles the gizmo's transform space. The toolbar button
                     // was the only way to reach Local/World, so the single most
@@ -2046,7 +2120,7 @@ int main(int argc, char** argv) {
                         }
                     }
                     apply_viewport_navigation(runtime, ui_in, dt, key_down(VK_SHIFT),
-                                              app.view_pivot());
+                                              app.view_pivot(), app.is_2d_mode());
                     // The framed radius becomes an eye distance here, because the
                     // fov lives in the view layer. Aiming at the sphere that
                     // circumscribes the object is what puts it on screen at any

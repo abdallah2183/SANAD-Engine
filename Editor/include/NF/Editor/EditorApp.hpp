@@ -96,6 +96,8 @@ public:
     /// (frame pacing, for example) and must reset it when this changes. Ordinary
     /// edits do not advance it; a successful new/open/recovery does.
     uint64_t scene_serial() const { return m_scene_serial; }
+    assets::VirtualFileSystem& vfs() { return m_vfs; }
+    const assets::VirtualFileSystem& vfs() const { return m_vfs; }
 
     // --- Project ---
     //
@@ -122,6 +124,10 @@ public:
     const std::string& project_path() const { return m_project_path; }
     const std::string& project_name() const { return m_project_name; }
     bool has_project() const { return !m_project_path.empty(); }
+
+    // --- Dimension Mode (2D / 3D) ---
+    bool is_2d_mode() const { return m_2d_mode; }
+    void set_2d_mode(bool enable) { m_2d_mode = enable; }
 
     // --- Structural edits (all undoable, all set dirty) ---
     bool create_entity(const std::string& name, ecs::Entity parent, std::string& out_err);
@@ -196,7 +202,11 @@ public:
     // Asset + entity in ONE undo step (create and place together).
     bool create_primitive(PrimitiveKind kind, ecs::Entity parent, std::string& out_err);
     bool create_directional_light(ecs::Entity parent, std::string& out_err);
+    bool create_point_light(ecs::Entity parent, std::string& out_err);
+    bool create_spot_light(ecs::Entity parent, std::string& out_err);
     bool create_camera(ecs::Entity parent, std::string& out_err);
+    bool create_sprite(ecs::Entity parent, std::string& out_err);
+    bool create_audio_emitter(ecs::Entity parent, std::string& out_err);
     // Attaches the natural-palette procedural sky to its own entity. The
     // renderer takes the first sky in the scene, so callers use this only when
     // the scene has none.
@@ -736,6 +746,7 @@ private:
     uint64_t m_scene_serial = 0;
     std::string m_project_path;
     std::string m_project_name;
+    bool m_2d_mode = false;
     bool m_dirty = false;
     Selection m_selection;
     OutlinerState m_outliner;

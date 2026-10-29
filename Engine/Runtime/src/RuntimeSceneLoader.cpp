@@ -444,6 +444,8 @@ static bool parse_squad(const std::string& line, SquadComponent& out, std::strin
     if (!optional_float_in_range(line, "radio=", 0.0f, 10000.0f, out.radio, out_bad)) return false;
     // Phase 69: the lost-contact callout window. Zero is the Phase 68 radio.
     if (!optional_float_in_range(line, "lost=", 0.0f, 10000.0f, out.lost, out_bad)) return false;
+    // Phase 71: the directional antenna half-angle. Zero is omnidirectional.
+    if (!optional_float_in_range(line, "cone=", 0.0f, 180.0f, out.cone, out_bad)) return false;
     out.enabled = line.find("enabled=false") == std::string::npos;
     return true;
 }
@@ -1373,6 +1375,48 @@ SceneLoadResult load_scene_from_text(std::string_view text) {
                 } else {
                     scene->world().add<DecalComponent>(e, std::move(decal));
                 }
+            } else if (line.rfind("  Sprite:", 0) == 0) {
+                // 2D Sprite / Billboard (Phase 73).
+                SpriteComponent sprite;
+                sprite.texture = field_value(line, "texture=");
+                size_t sz_pos = line.find("size(");
+                if (sz_pos != std::string::npos) {
+                    float sw = 1.0f, sh = 1.0f;
+                    if (sscanf(line.c_str() + sz_pos, "size(%f,%f)", &sw, &sh) == 2) {
+                        if (std::isfinite(sw) && sw > 0.0f) sprite.width = sw;
+                        if (std::isfinite(sh) && sh > 0.0f) sprite.height = sh;
+                    }
+                }
+                size_t col_pos = line.find("color(");
+                if (col_pos != std::string::npos) {
+                    float cr = 1.0f, cg = 1.0f, cb = 1.0f, ca = 1.0f;
+                    int n = sscanf(line.c_str() + col_pos, "color(%f,%f,%f,%f)", &cr, &cg, &cb, &ca);
+                    if (n >= 3) {
+                        sprite.color_r = cr;
+                        sprite.color_g = cg;
+                        sprite.color_b = cb;
+                        if (n == 4) sprite.color_a = ca;
+                    }
+                }
+                size_t uv_pos = line.find("uv(");
+                if (uv_pos != std::string::npos) {
+                    float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+                    if (sscanf(line.c_str() + uv_pos, "uv(%f,%f,%f,%f)", &u0, &v0, &u1, &v1) == 4) {
+                        sprite.u0 = u0; sprite.v0 = v0; sprite.u1 = u1; sprite.v1 = v1;
+                    }
+                }
+                if (line.find("flip_x=true") != std::string::npos) sprite.flip_x = true;
+                if (line.find("flip_y=true") != std::string::npos) sprite.flip_y = true;
+                if (line.find("billboard=true") != std::string::npos) sprite.billboard = true;
+                size_t zo_pos = line.find("z_order=");
+                if (zo_pos != std::string::npos) {
+                    int zo = 0;
+                    if (sscanf(line.c_str() + zo_pos, "z_order=%d", &zo) == 1) {
+                        sprite.z_order = zo;
+                    }
+                }
+                sprite.enabled = line.find("enabled=false") == std::string::npos;
+                scene->world().add<SpriteComponent>(e, std::move(sprite));
             } else if (line.rfind("  Light:",0)==0) {
                 // `type=` decides which light the numbers describe. Three shapes
                 // share one line prefix because the format's readers are humans,
@@ -2553,6 +2597,24 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             }
             out << "\n";
         }
+        const auto* sp = scene_obj.world().get<SpriteComponent>(e);
+        if (sp) {
+            out << "  Sprite:";
+            if (!sp->texture.empty()) {
+                out << " texture=" << sp->texture;
+            }
+            out << " size(" << sp->width << "," << sp->height << ")";
+            out << " color(" << sp->color_r << "," << sp->color_g << "," << sp->color_b << "," << sp->color_a << ")";
+            if (sp->u0 != 0.0f || sp->v0 != 0.0f || sp->u1 != 1.0f || sp->v1 != 1.0f) {
+                out << " uv(" << sp->u0 << "," << sp->v0 << "," << sp->u1 << "," << sp->v1 << ")";
+            }
+            if (sp->flip_x) out << " flip_x=true";
+            if (sp->flip_y) out << " flip_y=true";
+            if (sp->billboard) out << " billboard=true";
+            if (sp->z_order != 0) out << " z_order=" << sp->z_order;
+            if (!sp->enabled) out << " enabled=false";
+            out << "\n";
+        }
         const auto* l = scene_obj.world().get<DirectionalLight>(e);
         if (l) {
             out << "  Light: type=Directional dir(" << l->dir_x << "," << l->dir_y << "," << l->dir_z << ") color(" << l->color_r << "," << l->color_g << "," << l->color_b << ") intensity=" << l->intensity;
@@ -3008,6 +3070,11 @@ std::string serialize_scene_to_text(const scene::Scene& scene_obj) {
             if (squad->lost > 0.0f) {
                 out << " lost=" << squad->lost;
             }
+            // Phase 71: zero is the omnidirectional default, so it writes no
+            // key and every older radio round-trips unchanged.
+            if (squad->cone > 0.0f) {
+                out << " cone=" << squad->cone;
+            }
             if (!squad->enabled) {
                 out << " enabled=false";
             }
@@ -3438,6 +3505,9 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
     }
     if (const auto* dc = src.get<DecalComponent>(se)) {
         dst.add<DecalComponent>(de, *dc);
+    }
+    if (const auto* sp = src.get<SpriteComponent>(se)) {
+        dst.add<SpriteComponent>(de, *sp);
     }
     if (const auto* l = src.get<DirectionalLight>(se)) {
         dst.add<DirectionalLight>(de, *l);

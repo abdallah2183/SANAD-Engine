@@ -53,6 +53,24 @@ struct DecalComponent {
     bool enabled = true;
 };
 
+/// A 2D sprite or billboard quad component (Phase 73).
+///
+/// In 2D scenes, sprites define the visual presentation on the XY plane.
+/// When billboard is true, the sprite rotates in 3D to always face the camera.
+struct SpriteComponent {
+    std::string texture;                  // Logical path e.g. "content://Textures/hero.png"
+    float width = 1.0f;
+    float height = 1.0f;
+    float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f, color_a = 1.0f;
+    float u0 = 0.0f, v0 = 0.0f;           // UV top-left
+    float u1 = 1.0f, v1 = 1.0f;           // UV bottom-right
+    bool flip_x = false;
+    bool flip_y = false;
+    int z_order = 0;                      // 2D sorting order / layer
+    bool billboard = false;               // Face the active camera in 3D
+    bool enabled = true;
+};
+
 struct DirectionalLight {
     float dir_x = -0.5f, dir_y = -1.0f, dir_z = -0.3f;
     float color_r = 1.0f, color_g = 1.0f, color_b = 1.0f;
@@ -1105,6 +1123,14 @@ struct PerceptionComponent {
 /// seconds of memory on the receiver. That report is still derived from a
 /// personal sighting, never from radio traffic, so the anti-relay rule does not
 /// change. `lost=0` keeps the Phase 68 behaviour exactly.
+///
+/// Phase 71 adds a directional antenna: `cone` is the horizontal half-angle the
+/// antenna can talk and listen through, measured around the owner's facing. A
+/// delivery now needs BOTH ends to face each other as well as to reach, exactly
+/// like the range test: a directional scout cannot hear a mate behind it, and a
+/// mate behind cannot hear it. `cone=0` keeps the omnidirectional Phase 70
+/// antenna byte for byte. Direction changes delivery only; a received report
+/// remains knowledge and is still never relayed.
 struct SquadComponent {
     /// Who hears whom. Two radios talk when the token matches exactly.
     std::string token;
@@ -1119,6 +1145,14 @@ struct SquadComponent {
     /// receiver's own `linger` is still a floor, so a longer personal search
     /// window is never shortened.
     f32 lost = 0.0f;
+
+    /// Horizontal antenna half-angle in degrees, `[0, 180]`. Zero (the
+    /// default) is omnidirectional and preserves the Phase 70 radio. A positive
+    /// value makes this end directional: the other radio must lie inside this
+    /// cone around the owner's facing, so a link needs both cones to agree.
+    /// The facing is the entity's Transform yaw, or a `CombatAgent`'s current
+    /// aim when it has one — the same rule its senses follow.
+    f32 cone = 0.0f;
 
     /// Off keeps the component authored and inert, the same contract every
     /// other component's enabled flag keeps.

@@ -1171,6 +1171,115 @@ bool EditorApp::create_directional_light(ecs::Entity parent, std::string& out_er
     return true;
 }
 
+bool EditorApp::create_point_light(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    scene::Transform t{};
+    t.local_y = 2.0f;
+    t.dirty = true;
+    w->add<scene::Transform>(e, t);
+    w->add<scene::NameComponent>(e, scene::NameComponent{"PointLight"});
+    runtime::PointLightComponent pl;
+    pl.color_r = 1.0f;
+    pl.color_g = 0.95f;
+    pl.color_b = 0.85f;
+    pl.intensity = 2.0f;
+    pl.radius = 10.0f;
+    w->add<runtime::PointLightComponent>(e, pl);
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_spot_light(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    scene::Transform t{};
+    t.local_y = 3.5f;
+    t.dirty = true;
+    w->add<scene::Transform>(e, t);
+    w->add<scene::NameComponent>(e, scene::NameComponent{"SpotLight"});
+    runtime::SpotLightComponent sl;
+    sl.color_r = 1.0f;
+    sl.color_g = 0.98f;
+    sl.color_b = 0.92f;
+    sl.intensity = 3.0f;
+    sl.range = 15.0f;
+    sl.inner_angle_rad = 0.35f;
+    sl.outer_angle_rad = 0.60f;
+    w->add<runtime::SpotLightComponent>(e, sl);
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_sprite(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    scene::Transform t{};
+    t.dirty = true;
+    w->add<scene::Transform>(e, t);
+    w->add<scene::NameComponent>(e, scene::NameComponent{"Sprite2D"});
+    runtime::SpriteComponent sp;
+    w->add<runtime::SpriteComponent>(e, sp);
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_audio_emitter(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    scene::Transform t{};
+    t.dirty = true;
+    w->add<scene::Transform>(e, t);
+    w->add<scene::NameComponent>(e, scene::NameComponent{"AudioSource"});
+    audio::AudioComponent aud;
+    aud.spatial = true;
+    aud.autoplay = true;
+    aud.looping = true;
+    w->add<audio::AudioComponent>(e, std::move(aud));
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::create_camera(ecs::Entity parent, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;
@@ -2485,6 +2594,10 @@ bool valid_squad_config(const runtime::SquadComponent& squad, std::string& out_e
     }
     if (!std::isfinite(squad.lost) || squad.lost < 0.0f || squad.lost > 10000.0f) {
         out_err = "Squad lost-callout window must be within [0, 10000] seconds";
+        return false;
+    }
+    if (!std::isfinite(squad.cone) || squad.cone < 0.0f || squad.cone > 180.0f) {
+        out_err = "Squad antenna cone half-angle must be within [0, 180] degrees";
         return false;
     }
     return true;

@@ -28,9 +28,13 @@
 #include <winver.h>
 
 // ICON_ID is 1 on purpose: it is the first (and only) icon in the exe, and
-// LoadIcon(NULL, MAKEINTRESOURCE(1)) is the documented way to get "the
-// application icon" without a class or a name string.
-IDI_NOVAFORGE_ICON ICON DISCARDABLE "@SANAD_ICO@"
+// LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON, ...)
+// is how the editor window and the project launcher fetch it for their title
+// bars (Window_Win.cpp / ProjectLauncher.cpp). It used to be declared under a
+// NAME (IDI_NOVAFORGE_ICON, undefined, so rc.exe stored it as a string), and
+// no window class ever asked for it - Explorer showed the logo, while the
+// title bar, taskbar and Alt-Tab showed the blank default glyph.
+1 ICON DISCARDABLE "@SANAD_ICO@"
 
 // FILEVERSION takes four 16-bit fields. CMake's version has three components
 // (major.minor.patch[.tweak]), so the fourth is 0; the pre-release tag has no

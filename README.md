@@ -19,8 +19,8 @@
 
 <br>
 
-[**What's new in 0.6.0**](RELEASE_NOTES_0.6.0.md) ·
-[**Download 0.6.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.6.0) ·
+[**What's new in 0.7.0**](RELEASE_NOTES_0.7.0.md) ·
+[**Download 0.7.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.7.0) ·
 [**Watch the 43s demo**](Docs/media/demo.mp4) ·
 [**Docs**](Docs/) ·
 [**العربية**](README.ar.md)
@@ -34,7 +34,7 @@
 ---
 
 > [!IMPORTANT]
-> **0.6.0 is a public release, not a beta.** It ships as a **portable Windows x64
+> **0.7.0 is a public release, not a beta.** It ships as a **portable Windows x64
 > zip** built from this tree, with a SHA-256 checksum. The executables are signed
 > with the self-signed **`SANAD Dev Build`** certificate, not a publicly trusted
 > one, so Windows may still show "Unknown publisher". Do not disable Smart App
@@ -63,12 +63,12 @@
 
 ### 1. Download
 
-Grab the portable build from the [0.6.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.6.0):
+Grab the portable build from the [0.7.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.7.0):
 
 | File | What to do |
 |:---|:---|
-| [`SANAD-0.6.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.6.0/SANAD-0.6.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
-| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.6.0/SHA256SUMS.txt) | SHA-256 checksum for the portable zip |
+| [`SANAD-0.7.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.7.0/SANAD-0.7.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
+| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.7.0/SHA256SUMS.txt) | SHA-256 checksum for the portable zip |
 
 > [!NOTE]
 > There is **no installer in this release yet**. The portable zip carries a
@@ -144,12 +144,12 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
 
 > [!NOTE]
-> TreeWorld ships **in the 0.6.0 portable zip** under `Games/`, and on
+> TreeWorld ships **in the 0.7.0 portable zip** under `Games/`, and on
 > **`main`** as source. `nf run --project Games\TreeWorld\TreeWorld.nfproj`
 > builds and plays it from the repository; the packaged copy plays the same
 > scene standalone.
 
-## ✨ What's in 0.6.0
+## ✨ What's in 0.7.0
 
 - **Combat feedback, from one scene line** — `Feedback: flash_time=0.06
   flash_size=0.26 tracer_time=0.1 tracer_length=7 tracer_width=0.03
@@ -173,7 +173,7 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 - **Everything from 0.5.0 remains** — FXAA on the tonemapped image, ADS, mouse
   buttons, camera shake and recoil, decals, render scale, dynamic resolution,
   master dynamics, and player settings.
-- **Docs that match the build** — [release notes](RELEASE_NOTES_0.6.0.md),
+- **Docs that match the build** — [release notes](RELEASE_NOTES_0.7.0.md),
   [demo notes](Docs/Demo_Release.md), and a five-minute quick start.
 
 ## 🔬 GPU profiling (development tree)
@@ -287,11 +287,11 @@ Feedback: flash_time=0.06 flash_size=0.26 tracer_time=0.1 tracer_length=7
           max_flashes=48 max_tracers=96 max_impacts=192 max_sounds=16 max_lights=4
 ```
 
-Phase 59 closed the five gaps 0.6.0 declared:
+Phase 59 closed the five gaps 0.7.0 declared:
 
 - **The flash lights the world.** Every live muzzle or blast flash also
   contributes a transient point light, so a shot brightens the wall it is fired
-  at instead of only adding an emissive cube. `light=false` restores the 0.6.0
+  at instead of only adding an emissive cube. `light=false` restores the 0.7.0
   look exactly; the light takes whatever renderer slots the scene's own point
   lights leave free and dies with the cube it came from.
 - **An explosion looks like one.** An explosive impact spawns a second, larger
@@ -675,6 +675,37 @@ Jammer: radius=9 strength=0.5
   loader refuses values outside the bounds, and the validator names an
   out-of-range field, an inert field and a field with no Transform.
 
+### Radios that only hear where they face (`cone=`, Phase 71)
+
+A directional antenna talks into a cone, not in every direction:
+
+```text
+Squad: token=guards radio=45 lost=2 cone=90
+```
+
+- **`cone=`** is the horizontal antenna half-angle in degrees, `[0, 180]`,
+  default 0. Zero is omnidirectional and keeps the Phase 70 radio exactly; a
+  positive value makes this end directional. A scene without the key round-trips
+  and behaves byte for byte as before.
+- **Who has to face whom**: a delivery needs the receiver inside the reporter's
+  cone **and** the reporter inside the receiver's cone when that end is
+  directional. The test composes with the Phase 68 range and Phase 70 jamming:
+  all three gates must pass, and `cone=0` at either end removes only its own
+  direction check.
+- **Where it points**: along the entity's Transform yaw (`rot_y`), or along a
+  `CombatAgent`'s current aim when it has one — the same rule the entity's own
+  senses already use. The check is horizontal; a ridge or a floor does not stop a
+  radio link, so only direction and reach decide delivery.
+- **What it changes**: live reports and lost callouts obey the same cones, with
+  the same one-frame latency. A cone never touches the Phase 67 `squad=` board,
+  personal senses, detection, or lost tracking, and a received report is still
+  knowledge that is never relayed.
+- **Demo, inspector and validator**: Terrain's WalkerC uses `cone=150`, so its
+  radio is directional without breaking the Phase 68 hold demo. The inspector's
+  Squad radio section has a 0–180° cone slider with attach/apply/detach, the
+  loader refuses a value outside the bounds, and the validator names an
+  out-of-range cone.
+
 ## 🧱 Features
 
 | Area | What it does |
@@ -687,18 +718,18 @@ Jammer: radius=9 strength=0.5
 | **Assets** | glTF/GLB, OBJ, STL, PLY and `.nfmesh` import; asset cooker; material/texture pipeline; hot reload |
 | **Audio** | 3D spatial audio on WASAPI; WAV/OGG/MP3/FLAC import |
 | **2D** | `NFScene2D`: cameras, sprite batching, tile chunks, 2D physics, A* |
-| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`), personally sensed contacts shared over an opt-in squad radio (`Squad:`), an opt-in lost-contact callout (`lost=`) and an opt-in radio jammer field (`Jammer:`) |
+| **Gameplay** | Weapons (fire modes, magazine/reserve, deterministic spread, recoil patterns, hitscan and time-of-flight projectiles with gravity), hit points with regeneration, factions with friendly-fire filtering, combat agents that notice, turn, aim, fire in bursts, auto-acquire the nearest visible enemy team and lead moving targets with projectiles, per-frame impact events, and an opt-in `Feedback:` layer that turns those events into muzzle flashes, tracers, scorch decals and procedural one-shots; tags, quests, inventory, dialogue, input replays; grid A* + behavior trees; terrain-aware NavMesh with authored links and patrol routes (`NavRoute:`/`NavPoint:`) with waits, loops, ping-pong, perception-gated holds (`hold=`) and last-known-position investigation (`investigate=`) shared across a squad (`squad=`), personally sensed contacts shared over an opt-in squad radio (`Squad:`), an opt-in lost-contact callout (`lost=`), an opt-in radio jammer field (`Jammer:`) and an opt-in directional antenna cone (`cone=`) |
 | **Tools** | `nf` CLI (`new` / `build` / `verify` / `run`), asset cooker, model importer, standalone player |
 
 <details>
 <summary><b>Quality gates</b></summary>
 
 - Clean MSVC `/W4 /WX` build.
-- **26 test suites.** The 0.6.0 suites passed on Windows x64 (Release):
+- **26 test suites.** The 0.7.0 suites passed on Windows x64 (Release):
   `RHITests` 345/345, `RuntimeTests` 364/364, `EditorTests` 289/289,
   `UITests` 46/46, `ToolTests` 55/55, `AudioTests` 136/136. All 26 suites pass
-  (`ctest -j 4`: 100%). On the development tree after Phase 70 the counts are
-  `RuntimeTests` 447/447, `EditorTests` 295/295, `AITests` 134/134 and
+  (`ctest -j 4`: 100%). On the development tree after Phase 71 the counts are
+  `RuntimeTests` 449/449, `EditorTests` 295/295, `AITests` 134/134 and
   `AudioTests` 138/138. On a
   machine whose Smart App Control blocks a freshly signed binary, a suite can be
   reported as "process not started" until the reputation service catches up -
@@ -779,7 +810,7 @@ cmake --build build\release --parallel
 
 > [!NOTE]
 > The release script `packaging/windows/build_installer.ps1` can produce an Inno
-> Setup installer on a machine that has Inno Setup. 0.6.0 intentionally ships the
+> Setup installer on a machine that has Inno Setup. 0.7.0 intentionally ships the
 > portable zip only.
 
 ## 🎮 Make a game
@@ -839,7 +870,7 @@ Phases 1–38 are in the tree (rendering, editor, physics, scripting, networking
 2D, destruction, cascaded shadows, SSAO, PBR maps, sky IBL, navmesh, Jolt
 vehicles, aiming, audio dynamics, decals, render scale, and dynamic resolution).
 0.5.0 closed the image-and-hand phase: FXAA, projected decals, supersampling,
-dynamic resolution, ADS, shake, recoil, and player settings. 0.6.0 closes the
+dynamic resolution, ADS, shake, recoil, and player settings. 0.7.0 closes the
 feedback gap in combat: shot and impact events now become a muzzle flash, a
 tracer, a scorch decal and a procedural one-shot, opt-in from one scene line.
 

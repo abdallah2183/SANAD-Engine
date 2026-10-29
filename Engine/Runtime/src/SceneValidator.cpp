@@ -317,6 +317,12 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
                            " is outside [0, 10000]; no lost-contact callout can use that "
                            "window");
         }
+        if (!sane(squad->cone, 0.0f, 180.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       std::string("cone ") + std::to_string(squad->cone) +
+                           " is outside [0, 180]; an antenna cannot point through more than "
+                           "a full circle");
+        }
         if (squad->enabled && squad->radio <= 0.0f) {
             report.add(ValidationSeverity::Warning, label,
                        "Squad radio=0 shares nothing: no contact is ever delivered");
@@ -361,6 +367,24 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
         if (world.get<scene::Transform>(e) == nullptr) {
             report.add(ValidationSeverity::Warning, label,
                        "Jammer has no Transform: its field has no position and jams nothing");
+        }
+    }
+
+    // --- 2D Sprites (Phase 73) -------------------------------------------
+    for (const ecs::Entity e : entities) {
+        const auto* sp = world.get<SpriteComponent>(e);
+        if (sp == nullptr) {
+            continue;
+        }
+        const std::string label = entity_label(world, e);
+        if (!sane(sp->width, 0.001f, 10000.0f) || !sane(sp->height, 0.001f, 10000.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Sprite dimensions must be positive and <= 10000");
+        }
+        if (!sane(sp->color_r, 0.0f, 1.0f) || !sane(sp->color_g, 0.0f, 1.0f) ||
+            !sane(sp->color_b, 0.0f, 1.0f) || !sane(sp->color_a, 0.0f, 1.0f)) {
+            report.add(ValidationSeverity::Warning, label,
+                       "Sprite color components should be in [0, 1]");
         }
     }
 
@@ -804,6 +828,11 @@ ValidationReport validate_scene(const scene::Scene& scene, std::string_view scen
             }
             if (const auto* decal = world.get<DecalComponent>(e); decal != nullptr) {
                 check_path(label, "decal material", decal->material);
+            }
+            if (const auto* sp = world.get<SpriteComponent>(e); sp != nullptr) {
+                if (!sp->texture.empty()) {
+                    check_path(label, "sprite texture", sp->texture);
+                }
             }
             if (const auto* pp = world.get<PostProcessComponent>(e); pp != nullptr) {
                 check_path(label, "LUT", pp->lut_path);

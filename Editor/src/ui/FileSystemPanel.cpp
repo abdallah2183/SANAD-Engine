@@ -18,6 +18,13 @@
 // never through AV()/shaping (shaping is for UI labels only).
 
 #define _CRT_SECURE_NO_WARNINGS
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 #include <NF/Editor/FileSystemPanel.hpp>
 #include <NF/Editor/UiText.hpp>
 #include <NF/Editor/UiTextInput.hpp>
@@ -38,6 +45,27 @@
 namespace nf::editor {
 
 namespace {
+
+void open_in_os_file_manager(const EditorApp& app, const std::string& logical_path) {
+    ImGui::SetClipboardText(logical_path.c_str());
+#ifdef _WIN32
+    auto resolved = app.vfs().resolve(logical_path);
+    if (resolved.ok && !resolved.value.empty()) {
+        std::string p = resolved.value.string();
+        for (char& c : p) {
+            if (c == '/') {
+                c = '\\';
+            }
+        }
+        const DWORD attr = ::GetFileAttributesA(p.c_str());
+        const bool is_dir = (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
+        const std::string param = is_dir ? ("\"" + p + "\"") : ("/select,\"" + p + "\"");
+        ::ShellExecuteA(nullptr, "open", "explorer.exe", param.c_str(), nullptr, SW_SHOWDEFAULT);
+    }
+#else
+    (void)app;
+#endif
+}
 
 bool fs_ends_with(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() &&
@@ -1259,9 +1287,9 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                     if (ImGui::MenuItem(AV("rename_asset").c_str())) {
                         begin_rename(rename_state(), e.logical_path);
                     }
-                    if (ImGui::MenuItem(AV("show_in_folder").c_str())) {
-                        ImGui::SetClipboardText(e.logical_path.c_str());
-                        push_info(app.console(), "Path copied: " + e.logical_path);
+                    if (ImGui::MenuItem(AV("show_in_explorer").c_str())) {
+                        open_in_os_file_manager(app, e.logical_path);
+                        push_info(app.console(), "Revealed in Explorer: " + e.logical_path);
                     }
                     if (e.type == assets::AssetType::Script) {
                         if (ImGui::MenuItem(AV("open_in_vs").c_str())) {
@@ -1284,6 +1312,13 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                 ImGui::EndGroup();
                 if (e.type == assets::AssetType::Mesh && ImGui::BeginDragDropSource()) {
                     ImGui::SetDragDropPayload("NF_MESH", e.logical_path.c_str(),
+                                              e.logical_path.size() + 1);
+                    ImGui::Text("%s", e.logical_path.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if ((fs_ends_with(e.logical_path, ".nfprefab") || fs_ends_with(e.logical_path, ".nfscene")) &&
+                    ImGui::BeginDragDropSource()) {
+                    ImGui::SetDragDropPayload("NF_PREFAB", e.logical_path.c_str(),
                                               e.logical_path.size() + 1);
                     ImGui::Text("%s", e.logical_path.c_str());
                     ImGui::EndDragDropSource();
@@ -1317,6 +1352,19 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                     push_info(app.console(), std::string("Script created: ") + created);
                     app.invalidate_browser();
                 }
+            }
+            if (ImGui::MenuItem(AV("new_material").c_str())) {
+                std::string err;
+                const std::string created = nav_base + "/NewMaterial.nfmat";
+                if (!app.save_material("content://Materials/Default", created, err)) {
+                    push_error(app.console(), "Create material failed", err);
+                } else {
+                    push_info(app.console(), std::string("Material created: ") + created);
+                    app.invalidate_browser();
+                }
+            }
+            if (ImGui::MenuItem(AV("show_in_explorer").c_str())) {
+                open_in_os_file_manager(app, nav_base);
             }
             if (ImGui::MenuItem(AV("refresh").c_str())) {
                 app.invalidate_browser();

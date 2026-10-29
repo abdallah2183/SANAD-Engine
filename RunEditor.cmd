@@ -35,4 +35,4 @@ rem whole bin folder, not just the editor: it also holds nf.exe and the player.
 for %%f in ("%SANAD_EDITOR%") do (
     icacls "%%~dpf*" /setintegritylevel Medium /C /Q >nul 2>&1
 )
-start "SANAD Editor" "%SANAD_EDITOR%"
+start "SANAD Editor" "%SANAD_EDITOR%" %*

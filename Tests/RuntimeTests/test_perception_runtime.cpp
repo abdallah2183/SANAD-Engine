@@ -298,6 +298,7 @@ NF_TEST(squad_line_round_trips_every_key) {
     squad.token = "guards";
     squad.radio = 45.5f;
     squad.lost = 2.5f;
+    squad.cone = 35.5f;
     squad.enabled = false;
     world.add<SquadComponent>(e, squad);
 
@@ -307,7 +308,8 @@ NF_TEST(squad_line_round_trips_every_key) {
 
     const auto text = vfs.read_text("content://Scenes/squad.nfscene");
     NF_CHECK(text.ok);
-    NF_CHECK(text.value.find("Squad: token=guards radio=45.5 lost=2.5 enabled=false") !=
+    NF_CHECK(text.value.find(
+                 "Squad: token=guards radio=45.5 lost=2.5 cone=35.5 enabled=false") !=
              std::string::npos);
 
     auto result = load_scene_from_vfs(vfs, "content://Scenes/squad.nfscene");
@@ -324,6 +326,7 @@ NF_TEST(squad_line_round_trips_every_key) {
         NF_CHECK(loaded->token == "guards");
         NF_CHECK_NEAR(loaded->radio, 45.5f, 1e-5f);
         NF_CHECK_NEAR(loaded->lost, 2.5f, 1e-5f);
+        NF_CHECK_NEAR(loaded->cone, 35.5f, 1e-5f);
         NF_CHECK(!loaded->enabled);
     }
 
@@ -372,6 +375,7 @@ NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
             NF_CHECK(squad->token == "guards");
             NF_CHECK_NEAR(squad->radio, 30.0f, 1e-6f);
             NF_CHECK_NEAR(squad->lost, 0.0f, 1e-6f);
+            NF_CHECK_NEAR(squad->cone, 0.0f, 1e-6f);
             NF_CHECK(squad->enabled);
         }
     }
@@ -409,6 +413,9 @@ NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
     // Phase 69 adds the lost-callout window with the same bounds.
     NF_CHECK(refused("Squad: token=guards lost=20000", "lost"));
     NF_CHECK(refused("Squad: token=guards lost=-1", "lost"));
+    // Phase 71 adds the horizontal antenna half-angle, [0, 180].
+    NF_CHECK(refused("Squad: token=guards cone=181", "cone"));
+    NF_CHECK(refused("Squad: token=guards cone=-1", "cone"));
 
     // Exactly 64 characters is legal and round-trips.
     const std::string longest(64, 'a');
@@ -416,7 +423,7 @@ NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
         "# SANAD Scene v1\nversion: 1\nname: CapSquad\nentity_count: 1\n"
         "---\nentity: 1:0\n  Name: Guard\n"
         "  Transform: local(0,0,0) world(0,0,0) rot(0,0,0) scale(1,1,1) "
-        "parent(4294967295:0)\n  Squad: token=" + longest + "\n";
+        "parent(4294967295:0)\n  Squad: token=" + longest + " cone=180\n";
     auto cap = load_scene_from_text(cap_text);
     NF_CHECK(cap.success);
     if (cap.scene) {
@@ -425,6 +432,7 @@ NF_TEST(squad_line_defaults_and_refuses_bad_values_by_name) {
         NF_CHECK(squad != nullptr);
         if (squad != nullptr) {
             NF_CHECK(squad->token == longest);
+            NF_CHECK_NEAR(squad->cone, 180.0f, 1e-6f);
         }
     }
 }
@@ -438,6 +446,7 @@ NF_TEST(squad_values_with_nothing_to_send_are_warned_by_name) {
     squad.token = "two words";
     squad.radio = 0.0f;
     squad.lost = 20000.0f;
+    squad.cone = 200.0f;
     world.add<SquadComponent>(e, squad);
 
     const ValidationReport report = validate_scene(scene, "content://Scenes/squad_warn.nfscene");
@@ -445,16 +454,22 @@ NF_TEST(squad_values_with_nothing_to_send_are_warned_by_name) {
     bool silent = false;
     bool no_perception = false;
     bool lost_window = false;
+    bool cone_window = false;
     for (const ValidationIssue& issue : report.issues) {
         if (issue.message.find("whitespace") != std::string::npos) whitespace = true;
         if (issue.message.find("radio=0") != std::string::npos) silent = true;
         if (issue.message.find("Perception") != std::string::npos) no_perception = true;
         if (issue.message.find("lost") != std::string::npos) lost_window = true;
+        if (issue.message.find("cone") != std::string::npos &&
+            issue.message.find("outside") != std::string::npos) {
+            cone_window = true;
+        }
     }
     NF_CHECK(whitespace);
     NF_CHECK(silent);
     NF_CHECK(no_perception);
     NF_CHECK(lost_window);
+    NF_CHECK(cone_window);
 
     // A well-formed radio with a sensor is not worth a warning.
     scene::Scene good("SquadGood");
@@ -464,6 +479,7 @@ NF_TEST(squad_values_with_nothing_to_send_are_warned_by_name) {
     fine.token = "guards";
     fine.radio = 45.0f;
     fine.lost = 2.0f;
+    fine.cone = 90.0f;
     good.world().add<SquadComponent>(g, fine);
     good.world().add<PerceptionComponent>(g, PerceptionComponent{});
     const ValidationReport quiet =
@@ -1405,6 +1421,279 @@ NF_TEST(squad_radio_shares_only_personal_live_contacts) {
         NF_CHECK(stranger_senses != nullptr);
         if (stranger_senses != nullptr) {
             NF_CHECK(stranger_senses->perceived().empty());
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+// --- directional antennas (Phase 71) -----------------------------------------
+//
+// A cone is a delivery gate, not a new kind of knowledge: if either antenna is
+// not facing the other end the report does not arrive, and once both face the
+// same awareness-only report arrives. The default `cone=0` is the Phase 70
+// radio, so this is purely opt-in.
+
+NF_TEST(squad_radio_cone_needs_both_antennas_to_face) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_squad_cone";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("ConeNet");
+        const auto make_radio = [&](const char* name, f32 x, f32 z, f32 cone) {
+            const ecs::Entity e = add_world_entity(*game, name, x, 0.0f, z, false);
+            add_health(*game, e, 100.0f);
+            FactionComponent faction;
+            faction.team = "Blue";
+            game->world().add<FactionComponent>(e, faction);
+            PerceptionComponent senses;
+            senses.sight_range = 0.0f;
+            senses.hearing_range = 0.0f;
+            senses.touch_range = 0.0f;
+            senses.pain = false;
+            game->world().add<PerceptionComponent>(e, senses);
+            SquadComponent squad;
+            squad.token = "guards";
+            squad.radio = 12.0f;
+            squad.cone = cone;
+            game->world().add<SquadComponent>(e, squad);
+            return e;
+        };
+
+        // The observer looks at +Z (the default forward is -Z).
+        const ecs::Entity observer = add_world_entity(*game, "Observer", 1.0f, 0.0f, 1.0f,
+                                                      false);
+        add_health(*game, observer, 100.0f);
+        if (auto* ot = game->world().get<scene::Transform>(observer); ot != nullptr) {
+            ot->rot_y = 180.0f;
+        }
+        FactionComponent blue;
+        blue.team = "Blue";
+        game->world().add<FactionComponent>(observer, blue);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 60.0f;
+        eyes.sight_gain = 2.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        game->world().add<PerceptionComponent>(observer, eyes);
+        SquadComponent observer_squad;
+        observer_squad.token = "guards";
+        observer_squad.radio = 12.0f;
+        observer_squad.cone = 45.0f;
+        game->world().add<SquadComponent>(observer, observer_squad);
+
+        const ecs::Entity target = add_world_entity(*game, "Contact", 1.0f, 0.0f, 6.0f,
+                                                    false);
+        add_health(*game, target, 100.0f);
+        FactionComponent red;
+        red.team = "Red";
+        game->world().add<FactionComponent>(target, red);
+
+        // In front of the observer and omnidirectional: receives.
+        const ecs::Entity clear = make_radio("Clear", 2.0f, 3.0f, 0.0f);
+        // Behind the directional observer: the reporter's cone rejects it.
+        const ecs::Entity behind = make_radio("Behind", 0.0f, 0.0f, 0.0f);
+        // In front of the observer but facing +Z, away from the reporter: the
+        // RECEIVER's cone rejects it until it turns around.
+        const ecs::Entity picky = make_radio("Picky", 2.5f, 3.0f, 45.0f);
+        if (auto* pt = game->world().get<scene::Transform>(picky); pt != nullptr) {
+            pt->rot_y = 180.0f;
+        }
+
+        rt.adopt_scene(std::move(game), "content://Scenes/ConeNet.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK(rt.entity_aware_of(clear, target));
+        NF_CHECK(!rt.entity_aware_of(behind, target));
+        NF_CHECK(!rt.entity_aware_of(picky, target));
+
+        // Moving the behind mate into the observer's beam delivers the next
+        // report without touching the observer's facing.
+        if (auto* bt = rt.edit_scene()->world().get<scene::Transform>(behind);
+            bt != nullptr) {
+            bt->local_x = 0.5f;
+            bt->world_x = 0.5f;
+            bt->local_z = 3.0f;
+            bt->world_z = 3.0f;
+        }
+        // Turning the picky receiver to face the reporter opens its side.
+        if (auto* pt = rt.edit_scene()->world().get<scene::Transform>(picky);
+            pt != nullptr) {
+            pt->rot_y = 0.0f;
+        }
+        for (int frame = 0; frame < 5; ++frame) {
+            rt.update(1.0f / 60.0f);
+        }
+
+        NF_CHECK(rt.entity_aware_of(behind, target));
+        NF_CHECK(rt.entity_aware_of(picky, target));
+
+        // A received report is still knowledge, never a sense of its own.
+        NF_CHECK(!rt.entity_sensing(clear, target));
+        NF_CHECK(!rt.entity_sensing(behind, target));
+        NF_CHECK(!rt.entity_sensing(picky, target));
+        const ai::Perception* picky_senses = rt.perception_of(picky);
+        NF_CHECK(picky_senses != nullptr);
+        if (picky_senses != nullptr && !picky_senses->perceived().empty()) {
+            NF_CHECK(!picky_senses->perceived().front().personally_perceived);
+            for (u32 k = 0; k < ai::kStimulusKindCount; ++k) {
+                NF_CHECK_NEAR(picky_senses->perceived().front().detection[k], 0.0f, 1e-6f);
+            }
+        }
+    }
+
+    device->wait_idle();
+    device->shutdown();
+    std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(squad_lost_callout_respects_the_cone) {
+    auto device = rhi::create_device();
+    if (!device) {
+        NF_SKIP("no Vulkan device available");
+    }
+    rhi::DeviceDesc desc{};
+    desc.window_handle = nullptr;
+    if (!device->init(desc)) {
+        NF_SKIP("headless Vulkan device init failed");
+    }
+
+    auto tmp = nf::test::temp_root() / "nf_squad_cone_lost";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp);
+
+    constexpr f32 dt = 1.0f / 60.0f;
+    {
+        AssetRegistry registry;
+        AssetManager manager(vfs, registry);
+        Runtime rt(vfs, registry, manager, *device, nullptr);
+
+        auto game = std::make_unique<scene::Scene>("ConeLostNet");
+        const ecs::Entity observer = add_world_entity(*game, "Observer", 1.0f, 0.0f, 1.0f,
+                                                      false);
+        add_health(*game, observer, 100.0f);
+        if (auto* ot = game->world().get<scene::Transform>(observer); ot != nullptr) {
+            ot->rot_y = 180.0f; // looks at +Z, where the mate also stands
+        }
+        FactionComponent blue;
+        blue.team = "Blue";
+        game->world().add<FactionComponent>(observer, blue);
+        PerceptionComponent eyes;
+        eyes.sight_range = 30.0f;
+        eyes.sight_half_fov_deg = 60.0f;
+        eyes.sight_gain = 2.0f;
+        eyes.sight_linger = 3.0f;
+        eyes.hearing_range = 0.0f;
+        eyes.touch_range = 0.0f;
+        eyes.pain = false;
+        game->world().add<PerceptionComponent>(observer, eyes);
+        SquadComponent observer_squad;
+        observer_squad.token = "guards";
+        observer_squad.radio = 8.0f;
+        observer_squad.lost = 2.0f;
+        observer_squad.cone = 45.0f;
+        game->world().add<SquadComponent>(observer, observer_squad);
+
+        const ecs::Entity mate = add_world_entity(*game, "Mate", 2.0f, 0.0f, 3.0f, false);
+        add_health(*game, mate, 100.0f);
+        game->world().add<FactionComponent>(mate, blue);
+        PerceptionComponent mate_senses;
+        mate_senses.sight_range = 0.0f;
+        mate_senses.hearing_range = 0.0f;
+        mate_senses.touch_range = 0.0f;
+        mate_senses.pain = false;
+        // A 0.5 s window makes a missing callout visible: only the callout can
+        // keep the mate aware a full second after the last live report.
+        mate_senses.sight_linger = 0.5f;
+        game->world().add<PerceptionComponent>(mate, mate_senses);
+        SquadComponent mate_squad;
+        mate_squad.token = "guards";
+        mate_squad.radio = 8.0f;
+        mate_squad.lost = 2.0f;
+        game->world().add<SquadComponent>(mate, mate_squad);
+
+        const ecs::Entity target = add_world_entity(*game, "Contact", 1.0f, 0.0f, 6.0f,
+                                                    false);
+        add_health(*game, target, 100.0f);
+        FactionComponent red;
+        red.team = "Red";
+        game->world().add<FactionComponent>(target, red);
+
+        rt.adopt_scene(std::move(game), "content://Scenes/ConeLostNet.nfscene");
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(dt);
+        }
+        NF_CHECK(rt.entity_aware_of(mate, target));
+
+        // Turn the antenna around: the target leaves the observer's sight and
+        // the mate now sits behind the same cone. The loss is noticed, but the
+        // one callout is shouted at nobody.
+        if (auto* ot = rt.edit_scene()->world().get<scene::Transform>(observer);
+            ot != nullptr) {
+            ot->rot_y = 0.0f;
+        }
+        for (int frame = 0; frame < 72; ++frame) {
+            rt.update(dt);
+        }
+        NF_CHECK(!rt.entity_aware_of(mate, target));
+
+        // Face the mate and the target again. A fresh sighting restores the
+        // live report; when it is lost again the callout goes into the cone and
+        // the receiver's own lost window keeps it.
+        if (auto* ot = rt.edit_scene()->world().get<scene::Transform>(observer);
+            ot != nullptr) {
+            ot->rot_y = 180.0f;
+        }
+        for (int frame = 0; frame < 60; ++frame) {
+            rt.update(dt);
+        }
+        NF_CHECK(rt.entity_aware_of(mate, target));
+
+        if (auto* tt = rt.edit_scene()->world().get<scene::Transform>(target);
+            tt != nullptr) {
+            tt->local_z = -100.0f;
+            tt->world_z = -100.0f;
+        }
+        rt.update(dt); // notices the loss and queues the callout
+        rt.update(dt); // the delivery, now inside both cones
+        for (int frame = 0; frame < 72; ++frame) {
+            rt.update(dt);
+        }
+
+        // Past the live report's 0.5 s window, still inside the 2 s callout
+        // window: only a delivered callout can explain this awareness.
+        NF_CHECK(rt.entity_aware_of(mate, target));
+        const ai::Perception* after = rt.perception_of(mate);
+        NF_CHECK(after != nullptr);
+        if (after != nullptr && !after->perceived().empty()) {
+            NF_CHECK(!after->perceived().front().sensed);
+            NF_CHECK(!after->perceived().front().personally_perceived);
         }
     }
 

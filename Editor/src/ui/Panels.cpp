@@ -280,6 +280,8 @@ struct InspectorCache {
     bool squad_enabled = true;
     float squad_radio = 30.0f;
     float squad_lost = 0.0f;
+    // Phase 71: horizontal antenna half-angle; 0 is omnidirectional.
+    float squad_cone = 0.0f;
     char squad_token[65]{};
     // Radio jammer (Phase 70). The field radius and the fraction of an
     // antenna's reach it removes inside that radius.
@@ -681,6 +683,43 @@ void draw_ground_grid(ImDrawList* dl, const ImVec2& min, const ImVec2& max, cons
     }
 }
 
+void draw_2d_grid(ImDrawList* dl, const ImVec2& min, const ImVec2& max, const Mat4& view_proj,
+                  float spacing, int half_extent, float center_x, float center_y) {
+    if (spacing <= 0.0f || half_extent <= 0) {
+        return;
+    }
+    const float extent = static_cast<float>(half_extent) * spacing;
+    const ImU32 line_col = IM_COL32(255, 255, 255, 18);
+    const ImU32 axis_x = IM_COL32(230, 90, 90, 140);   // X axis (Red)
+    const ImU32 axis_y = IM_COL32(90, 230, 110, 140);  // Y axis (Green)
+    const GridCellRange xr = grid_cell_range_around(center_x, spacing, half_extent);
+    const GridCellRange yr = grid_cell_range_around(center_y, spacing, half_extent);
+
+    for (int pass = 0; pass < 2; ++pass) {
+        const GridCellRange& r = (pass == 0) ? xr : yr;
+        const bool along_y = (pass == 0);
+        for (int i = r.lo; i <= r.hi; ++i) {
+            const float o = static_cast<float>(i) * spacing;
+            if (!grid_line_visible(i, o)) {
+                continue;
+            }
+            ImVec2 a{}, b{};
+            const bool ok_a = along_y
+                ? project_to_viewport(view_proj, o, center_y - extent, 0.0f, min, max, a)
+                : project_to_viewport(view_proj, center_x - extent, o, 0.0f, min, max, a);
+            const bool ok_b = along_y
+                ? project_to_viewport(view_proj, o, center_y + extent, 0.0f, min, max, b)
+                : project_to_viewport(view_proj, center_x + extent, o, 0.0f, min, max, b);
+            if (!ok_a || !ok_b) {
+                continue;
+            }
+            const bool on_axis = grid_cell_is_world_axis(i, spacing);
+            const ImU32 col = on_axis ? (along_y ? axis_y : axis_x) : line_col;
+            dl->AddLine(a, b, col, on_axis ? 1.6f : 1.0f);
+        }
+    }
+}
+
 // --- Navigation debug overlay (Step 8) ---------------------------------------
 //
 // The baked mesh outlines plus every bound agent's remaining route, projected
@@ -1049,6 +1088,118 @@ void outliner_plane_icon(ImDrawList* dl, ImVec2 c, float s) {
                 ImVec2(c.x + h * 0.95f, c.y - h * 0.45f), dark, t * 0.8f);
 }
 
+bool outliner_is_audio_label(const std::string& label) {
+    std::string lower;
+    lower.reserve(label.size());
+    for (char c : label) {
+        if (c >= 'A' && c <= 'Z') {
+            lower.push_back(static_cast<char>(c + ('a' - 'A')));
+        } else {
+            lower.push_back(c);
+        }
+    }
+    return lower.find("audio") != std::string::npos ||
+           lower.find("sound") != std::string::npos ||
+           lower.find("chime") != std::string::npos ||
+           lower.find("hum") != std::string::npos ||
+           lower.find("music") != std::string::npos ||
+           lower.find("voice") != std::string::npos;
+}
+
+void outliner_audio_icon(ImDrawList* dl, ImVec2 c, float s) {
+    if (dl == nullptr || s <= 0.0f) {
+        return;
+    }
+    const float h = s * 0.5f;
+    const ImU32 spk_col = IM_COL32(185, 155, 245, 255);
+    // Speaker box
+    dl->AddRectFilled(ImVec2(c.x - h * 0.8f, c.y - h * 0.35f),
+                      ImVec2(c.x - h * 0.3f, c.y + h * 0.35f), spk_col, 1.0f);
+    // Speaker cone
+    const ImVec2 p1(c.x - h * 0.3f, c.y - h * 0.35f);
+    const ImVec2 p2(c.x + h * 0.15f, c.y - h * 0.72f);
+    const ImVec2 p3(c.x + h * 0.15f, c.y + h * 0.72f);
+    const ImVec2 p4(c.x - h * 0.3f, c.y + h * 0.35f);
+    dl->AddQuadFilled(p1, p2, p3, p4, spk_col);
+    // Sound wave arcs
+    dl->PathArcTo(ImVec2(c.x + h * 0.15f, c.y), h * 0.42f, -0.32f * 3.14159265f, 0.32f * 3.14159265f, 6);
+    dl->PathStroke(spk_col, 0, 1.3f);
+    dl->PathArcTo(ImVec2(c.x + h * 0.15f, c.y), h * 0.75f, -0.32f * 3.14159265f, 0.32f * 3.14159265f, 6);
+    dl->PathStroke(spk_col, 0, 1.3f);
+}
+
+// Colored X/Y/Z vector control (Blender/Unreal style).
+// X = Red, Y = Green, Z = Blue with live drag, click-to-reset pill buttons.
+bool draw_vec3_control(const char* label, float values[3], float reset_val = 0.0f,
+                       float speed = 0.05f, float min_val = 0.0f, float max_val = 0.0f,
+                       const char* format = "%.2f") {
+    bool changed = false;
+    ImGui::PushID(label);
+
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    const float label_w = 75.0f;
+    const float item_w = std::max(40.0f, (avail_w - label_w - 60.0f) / 3.0f);
+
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(label_w);
+
+    const float line_h = ImGui::GetFrameHeight();
+    const ImVec2 btn_sz(line_h * 0.9f, line_h);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.0f, 2.0f));
+
+    // X Component (Red)
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(215, 55, 55, 230));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(235, 75, 75, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(190, 40, 40, 255));
+    if (ImGui::Button("X##btn", btn_sz)) {
+        values[0] = reset_val;
+        changed = true;
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(item_w);
+    if (ImGui::DragFloat("##X", &values[0], speed, min_val, max_val, format)) {
+        changed = true;
+    }
+    ImGui::SameLine();
+
+    // Y Component (Green)
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 175, 75, 230));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(65, 205, 95, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(35, 145, 55, 255));
+    if (ImGui::Button("Y##btn", btn_sz)) {
+        values[1] = reset_val;
+        changed = true;
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(item_w);
+    if (ImGui::DragFloat("##Y", &values[1], speed, min_val, max_val, format)) {
+        changed = true;
+    }
+    ImGui::SameLine();
+
+    // Z Component (Blue)
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 115, 225, 230));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 140, 245, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(35, 95, 200, 255));
+    if (ImGui::Button("Z##btn", btn_sz)) {
+        values[2] = reset_val;
+        changed = true;
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(item_w);
+    if (ImGui::DragFloat("##Z", &values[2], speed, min_val, max_val, format)) {
+        changed = true;
+    }
+
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    return changed;
+}
+
 // --- Reflection-driven widgets ---------------------------------------------
 //
 // The widget dispatch is a direct translation of ReflectedWidgetKind; all the
@@ -1250,6 +1401,11 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
+    // Top bar: menus + toolbar + dialogs (NF/Editor/ToolbarUi.hpp).
+    // Recorded first so BeginViewportSideBar reserves the top area BEFORE
+    // DockSpaceOverViewport, keeping the dockspace perfectly below the toolbar.
+    toolbar_ui(app, stats, intents);
+
     // Full-window dockspace. A human session restores the layout it saved last
     // time (ui_init's IniFilename), so the default below is only built when
     // there is nothing to restore — rebuilding unconditionally would throw the
@@ -1321,15 +1477,93 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
     const EditorStatus st = app.status();
 
-    // --- Top bar: menus + toolbar + dialogs (NF/Editor/ToolbarUi.hpp) --------
-    // Moved out of this file so the panels stay "the docked panels". The menu
-    // bar and the icon row are recorded first, so their window ordering keeps
-    // the toolbar above the dockspace on the frame it is created.
-    toolbar_ui(app, stats, intents);
+
 
     // --- Left: Scene Outliner --------------------------------------------------
     if (ImGui::Begin((AV("outliner") + "###Outliner").c_str())) {
-        if (ImGui::Button(AV("create_empty").c_str())) {
+        // Quick-Add Primitives / Entities Menu
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 200));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
+        if (ImGui::Button(AV("outliner_add_entity").c_str())) {
+            ImGui::OpenPopup("##outliner_add_popup");
+        }
+        ImGui::PopStyleColor(3);
+        if (ImGui::BeginPopup("##outliner_add_popup")) {
+            const ecs::Entity parent = app.selection().has_selection() ? app.selection().primary() : ecs::kInvalidEntity;
+            std::string err;
+            if (ImGui::MenuItem(AV("cube").c_str())) {
+                if (!app.create_primitive(PrimitiveKind::Cube, parent, err)) {
+                    push_error(app.console(), "Create cube failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("sphere").c_str())) {
+                if (!app.create_primitive(PrimitiveKind::Sphere, parent, err)) {
+                    push_error(app.console(), "Create sphere failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("quad").c_str())) {
+                if (!app.create_primitive(PrimitiveKind::Quad, parent, err)) {
+                    push_error(app.console(), "Create quad failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("ground").c_str())) {
+                if (!app.create_primitive(PrimitiveKind::Ground, parent, err)) {
+                    push_error(app.console(), "Create ground failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("sprite_2d").c_str())) {
+                if (!app.create_sprite(parent, err)) {
+                    push_error(app.console(), "Create sprite failed", err);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(AV("camera").c_str())) {
+                if (!app.create_camera(parent, err)) {
+                    push_error(app.console(), "Create camera failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("light_sun").c_str())) {
+                if (!app.create_directional_light(parent, err)) {
+                    push_error(app.console(), "Create light failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("point_light").c_str())) {
+                if (!app.create_point_light(parent, err)) {
+                    push_error(app.console(), "Create point light failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("spot_light").c_str())) {
+                if (!app.create_spot_light(parent, err)) {
+                    push_error(app.console(), "Create spot light failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("audio_source").c_str())) {
+                if (!app.create_audio_emitter(parent, err)) {
+                    push_error(app.console(), "Create audio source failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("sky").c_str())) {
+                if (!app.create_sky_entity(parent, err)) {
+                    push_error(app.console(), "Create sky failed", err);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(AV("create_empty").c_str())) {
+                const int n = static_cast<int>(app.status().entity_count);
+                if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n), parent, err)) {
+                    push_error(app.console(), "Create entity failed", err);
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(36, 110, 78, 200));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(48, 145, 102, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(28, 90, 62, 255));
+        const bool btn_create_empty = ImGui::Button(AV("create_empty").c_str());
+        ImGui::PopStyleColor(3);
+        if (btn_create_empty) {
             std::string err;
             const int n = static_cast<int>(app.status().entity_count);
             // A3b: this string is STORED as the entity's name, so it must be the
@@ -1436,13 +1670,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         const float ol_icon_sz = 13.0f;
         const float ol_space_w = ImGui::CalcTextSize(" ").x;
         int ol_pad_n = (ol_space_w > 0.0f)
-                           ? static_cast<int>(std::ceil((ol_icon_sz + 4.0f) / ol_space_w))
-                           : 4;
-        if (ol_pad_n < 2) {
-            ol_pad_n = 2;
+                           ? static_cast<int>(std::ceil((ol_icon_sz + 10.0f) / ol_space_w))
+                           : 5;
+        if (ol_pad_n < 4) {
+            ol_pad_n = 4;
         }
         const std::string ol_pad(static_cast<size_t>(ol_pad_n), ' ');
-        const float ol_pad_w = ImGui::CalcTextSize(ol_pad.c_str()).x;
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(rows.size()));
         while (clipper.Step()) {
@@ -1483,11 +1716,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 const ImVec2 rmin = ImGui::GetItemRectMin();
                 const ImVec2 rmax = ImGui::GetItemRectMax();
                 const float label_x = rmin.x + ImGui::GetTreeNodeToLabelSpacing();
-                const float ix = label_x + (ol_pad_w - ol_icon_sz) * 0.5f;
+                const float ix = label_x + 2.0f;
                 const float iy = (rmin.y + rmax.y - ol_icon_sz) * 0.5f;
                 const ImVec2 ic(ix + ol_icon_sz * 0.5f, iy + ol_icon_sz * 0.5f);
                 if (row.kind == OutlinerKind::Mesh && outliner_is_ground_label(row.label)) {
                     outliner_plane_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
+                } else if (outliner_is_audio_label(row.label)) {
+                    outliner_audio_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
                 } else {
                     outliner_kind_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz,
                                        row.kind);
@@ -1527,12 +1762,18 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // buttons offer, where the pointer already is. Delete is undoable
             // (Ctrl+Z restores), matching the button's safety contract.
             if (ImGui::BeginPopupContextItem("##rowctx")) {
-                if (ImGui::MenuItem(AV("delete").c_str())) {
+                if (ImGui::MenuItem((AV("frame_selection") + "   F").c_str())) {
+                    app.selection().set_single(row.entity);
+                    intents.nav_frame = 1;
+                }
+                if (ImGui::MenuItem(AV("create_child").c_str())) {
                     std::string err;
-                    if (!app.delete_entity(row.entity, err)) {
-                        push_error(app.console(), "Delete failed", err);
+                    const int n = static_cast<int>(app.status().entity_count);
+                    if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n), row.entity, err)) {
+                        push_error(app.console(), "Create child failed", err);
                     }
                 }
+                ImGui::Separator();
                 if (ImGui::MenuItem((AV("duplicate") + "   Ctrl+D").c_str())) {
                     std::string err;
                     if (!app.duplicate_selection(err)) {
@@ -1545,6 +1786,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         std::string("content://Prefabs/") + row.label + ".nfscene";
                     if (!app.create_prefab(row.entity, prefab_path, err)) {
                         push_error(app.console(), "Save as prefab failed", err);
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem(AV("delete").c_str())) {
+                    std::string err;
+                    if (!app.delete_entity(row.entity, err)) {
+                        push_error(app.console(), "Delete failed", err);
                     }
                 }
                 ImGui::EndPopup();
@@ -1567,6 +1815,62 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             ImGui::EndDragDropTarget();
+        }
+        if (ImGui::BeginPopupContextWindow("##outliner_empty_ctx", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            if (ImGui::MenuItem(AV("create_empty").c_str())) {
+                std::string err;
+                const int n = static_cast<int>(app.status().entity_count);
+                if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n), ecs::kInvalidEntity, err)) {
+                    push_error(app.console(), "Create entity failed", err);
+                }
+            }
+            if (ImGui::BeginMenu(AV("primitive").c_str())) {
+                if (ImGui::MenuItem(AV("add_cube").c_str())) {
+                    std::string err;
+                    app.create_primitive(PrimitiveKind::Cube, ecs::kInvalidEntity, err);
+                }
+                if (ImGui::MenuItem(AV("add_sphere").c_str())) {
+                    std::string err;
+                    app.create_primitive(PrimitiveKind::Sphere, ecs::kInvalidEntity, err);
+                }
+                if (ImGui::MenuItem(AV("add_quad").c_str())) {
+                    std::string err;
+                    app.create_primitive(PrimitiveKind::Quad, ecs::kInvalidEntity, err);
+                }
+                if (ImGui::MenuItem(AV("add_ground").c_str())) {
+                    std::string err;
+                    app.create_primitive(PrimitiveKind::Ground, ecs::kInvalidEntity, err);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu(AV("light").c_str())) {
+                if (ImGui::MenuItem(AV("light_sun").c_str())) {
+                    std::string err;
+                    app.create_directional_light(ecs::kInvalidEntity, err);
+                }
+                if (ImGui::MenuItem(AV("point_light").c_str())) {
+                    std::string err;
+                    app.create_point_light(ecs::kInvalidEntity, err);
+                }
+                if (ImGui::MenuItem(AV("spot_light").c_str())) {
+                    std::string err;
+                    app.create_spot_light(ecs::kInvalidEntity, err);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem(AV("sprite_2d").c_str())) {
+                std::string err;
+                app.create_sprite(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("audio_source").c_str())) {
+                std::string err;
+                app.create_audio_emitter(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("add_camera").c_str())) {
+                std::string err;
+                app.create_camera(ecs::kInvalidEntity, err);
+            }
+            ImGui::EndPopup();
         }
     }
     ImGui::End();
@@ -1630,6 +1934,41 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::PopStyleColor();
             }
         };
+        // 2D / 3D Dimension Mode Switcher
+        const bool is_2d_mode = app.is_2d_mode();
+        if (is_2d_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 220)); // Emerald
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(52, 211, 153, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(5, 150, 105, 255));
+        }
+        if (ImGui::Button("2D###vp_mode_2d")) {
+            app.set_2d_mode(true);
+            app.set_gizmo_mode(GizmoMode::Translate);
+        }
+        if (is_2d_mode) {
+            ImGui::PopStyleColor(3);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", ui::tr("view_mode_2d").c_str());
+        }
+        ImGui::SameLine();
+        if (!is_2d_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220)); // Electric blue
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
+        }
+        if (ImGui::Button("3D###vp_mode_3d")) {
+            app.set_2d_mode(false);
+        }
+        if (!is_2d_mode) {
+            ImGui::PopStyleColor(3);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", ui::tr("view_mode_3d").c_str());
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
         // Gizmo labels translate (AV) with stable ###ids so the widget identity
         // survives a language switch; the temporaries outlive the Button call.
         mode_button(GizmoMode::Translate, (AV("move") + "###gizmo_move").c_str());
@@ -1698,18 +2037,6 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::DragFloat((AV("scale") + "###snap_scale").c_str(), &snap.scale_step, 0.05f, 0.0f, 4.0f, "%.2f");
             ImGui::PopItemWidth();
         }
-        // Mode readout: skipped when the panel is too narrow to hold it (it
-        // used to bleed past the panel edge and paint clipped garbage).
-        if (ImGui::GetContentRegionAvail().x > 420.0f) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(%s, %s, %s)",
-                                (cur_mode == GizmoMode::Translate
-                                     ? AV("move")
-                                     : (cur_mode == GizmoMode::Rotate ? AV("rotate")
-                                                                      : AV("scale_tool")))
-                                    .c_str(),
-                                space_label.c_str(), AV("shift_click_multi").c_str());
-        }
         // Lit-pixel counter: a renderer diagnostic, English on purpose (same
         // decision as the profiler block below). It sits behind the same
         // View > Viewport stats toggle as the census card — a number nobody
@@ -1763,9 +2090,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // compromise (the alternative is a depth-aware overlay pass, which
             // needs the depth buffer in this draw list) and it is what keeps
             // the grid usable as a reference while orbiting.
-            draw_ground_grid(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
+            if (app.is_2d_mode()) {
+                draw_2d_grid(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
                              ui_settings().grid_step, kGridHalfExtent, app.view_pivot()[0],
-                             app.view_pivot()[2]);
+                             app.view_pivot()[1]);
+            } else {
+                draw_ground_grid(ImGui::GetWindowDrawList(), mn, mx, vp_cam.view_projection,
+                                 ui_settings().grid_step, kGridHalfExtent, app.view_pivot()[0],
+                                 app.view_pivot()[2]);
+            }
         }
         // Navigation debug overlay beside the grid: the baked mesh outlines
         // plus every bound agent's remaining route, through the same camera.
@@ -1788,6 +2121,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // instead of the pick press (no re-select while grabbing).
             gizmo_hover = draw_transform_gizmo(app, vp_cam, ImGui::GetItemRectMin(),
                                                ImGui::GetItemRectMax());
+        }
+        // Mode badge in viewport top corner
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 vp_min = ImGui::GetItemRectMin();
+            const bool is_2d = app.is_2d_mode();
+            const char* mode_badge = is_2d ? "[ 2D ]" : "[ 3D ]";
+            const ImVec2 badge_pos(vp_min.x + 10.0f, vp_min.y + 10.0f);
+            const ImVec2 text_sz = ImGui::CalcTextSize(mode_badge);
+            const ImVec2 badge_pad(6.0f, 3.0f);
+            const ImU32 bg_col = is_2d ? IM_COL32(16, 185, 129, 210) : IM_COL32(20, 20, 28, 190);
+            const ImU32 border_col = is_2d ? IM_COL32(52, 211, 153, 240) : IM_COL32(76, 141, 255, 180);
+            dl->AddRectFilled(ImVec2(badge_pos.x - badge_pad.x, badge_pos.y - badge_pad.y),
+                              ImVec2(badge_pos.x + text_sz.x + badge_pad.x, badge_pos.y + text_sz.y + badge_pad.y),
+                              bg_col, 4.0f);
+            dl->AddRect(ImVec2(badge_pos.x - badge_pad.x, badge_pos.y - badge_pad.y),
+                        ImVec2(badge_pos.x + text_sz.x + badge_pad.x, badge_pos.y + text_sz.y + badge_pad.y),
+                        border_col, 4.0f, 0, 1.0f);
+            dl->AddText(badge_pos, IM_COL32(245, 245, 250, 255), mode_badge);
         }
         // Live simulation overlay: what the frame actually stepped, for the
         // "is anything running" glance. Counts come straight from the Runtime
@@ -1950,6 +2302,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 intents.viewport_drop = true;
                 intents.dropped_mesh_path.assign(static_cast<const char*>(pl->Data), pl->DataSize);
             }
+            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("NF_PREFAB")) {
+                const std::string prefab_path(static_cast<const char*>(pl->Data), pl->DataSize);
+                std::string err;
+                if (!app.instantiate_prefab(prefab_path, ecs::kInvalidEntity, err)) {
+                    push_error(app.console(), "Instantiate prefab failed", err);
+                } else {
+                    push_info(app.console(), "Instantiated prefab: " + prefab_path);
+                }
+            }
             ImGui::EndDragDropTarget();
         }
         if (!app.selection().has_selection()) {
@@ -1975,16 +2336,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
     // --- Right: Inspector ------------------------------------------------------
     if (ImGui::Begin((AV("inspector") + "###Inspector").c_str())) {
+        ImGui::PushItemWidth(-135.0f);
         ecs::World* w = app.world();
         const ecs::Entity sel = app.selection().primary();
         if (w == nullptr || !sel.valid() || !w->is_alive(sel)) {
             ImGui::TextDisabled("%s", AV("nothing_selected").c_str());
         } else {
             // Identity line: the stable Entity id + generation (what undo,
-            // logs and the outliner's ###e<id> all key on). English on purpose,
-            // like every other technical diagnostic in the editor.
-            ImGui::TextDisabled("Entity %u (gen %u)", static_cast<unsigned>(sel.id),
-                                static_cast<unsigned>(sel.generation));
+            // logs and the outliner's ###e<id> all key on).
+            rt_disabled_str(AVF("inspector_entity_gen", static_cast<unsigned>(sel.id),
+                                static_cast<unsigned>(sel.generation)));
             InspectorCache& ic = inspector_cache();
             if (!ic.valid || !(ic.entity == sel)) {
                 // A drag in progress targets the old material: fold it into
@@ -2292,6 +2653,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ic.squad_enabled = squad->enabled;
                     ic.squad_radio = squad->radio;
                     ic.squad_lost = squad->lost;
+                    ic.squad_cone = squad->cone;
                     std::strncpy(ic.squad_token, squad->token.c_str(),
                                  sizeof(ic.squad_token) - 1);
                     ic.squad_token[sizeof(ic.squad_token) - 1] = '\0';
@@ -2588,6 +2950,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::EndPopup();
             }
             if (ImGui::CollapsingHeader((AV("name") + "###Name").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SetNextItemWidth(-86.0f);
                 ImGui::InputText("##name", ic.name, sizeof(ic.name));
                 ImGui::SameLine();
                 if (ImGui::Button((AV("apply") + "##name").c_str())) {
@@ -2601,9 +2964,26 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             if (w->has<scene::Transform>(sel) && ImGui::CollapsingHeader((AV("transform") + "###Transform").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::DragFloat3(AV("position").c_str(), ic.pos, 0.05f);
-                ImGui::DragFloat3(AV("rotation").c_str(), ic.rot, 0.5f);
-                ImGui::DragFloat3(AV("scale").c_str(), ic.scl, 0.02f, 0.01f, 1000.0f);
+                bool t_changed = false;
+                t_changed |= draw_vec3_control(AV("position").c_str(), ic.pos, 0.0f, 0.05f);
+                t_changed |= draw_vec3_control(AV("rotation").c_str(), ic.rot, 0.0f, 0.5f);
+                t_changed |= draw_vec3_control(AV("scale").c_str(), ic.scl, 1.0f, 0.02f, 0.01f, 1000.0f);
+
+                auto* cur_tr = w->get<scene::Transform>(sel);
+                if (cur_tr != nullptr && t_changed) {
+                    cur_tr->local_x = ic.pos[0];
+                    cur_tr->local_y = ic.pos[1];
+                    cur_tr->local_z = ic.pos[2];
+                    cur_tr->rot_x = ic.rot[0];
+                    cur_tr->rot_y = ic.rot[1];
+                    cur_tr->rot_z = ic.rot[2];
+                    cur_tr->scale_x = ic.scl[0];
+                    cur_tr->scale_y = ic.scl[1];
+                    cur_tr->scale_z = ic.scl[2];
+                    cur_tr->dirty = true;
+                    scene::propagate_transforms(*w);
+                }
+
                 if (const auto* t = w->get<scene::Transform>(sel)) {
                     // A parent name is user-authored text (may be Arabic):
                     // compose LOGICAL then shape once (concatenating two
@@ -2611,12 +2991,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     // keeps a shaped '%' in the name from being read as a
                     // format specifier.
                     rt_text_str(ui::shape_arabic(
-                        ui::tr("parent_prefix") + ": " +
+                        ui::tr("parent_prefix") + " : " +
                         std::string(t->parent.valid() ? entity_label_ptr(app, t->parent)
                                                       : ui::tr("inspector_root"))));
                 }
-                ImGui::SameLine();
-                if (ImGui::Button((AV("apply") + "##transform").c_str())) {
+                const bool apply_btn = ImGui::Button((AV("apply") + "##transform").c_str());
+                const bool drag_finished = ImGui::IsItemDeactivatedAfterEdit();
+                if (apply_btn || drag_finished) {
                     TransformEdit e;
                     e.px = ic.pos[0];
                     e.py = ic.pos[1];
@@ -2669,6 +3050,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                         }
                         return (*list)[static_cast<size_t>(idx)].c_str();
                     };
+                    ImGui::SetNextItemWidth(-185.0f);
                     ImGui::Combo((AV("material") + "##material_asset").c_str(), &ic.mat_choice,
                                  mat_combo_item, &mat_list,
                                  static_cast<int>(mat_list.size()));
@@ -2684,19 +3066,19 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                             ic.valid = false; // refresh params from the new material
                         }
                     }
-                    std::string state = "state=unknown";
+                    std::string state_val = AV("asset_state_not_requested");
                     auto handle = app.asset_manager().find(m->mesh_id);
-                    if (!handle) {
-                        state = "state=not requested";
-                    } else {
+                    if (handle) {
                         switch (handle->state) {
-                            case assets::AssetState::Unloaded: state = "state=unloaded"; break;
-                            case assets::AssetState::Loading: state = "state=loading..."; break;
-                            case assets::AssetState::Ready: state = "state=ready"; break;
-                            case assets::AssetState::Failed: state = std::string("state=failed: ") + handle->error; break;
+                            case assets::AssetState::Unloaded: state_val = AV("asset_state_unloaded"); break;
+                            case assets::AssetState::Loading: state_val = AV("asset_state_loading"); break;
+                            case assets::AssetState::Ready: state_val = AV("asset_state_ready"); break;
+                            case assets::AssetState::Failed:
+                                state_val = AV("failed") + ": " + handle->error;
+                                break;
                         }
                     }
-                    ImGui::TextUnformatted(state.c_str());
+                    rt_disabled_str(AV("status") + ": " + state_val);
                     if (ImGui::Button((AV("apply") + "##mesh").c_str())) {
                         std::string err;
                         if (!app.set_mesh(sel, ic.mesh_id, ic.mesh_mat, err)) {
@@ -2781,6 +3163,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     const std::string& s = (*list)[static_cast<size_t>(idx)];
                     return s.empty() ? "None (scalar)" : s.c_str();
                 };
+                ImGui::SetNextItemWidth(-185.0f);
                 ImGui::Combo(AV("albedo").c_str(), &ic.albedo_choice, tex_combo_item, &tex_list,
                              static_cast<int>(tex_list.size()));
                 // Albedo swatch: the same thumbnail the browser shows, drawn
@@ -2817,6 +3200,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 // the pointer outlives the Combo call.
                 const std::string mip_items =
                     AV("none") + '\0' + AV("nearest") + '\0' + AV("linear") + '\0';
+                ImGui::SetNextItemWidth(-185.0f);
                 ImGui::Combo(AV("mip_filter").c_str(), &ic.mip_choice, mip_items.c_str());
                 ImGui::SameLine();
                 if (ImGui::Button((AV("apply") + "##mip").c_str())) {
@@ -3234,7 +3618,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             // --- Day/night cycle (design doc §64) ---
-if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
+if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
     if (!ic.tod_has) {
         ImGui::TextDisabled("%s", AV("no_day_night").c_str());
         if (ImGui::Button((AV("add_day_night") + "##addtod").c_str())) {
@@ -3595,6 +3979,64 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                     }
                 }
             }
+            // --- 2D Sprite / Billboard (Phase 73) ---
+            if (auto* sp = w->get<runtime::SpriteComponent>(sel)) {
+                if (ImGui::CollapsingHeader((AV("sprite_2d") + "###Sprite2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    static char tex_buf[256];
+                    std::strncpy(tex_buf, sp->texture.c_str(), sizeof(tex_buf) - 1);
+                    tex_buf[sizeof(tex_buf) - 1] = '\0';
+                    if (ImGui::InputText(AV("texture").c_str(), tex_buf, sizeof(tex_buf))) {
+                        sp->texture = tex_buf;
+                    }
+                    ImGui::DragFloat2(AV("size").c_str(), &sp->width, 0.05f, 0.01f, 1000.0f);
+                    float col[4] = {sp->color_r, sp->color_g, sp->color_b, sp->color_a};
+                    if (ImGui::ColorEdit4(AV("color").c_str(), col)) {
+                        sp->color_r = col[0]; sp->color_g = col[1]; sp->color_b = col[2]; sp->color_a = col[3];
+                    }
+                    ImGui::Checkbox(AV("flip_x").c_str(), &sp->flip_x);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("flip_y").c_str(), &sp->flip_y);
+                    ImGui::DragInt(AV("z_order").c_str(), &sp->z_order, 1, -1000, 1000);
+                    ImGui::Checkbox(AV("billboard").c_str(), &sp->billboard);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("enabled").c_str(), &sp->enabled);
+                }
+            }
+            if (auto* pl = w->get<runtime::PointLightComponent>(sel)) {
+                if (ImGui::CollapsingHeader((AV("point_light") + "###PointLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    float col[3] = {pl->color_r, pl->color_g, pl->color_b};
+                    if (ImGui::ColorEdit3(AV("color").c_str(), col)) {
+                        pl->color_r = col[0]; pl->color_g = col[1]; pl->color_b = col[2];
+                    }
+                    ImGui::DragFloat(AV("intensity").c_str(), &pl->intensity, 0.1f, 0.0f, 100.0f);
+                    ImGui::DragFloat(AV("radius").c_str(), &pl->radius, 0.2f, 0.1f, 1000.0f);
+                    ImGui::Checkbox(AV("cast_shadows").c_str(), &pl->cast_shadows);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("enabled").c_str(), &pl->enabled);
+                }
+            }
+            if (auto* sl = w->get<runtime::SpotLightComponent>(sel)) {
+                if (ImGui::CollapsingHeader((AV("spot_light") + "###SpotLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    float col[3] = {sl->color_r, sl->color_g, sl->color_b};
+                    if (ImGui::ColorEdit3(AV("color").c_str(), col)) {
+                        sl->color_r = col[0]; sl->color_g = col[1]; sl->color_b = col[2];
+                    }
+                    ImGui::DragFloat(AV("intensity").c_str(), &sl->intensity, 0.1f, 0.0f, 100.0f);
+                    ImGui::DragFloat(AV("range").c_str(), &sl->range, 0.2f, 0.1f, 1000.0f);
+                    float inner_deg = sl->inner_angle_rad * (180.0f / 3.14159265f);
+                    float outer_deg = sl->outer_angle_rad * (180.0f / 3.14159265f);
+                    if (ImGui::SliderFloat(AV("inner_angle").c_str(), &inner_deg, 1.0f, 89.0f, "%.1f deg")) {
+                        sl->inner_angle_rad = inner_deg * (3.14159265f / 180.0f);
+                    }
+                    if (ImGui::SliderFloat(AV("outer_angle").c_str(), &outer_deg, 1.0f, 90.0f, "%.1f deg")) {
+                        sl->outer_angle_rad = outer_deg * (3.14159265f / 180.0f);
+                    }
+                    ImGui::Checkbox(AV("cast_shadows").c_str(), &sl->cast_shadows);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(AV("enabled").c_str(), &sl->enabled);
+                }
+            }
+
             // --- Projected decal (Phase 36) ---
             // A decal has no mesh and no light: it projects the entity's local
             // +/-Z box onto whatever the GBuffer already drew. Placement and
@@ -4196,11 +4638,17 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("%s", AV("squad_lost_hint").c_str());
                     }
+                    ImGui::SliderFloat((AV("squad_cone") + "##squad").c_str(), &ic.squad_cone,
+                                       0.0f, 180.0f, "%.0f deg");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", AV("squad_cone_hint").c_str());
+                    }
                     if (ImGui::Button((AV("apply") + "##squad").c_str())) {
                         runtime::SquadComponent edited;
                         edited.enabled = ic.squad_enabled;
                         edited.radio = ic.squad_radio;
                         edited.lost = ic.squad_lost;
+                        edited.cone = ic.squad_cone;
                         edited.token = std::string{ic.squad_token};
                         std::string err;
                         if (!app.set_squad(sel, edited, err)) {
@@ -5674,6 +6122,7 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                 }
             }
         }
+        ImGui::PopItemWidth();
     }
     ImGui::End();
 
@@ -5792,6 +6241,12 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
                     // display and avoid the %s format path entirely.
                     const std::string shaped = ui::shape_arabic(m.text);
                     ImGui::TextColored(level_color(m.level), "%s", shaped.c_str());
+                    if (ImGui::BeginPopupContextItem("##logctx")) {
+                        if (ImGui::MenuItem(AV("copy_log_message").c_str())) {
+                            ImGui::SetClipboardText(m.text.c_str());
+                        }
+                        ImGui::EndPopup();
+                    }
                 }
             }
             clipper.End();
@@ -5949,7 +6404,12 @@ if (ImGui::CollapsingHeader((AV("sky") + "###TimeOfDay").c_str())) {
             if (st.scene_label.empty()) {
                 ImGui::TextDisabled("%s", AV("untitled").c_str());
             } else {
-                ImGui::TextUnformatted(ui::shape_arabic(st.scene_label).c_str());
+                std::string clean_label = st.scene_label;
+                if (clean_label.size() >= 2 &&
+                    clean_label.compare(clean_label.size() - 2, 2, " *") == 0) {
+                    clean_label.erase(clean_label.size() - 2);
+                }
+                ImGui::TextUnformatted(ui::shape_arabic(clean_label).c_str());
             }
             ImGui::SameLine(0.0f, 8.0f);
             if (st.dirty) {
