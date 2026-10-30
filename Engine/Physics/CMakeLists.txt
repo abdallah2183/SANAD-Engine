@@ -31,6 +31,7 @@ set(NFPHYSICS_SOURCES
     src/Cloth.cpp
     src/PhysicsQuery.cpp
     src/TriggerVolume.cpp
+    src/CableSystem.cpp
 )
 
 nf_engine_library(NFPhysics

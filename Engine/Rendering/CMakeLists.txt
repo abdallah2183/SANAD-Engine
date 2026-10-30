@@ -38,6 +38,7 @@ set(NFRENDERING_SOURCES
     src/Culling.cpp
     src/ResourceState.cpp
     src/ProceduralMesh.cpp
+    src/Weather.cpp
 )
 
 nf_engine_library(NFRendering

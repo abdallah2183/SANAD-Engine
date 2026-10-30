@@ -130,6 +130,8 @@ add_executable(RHITests
     # polling and RenderGraph's per-pass brackets. The Renderer3D integration
     # lives in test_3d_renderer.cpp with the rest of the scene pipeline.
     RHITests/test_gpu_timing.cpp
+    # Atmospheric weather & height fog (Phase 115)
+    RHITests/test_weather_system.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -348,6 +350,7 @@ add_executable(PhysicsTests
     PhysicsTests/test_cloth.cpp
     PhysicsTests/test_collision_materials_and_buoyancy.cpp
     PhysicsTests/test_physics_query_and_triggers.cpp
+    PhysicsTests/test_cable_system.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)
@@ -365,6 +368,7 @@ add_executable(AnimationTests
     AnimationTests/test_notifies_and_montage.cpp
     AnimationTests/test_foot_placement_ik.cpp
     AnimationTests/test_look_at_ik.cpp
+    AnimationTests/test_ragdoll_blend.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
@@ -413,6 +417,7 @@ add_executable(GameplayTests
     GameplayTests/test_cues_and_execution.cpp
     GameplayTests/test_equipment.cpp
     GameplayTests/test_crafting.cpp
+    GameplayTests/test_grid_inventory.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)

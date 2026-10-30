@@ -22,6 +22,7 @@ set(NFGAMEPLAY_SOURCES
     src/Equipment.cpp
     src/Crafting.cpp
     src/SaveGame.cpp
+    src/GridInventory.cpp
 )
 
 nf_engine_library(NFGameplay

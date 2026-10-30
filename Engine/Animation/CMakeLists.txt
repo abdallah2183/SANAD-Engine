@@ -22,6 +22,7 @@ set(NFANIMATION_SOURCES
     src/BoneMask.cpp
     src/FootPlacementIK.cpp
     src/LookAtIK.cpp
+    src/RagdollBlend.cpp
 )
 
 nf_engine_library(NFAnimation
