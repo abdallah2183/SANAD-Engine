@@ -27,6 +27,8 @@ set(NFAUDIO_SOURCES
     src/OggVorbisImpl.cpp
     src/Reverb.cpp
     src/SoundCue.cpp
+    src/AudioConcurrency.cpp
+    src/AudioDucking.cpp
 )
 
 if(WIN32)

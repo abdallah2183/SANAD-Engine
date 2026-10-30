@@ -387,6 +387,7 @@ AudioTests/test_audio_game_settings.cpp
     # plays. Fixed-seed noise, bounded, decaying, deterministic.
     AudioTests/test_feedback_audio.cpp
     AudioTests/test_dsp_and_soundcue.cpp
+    AudioTests/test_concurrency_and_ducking.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
