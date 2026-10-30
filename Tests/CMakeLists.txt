@@ -134,6 +134,12 @@ add_executable(RHITests
     RHITests/test_weather_system.cpp
     # Light probe volume & spherical harmonics irradiance (Phase 124)
     RHITests/test_light_probes.cpp
+    # Screen-space ambient occlusion (Phase 128)
+    RHITests/test_ssao.cpp
+    # Atmospheric fog (Phase 129)
+    RHITests/test_atmospheric_fog.cpp
+    # Terrain erosion (Phase 130)
+    RHITests/test_terrain_erosion.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -373,6 +379,8 @@ add_executable(AnimationTests
     AnimationTests/test_look_at_ik.cpp
     AnimationTests/test_ragdoll_blend.cpp
     AnimationTests/test_morph_targets.cpp
+    # Inertialization transitions (Phase 131)
+    AnimationTests/test_inertialization.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)

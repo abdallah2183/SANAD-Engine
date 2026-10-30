@@ -24,6 +24,7 @@ set(NFANIMATION_SOURCES
     src/LookAtIK.cpp
     src/RagdollBlend.cpp
     src/MorphTarget.cpp
+    src/Inertialization.cpp
 )
 
 nf_engine_library(NFAnimation

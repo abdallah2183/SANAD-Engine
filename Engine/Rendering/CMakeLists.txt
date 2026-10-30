@@ -40,6 +40,9 @@ set(NFRENDERING_SOURCES
     src/ProceduralMesh.cpp
     src/Weather.cpp
     src/LightProbeVolume.cpp
+    src/SSAO.cpp
+    src/AtmosphericFog.cpp
+    src/TerrainErosion.cpp
 )
 
 nf_engine_library(NFRendering
