@@ -169,6 +169,10 @@ bool AbilitySystemComponent::try_activate_ability(u32 slot_index, AttributeSet& 
         return false;
     }
 
+    for (const auto& tag : spec->ability->activation_applied_tags().all()) {
+        notify_tag_changed(tag, true);
+    }
+
     // Start cooldown
     spec->cooldown_remaining = spec->ability->cooldown_duration();
 
@@ -200,6 +204,9 @@ void AbilitySystemComponent::end_ability(u32 slot_index, AttributeSet& attribute
         return;
     }
     spec->ability->on_end(attributes, actor_tags);
+    for (const auto& tag : spec->ability->activation_applied_tags().all()) {
+        notify_tag_changed(tag, false);
+    }
     spec->is_active = false;
     spec->active_elapsed = 0.0f;
 }
@@ -277,8 +284,110 @@ f32 AbilitySystemComponent::get_cooldown_remaining(u32 slot_index) const {
     return spec ? spec->cooldown_remaining : 0.0f;
 }
 
+void AbilitySystemComponent::register_tag_listener(const std::string& tag, TagEventCallback cb) {
+    if (tag.empty() || !cb) {
+        return;
+    }
+    m_tag_listeners[tag].push_back(std::move(cb));
+}
+
+void AbilitySystemComponent::unregister_tag_listener(const std::string& tag) {
+    m_tag_listeners.erase(tag);
+}
+
+void AbilitySystemComponent::notify_tag_changed(const std::string& tag, bool added) {
+    if (tag.empty()) {
+        return;
+    }
+
+    // 1. Exact match
+    auto it = m_tag_listeners.find(tag);
+    if (it != m_tag_listeners.end()) {
+        for (const auto& cb : it->second) {
+            if (cb) {
+                cb(tag, added);
+            }
+        }
+    }
+
+    // 2. Parent tags
+    std::string current = tag;
+    while (true) {
+        const size_t dot = current.rfind('.');
+        if (dot == std::string::npos) {
+            break;
+        }
+        current = current.substr(0, dot);
+        if (current.empty()) {
+            break;
+        }
+        auto parent_it = m_tag_listeners.find(current);
+        if (parent_it != m_tag_listeners.end()) {
+            for (const auto& cb : parent_it->second) {
+                if (cb) {
+                    cb(tag, added);
+                }
+            }
+        }
+    }
+}
+
+ExecutionOutput AbilitySystemComponent::execute_calculation(
+    const GameplayExecutionCalculation& calc,
+    AbilitySystemComponent& target_asc,
+    AttributeSet& source_attributes,
+    AttributeSet& target_attributes,
+    const TagContainer& source_tags,
+    const TagContainer& target_tags,
+    f32 base_value,
+    f32 roll,
+    u64 source_id,
+    u64 target_id)
+{
+    const ExecutionParams params{
+        source_attributes,
+        target_attributes,
+        source_tags,
+        target_tags,
+        base_value,
+        source_id,
+        target_id,
+        roll
+    };
+
+    ExecutionOutput output = calc.execute(params);
+
+    // Apply modifiers to source or target attributes
+    for (const auto& mod : output.modifiers) {
+        AttributeSet& dest_attrs = mod.apply_to_source ? source_attributes : target_attributes;
+        if (dest_attrs.has_attribute(mod.attribute_name)) {
+            if (mod.op == ModifierOp::Add) {
+                const f32 cur = dest_attrs.get_base_value(mod.attribute_name);
+                dest_attrs.set_base_value(mod.attribute_name, cur + mod.magnitude);
+            } else if (mod.op == ModifierOp::Multiply) {
+                const f32 cur = dest_attrs.get_base_value(mod.attribute_name);
+                dest_attrs.set_base_value(mod.attribute_name, cur * mod.magnitude);
+            } else if (mod.op == ModifierOp::Override) {
+                dest_attrs.set_base_value(mod.attribute_name, mod.magnitude);
+            }
+        }
+    }
+
+    // Trigger cue if one was emitted
+    if (!output.cue_tag.empty()) {
+        if (m_cue_manager) {
+            m_cue_manager->execute_cue(output.cue_tag, output.cue_params);
+        } else if (target_asc.cue_manager()) {
+            target_asc.cue_manager()->execute_cue(output.cue_tag, output.cue_params);
+        }
+    }
+
+    return output;
+}
+
 void AbilitySystemComponent::clear() {
     m_abilities.clear();
+    m_tag_listeners.clear();
 }
 
 } // namespace nf::gameplay

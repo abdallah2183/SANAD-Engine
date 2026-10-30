@@ -2,7 +2,9 @@
 
 #include <NF/Core/Types.hpp>
 #include <NF/Gameplay/GameplayAttributes.hpp>
+#include <NF/Gameplay/GameplayCue.hpp>
 #include <NF/Gameplay/GameplayEffect.hpp>
+#include <NF/Gameplay/GameplayExecution.hpp>
 #include <NF/Gameplay/Tags.hpp>
 
 #include <string>
@@ -156,12 +158,38 @@ public:
     ActiveEffectsContainer& effects_container() noexcept { return m_effects; }
     [[nodiscard]] const ActiveEffectsContainer& effects_container() const noexcept { return m_effects; }
 
+    /// Gameplay Cue integration
+    void set_cue_manager(std::shared_ptr<GameplayCueManager> mgr) { m_cue_manager = std::move(mgr); }
+    [[nodiscard]] const std::shared_ptr<GameplayCueManager>& cue_manager() const noexcept { return m_cue_manager; }
+
+    /// Tag Event Listeners
+    using TagEventCallback = std::function<void(const std::string& tag, bool added)>;
+    void register_tag_listener(const std::string& tag, TagEventCallback cb);
+    void unregister_tag_listener(const std::string& tag);
+    void notify_tag_changed(const std::string& tag, bool added);
+
+    /// Execute a combat/gameplay calculation between this ASC (source) and a target ASC,
+    /// committing resulting modifiers to target and source attributes, and dispatching cues.
+    ExecutionOutput execute_calculation(
+        const GameplayExecutionCalculation& calc,
+        AbilitySystemComponent& target_asc,
+        AttributeSet& source_attributes,
+        AttributeSet& target_attributes,
+        const TagContainer& source_tags,
+        const TagContainer& target_tags,
+        f32 base_value = 0.0f,
+        f32 roll = 0.0f,
+        u64 source_id = 0,
+        u64 target_id = 0);
+
     /// Clear all abilities and reset cooldowns
     void clear();
 
 private:
     std::unordered_map<u32, AbilitySpec> m_abilities;
     ActiveEffectsContainer m_effects;
+    std::shared_ptr<GameplayCueManager> m_cue_manager;
+    std::unordered_map<std::string, std::vector<TagEventCallback>> m_tag_listeners;
 };
 
 } // namespace nf::gameplay

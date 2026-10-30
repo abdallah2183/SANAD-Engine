@@ -81,6 +81,7 @@
 | **Phase 93** | توليد المجسمات الإجرائية وتعديل الشبكات والأسطح ثلاثية الأبعاد (Procedural Mesh & Geometry Engine): مولدات الأشكال الهندسية الأساسية (Box, Plane, Disc, UV Sphere, Icosphere, Cylinder, Cone, Capsule, Torus) مع تقطيعات شبكية وحساب تلقائي للحدود (AABB و BoundingSphere)، سحب المقاطع المضلعة ثنائية الأبعاد على مسارات ثلاثية الأبعاد (Path Extrusion) بإطارات النقل المتوازي (Parallel Transport)، دمج وتحويل المجسمات، إعادة حساب النواظم السطحية والمماسات (Tangents) المنسوبة للإحداثيات، وتشويه المجسمات إجرائياً بالضوضاء الفركتلية لصناعة الكويكبات والصخور وتضاريس الرقع الطبيعية | **مكتمل** | التوليد الإجرائي للبيئات، الأنابيب والسكك الحديدية والأنفاق، الكويكبات الفضائية والصخور الطبيعية |
 | **Phase 94** | الاستعلامات المكانية الفيزيائية وأحجام التحفيز التفاعلية (Physics Spatial Queries & Trigger Volumes): استعلامات الأشعة المباشرة والشاملة (Raycast & RaycastAll) للأشكال الكروية والصندوقية OBB والمستويات اللانهائية، مسح ومسار حركة الكرات (Sphere Sweep) لكشف التصادمات الحركية المستمرة CCD، استعلامات التداخل والتقاطع المكاني (OverlapSphere & OverlapBox)، ونظام أحجام التحفيز TriggerManager بتتبع دورة الحياة الكاملة (OnTriggerEnter, OnTriggerStay, OnTriggerExit) ومعالجة دخول وخروج الأجسام تلقائياً | **مكتمل** | رصد خطوط الرؤية AI Line-of-Sight، المقذوفات النقطية والرصاص، بوابات العبور ومناطق الضرر والألغاز البيئية |
 | **Phase 95** | تزامن الأصوات وإدارة القنوات وخفض مستوى الصوت الجانبي (Dynamic Audio Concurrency & Bus Ducking): مجموعات تزامن الأصوات AudioConcurrencyGroup للحد من ازدحام وتكدس المؤثرات الصوتية، 5 سياسات لسرقة واستبدال القنوات (PreventNew, StopOldest, StopFarthest, StopQuietest, StopLowestPriority) مع خفوت دقيق (Micro-fade 20ms) لمنع الطقطقة، ونظام خفض مستوى الصوت الجانبي AudioDuckingManager بخوارزمية Attack-Hold-Release التلقائية لخفت الموسيقى والبيئة أثناء الحوارات والانفجارات | **مكتمل** | معالجة الحوارات السينمائية، خفض الموسيقى الذكي، منع تشوه الصوت في المعارك المحتدمة |
+| **Phase 96** | إشارات أسلوب اللعب وحسابات معارك القتال ورصد وسوم اللعب (GAS Gameplay Cues, Combat Execution Calculations & Tag Listeners): إشارات مرئية وصوتية GameplayCue تفصل منطق المعارك عن العرض، مطابقة هرمية للأوسمة والأنماط (Exact & Hierarchical Propagation)، دورة حياة كاملة (OnActive, WhileActive, Executed, Removed) مع تسجيل الأحداث وإعادتها، حسابات قتالية متقدمة DamageExecutionCalculation بصيغة تناقص الدروع اللانهائي والضربات الحرجة وسرقة الحياة LifeSteal، حسابات الضرر العنصري المقاوم والمعرض ElementalDamageExecutionCalculation، حسابات الشفاء المعزز HealingExecutionCalculation، ورصد تغيرات الوسوم الهرمية في مكون القدرات AbilitySystemComponent | **مكتمل** | ضربات القتال والمؤثرات الصوتية والبصرية، أنظمة مقاومة السحر والضربات الحرجة، تفاعلات عناصر الطبيعة |
 
 ---
 
@@ -2864,6 +2865,33 @@ Vulkan ولا يلمس العارض: يأكل زمن الإطار بالثوان
       - إضافة 6 اختبارات آلية جديدة شاملة في `test_concurrency_and_ducking.cpp`.
       - اجتياز 100% لكافة الاختبارات (151/151 في `AudioTests`).
       - إجمالي اختبارات المحرك يرتفع إلى **1,228 اختباراً مؤكداً بنسبة نجاح 100%**.
+      - بناء كامل وخالٍ من أي تحذير تحت `/W4 /WX` وتوقيع 47 ثنائياً تنفيذياً.
+
+---
+
+### المرحلة 96: إشارات أسلوب اللعب وحسابات معارك القتال ورصد وسوم اللعب (GAS Gameplay Cues, Combat Execution Calculations & Tag Listeners)
+
+تطوير بنيان متكامل لنظام إشارات أسلوب اللعب وحسابات المعارك المتقدمة في وحدة أسلوب اللعب (`NFGameplay`):
+
+- [x] **نظام إشارات أسلوب اللعب وفصل المؤثرات عن المنطق (`GameplayCue` & `GameplayCueManager`)**:
+      - ملفات الهيكل: `Engine/Gameplay/include/NF/Gameplay/GameplayCue.hpp` و `Engine/Gameplay/src/GameplayCue.cpp`.
+      - الفصل التام بين منطق الحسابات والقتال وبين العرض البصري والصوتي (Presentation Layer).
+      - دورة حياة رباعية للحالات: التفعيل (`OnActive`)، التحديث المستمر (`WhileActive`)، الإطلاق اللحظي (`Executed`)، والإزالة (`Removed`).
+      - مطابقة الوسوم الهرمية التلقائية (*Hierarchical Tag Propagation*): استدعاء المعالجات الدقيقة والوسوم الأبوية تلقائياً عند إطلاق إشارة فرعية (مثل `GameplayCue.Combat.Hit.Fire` إلى `GameplayCue.Combat.Hit` ثم `GameplayCue.Combat`).
+      - حمولة متكاملة من المعاملات (`GameplayCueParameters`): موضع الارتطام ثلاثي الأبعاد، الناظم السطحي، السعة الخام والمطبعة، معرفات المهاجم والضحية والسبب، ونوع المادة الفيزيائية.
+      - نظام تسجيل وإعادة تشغيل الأحداث (*Cue Event Recording & Replay*) لاختبارات التحقق والتزامن الشبكي والتليمترية.
+- [x] **محركات حسابات المعارك المتقدمة (`GameplayExecutionCalculation`)**:
+      - ملفات الهيكل: `Engine/Gameplay/include/NF/Gameplay/GameplayExecution.hpp` و `Engine/Gameplay/src/GameplayExecution.cpp`.
+      - **حسابات الضرر الفيزيائي المباشر (`DamageExecutionCalculation`)**: معادلة التناقص التدريجي للدروع (*Diminishing Returns Armor Mitigation*: \(\text{mitigation} = \frac{\text{armor}}{\text{armor} + K}\))، فحص الضربات الحرجة (Critical Strike) مع نسبة الحدوث ومضاعف الضرر، وتطبيق سرقة الحياة (LifeSteal) وإعادتها فوراً للمهاجم، مع إطلاق تلقائي لإشارة الارتطام الحرج أو العادي.
+      - **حسابات الضرر العنصري والسحري (`ElementalDamageExecutionCalculation`)**: فحص قوى العناصر (نار، جليد، برق، سم) ومطابقتها مع مقاومات الضحية الإيجابية أو السلبية (Vulnerability)، وإطلاق الإشارات العنصرية المناسبة.
+      - **حسابات الشفاء والتعافي (`HealingExecutionCalculation`)**: حساب قوى الشفاء ومضاعف الاستقبال للشفاء العلاجي (`HealingReceived`).
+- [x] **تكامل مكون نظام القدرات ورصد الوسوم (`AbilitySystemComponent Integration & Tag Listeners`)**:
+      - دعم كامل لدوال `execute_calculation` داخل `AbilitySystemComponent` لتطبيق التعديلات الحسابية على السمات آلياً وتوجيه الإشارات المرئية والصوتية لمدير الإشارات.
+      - نظام تفويض واستماع للوسوم (`register_tag_listener`) لرصد إضافة وحذف الوسوم الهرمية والتفاعل اللحظي مع الحالات القتالية وتحديث واجهات المستخدم (HUD).
+- [x] **التحقق والاستقرار**:
+      - إضافة 7 اختبارات آلية جديدة شاملة في `test_cues_and_execution.cpp`.
+      - اجتياز 100% لكافة الاختبارات (60/60 في `GameplayTests`).
+      - إجمالي اختبارات المحرك يرتفع إلى **1,235 اختباراً مؤكداً بنسبة نجاح 100%**.
       - بناء كامل وخالٍ من أي تحذير تحت `/W4 /WX` وتوقيع 47 ثنائياً تنفيذياً.
 
 ---

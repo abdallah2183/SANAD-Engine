@@ -9,7 +9,9 @@
 
 set(NFGAMEPLAY_SOURCES
     src/GameplayAbility.cpp
+    src/GameplayCue.cpp
     src/GameplayEffect.cpp
+    src/GameplayExecution.cpp
     src/GameplayModuleRegistry.cpp
     src/GameplayState.cpp
     src/Tags.cpp
