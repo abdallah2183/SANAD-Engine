@@ -12,6 +12,7 @@ set(NFSCENE2D_SOURCES
     src/Light2D.cpp
     src/Systems.cpp
     src/CameraFollower2D.cpp
+    src/SpriteAnimation.cpp
 )
 
 nf_engine_library(NFScene2D

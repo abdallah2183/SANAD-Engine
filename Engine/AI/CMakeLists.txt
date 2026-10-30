@@ -17,6 +17,7 @@ set(NFAI_SOURCES
     src/EQS.cpp
     src/CoverSystem.cpp
     src/SmartObject.cpp
+    src/Formation.cpp
 )
 
 nf_engine_library(NFAI

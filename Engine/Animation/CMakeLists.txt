@@ -21,6 +21,7 @@ set(NFANIMATION_SOURCES
     src/FABRIK.cpp
     src/BoneMask.cpp
     src/FootPlacementIK.cpp
+    src/LookAtIK.cpp
 )
 
 nf_engine_library(NFAnimation

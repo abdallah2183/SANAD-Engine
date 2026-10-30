@@ -364,6 +364,7 @@ add_executable(AnimationTests
     AnimationTests/test_blend_space_and_fabrik.cpp
     AnimationTests/test_notifies_and_montage.cpp
     AnimationTests/test_foot_placement_ik.cpp
+    AnimationTests/test_look_at_ik.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
@@ -523,6 +524,7 @@ add_executable(AITests
     AITests/test_bt_services_and_blackboard.cpp
     AITests/test_cover_system.cpp
     AITests/test_smart_objects.cpp
+    AITests/test_formation.cpp
 )
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)
@@ -535,6 +537,7 @@ add_executable(Scene2DTests
     Scene2DTests/test_systems.cpp
     Scene2DTests/test_parallax_and_nineslice.cpp
     Scene2DTests/test_camera_follower.cpp
+    Scene2DTests/test_sprite_animation.cpp
 )
 target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)
@@ -586,6 +589,7 @@ add_executable(WaterTests
     TestFramework.cpp
     WaterTests/test_water.cpp
     WaterTests/test_water_ripples.cpp
+    WaterTests/test_river_flow.cpp
 )
 target_include_directories(WaterTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(WaterTests PRIVATE NFCore NFWater)

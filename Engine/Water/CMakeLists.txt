@@ -9,6 +9,7 @@
 set(NFWater_SOURCES
     src/Water.cpp
     src/WaterRipple.cpp
+    src/RiverFlow.cpp
 )
 
 nf_engine_library(NFWater
