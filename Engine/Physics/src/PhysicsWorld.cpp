@@ -164,6 +164,26 @@ void PhysicsWorld::apply_impulse(BodyHandle handle, const Vec3& impulse, const V
     b.sleep_timer = 0.0f;
 }
 
+const Shape* PhysicsWorld::body_shape(BodyHandle handle) const {
+    if (!is_alive(handle)) return nullptr;
+    return &m_bodies[handle.index].shape;
+}
+
+BodyType PhysicsWorld::body_type(BodyHandle handle) const {
+    if (!is_alive(handle)) return BodyType::Static;
+    return m_bodies[handle.index].type;
+}
+
+void PhysicsWorld::for_each_body(const std::function<void(BodyHandle, const Shape&, const BodyState&)>& fn) const {
+    for (size_t i = 0; i < m_bodies.size(); ++i) {
+        if (m_bodies[i].alive) {
+            BodyHandle h{static_cast<u32>(i), m_bodies[i].generation};
+            const auto& b = m_bodies[i];
+            fn(h, b.shape, BodyState{b.position, b.orientation, b.linear_velocity, b.angular_velocity, b.asleep});
+        }
+    }
+}
+
 Vec3 PhysicsWorld::world_inv_inertia_mul(const RigidBody& body, const Vec3& v) const {
     const Vec3 local = body.orientation.conjugate().rotate(v);
     const Vec3 scaled{

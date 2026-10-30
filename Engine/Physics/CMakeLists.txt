@@ -29,6 +29,8 @@ set(NFPHYSICS_SOURCES
     # solver, so §38's Cloth entry is a PBD implementation over the engine's own
     # shapes. It includes no Jolt header — do not "unify" it with the Jolt TUs.
     src/Cloth.cpp
+    src/PhysicsQuery.cpp
+    src/TriggerVolume.cpp
 )
 
 nf_engine_library(NFPhysics

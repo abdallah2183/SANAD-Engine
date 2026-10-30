@@ -5,6 +5,7 @@
 #include <NF/Physics/Shapes.hpp>
 
 #include <vector>
+#include <functional>
 
 namespace nf::physics {
 
@@ -105,6 +106,15 @@ public:
     /// Impulse applied at a world-space offset from the centre of mass, so it
     /// produces torque as well as linear motion.
     void apply_impulse(BodyHandle handle, const Vec3& impulse, const Vec3& world_offset);
+
+    /// Returns the shape of a live body, or nullptr if the handle is dead or invalid.
+    const Shape* body_shape(BodyHandle handle) const;
+
+    /// Returns the BodyType (Static, Dynamic, Kinematic) of a live body.
+    BodyType body_type(BodyHandle handle) const;
+
+    /// Iterates over every alive body in index order: fn(BodyHandle, Shape, BodyState).
+    void for_each_body(const std::function<void(BodyHandle, const Shape&, const BodyState&)>& fn) const;
 
     // --- Simulation ---------------------------------------------------------
 

@@ -346,6 +346,7 @@ add_executable(PhysicsTests
     # file rather than next to the Jolt cases.
     PhysicsTests/test_cloth.cpp
     PhysicsTests/test_collision_materials_and_buoyancy.cpp
+    PhysicsTests/test_physics_query_and_triggers.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)
