@@ -12,6 +12,7 @@
 
 set(NFFoliage_SOURCES
     src/Foliage.cpp
+    src/FoliageInteraction.cpp
 )
 
 nf_engine_library(NFFoliage

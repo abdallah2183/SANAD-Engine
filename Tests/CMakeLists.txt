@@ -390,6 +390,7 @@ AudioTests/test_audio_game_settings.cpp
     AudioTests/test_feedback_audio.cpp
     AudioTests/test_dsp_and_soundcue.cpp
     AudioTests/test_concurrency_and_ducking.cpp
+    AudioTests/test_interactive_music.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
@@ -410,6 +411,7 @@ add_executable(GameplayTests
     GameplayTests/test_gameplay_effects.cpp
     GameplayTests/test_cues_and_execution.cpp
     GameplayTests/test_equipment.cpp
+    GameplayTests/test_crafting.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
@@ -572,6 +574,7 @@ nf_target_set_warnings(PerfTests)
 add_executable(FoliageTests
     TestFramework.cpp
     FoliageTests/test_scatter.cpp
+    FoliageTests/test_foliage_interaction.cpp
 )
 target_include_directories(FoliageTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(FoliageTests PRIVATE NFCore NFFoliage)
@@ -593,6 +596,7 @@ add_executable(VFXTests
     TestFramework.cpp
     VFXTests/test_particles.cpp
     VFXTests/test_vfx_advanced.cpp
+    VFXTests/test_beam_system.cpp
 )
 target_include_directories(VFXTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(VFXTests PRIVATE NFCore NFVfx)

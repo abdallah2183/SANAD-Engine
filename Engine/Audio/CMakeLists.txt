@@ -29,6 +29,7 @@ set(NFAUDIO_SOURCES
     src/SoundCue.cpp
     src/AudioConcurrency.cpp
     src/AudioDucking.cpp
+    src/InteractiveMusic.cpp
 )
 
 if(WIN32)

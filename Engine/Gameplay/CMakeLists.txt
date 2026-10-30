@@ -20,6 +20,7 @@ set(NFGAMEPLAY_SOURCES
     src/Dialogue.cpp
     src/GameplayAttributes.cpp
     src/Equipment.cpp
+    src/Crafting.cpp
     src/SaveGame.cpp
 )
 
