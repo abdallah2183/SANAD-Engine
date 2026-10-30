@@ -520,6 +520,7 @@ add_executable(AITests
     AITests/test_eqs_and_advanced_bt.cpp
     AITests/test_bt_services_and_blackboard.cpp
     AITests/test_cover_system.cpp
+    AITests/test_smart_objects.cpp
 )
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)
@@ -531,6 +532,7 @@ add_executable(Scene2DTests
     Scene2DTests/test_scene2d.cpp
     Scene2DTests/test_systems.cpp
     Scene2DTests/test_parallax_and_nineslice.cpp
+    Scene2DTests/test_camera_follower.cpp
 )
 target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)

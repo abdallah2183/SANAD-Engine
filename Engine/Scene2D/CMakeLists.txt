@@ -11,6 +11,7 @@ set(NFSCENE2D_SOURCES
     src/Particles2D.cpp
     src/Light2D.cpp
     src/Systems.cpp
+    src/CameraFollower2D.cpp
 )
 
 nf_engine_library(NFScene2D
