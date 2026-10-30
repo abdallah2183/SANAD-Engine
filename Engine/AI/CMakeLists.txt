@@ -18,6 +18,7 @@ set(NFAI_SOURCES
     src/CoverSystem.cpp
     src/SmartObject.cpp
     src/Formation.cpp
+    src/FlowField.cpp
 )
 
 nf_engine_library(NFAI

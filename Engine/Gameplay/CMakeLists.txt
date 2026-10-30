@@ -23,6 +23,7 @@ set(NFGAMEPLAY_SOURCES
     src/Crafting.cpp
     src/SaveGame.cpp
     src/GridInventory.cpp
+    src/TalentTree.cpp
 )
 
 nf_engine_library(NFGameplay

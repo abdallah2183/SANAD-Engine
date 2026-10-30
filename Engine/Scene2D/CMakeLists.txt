@@ -13,6 +13,7 @@ set(NFSCENE2D_SOURCES
     src/Systems.cpp
     src/CameraFollower2D.cpp
     src/SpriteAnimation.cpp
+    src/RuleTile.cpp
 )
 
 nf_engine_library(NFScene2D

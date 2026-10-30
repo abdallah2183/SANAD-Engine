@@ -396,6 +396,7 @@ AudioTests/test_audio_game_settings.cpp
     AudioTests/test_dsp_and_soundcue.cpp
     AudioTests/test_concurrency_and_ducking.cpp
     AudioTests/test_interactive_music.cpp
+    AudioTests/test_surface_audio.cpp
 )
 target_include_directories(AudioTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AudioTests PRIVATE NFCore NFAudio)
@@ -418,6 +419,7 @@ add_executable(GameplayTests
     GameplayTests/test_equipment.cpp
     GameplayTests/test_crafting.cpp
     GameplayTests/test_grid_inventory.cpp
+    GameplayTests/test_talent_tree.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
@@ -530,6 +532,7 @@ add_executable(AITests
     AITests/test_cover_system.cpp
     AITests/test_smart_objects.cpp
     AITests/test_formation.cpp
+    AITests/test_flow_field.cpp
 )
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)
@@ -543,6 +546,7 @@ add_executable(Scene2DTests
     Scene2DTests/test_parallax_and_nineslice.cpp
     Scene2DTests/test_camera_follower.cpp
     Scene2DTests/test_sprite_animation.cpp
+    Scene2DTests/test_rule_tile.cpp
 )
 target_include_directories(Scene2DTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Scene2DTests PRIVATE NFCore NFScene2D)
