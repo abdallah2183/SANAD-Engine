@@ -23,6 +23,7 @@ set(NFANIMATION_SOURCES
     src/FootPlacementIK.cpp
     src/LookAtIK.cpp
     src/RagdollBlend.cpp
+    src/MorphTarget.cpp
 )
 
 nf_engine_library(NFAnimation

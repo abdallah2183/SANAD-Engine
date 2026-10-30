@@ -32,6 +32,7 @@ set(NFPHYSICS_SOURCES
     src/PhysicsQuery.cpp
     src/TriggerVolume.cpp
     src/CableSystem.cpp
+    src/WindField.cpp
 )
 
 nf_engine_library(NFPhysics

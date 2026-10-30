@@ -132,6 +132,8 @@ add_executable(RHITests
     RHITests/test_gpu_timing.cpp
     # Atmospheric weather & height fog (Phase 115)
     RHITests/test_weather_system.cpp
+    # Light probe volume & spherical harmonics irradiance (Phase 124)
+    RHITests/test_light_probes.cpp
 )
 target_include_directories(RHITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # NFScene/NFEcs are explicit now: NFRendering no longer provides them (Phase 11, W2).
@@ -351,6 +353,7 @@ add_executable(PhysicsTests
     PhysicsTests/test_collision_materials_and_buoyancy.cpp
     PhysicsTests/test_physics_query_and_triggers.cpp
     PhysicsTests/test_cable_system.cpp
+    PhysicsTests/test_wind_field.cpp
 )
 target_include_directories(PhysicsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PhysicsTests PRIVATE NFCore NFPhysics)
@@ -369,6 +372,7 @@ add_executable(AnimationTests
     AnimationTests/test_foot_placement_ik.cpp
     AnimationTests/test_look_at_ik.cpp
     AnimationTests/test_ragdoll_blend.cpp
+    AnimationTests/test_morph_targets.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
@@ -420,6 +424,7 @@ add_executable(GameplayTests
     GameplayTests/test_crafting.cpp
     GameplayTests/test_grid_inventory.cpp
     GameplayTests/test_talent_tree.cpp
+    GameplayTests/test_sequencer.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)

@@ -49,11 +49,12 @@ function Get-CodeSigningCertificates {
 # with 4551 (STATUS_DEVICE_GUARD_BLOCKED... the code the shell reports).
 function Test-ExecutableStarts {
     param([string]$Path)
-    $out = Join-Path $env:TEMP 'nf_sign_probe.log'
-    cmd /c "`"$Path`" --help" > $out 2>&1
-    $code = $LASTEXITCODE
-    if ($code -eq 4551) { return $false }
-    return $true
+    try {
+        $proc = Start-Process -FilePath $Path -ArgumentList "--help" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 $candidates = @()

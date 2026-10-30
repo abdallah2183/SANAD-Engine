@@ -24,6 +24,7 @@ set(NFGAMEPLAY_SOURCES
     src/SaveGame.cpp
     src/GridInventory.cpp
     src/TalentTree.cpp
+    src/Sequencer.cpp
 )
 
 nf_engine_library(NFGameplay

@@ -39,6 +39,7 @@ set(NFRENDERING_SOURCES
     src/ResourceState.cpp
     src/ProceduralMesh.cpp
     src/Weather.cpp
+    src/LightProbeVolume.cpp
 )
 
 nf_engine_library(NFRendering
