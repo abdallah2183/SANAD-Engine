@@ -121,4 +121,6 @@ private:
     std::array<u8, 512> m_perm{};
 };
 
+using Noise = NoiseGenerator;
+
 } // namespace nf::core

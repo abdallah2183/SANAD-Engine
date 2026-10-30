@@ -37,6 +37,7 @@ set(NFRENDERING_SOURCES
     src/Camera.cpp
     src/Culling.cpp
     src/ResourceState.cpp
+    src/ProceduralMesh.cpp
 )
 
 nf_engine_library(NFRendering

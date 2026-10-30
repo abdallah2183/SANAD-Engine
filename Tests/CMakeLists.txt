@@ -89,6 +89,7 @@ add_executable(RHITests
     RHITests/test_skyenv.cpp
     RHITests/test_timeofday.cpp
     RHITests/test_terrain.cpp
+    RHITests/test_procedural_mesh.cpp
     RHITests/test_postfx_shake.cpp
     # The §206 post stack: bloom chain, colour grade, sharpen. CPU mirrors for
     # every stage (so the maths, the neutral values and the stage ORDER are
