@@ -27,6 +27,7 @@ set(NFCORE_SOURCES
     src/Compression.cpp
     src/CommandLine.cpp
     src/Noise.cpp
+    src/BVH.cpp
 )
 
 nf_engine_library(NFCore
