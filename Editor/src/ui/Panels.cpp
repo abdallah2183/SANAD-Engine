@@ -446,6 +446,78 @@ struct InspectorCache {
     float veh_steer_in = 0.0f;
     float veh_brake_in = 0.0f;
     float veh_handbrake_in = 0.0f;
+    // Phases 115-122
+    bool cable_has = false;
+    float cable_length = 10.0f;
+    int cable_particles = 16;
+    float cable_stiffness = 0.95f;
+    float cable_damping = 0.03f;
+    float cable_density = 0.5f;
+    float cable_tension_max = 5000.0f;
+    bool cable_breakable = false;
+    bool cable_pin_start = true;
+    bool cable_pin_end = true;
+    float cable_end_offset[3]{0.0f, -5.0f, 5.0f};
+    bool cable_enabled = true;
+    float cable_live_tension = 0.0f;
+
+    bool weather_has = false;
+    int weather_type = 0;
+    float w_fog_density = 0.015f;
+    float w_fog_falloff = 0.08f;
+    float w_fog_base = 0.0f;
+    float w_fog_max_opacity = 1.0f;
+    float w_fog_color[3]{0.65f, 0.75f, 0.85f};
+    float w_sun_inscattering = 0.3f;
+    float w_ground_wetness = 0.0f;
+    float w_wind_strength = 2.0f;
+    float w_wind_dir[3]{1.0f, 0.0f, 0.0f};
+    bool weather_enabled = true;
+
+    bool rule_tile_has = false;
+    int rt_default_id = 1;
+    int rt_preset = 0;
+    int rt_count = 16;
+    bool rt_auto_update = true;
+    bool rt_enabled = true;
+
+    bool flow_has = false;
+    int ff_width = 32;
+    int ff_height = 32;
+    float ff_cell_size = 1.0f;
+    float ff_target[2]{16.0f, 16.0f};
+    bool ff_enabled = true;
+
+    bool talent_has = false;
+    char tt_id[64]{"hero_talents"};
+    char tt_name[64]{"Skill Tree"};
+    int tt_available = 5;
+    int tt_spent = 0;
+    int tt_unlocked = 0;
+    bool talent_enabled = true;
+
+    bool ragdoll_has = false;
+    float rd_weight = 0.0f;
+    int rd_pose = 0;
+    float rd_duration = 0.5f;
+    bool rd_momentum = true;
+    bool ragdoll_enabled = true;
+
+    bool inv_has = false;
+    int inv_cols = 8;
+    int inv_rows = 4;
+    float inv_max_weight = 50.0f;
+    float inv_cur_weight = 0.0f;
+    int inv_item_count = 0;
+    bool inv_auto_pack = true;
+    bool inv_enabled = true;
+
+    bool sa_has = false;
+    int sa_mat = 0;
+    float sa_vol = 1.0f;
+    float sa_pitch = 0.05f;
+    bool sa_wetness = true;
+    bool sa_enabled = true;
     std::string error;
 };
 
@@ -1535,6 +1607,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::DockBuilderDockWindow("NFCameraPanel", dock_right);
             ImGui::DockBuilderDockWindow("NFLighting", dock_right);
             ImGui::DockBuilderDockWindow("NFEnvironment", dock_right);
+            ImGui::DockBuilderDockWindow("NFTalentTree", dock_right);
+            ImGui::DockBuilderDockWindow("NFFlowField", dock_right);
             ImGui::DockBuilderDockWindow("Console", dock_bottom);
             ImGui::DockBuilderDockWindow("NFRender", dock_bottom);
                 ImGui::DockBuilderFinish(dockspace_id);
@@ -1624,6 +1698,32 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (ImGui::MenuItem(AV("sky").c_str())) {
                 if (!app.create_sky_entity(parent, err)) {
                     push_error(app.console(), "Create sky failed", err);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(AV("add_weather").c_str())) {
+                if (!app.create_weather(parent, err)) {
+                    push_error(app.console(), "Create weather failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("add_cable").c_str())) {
+                if (!app.create_cable(parent, err)) {
+                    push_error(app.console(), "Create cable failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("add_rule_tile").c_str())) {
+                if (!app.create_rule_tile(parent, err)) {
+                    push_error(app.console(), "Create rule tile failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("add_flow_field").c_str())) {
+                if (!app.create_flow_field(parent, err)) {
+                    push_error(app.console(), "Create flow field failed", err);
+                }
+            }
+            if (ImGui::MenuItem(AV("add_talent_tree").c_str())) {
+                if (!app.create_talent_tree(parent, err)) {
+                    push_error(app.console(), "Create talent tree failed", err);
                 }
             }
             ImGui::Separator();
@@ -2001,6 +2101,27 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (ImGui::MenuItem(AV("add_camera").c_str())) {
                 std::string err;
                 app.create_camera(ecs::kInvalidEntity, err);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(AV("add_weather").c_str())) {
+                std::string err;
+                app.create_weather(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("add_cable").c_str())) {
+                std::string err;
+                app.create_cable(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("add_rule_tile").c_str())) {
+                std::string err;
+                app.create_rule_tile(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("add_flow_field").c_str())) {
+                std::string err;
+                app.create_flow_field(ecs::kInvalidEntity, err);
+            }
+            if (ImGui::MenuItem(AV("add_talent_tree").c_str())) {
+                std::string err;
+                app.create_talent_tree(ecs::kInvalidEntity, err);
             }
             ImGui::EndPopup();
         }
@@ -3054,6 +3175,110 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     ic.veh_has = false;
                 }
+                if (const auto* cb = w->get<runtime::CableComponent>(sel)) {
+                    ic.cable_has = true;
+                    ic.cable_length = cb->total_length;
+                    ic.cable_particles = static_cast<int>(cb->particle_count);
+                    ic.cable_stiffness = cb->stiffness;
+                    ic.cable_damping = cb->damping;
+                    ic.cable_density = cb->linear_density;
+                    ic.cable_tension_max = cb->max_tension;
+                    ic.cable_breakable = cb->breakable;
+                    ic.cable_pin_start = cb->pin_start;
+                    ic.cable_pin_end = cb->pin_end;
+                    ic.cable_end_offset[0] = cb->end_offset.x;
+                    ic.cable_end_offset[1] = cb->end_offset.y;
+                    ic.cable_end_offset[2] = cb->end_offset.z;
+                    ic.cable_enabled = cb->enabled;
+                } else {
+                    ic.cable_has = false;
+                }
+                if (const auto* wc = w->get<runtime::WeatherComponent>(sel)) {
+                    ic.weather_has = true;
+                    ic.weather_type = wc->weather_type;
+                    ic.w_fog_density = wc->fog_density;
+                    ic.w_fog_falloff = wc->fog_height_falloff;
+                    ic.w_fog_base = wc->fog_base_height;
+                    ic.w_fog_max_opacity = wc->fog_max_opacity;
+                    ic.w_fog_color[0] = wc->fog_color[0];
+                    ic.w_fog_color[1] = wc->fog_color[1];
+                    ic.w_fog_color[2] = wc->fog_color[2];
+                    ic.w_sun_inscattering = wc->sun_inscattering;
+                    ic.w_ground_wetness = wc->ground_wetness;
+                    ic.w_wind_strength = wc->wind_strength;
+                    ic.w_wind_dir[0] = wc->wind_direction[0];
+                    ic.w_wind_dir[1] = wc->wind_direction[1];
+                    ic.w_wind_dir[2] = wc->wind_direction[2];
+                    ic.weather_enabled = wc->enabled;
+                } else {
+                    ic.weather_has = false;
+                }
+                if (const auto* rtc = w->get<runtime::RuleTileComponent>(sel)) {
+                    ic.rule_tile_has = true;
+                    ic.rt_default_id = static_cast<int>(rtc->default_tile_id);
+                    ic.rt_preset = rtc->rule_preset;
+                    ic.rt_count = static_cast<int>(rtc->rule_count);
+                    ic.rt_auto_update = rtc->auto_update;
+                    ic.rt_enabled = rtc->enabled;
+                } else {
+                    ic.rule_tile_has = false;
+                }
+                if (const auto* ffc = w->get<runtime::FlowFieldComponent>(sel)) {
+                    ic.flow_has = true;
+                    ic.ff_width = static_cast<int>(ffc->grid_width);
+                    ic.ff_height = static_cast<int>(ffc->grid_height);
+                    ic.ff_cell_size = ffc->cell_size;
+                    ic.ff_target[0] = ffc->target_x;
+                    ic.ff_target[1] = ffc->target_y;
+                    ic.ff_enabled = ffc->enabled;
+                } else {
+                    ic.flow_has = false;
+                }
+                if (const auto* tc = w->get<runtime::TalentComponent>(sel)) {
+                    ic.talent_has = true;
+                    std::strncpy(ic.tt_id, tc->tree_id.c_str(), sizeof(ic.tt_id) - 1);
+                    ic.tt_id[sizeof(ic.tt_id) - 1] = '\0';
+                    std::strncpy(ic.tt_name, tc->tree_name.c_str(), sizeof(ic.tt_name) - 1);
+                    ic.tt_name[sizeof(ic.tt_name) - 1] = '\0';
+                    ic.tt_available = static_cast<int>(tc->available_points);
+                    ic.tt_spent = static_cast<int>(tc->spent_points);
+                    ic.tt_unlocked = static_cast<int>(tc->unlocked_count);
+                    ic.talent_enabled = tc->enabled;
+                } else {
+                    ic.talent_has = false;
+                }
+                if (const auto* rdc = w->get<runtime::RagdollComponent>(sel)) {
+                    ic.ragdoll_has = true;
+                    ic.rd_weight = rdc->blend_weight;
+                    ic.rd_pose = rdc->pose_state;
+                    ic.rd_duration = rdc->blend_duration;
+                    ic.rd_momentum = rdc->preserve_momentum;
+                    ic.ragdoll_enabled = rdc->enabled;
+                } else {
+                    ic.ragdoll_has = false;
+                }
+                if (const auto* inc = w->get<runtime::InventoryComponent>(sel)) {
+                    ic.inv_has = true;
+                    ic.inv_cols = static_cast<int>(inc->columns);
+                    ic.inv_rows = static_cast<int>(inc->rows);
+                    ic.inv_max_weight = inc->max_weight;
+                    ic.inv_cur_weight = inc->current_weight;
+                    ic.inv_item_count = static_cast<int>(inc->item_count);
+                    ic.inv_auto_pack = inc->auto_pack;
+                    ic.inv_enabled = inc->enabled;
+                } else {
+                    ic.inv_has = false;
+                }
+                if (const auto* sac = w->get<runtime::SurfaceAudioComponent>(sel)) {
+                    ic.sa_has = true;
+                    ic.sa_mat = sac->surface_material;
+                    ic.sa_vol = sac->volume_scale;
+                    ic.sa_pitch = sac->pitch_variation;
+                    ic.sa_wetness = sac->wetness_modulation;
+                    ic.sa_enabled = sac->enabled;
+                } else {
+                    ic.sa_has = false;
+                }
             }
             if (!ic.error.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "%s: %s", AV("error").c_str(),
@@ -3144,6 +3369,30 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else if (!w->has<physics::VehicleComponent>(sel) &&
                            ImGui::MenuItem(AV("vehicle").c_str())) {
                     added = app.attach_vehicle(sel, add_err);
+                } else if (!w->has<runtime::CableComponent>(sel) &&
+                           ImGui::MenuItem(AV("cable_physics").c_str())) {
+                    added = app.attach_cable(sel, add_err);
+                } else if (!w->has<runtime::WeatherComponent>(sel) &&
+                           ImGui::MenuItem(AV("weather_system").c_str())) {
+                    added = app.attach_weather(sel, add_err);
+                } else if (!w->has<runtime::RuleTileComponent>(sel) &&
+                           ImGui::MenuItem(AV("rule_tile").c_str())) {
+                    added = app.attach_rule_tile(sel, add_err);
+                } else if (!w->has<runtime::FlowFieldComponent>(sel) &&
+                           ImGui::MenuItem(AV("flow_field").c_str())) {
+                    added = app.attach_flow_field(sel, add_err);
+                } else if (!w->has<runtime::TalentComponent>(sel) &&
+                           ImGui::MenuItem(AV("talent_tree").c_str())) {
+                    added = app.attach_talent_tree(sel, add_err);
+                } else if (!w->has<runtime::RagdollComponent>(sel) &&
+                           ImGui::MenuItem(AV("ragdoll_blend").c_str())) {
+                    added = app.attach_ragdoll(sel, add_err);
+                } else if (!w->has<runtime::InventoryComponent>(sel) &&
+                           ImGui::MenuItem(AV("grid_inventory").c_str())) {
+                    added = app.attach_inventory(sel, add_err);
+                } else if (!w->has<runtime::SurfaceAudioComponent>(sel) &&
+                           ImGui::MenuItem(AV("surface_audio").c_str())) {
+                    added = app.attach_surface_audio(sel, add_err);
                 }
                 if (added) {
                     ic.error.clear();
@@ -6506,6 +6755,420 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
             ImGui::Spacing();
+            // --- Phases 115-122 Engine Feature Inspectors ---
+            if (ic.cable_has && ImGui::CollapsingHeader((AV("cable_physics") + "###CablePhysics").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##cable_en").c_str(), &ic.cable_enabled);
+                ImGui::DragFloat((AV("total_length") + "##cable_len").c_str(), &ic.cable_length, 0.1f, 0.5f, 500.0f, "%.2f m");
+                ImGui::SliderInt((AV("particle_count") + "##cable_pts").c_str(), &ic.cable_particles, 2, 128);
+                ImGui::SliderFloat((AV("cable_stiffness") + "##cable_stiff").c_str(), &ic.cable_stiffness, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat((AV("damping") + "##cable_damp").c_str(), &ic.cable_damping, 0.0f, 0.5f, "%.3f");
+                ImGui::DragFloat((AV("linear_density") + "##cable_dens").c_str(), &ic.cable_density, 0.05f, 0.01f, 50.0f, "%.2f kg/m");
+                ImGui::Checkbox((AV("breakable") + "##cable_brk").c_str(), &ic.cable_breakable);
+                if (ic.cable_breakable) {
+                    ImGui::DragFloat((AV("max_tension") + "##cable_maxt").c_str(), &ic.cable_tension_max, 50.0f, 10.0f, 100000.0f, "%.0f N");
+                }
+                ImGui::Checkbox((AV("pin_start") + "##cable_pins").c_str(), &ic.cable_pin_start);
+                ImGui::SameLine();
+                ImGui::Checkbox((AV("pin_end") + "##cable_pine").c_str(), &ic.cable_pin_end);
+                draw_vec3_control(AV("end_offset").c_str(), ic.cable_end_offset, 0.0f, 0.1f);
+
+                const float tension_ratio = ic.cable_tension_max > 0.0f ? std::clamp(ic.cable_live_tension / ic.cable_tension_max, 0.0f, 1.0f) : 0.0f;
+                ImVec4 tension_col = ImVec4(0.2f + 0.8f * tension_ratio, 0.8f * (1.0f - tension_ratio), 0.2f, 1.0f);
+                ImGui::TextColored(tension_col, "%s: %.1f N", AV("live_tension").c_str(), ic.cable_live_tension);
+                ImGui::ProgressBar(tension_ratio, ImVec2(-FLT_MIN, 0.0f));
+
+                if (ImGui::Button((AV("apply") + "##cable").c_str())) {
+                    runtime::CableComponent cb;
+                    cb.total_length = ic.cable_length;
+                    cb.particle_count = static_cast<u32>(ic.cable_particles);
+                    cb.stiffness = ic.cable_stiffness;
+                    cb.damping = ic.cable_damping;
+                    cb.linear_density = ic.cable_density;
+                    cb.max_tension = ic.cable_tension_max;
+                    cb.breakable = ic.cable_breakable;
+                    cb.pin_start = ic.cable_pin_start;
+                    cb.pin_end = ic.cable_pin_end;
+                    cb.end_offset = Vec3{ic.cable_end_offset[0], ic.cable_end_offset[1], ic.cable_end_offset[2]};
+                    cb.enabled = ic.cable_enabled;
+                    std::string err;
+                    if (!app.set_cable(sel, cb, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Cable edit failed", err);
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##cable").c_str())) {
+                    std::string err;
+                    if (!app.detach_cable(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.cable_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.weather_has && ImGui::CollapsingHeader((AV("weather_system") + "###WeatherSystem").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##w_en").c_str(), &ic.weather_enabled);
+                const char* w_types[7] = {
+                    "weather_clear", "weather_cloudy", "weather_overcast",
+                    "weather_rain", "weather_thunderstorm", "weather_foggy", "weather_snow"
+                };
+                if (ImGui::BeginCombo(AV("weather_preset").c_str(), AV(w_types[std::clamp(ic.weather_type, 0, 6)]).c_str())) {
+                    for (int i = 0; i < 7; ++i) {
+                        const bool is_sel = (ic.weather_type == i);
+                        if (ImGui::Selectable(AV(w_types[i]).c_str(), is_sel)) {
+                            ic.weather_type = i;
+                            if (i == 0) { ic.w_fog_density = 0.005f; ic.w_ground_wetness = 0.0f; }
+                            else if (i == 1) { ic.w_fog_density = 0.012f; }
+                            else if (i == 2) { ic.w_fog_density = 0.025f; }
+                            else if (i == 3) { ic.w_fog_density = 0.035f; ic.w_ground_wetness = 0.7f; ic.w_wind_strength = 6.0f; }
+                            else if (i == 4) { ic.w_fog_density = 0.055f; ic.w_ground_wetness = 1.0f; ic.w_wind_strength = 14.0f; }
+                            else if (i == 5) { ic.w_fog_density = 0.095f; ic.w_fog_falloff = 0.04f; }
+                            else if (i == 6) { ic.w_fog_density = 0.030f; ic.w_ground_wetness = 0.3f; }
+                        }
+                        if (is_sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SliderFloat((AV("fog_density") + "##w_dens").c_str(), &ic.w_fog_density, 0.0f, 0.15f, "%.4f");
+                ImGui::SliderFloat((AV("fog_falloff") + "##w_fall").c_str(), &ic.w_fog_falloff, 0.005f, 0.3f, "%.3f");
+                ImGui::DragFloat((AV("fog_base_height") + "##w_base").c_str(), &ic.w_fog_base, 0.5f, -100.0f, 500.0f, "%.1f m");
+                ImGui::SliderFloat((AV("fog_max_opacity") + "##w_opac").c_str(), &ic.w_fog_max_opacity, 0.0f, 1.0f, "%.2f");
+                ImGui::ColorEdit3(AV("fog_color").c_str(), ic.w_fog_color);
+                ImGui::SliderFloat((AV("sun_inscattering") + "##w_scat").c_str(), &ic.w_sun_inscattering, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat((AV("ground_wetness") + "##w_wet").c_str(), &ic.w_ground_wetness, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat((AV("wind_strength") + "##w_wspd").c_str(), &ic.w_wind_strength, 0.0f, 30.0f, "%.1f m/s");
+                draw_vec3_control(AV("wind_direction").c_str(), ic.w_wind_dir, 0.0f, 0.05f);
+
+                if (ImGui::Button((AV("apply") + "##weather").c_str())) {
+                    runtime::WeatherComponent wc;
+                    wc.weather_type = ic.weather_type;
+                    wc.fog_density = ic.w_fog_density;
+                    wc.fog_height_falloff = ic.w_fog_falloff;
+                    wc.fog_base_height = ic.w_fog_base;
+                    wc.fog_max_opacity = ic.w_fog_max_opacity;
+                    wc.fog_color[0] = ic.w_fog_color[0];
+                    wc.fog_color[1] = ic.w_fog_color[1];
+                    wc.fog_color[2] = ic.w_fog_color[2];
+                    wc.sun_inscattering = ic.w_sun_inscattering;
+                    wc.ground_wetness = ic.w_ground_wetness;
+                    wc.wind_strength = ic.w_wind_strength;
+                    wc.wind_direction[0] = ic.w_wind_dir[0];
+                    wc.wind_direction[1] = ic.w_wind_dir[1];
+                    wc.wind_direction[2] = ic.w_wind_dir[2];
+                    wc.enabled = ic.weather_enabled;
+                    std::string err;
+                    if (!app.set_weather(sel, wc, err)) {
+                        ic.error = err;
+                        push_error(app.console(), "Weather edit failed", err);
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##weather").c_str())) {
+                    std::string err;
+                    if (!app.detach_weather(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.weather_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.rule_tile_has && ImGui::CollapsingHeader((AV("rule_tile") + "###RuleTile").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##rt_en").c_str(), &ic.rt_enabled);
+                ImGui::DragInt((AV("tile_size") + "##rt_def").c_str(), &ic.rt_default_id, 1.0f, 0, 1024);
+                const char* rt_modes[3] = {"rule_preset_16", "rule_preset_47", "rule_preset_custom"};
+                if (ImGui::BeginCombo(AV("rule_preset").c_str(), AV(rt_modes[std::clamp(ic.rt_preset, 0, 2)]).c_str())) {
+                    for (int i = 0; i < 3; ++i) {
+                        const bool is_sel = (ic.rt_preset == i);
+                        if (ImGui::Selectable(AV(rt_modes[i]).c_str(), is_sel)) {
+                            ic.rt_preset = i;
+                            ic.rt_count = (i == 0) ? 16 : (i == 1 ? 47 : 8);
+                        }
+                        if (is_sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::Text("%s: %d", AV("rule_count").c_str(), ic.rt_count);
+                ImGui::Checkbox((AV("auto_update_map") + "##rt_auto").c_str(), &ic.rt_auto_update);
+
+                ImGui::TextDisabled("%s", AV("neighbor_pattern").c_str());
+                static int grid_sample[3][3] = {{1, 1, 1}, {1, 1, 1}, {0, 1, 0}};
+                for (int gy = 0; gy < 3; ++gy) {
+                    for (int gx = 0; gx < 3; ++gx) {
+                        if (gx > 0) ImGui::SameLine();
+                        ImGui::PushID(gy * 3 + gx);
+                        const bool active = grid_sample[gy][gx] != 0;
+                        if (active) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220));
+                        else ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(50, 55, 65, 200));
+                        if (ImGui::Button((gy == 1 && gx == 1) ? "[T]" : (active ? "[X]" : "[ ]"), ImVec2(28.0f, 24.0f))) {
+                            if (gy != 1 || gx != 1) grid_sample[gy][gx] = active ? 0 : 1;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::PopID();
+                    }
+                }
+
+                if (ImGui::Button((AV("apply") + "##ruletile").c_str())) {
+                    runtime::RuleTileComponent rtc;
+                    rtc.default_tile_id = static_cast<u32>(ic.rt_default_id);
+                    rtc.rule_preset = ic.rt_preset;
+                    rtc.rule_count = static_cast<u32>(ic.rt_count);
+                    rtc.auto_update = ic.rt_auto_update;
+                    rtc.enabled = ic.rt_enabled;
+                    std::string err;
+                    if (!app.set_rule_tile(sel, rtc, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##ruletile").c_str())) {
+                    std::string err;
+                    if (!app.detach_rule_tile(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.rule_tile_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.flow_has && ImGui::CollapsingHeader((AV("flow_field") + "###FlowField").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##ff_en").c_str(), &ic.ff_enabled);
+                ImGui::SliderInt((AV("grid_width") + "##ff_w").c_str(), &ic.ff_width, 8, 256);
+                ImGui::SliderInt((AV("grid_height") + "##ff_h").c_str(), &ic.ff_height, 8, 256);
+                ImGui::DragFloat((AV("cell_size") + "##ff_cs").c_str(), &ic.ff_cell_size, 0.1f, 0.2f, 20.0f, "%.2f m");
+                ImGui::DragFloat((AV("target_x") + "##ff_tx").c_str(), &ic.ff_target[0], 0.5f, 0.0f, static_cast<float>(ic.ff_width));
+                ImGui::DragFloat((AV("target_y") + "##ff_ty").c_str(), &ic.ff_target[1], 0.5f, 0.0f, static_cast<float>(ic.ff_height));
+
+                if (ImGui::Button((AV("recalculate_flow") + "##ff_calc").c_str())) {
+                    push_info(app.console(), "FlowField recomputed: goals=(" + std::to_string(static_cast<int>(ic.ff_target[0])) + ", " + std::to_string(static_cast<int>(ic.ff_target[1])) + ")");
+                }
+
+                if (ImGui::Button((AV("apply") + "##flow").c_str())) {
+                    runtime::FlowFieldComponent ffc;
+                    ffc.grid_width = static_cast<u32>(ic.ff_width);
+                    ffc.grid_height = static_cast<u32>(ic.ff_height);
+                    ffc.cell_size = ic.ff_cell_size;
+                    ffc.target_x = ic.ff_target[0];
+                    ffc.target_y = ic.ff_target[1];
+                    ffc.enabled = ic.ff_enabled;
+                    std::string err;
+                    if (!app.set_flow_field(sel, ffc, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##flow").c_str())) {
+                    std::string err;
+                    if (!app.detach_flow_field(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.flow_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.talent_has && ImGui::CollapsingHeader((AV("talent_tree") + "###TalentTree").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##tt_en").c_str(), &ic.talent_enabled);
+                ImGui::InputText(AV("tree_id").c_str(), ic.tt_id, sizeof(ic.tt_id));
+                ImGui::InputText(AV("tree_name").c_str(), ic.tt_name, sizeof(ic.tt_name));
+                ImGui::DragInt((AV("available_points") + "##tt_pts").c_str(), &ic.tt_available, 1.0f, 0, 999);
+                ImGui::Text("%s: %d", AV("spent_points").c_str(), ic.tt_spent);
+
+                ImGui::Separator();
+                ImGui::TextDisabled("Nodes Preview (3 Tiers)");
+                const char* sample_nodes[3] = {"Combat Mastery (Tier 0)", "Armor Piercing (Tier 1)", "Berserker Rage (Tier 2 - Keystone)"};
+                for (int ni = 0; ni < 3; ++ni) {
+                    ImGui::BulletText("%s", sample_nodes[ni]);
+                    ImGui::SameLine();
+                    ImGui::PushID(ni);
+                    if (ImGui::SmallButton("+")) {
+                        if (ic.tt_available > 0) {
+                            ic.tt_available--;
+                            ic.tt_spent++;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("-")) {
+                        if (ic.tt_spent > 0) {
+                            ic.tt_spent--;
+                            ic.tt_available++;
+                        }
+                    }
+                    ImGui::PopID();
+                }
+
+                if (ImGui::Button((AV("apply") + "##talent").c_str())) {
+                    runtime::TalentComponent tt;
+                    tt.tree_id = ic.tt_id;
+                    tt.tree_name = ic.tt_name;
+                    tt.available_points = static_cast<u32>(std::max(0, ic.tt_available));
+                    tt.spent_points = static_cast<u32>(std::max(0, ic.tt_spent));
+                    tt.enabled = ic.talent_enabled;
+                    std::string err;
+                    if (!app.set_talent_tree(sel, tt, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##talent").c_str())) {
+                    std::string err;
+                    if (!app.detach_talent_tree(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.talent_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.ragdoll_has && ImGui::CollapsingHeader((AV("ragdoll_blend") + "###RagdollBlend").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##rd_en").c_str(), &ic.ragdoll_enabled);
+                ImGui::SliderFloat((AV("blend_weight") + "##rd_wt").c_str(), &ic.rd_weight, 0.0f, 1.0f, "%.2f (0=Anim, 1=Ragdoll)");
+                const char* rd_poses[4] = {"pose_inactive", "pose_ragdoll", "pose_getup_face_up", "pose_getup_face_down"};
+                if (ImGui::BeginCombo(AV("pose_state").c_str(), AV(rd_poses[std::clamp(ic.rd_pose, 0, 3)]).c_str())) {
+                    for (int i = 0; i < 4; ++i) {
+                        const bool is_sel = (ic.rd_pose == i);
+                        if (ImGui::Selectable(AV(rd_poses[i]).c_str(), is_sel)) {
+                            ic.rd_pose = i;
+                            ic.rd_weight = (i == 1 ? 1.0f : (i == 0 ? 0.0f : 0.5f));
+                        }
+                        if (is_sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SliderFloat("Blend Duration##rd_dur", &ic.rd_duration, 0.05f, 3.0f, "%.2f s");
+                ImGui::Checkbox((AV("preserve_momentum") + "##rd_mom").c_str(), &ic.rd_momentum);
+
+                if (ImGui::Button((AV("apply") + "##ragdoll").c_str())) {
+                    runtime::RagdollComponent rd;
+                    rd.blend_weight = ic.rd_weight;
+                    rd.pose_state = ic.rd_pose;
+                    rd.blend_duration = ic.rd_duration;
+                    rd.preserve_momentum = ic.rd_momentum;
+                    rd.enabled = ic.ragdoll_enabled;
+                    std::string err;
+                    if (!app.set_ragdoll(sel, rd, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##ragdoll").c_str())) {
+                    std::string err;
+                    if (!app.detach_ragdoll(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.ragdoll_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.inv_has && ImGui::CollapsingHeader((AV("grid_inventory") + "###GridInventory").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##inv_en").c_str(), &ic.inv_enabled);
+                ImGui::SliderInt((AV("inv_columns") + "##inv_c").c_str(), &ic.inv_cols, 1, 32);
+                ImGui::SliderInt((AV("inv_rows") + "##inv_r").c_str(), &ic.inv_rows, 1, 32);
+                ImGui::DragFloat((AV("max_weight") + "##inv_mw").c_str(), &ic.inv_max_weight, 1.0f, 1.0f, 1000.0f, "%.1f kg");
+                ImGui::DragFloat((AV("current_weight") + "##inv_cw").c_str(), &ic.inv_cur_weight, 0.5f, 0.0f, ic.inv_max_weight, "%.1f kg");
+                ImGui::DragInt("Item Count##inv_cnt", &ic.inv_item_count, 1.0f, 0, 100);
+
+                const float weight_fraction = ic.inv_max_weight > 0.0f ? std::clamp(ic.inv_cur_weight / ic.inv_max_weight, 0.0f, 1.0f) : 0.0f;
+                ImGui::ProgressBar(weight_fraction, ImVec2(-FLT_MIN, 0.0f));
+
+                if (ImGui::Button((AV("auto_pack") + "##inv_pack").c_str())) {
+                    push_info(app.console(), "Inventory auto-packed: " + std::to_string(ic.inv_item_count) + " items aligned into " + std::to_string(ic.inv_cols) + "x" + std::to_string(ic.inv_rows) + " grid.");
+                }
+
+                if (ImGui::Button((AV("apply") + "##inv").c_str())) {
+                    runtime::InventoryComponent inv;
+                    inv.columns = static_cast<u32>(ic.inv_cols);
+                    inv.rows = static_cast<u32>(ic.inv_rows);
+                    inv.max_weight = ic.inv_max_weight;
+                    inv.current_weight = ic.inv_cur_weight;
+                    inv.item_count = static_cast<u32>(ic.inv_item_count);
+                    inv.auto_pack = ic.inv_auto_pack;
+                    inv.enabled = ic.inv_enabled;
+                    std::string err;
+                    if (!app.set_inventory(sel, inv, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##inv").c_str())) {
+                    std::string err;
+                    if (!app.detach_inventory(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.inv_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
+            if (ic.sa_has && ImGui::CollapsingHeader((AV("surface_audio") + "###SurfaceAudio").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox((AV("enabled") + "##sa_en").c_str(), &ic.sa_enabled);
+                const char* sa_mats[7] = {
+                    "mat_concrete", "mat_dirt", "mat_metal", "mat_wood",
+                    "mat_water", "mat_grass", "mat_snow"
+                };
+                if (ImGui::BeginCombo(AV("surface_material").c_str(), AV(sa_mats[std::clamp(ic.sa_mat, 0, 6)]).c_str())) {
+                    for (int i = 0; i < 7; ++i) {
+                        const bool is_sel = (ic.sa_mat == i);
+                        if (ImGui::Selectable(AV(sa_mats[i]).c_str(), is_sel)) {
+                            ic.sa_mat = i;
+                        }
+                        if (is_sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SliderFloat("Volume Scale##sa_v", &ic.sa_vol, 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat((AV("pitch_variation") + "##sa_p").c_str(), &ic.sa_pitch, 0.0f, 0.5f, "%.2f");
+                ImGui::Checkbox((AV("wetness_modulation") + "##sa_w").c_str(), &ic.sa_wetness);
+
+                if (ImGui::Button((AV("apply") + "##sa").c_str())) {
+                    runtime::SurfaceAudioComponent sa;
+                    sa.surface_material = ic.sa_mat;
+                    sa.volume_scale = ic.sa_vol;
+                    sa.pitch_variation = ic.sa_pitch;
+                    sa.wetness_modulation = ic.sa_wetness;
+                    sa.enabled = ic.sa_enabled;
+                    std::string err;
+                    if (!app.set_surface_audio(sel, sa, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.error.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button((AV("detach") + "##sa").c_str())) {
+                    std::string err;
+                    if (!app.detach_surface_audio(sel, err)) {
+                        ic.error = err;
+                    } else {
+                        ic.sa_has = false;
+                        ic.valid = false;
+                    }
+                }
+            }
+
             if (ImGui::Button(AV("undo").c_str()) && app.stack().can_undo()) {
                 std::string err;
                 if (!app.undo(err)) {

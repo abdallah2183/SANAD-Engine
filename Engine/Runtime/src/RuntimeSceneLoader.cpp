@@ -3840,6 +3840,30 @@ void copy_scene_entity(const ecs::World& src, ecs::Entity se, ecs::World& dst, e
         fresh.vehicle = nullptr;
         dst.add<physics::VehicleComponent>(de, fresh);
     }
+    if (const auto* cable = src.get<CableComponent>(se)) {
+        dst.add<CableComponent>(de, *cable);
+    }
+    if (const auto* rt = src.get<RuleTileComponent>(se)) {
+        dst.add<RuleTileComponent>(de, *rt);
+    }
+    if (const auto* tt = src.get<TalentComponent>(se)) {
+        dst.add<TalentComponent>(de, *tt);
+    }
+    if (const auto* ff = src.get<FlowFieldComponent>(se)) {
+        dst.add<FlowFieldComponent>(de, *ff);
+    }
+    if (const auto* rd = src.get<RagdollComponent>(se)) {
+        dst.add<RagdollComponent>(de, *rd);
+    }
+    if (const auto* inv = src.get<InventoryComponent>(se)) {
+        dst.add<InventoryComponent>(de, *inv);
+    }
+    if (const auto* sa = src.get<SurfaceAudioComponent>(se)) {
+        dst.add<SurfaceAudioComponent>(de, *sa);
+    }
+    if (const auto* w = src.get<WeatherComponent>(se)) {
+        dst.add<WeatherComponent>(de, *w);
+    }
 }
 
 namespace {

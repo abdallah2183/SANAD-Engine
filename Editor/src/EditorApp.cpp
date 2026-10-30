@@ -1376,6 +1376,107 @@ bool EditorApp::create_sky_entity(ecs::Entity parent, std::string& out_err) {
     return true;
 }
 
+bool EditorApp::create_weather(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"WeatherAtmosphere"});
+    w->add<runtime::WeatherComponent>(e, runtime::WeatherComponent{});
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_cable(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"Cable"});
+    w->add<runtime::CableComponent>(e, runtime::CableComponent{});
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_rule_tile(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"RuleTile"});
+    w->add<runtime::RuleTileComponent>(e, runtime::RuleTileComponent{});
+    w->add<runtime::TilemapComponent>(e, runtime::TilemapComponent{});
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_flow_field(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"FlowFieldNav"});
+    w->add<runtime::FlowFieldComponent>(e, runtime::FlowFieldComponent{});
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::create_talent_tree(ecs::Entity parent, std::string& out_err) {
+    if (!require_editable(out_err)) {
+        return false;
+    }
+    ecs::World* w = world();
+    if (w == nullptr) {
+        out_err = "No scene open";
+        return false;
+    }
+    ecs::Entity e = w->create_entity();
+    w->add<scene::Transform>(e, scene::Transform{});
+    w->add<scene::NameComponent>(e, scene::NameComponent{"TalentTree"});
+    w->add<runtime::TalentComponent>(e, runtime::TalentComponent{});
+    if (parent.valid() && w->is_alive(parent)) {
+        scene::set_parent(*w, e, parent);
+    }
+    after_mutation(e);
+    return true;
+}
+
 bool EditorApp::apply_sky_edit(const SkyEdit& edit, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
@@ -3469,6 +3570,294 @@ bool EditorApp::reset_vehicle_pose(ecs::Entity e, std::string& out_err) {
         out_err = "Entity has no bound vehicle";
         return false;
     }
+    return true;
+}
+
+bool EditorApp::attach_cable(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::CableComponent>(e)) {
+        w->add<runtime::CableComponent>(e, runtime::CableComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_cable(ecs::Entity e, const runtime::CableComponent& cable, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (cable.particle_count < 2 || cable.particle_count > 256) {
+        out_err = "Particle count must be within [2, 256]";
+        return false;
+    }
+    if (cable.total_length <= 0.0f) {
+        out_err = "Cable length must be positive";
+        return false;
+    }
+    if (auto* existing = w->get<runtime::CableComponent>(e)) {
+        *existing = cable;
+    } else {
+        w->add<runtime::CableComponent>(e, cable);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_cable(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::CableComponent>(e)) { out_err = "No CableComponent on entity"; return false; }
+    w->remove<runtime::CableComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_weather(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::WeatherComponent>(e)) {
+        w->add<runtime::WeatherComponent>(e, runtime::WeatherComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_weather(ecs::Entity e, const runtime::WeatherComponent& weather, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (auto* existing = w->get<runtime::WeatherComponent>(e)) {
+        *existing = weather;
+    } else {
+        w->add<runtime::WeatherComponent>(e, weather);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_weather(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::WeatherComponent>(e)) { out_err = "No WeatherComponent on entity"; return false; }
+    w->remove<runtime::WeatherComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_rule_tile(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::RuleTileComponent>(e)) {
+        w->add<runtime::RuleTileComponent>(e, runtime::RuleTileComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_rule_tile(ecs::Entity e, const runtime::RuleTileComponent& rt, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (auto* existing = w->get<runtime::RuleTileComponent>(e)) {
+        *existing = rt;
+    } else {
+        w->add<runtime::RuleTileComponent>(e, rt);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_rule_tile(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::RuleTileComponent>(e)) { out_err = "No RuleTileComponent on entity"; return false; }
+    w->remove<runtime::RuleTileComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_flow_field(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::FlowFieldComponent>(e)) {
+        w->add<runtime::FlowFieldComponent>(e, runtime::FlowFieldComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_flow_field(ecs::Entity e, const runtime::FlowFieldComponent& ff, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (ff.grid_width == 0 || ff.grid_height == 0) {
+        out_err = "Grid dimensions must be non-zero";
+        return false;
+    }
+    if (auto* existing = w->get<runtime::FlowFieldComponent>(e)) {
+        *existing = ff;
+    } else {
+        w->add<runtime::FlowFieldComponent>(e, ff);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_flow_field(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::FlowFieldComponent>(e)) { out_err = "No FlowFieldComponent on entity"; return false; }
+    w->remove<runtime::FlowFieldComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_talent_tree(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::TalentComponent>(e)) {
+        w->add<runtime::TalentComponent>(e, runtime::TalentComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_talent_tree(ecs::Entity e, const runtime::TalentComponent& tt, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (auto* existing = w->get<runtime::TalentComponent>(e)) {
+        *existing = tt;
+    } else {
+        w->add<runtime::TalentComponent>(e, tt);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_talent_tree(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::TalentComponent>(e)) { out_err = "No TalentComponent on entity"; return false; }
+    w->remove<runtime::TalentComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_ragdoll(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::RagdollComponent>(e)) {
+        w->add<runtime::RagdollComponent>(e, runtime::RagdollComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_ragdoll(ecs::Entity e, const runtime::RagdollComponent& rd, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (auto* existing = w->get<runtime::RagdollComponent>(e)) {
+        *existing = rd;
+    } else {
+        w->add<runtime::RagdollComponent>(e, rd);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_ragdoll(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::RagdollComponent>(e)) { out_err = "No RagdollComponent on entity"; return false; }
+    w->remove<runtime::RagdollComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_inventory(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::InventoryComponent>(e)) {
+        w->add<runtime::InventoryComponent>(e, runtime::InventoryComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_inventory(ecs::Entity e, const runtime::InventoryComponent& inv, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (inv.columns == 0 || inv.rows == 0) {
+        out_err = "Inventory dimensions must be non-zero";
+        return false;
+    }
+    if (auto* existing = w->get<runtime::InventoryComponent>(e)) {
+        *existing = inv;
+    } else {
+        w->add<runtime::InventoryComponent>(e, inv);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_inventory(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::InventoryComponent>(e)) { out_err = "No InventoryComponent on entity"; return false; }
+    w->remove<runtime::InventoryComponent>(e);
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::attach_surface_audio(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::SurfaceAudioComponent>(e)) {
+        w->add<runtime::SurfaceAudioComponent>(e, runtime::SurfaceAudioComponent{});
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::set_surface_audio(ecs::Entity e, const runtime::SurfaceAudioComponent& sa, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (auto* existing = w->get<runtime::SurfaceAudioComponent>(e)) {
+        *existing = sa;
+    } else {
+        w->add<runtime::SurfaceAudioComponent>(e, sa);
+    }
+    after_mutation(e);
+    return true;
+}
+
+bool EditorApp::detach_surface_audio(ecs::Entity e, std::string& out_err) {
+    if (!require_editable(out_err)) return false;
+    ecs::World* w = world();
+    if (w == nullptr || !w->is_alive(e)) { out_err = "Entity not alive"; return false; }
+    if (!w->has<runtime::SurfaceAudioComponent>(e)) { out_err = "No SurfaceAudioComponent on entity"; return false; }
+    w->remove<runtime::SurfaceAudioComponent>(e);
+    after_mutation(e);
     return true;
 }
 

@@ -747,6 +747,8 @@ if(NF_BUILD_EDITOR)
         # drive / detach), plus the play/stop preservation the PlayMode
         # copiers now guarantee for vehicles and navigation alike.
         EditorTests/test_vehicle_editor.cpp
+        # Phases 115-122: Editor integration tests (quick-add, inspector CRUD, duplication)
+        EditorTests/test_new_features_ui.cpp
     )
     target_include_directories(EditorTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

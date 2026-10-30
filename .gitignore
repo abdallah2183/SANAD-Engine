@@ -5,6 +5,7 @@ out/
 bin/
 lib/
 obj/
+Testing/
 
 # CMake
 CMakeCache.txt

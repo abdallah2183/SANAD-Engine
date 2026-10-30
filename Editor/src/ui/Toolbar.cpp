@@ -766,6 +766,37 @@ void create_menu_contents(EditorApp& app) {
     if (ImGui::MenuItem((AV("add_sky") + " - " + AV("sky_night")).c_str())) {
         apply_sky_preset(app, 2);
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem(AV("add_weather").c_str())) {
+        std::string err;
+        if (!app.create_weather(ecs::kInvalidEntity, err)) {
+            push_error_console(app, "Create weather failed", err);
+        }
+    }
+    if (ImGui::MenuItem(AV("add_cable").c_str())) {
+        std::string err;
+        if (!app.create_cable(ecs::kInvalidEntity, err)) {
+            push_error_console(app, "Create cable failed", err);
+        }
+    }
+    if (ImGui::MenuItem(AV("add_rule_tile").c_str())) {
+        std::string err;
+        if (!app.create_rule_tile(ecs::kInvalidEntity, err)) {
+            push_error_console(app, "Create rule tile failed", err);
+        }
+    }
+    if (ImGui::MenuItem(AV("add_flow_field").c_str())) {
+        std::string err;
+        if (!app.create_flow_field(ecs::kInvalidEntity, err)) {
+            push_error_console(app, "Create flow field failed", err);
+        }
+    }
+    if (ImGui::MenuItem(AV("add_talent_tree").c_str())) {
+        std::string err;
+        if (!app.create_talent_tree(ecs::kInvalidEntity, err)) {
+            push_error_console(app, "Create talent tree failed", err);
+        }
+    }
 }
 /// A panel-section header used by the settings window.
 ///
@@ -1108,6 +1139,8 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             // The rebinding window lives here because it is a VIEW on the
             // project's input table, not a scene object like the panels above.
             ImGui::MenuItem(AV("input_bindings").c_str(), nullptr, &st.show_input);
+            ImGui::MenuItem(AV("tab_talent_tree").c_str(), nullptr, &st.show_talent_tree);
+            ImGui::MenuItem(AV("tab_flow_field").c_str(), nullptr, &st.show_flow_field);
             ImGui::EndMenu();
         }
 

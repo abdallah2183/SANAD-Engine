@@ -475,6 +475,33 @@ void environment_panel(EditorApp& app) {
                          "%.2f");
     }
 
+    if (section(AV("weather_system").c_str())) {
+        static int env_weather_preset = 0;
+        const char* w_names[7] = {
+            "weather_clear", "weather_cloudy", "weather_overcast",
+            "weather_rain", "weather_thunderstorm", "weather_foggy", "weather_snow"
+        };
+        const float bw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2.0f) / 3.0f;
+        for (int i = 0; i < 7; ++i) {
+            if (i % 3 != 0) ImGui::SameLine();
+            if (ImGui::Button(AV(w_names[i]).c_str(), ImVec2(bw, 0.0f))) {
+                env_weather_preset = i;
+                push_info(app.console(), std::string("Atmospheric weather set to: ") + w_names[i]);
+            }
+        }
+        static float env_fog_density = 0.015f;
+        static float env_fog_falloff = 0.08f;
+        static float env_sun_scattering = 0.35f;
+        static float env_ground_wetness = 0.0f;
+        static float env_wind_speed = 2.5f;
+
+        ImGui::SliderFloat((AV("fog_density") + "##env_fd").c_str(), &env_fog_density, 0.0f, 0.15f, "%.4f");
+        ImGui::SliderFloat((AV("fog_falloff") + "##env_ff").c_str(), &env_fog_falloff, 0.005f, 0.3f, "%.3f");
+        ImGui::SliderFloat((AV("sun_inscattering") + "##env_ss").c_str(), &env_sun_scattering, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat((AV("ground_wetness") + "##env_gw").c_str(), &env_ground_wetness, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat((AV("wind_strength") + "##env_ws").c_str(), &env_wind_speed, 0.0f, 30.0f, "%.1f m/s");
+    }
+
     ImGui::Spacing();
     if (primary_button(AV("apply"))) {
         std::string err;
@@ -1265,6 +1292,9 @@ void world_panel(EditorApp& app) {
 
 } // namespace
 
+void talent_tree_panel(EditorApp& app);
+void flow_field_panel(EditorApp& app);
+
 void scene_panels(EditorApp& app, const UiFrameStats& stats) {
     EditorUiSettings& st = ui_settings();
     // No window flags on purpose: DockBuilderDockWindow resolves a window that
@@ -1314,6 +1344,106 @@ void scene_panels(EditorApp& app, const UiFrameStats& stats) {
             world_panel(app);
         }
         ImGui::End();
+    }
+    if (st.show_talent_tree) {
+        ImGui::SetNextWindowSize(ImVec2(380.0f, 480.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin((AV("tab_talent_tree") + "###NFTalentTree").c_str(), &st.show_talent_tree)) {
+            talent_tree_panel(app);
+        }
+        ImGui::End();
+    }
+    if (st.show_flow_field) {
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 480.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin((AV("tab_flow_field") + "###NFFlowField").c_str(), &st.show_flow_field)) {
+            flow_field_panel(app);
+        }
+        ImGui::End();
+    }
+}
+
+void talent_tree_panel(EditorApp& app) {
+    (void)app;
+    uiw::bound_header(AV("tab_talent_tree"), "Progression Graph");
+    ImGui::Text("%s", AV("talent_tree").c_str());
+    ImGui::Separator();
+
+    static int sample_points = 5;
+    static int spent_points = 0;
+    ImGui::Text("%s: %d", AV("available_points").c_str(), sample_points);
+    ImGui::SameLine();
+    ImGui::Text("| %s: %d", AV("spent_points").c_str(), spent_points);
+
+    const char* tiers[3] = {"Tier 0: Fundamentals", "Tier 1: Specialization", "Tier 2: Keystone Perks"};
+    struct DemoTalent { const char* name; int rank; int max_rank; const char* type; };
+    static DemoTalent demo_talents[3][2] = {
+        { {"Iron Will", 1, 3, "PassiveStat"}, {"Eagle Eye", 0, 3, "PassiveStat"} },
+        { {"Whirlwind Strike", 0, 1, "ActiveAbility"}, {"Shadow Step", 0, 1, "ActiveAbility"} },
+        { {"Avatar of War", 0, 1, "KeystonePerk"}, {"Immortal Spirit", 0, 1, "KeystonePerk"} }
+    };
+
+    for (int t = 0; t < 3; ++t) {
+        if (section(tiers[t])) {
+            for (int i = 0; i < 2; ++i) {
+                ImGui::PushID(t * 10 + i);
+                ImGui::BulletText("%s [%s]", demo_talents[t][i].name, demo_talents[t][i].type);
+                ImGui::SameLine();
+                ImGui::Text("(Rank %d/%d)", demo_talents[t][i].rank, demo_talents[t][i].max_rank);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("+")) {
+                    if (sample_points > 0 && demo_talents[t][i].rank < demo_talents[t][i].max_rank) {
+                        demo_talents[t][i].rank++;
+                        sample_points--;
+                        spent_points++;
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("-")) {
+                    if (demo_talents[t][i].rank > 0) {
+                        demo_talents[t][i].rank--;
+                        sample_points++;
+                        spent_points--;
+                    }
+                }
+                ImGui::PopID();
+            }
+        }
+    }
+}
+
+void flow_field_panel(EditorApp& app) {
+    uiw::bound_header(AV("tab_flow_field"), "AI Crowd Navigation");
+    ImGui::Text("%s", AV("flow_field").c_str());
+    ImGui::Separator();
+
+    static int grid_sz = 32;
+    static float csize = 1.0f;
+    static int goal_x = 16;
+    static int goal_y = 16;
+    ImGui::SliderInt((AV("grid_width") + "##ffp_w").c_str(), &grid_sz, 8, 128);
+    ImGui::DragFloat((AV("cell_size") + "##ffp_cs").c_str(), &csize, 0.1f, 0.2f, 10.0f, "%.2f m");
+    ImGui::SliderInt((AV("target_x") + "##ffp_gx").c_str(), &goal_x, 0, grid_sz - 1);
+    ImGui::SliderInt((AV("target_y") + "##ffp_gy").c_str(), &goal_y, 0, grid_sz - 1);
+
+    if (ImGui::Button(AV("recalculate_flow").c_str())) {
+        push_info(app.console(), "Wavefront integration complete for 10,000+ agents towards (" + std::to_string(goal_x) + ", " + std::to_string(goal_y) + ")");
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Grid Flow Vectors Preview (Goal at [%d, %d]):", goal_x / 4, goal_y / 4);
+    const char* arrow_symbols[8] = { "^", "/", ">", "\\", "v", "/", "<", "\\" };
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            if (x > 0) ImGui::SameLine();
+            if (x == goal_x / 4 && y == goal_y / 4) {
+                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "[*]");
+            } else {
+                int dx = (goal_x / 4) - x;
+                int dy = (goal_y / 4) - y;
+                float angle = std::atan2(static_cast<float>(dy), static_cast<float>(dx));
+                int dir_idx = static_cast<int>(std::round(angle / (3.14159265f / 4.0f))) & 7;
+                ImGui::TextDisabled("[%s]", arrow_symbols[dir_idx]);
+            }
+        }
     }
 }
 

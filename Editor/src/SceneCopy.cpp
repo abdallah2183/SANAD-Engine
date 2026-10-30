@@ -147,6 +147,30 @@ void copy_entity_components(const ecs::World& src, ecs::Entity from, ecs::World&
         fresh.vehicle = nullptr;
         dst.add<physics::VehicleComponent>(to, fresh);
     }
+    if (const auto* cable = src.get<runtime::CableComponent>(from)) {
+        dst.add<runtime::CableComponent>(to, *cable);
+    }
+    if (const auto* weather = src.get<runtime::WeatherComponent>(from)) {
+        dst.add<runtime::WeatherComponent>(to, *weather);
+    }
+    if (const auto* rt = src.get<runtime::RuleTileComponent>(from)) {
+        dst.add<runtime::RuleTileComponent>(to, *rt);
+    }
+    if (const auto* ff = src.get<runtime::FlowFieldComponent>(from)) {
+        dst.add<runtime::FlowFieldComponent>(to, *ff);
+    }
+    if (const auto* tt = src.get<runtime::TalentComponent>(from)) {
+        dst.add<runtime::TalentComponent>(to, *tt);
+    }
+    if (const auto* rd = src.get<runtime::RagdollComponent>(from)) {
+        dst.add<runtime::RagdollComponent>(to, *rd);
+    }
+    if (const auto* inv = src.get<runtime::InventoryComponent>(from)) {
+        dst.add<runtime::InventoryComponent>(to, *inv);
+    }
+    if (const auto* sa = src.get<runtime::SurfaceAudioComponent>(from)) {
+        dst.add<runtime::SurfaceAudioComponent>(to, *sa);
+    }
 }
 
 } // namespace nf::editor

@@ -212,6 +212,11 @@ public:
     // renderer takes the first sky in the scene, so callers use this only when
     // the scene has none.
     bool create_sky_entity(ecs::Entity parent, std::string& out_err);
+    bool create_weather(ecs::Entity parent, std::string& out_err);
+    bool create_cable(ecs::Entity parent, std::string& out_err);
+    bool create_rule_tile(ecs::Entity parent, std::string& out_err);
+    bool create_flow_field(ecs::Entity parent, std::string& out_err);
+    bool create_talent_tree(ecs::Entity parent, std::string& out_err);
 
     /// Exports meshes as one file. `whole_scene` exports every mesh entity,
     /// otherwise only the selection; each entity's transform is baked into the
@@ -399,6 +404,39 @@ public:
     bool set_vehicle_input(ecs::Entity e, f32 throttle, f32 steer, f32 brake, f32 handbrake,
                            std::string& out_err);
     bool reset_vehicle_pose(ecs::Entity e, std::string& out_err);
+
+    // --- Phases 115-122 Engine Features ---
+    bool attach_cable(ecs::Entity e, std::string& out_err);
+    bool set_cable(ecs::Entity e, const runtime::CableComponent& cable, std::string& out_err);
+    bool detach_cable(ecs::Entity e, std::string& out_err);
+
+    bool attach_weather(ecs::Entity e, std::string& out_err);
+    bool set_weather(ecs::Entity e, const runtime::WeatherComponent& weather, std::string& out_err);
+    bool detach_weather(ecs::Entity e, std::string& out_err);
+
+    bool attach_rule_tile(ecs::Entity e, std::string& out_err);
+    bool set_rule_tile(ecs::Entity e, const runtime::RuleTileComponent& rt, std::string& out_err);
+    bool detach_rule_tile(ecs::Entity e, std::string& out_err);
+
+    bool attach_flow_field(ecs::Entity e, std::string& out_err);
+    bool set_flow_field(ecs::Entity e, const runtime::FlowFieldComponent& ff, std::string& out_err);
+    bool detach_flow_field(ecs::Entity e, std::string& out_err);
+
+    bool attach_talent_tree(ecs::Entity e, std::string& out_err);
+    bool set_talent_tree(ecs::Entity e, const runtime::TalentComponent& tt, std::string& out_err);
+    bool detach_talent_tree(ecs::Entity e, std::string& out_err);
+
+    bool attach_ragdoll(ecs::Entity e, std::string& out_err);
+    bool set_ragdoll(ecs::Entity e, const runtime::RagdollComponent& rd, std::string& out_err);
+    bool detach_ragdoll(ecs::Entity e, std::string& out_err);
+
+    bool attach_inventory(ecs::Entity e, std::string& out_err);
+    bool set_inventory(ecs::Entity e, const runtime::InventoryComponent& inv, std::string& out_err);
+    bool detach_inventory(ecs::Entity e, std::string& out_err);
+
+    bool attach_surface_audio(ecs::Entity e, std::string& out_err);
+    bool set_surface_audio(ecs::Entity e, const runtime::SurfaceAudioComponent& sa, std::string& out_err);
+    bool detach_surface_audio(ecs::Entity e, std::string& out_err);
 
     // --- Asset folders (Unity-style Project panel) --------------------------
     // Creates a VFS directory for the browser (content:// or project://, no

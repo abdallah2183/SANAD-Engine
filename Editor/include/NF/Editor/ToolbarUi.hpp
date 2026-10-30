@@ -101,6 +101,8 @@ struct EditorUiSettings {
     /// The rebinding window. Off by default like the others; opened from the
     /// View menu.
     bool show_input = false;
+    bool show_talent_tree = false;
+    bool show_flow_field = false;
 };
 
 EditorUiSettings& ui_settings();

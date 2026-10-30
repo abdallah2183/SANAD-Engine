@@ -1379,5 +1379,93 @@ struct BrainComponent {
     std::vector<BrainAction> actions;
 };
 
+/// Dynamic cable and rope simulation component (Phase 118)
+struct CableComponent {
+    f32 total_length = 10.0f;
+    u32 particle_count = 16;
+    f32 stiffness = 0.95f;
+    f32 damping = 0.03f;
+    f32 linear_density = 0.5f;
+    f32 max_tension = 5000.0f;
+    bool breakable = false;
+    bool pin_start = true;
+    bool pin_end = true;
+    Vec3 end_offset{0.0f, -5.0f, 5.0f};
+    bool enabled = true;
+};
+
+/// 2D Rule Tile engine component (Phase 119)
+struct RuleTileComponent {
+    u32 default_tile_id = 1;
+    int rule_preset = 0; // 0 = 16-Tile Cardinal, 1 = 47-Blob Wang/Marching, 2 = Custom
+    u32 rule_count = 16;
+    bool auto_update = true;
+    bool enabled = true;
+};
+
+/// Talent tree progression component (Phase 122)
+struct TalentComponent {
+    std::string tree_id = "hero_talents";
+    std::string tree_name = "Skill Tree";
+    u32 available_points = 5;
+    u32 spent_points = 0;
+    u32 unlocked_count = 0;
+    bool enabled = true;
+};
+
+/// Flow Field navigation grid component (Phase 121)
+struct FlowFieldComponent {
+    u32 grid_width = 32;
+    u32 grid_height = 32;
+    f32 cell_size = 1.0f;
+    f32 target_x = 16.0f;
+    f32 target_y = 16.0f;
+    bool enabled = true;
+};
+
+/// Dynamic Ragdoll blend and get-up component (Phase 116)
+struct RagdollComponent {
+    f32 blend_weight = 0.0f;
+    int pose_state = 0; // 0 = Inactive, 1 = Ragdoll, 2 = FaceUp GetUp, 3 = FaceDown GetUp
+    f32 blend_duration = 0.5f;
+    bool preserve_momentum = true;
+    bool enabled = true;
+};
+
+/// 2D Spatial Grid Inventory component (Phase 117)
+struct InventoryComponent {
+    u32 columns = 8;
+    u32 rows = 4;
+    f32 max_weight = 50.0f;
+    f32 current_weight = 0.0f;
+    u32 item_count = 0;
+    bool auto_pack = true;
+    bool enabled = true;
+};
+
+/// Surface Audio & Footstep Matrix component (Phase 120)
+struct SurfaceAudioComponent {
+    int surface_material = 0; // 0=Concrete, 1=Dirt, 2=Metal, 3=Wood, 4=Water, 5=Grass, 6=Snow
+    f32 volume_scale = 1.0f;
+    f32 pitch_variation = 0.05f;
+    bool wetness_modulation = true;
+    bool enabled = true;
+};
+
+/// Atmospheric Weather & Height Fog component (Phase 115)
+struct WeatherComponent {
+    int weather_type = 0; // 0=Clear, 1=Cloudy, 2=Overcast, 3=Rain, 4=Thunderstorm, 5=Foggy, 6=Snow
+    f32 fog_density = 0.015f;
+    f32 fog_height_falloff = 0.08f;
+    f32 fog_base_height = 0.0f;
+    f32 fog_max_opacity = 1.0f;
+    f32 fog_color[3]{0.65f, 0.75f, 0.85f};
+    f32 sun_inscattering = 0.3f;
+    f32 ground_wetness = 0.0f;
+    f32 wind_strength = 2.0f;
+    f32 wind_direction[3]{1.0f, 0.0f, 0.0f};
+    bool enabled = true;
+};
+
 } // namespace runtime
 } // namespace nf
