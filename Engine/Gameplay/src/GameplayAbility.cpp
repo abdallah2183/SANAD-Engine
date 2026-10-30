@@ -214,6 +214,7 @@ void AbilitySystemComponent::cancel_abilities_with_tag(const std::string& tag, A
 }
 
 void AbilitySystemComponent::update(f32 dt, AttributeSet& attributes, TagContainer& actor_tags) {
+    // 1. Update active abilities
     for (auto& pair : m_abilities) {
         AbilitySpec& spec = pair.second;
 
@@ -232,6 +233,38 @@ void AbilitySystemComponent::update(f32 dt, AttributeSet& attributes, TagContain
             }
         }
     }
+
+    // 2. Update active gameplay effects
+    m_effects.update(dt, attributes, actor_tags);
+}
+
+ActiveEffectHandle AbilitySystemComponent::apply_effect(
+    const std::shared_ptr<const GameplayEffectDef>& effect,
+    AttributeSet& attributes,
+    TagContainer& actor_tags,
+    u64 source_id)
+{
+    return m_effects.apply_effect(effect, attributes, actor_tags, source_id);
+}
+
+bool AbilitySystemComponent::remove_effect(ActiveEffectHandle handle, AttributeSet& attributes, TagContainer& actor_tags) {
+    return m_effects.remove_effect(handle, attributes, actor_tags);
+}
+
+size_t AbilitySystemComponent::remove_effects_with_tags(const TagContainer& tags, AttributeSet& attributes, TagContainer& actor_tags) {
+    return m_effects.remove_effects_with_tags(tags, attributes, actor_tags);
+}
+
+bool AbilitySystemComponent::has_active_effect(const std::string& effect_name) const {
+    return m_effects.has_active_effect(effect_name);
+}
+
+u32 AbilitySystemComponent::get_effect_stack_count(const std::string& effect_name) const {
+    return m_effects.get_stack_count(effect_name);
+}
+
+size_t AbilitySystemComponent::active_effect_count() const noexcept {
+    return m_effects.active_effect_count();
 }
 
 bool AbilitySystemComponent::is_on_cooldown(u32 slot_index) const {

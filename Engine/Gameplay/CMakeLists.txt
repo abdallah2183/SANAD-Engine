@@ -9,6 +9,7 @@
 
 set(NFGAMEPLAY_SOURCES
     src/GameplayAbility.cpp
+    src/GameplayEffect.cpp
     src/GameplayModuleRegistry.cpp
     src/GameplayState.cpp
     src/Tags.cpp

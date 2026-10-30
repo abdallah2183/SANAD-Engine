@@ -2,6 +2,7 @@
 
 #include <NF/Core/Types.hpp>
 #include <NF/Gameplay/GameplayAttributes.hpp>
+#include <NF/Gameplay/GameplayEffect.hpp>
 #include <NF/Gameplay/Tags.hpp>
 
 #include <string>
@@ -144,11 +145,23 @@ public:
 
     [[nodiscard]] size_t granted_ability_count() const noexcept { return m_abilities.size(); }
 
+    /// Gameplay Effects integration
+    ActiveEffectHandle apply_effect(const std::shared_ptr<const GameplayEffectDef>& effect,
+                                   AttributeSet& attributes, TagContainer& actor_tags, u64 source_id = 0);
+    bool remove_effect(ActiveEffectHandle handle, AttributeSet& attributes, TagContainer& actor_tags);
+    size_t remove_effects_with_tags(const TagContainer& tags, AttributeSet& attributes, TagContainer& actor_tags);
+    [[nodiscard]] bool has_active_effect(const std::string& effect_name) const;
+    [[nodiscard]] u32 get_effect_stack_count(const std::string& effect_name) const;
+    [[nodiscard]] size_t active_effect_count() const noexcept;
+    ActiveEffectsContainer& effects_container() noexcept { return m_effects; }
+    [[nodiscard]] const ActiveEffectsContainer& effects_container() const noexcept { return m_effects; }
+
     /// Clear all abilities and reset cooldowns
     void clear();
 
 private:
     std::unordered_map<u32, AbilitySpec> m_abilities;
+    ActiveEffectsContainer m_effects;
 };
 
 } // namespace nf::gameplay
