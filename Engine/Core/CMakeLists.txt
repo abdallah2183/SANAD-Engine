@@ -26,6 +26,7 @@ set(NFCORE_SOURCES
     src/TimerManager.cpp
     src/Compression.cpp
     src/CommandLine.cpp
+    src/Noise.cpp
 )
 
 nf_engine_library(NFCore
