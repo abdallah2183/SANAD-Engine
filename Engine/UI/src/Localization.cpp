@@ -1487,6 +1487,8 @@ constexpr Entry kEntries[] = {
     {"wind_speed", "Wind Speed", "سرعة الرياح"},
     {"rest_length", "Rest Length", "الطول الطبيعي"},
     {"tension_gauge", "Tension Gauge", "مقياس الشد"},
+    {"inventory", "Grid Inventory", "حقيبة شبكية"},
+    {"ragdoll", "Ragdoll Physics", "دمية فيزيائية"},
 };
 
 // The active language. Atomic: set_language() runs on the UI/main thread

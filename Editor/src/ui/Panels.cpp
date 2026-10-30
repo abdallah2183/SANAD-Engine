@@ -1012,42 +1012,10 @@ void draw_category_chip(const char* text) {
 //
 // Only the SPECIAL kinds are tinted; a mesh is the common case and stays the
 // theme's text colour, so the hierarchy does not turn into a colour chart.
-// Alpha 0 means "leave the theme colour alone".
+// Unified theme: all hierarchy rows use clean, unified text color.
 ImVec4 outliner_kind_color(OutlinerKind kind) {
-    switch (kind) {
-        case OutlinerKind::Camera:
-            return ImVec4(0.55f, 0.78f, 1.00f, 1.0f); // cool blue
-        case OutlinerKind::Light:
-            return ImVec4(1.00f, 0.80f, 0.45f, 1.0f); // warm amber
-        case OutlinerKind::Sky:
-            return ImVec4(0.60f, 0.88f, 0.85f, 1.0f); // pale teal
-        case OutlinerKind::Sprite2D:
-            return ImVec4(0.30f, 0.88f, 0.60f, 1.0f); // vibrant emerald
-        case OutlinerKind::Tilemap:
-            return ImVec4(0.40f, 0.92f, 0.75f, 1.0f); // mint tilemap
-        case OutlinerKind::Audio:
-            return ImVec4(0.85f, 0.55f, 1.00f, 1.0f); // rich violet
-        case OutlinerKind::Physics:
-            return ImVec4(1.00f, 0.60f, 0.35f, 1.0f); // sunset orange
-        case OutlinerKind::Weather:
-            return ImVec4(0.35f, 0.75f, 1.00f, 1.0f); // vibrant sky blue
-        case OutlinerKind::Cable:
-            return ImVec4(1.00f, 0.65f, 0.25f, 1.0f); // warm cable amber
-        case OutlinerKind::RuleTile:
-            return ImVec4(0.35f, 0.90f, 0.65f, 1.0f); // vibrant mint
-        case OutlinerKind::FlowField:
-            return ImVec4(0.20f, 0.85f, 0.50f, 1.0f); // emerald green
-        case OutlinerKind::TalentTree:
-            return ImVec4(0.95f, 0.45f, 0.75f, 1.0f); // talent pink
-        case OutlinerKind::Inventory:
-            return ImVec4(0.70f, 0.50f, 0.95f, 1.0f); // inventory purple
-        case OutlinerKind::Ragdoll:
-            return ImVec4(0.95f, 0.40f, 0.40f, 1.0f); // physics coral
-        case OutlinerKind::Mesh:
-        case OutlinerKind::Empty:
-        default:
-            return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-    }
+    (void)kind;
+    return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 // Tiny vector glyph per entity kind, drawn with ImDrawList right after the
@@ -1369,15 +1337,21 @@ bool draw_vec3_control(const char* label, float values[3], float reset_val = 0.0
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.0f, 2.0f));
 
-    // X Component (Red)
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(215, 55, 55, 230));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(235, 75, 75, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(190, 40, 40, 255));
+    // Unified dark slate buttons with subtle axis letter color
+    const ImU32 v3_btn_bg = IM_COL32(30, 41, 59, 240);
+    const ImU32 v3_btn_hov = IM_COL32(51, 65, 85, 255);
+    const ImU32 v3_btn_act = IM_COL32(37, 99, 235, 255);
+
+    // X Component
+    ImGui::PushStyleColor(ImGuiCol_Button, v3_btn_bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v3_btn_hov);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, v3_btn_act);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(248, 113, 113, 230));
     if (ImGui::Button("X##btn", btn_sz)) {
         values[0] = reset_val;
         changed = true;
     }
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleColor(4);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(item_w);
     if (ImGui::DragFloat("##X", &values[0], speed, min_val, max_val, format)) {
@@ -1385,15 +1359,16 @@ bool draw_vec3_control(const char* label, float values[3], float reset_val = 0.0
     }
     ImGui::SameLine();
 
-    // Y Component (Green)
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 175, 75, 230));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(65, 205, 95, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(35, 145, 55, 255));
+    // Y Component
+    ImGui::PushStyleColor(ImGuiCol_Button, v3_btn_bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v3_btn_hov);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, v3_btn_act);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(52, 211, 153, 230));
     if (ImGui::Button("Y##btn", btn_sz)) {
         values[1] = reset_val;
         changed = true;
     }
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleColor(4);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(item_w);
     if (ImGui::DragFloat("##Y", &values[1], speed, min_val, max_val, format)) {
@@ -1401,15 +1376,16 @@ bool draw_vec3_control(const char* label, float values[3], float reset_val = 0.0
     }
     ImGui::SameLine();
 
-    // Z Component (Blue)
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 115, 225, 230));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 140, 245, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(35, 95, 200, 255));
+    // Z Component
+    ImGui::PushStyleColor(ImGuiCol_Button, v3_btn_bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v3_btn_hov);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, v3_btn_act);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(96, 165, 250, 230));
     if (ImGui::Button("Z##btn", btn_sz)) {
         values[2] = reset_val;
         changed = true;
     }
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleColor(4);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(item_w);
     if (ImGui::DragFloat("##Z", &values[2], speed, min_val, max_val, format)) {
@@ -1810,9 +1786,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::EndPopup();
         }
         ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(36, 110, 78, 200));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(48, 145, 102, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(28, 90, 62, 255));
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(37, 99, 235, 255));
         const bool btn_create_empty = ImGui::Button(AV("create_empty").c_str());
         ImGui::PopStyleColor(3);
         if (btn_create_empty) {
@@ -1894,13 +1870,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             app.outliner().filter_text = outliner_filter;
         }
 
-        // 1-Click Feature Quick-Spawn Bar
+        // 1-Click Feature Quick-Spawn Bar (Unified SANAD theme)
         {
-            auto quick_spawn_pill = [&](const char* label, const char* tip, ImU32 bg, auto action) {
-                ImGui::PushStyleColor(ImGuiCol_Button, bg);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 80, 105, 255));
+            auto quick_spawn_pill = [&](const char* label, const char* tip, auto action) {
+                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(37, 99, 235, 180));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(241, 245, 249, 255));
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 2.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 2.5f));
                 if (ImGui::Button(label)) {
                     action();
                 }
@@ -1908,36 +1886,36 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ImGui::SetTooltip("%s", tip);
                 }
                 ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(2);
+                ImGui::PopStyleColor(4);
             };
-            quick_spawn_pill(("+ " + AV("filter_weather")).c_str(), "Create Atmospheric Weather entity", IM_COL32(14, 116, 144, 220), [&]{
+            quick_spawn_pill(("+ " + AV("filter_weather")).c_str(), "Create Atmospheric Weather entity", [&]{
                 std::string err; app.create_weather(ecs::kInvalidEntity, err);
             });
             ImGui::SameLine(0.0f, 3.0f);
-            quick_spawn_pill(("+ " + AV("filter_cable")).c_str(), "Create Cable Simulation entity", IM_COL32(180, 83, 9, 220), [&]{
+            quick_spawn_pill(("+ " + AV("filter_cable")).c_str(), "Create Cable Simulation entity", [&]{
                 std::string err; app.create_cable(ecs::kInvalidEntity, err);
             });
             ImGui::SameLine(0.0f, 3.0f);
-            quick_spawn_pill(("+ " + AV("filter_talents")).c_str(), "Create Talent Progression Tree", IM_COL32(190, 24, 93, 220), [&]{
+            quick_spawn_pill(("+ " + AV("filter_talents")).c_str(), "Create Talent Progression Tree", [&]{
                 std::string err; app.create_talent_tree(ecs::kInvalidEntity, err);
             });
             ImGui::SameLine(0.0f, 3.0f);
-            quick_spawn_pill(("+ " + AV("filter_nav")).c_str(), "Create Flow Field Navigation Grid", IM_COL32(21, 128, 61, 220), [&]{
+            quick_spawn_pill(("+ " + AV("filter_nav")).c_str(), "Create Flow Field Navigation Grid", [&]{
                 std::string err; app.create_flow_field(ecs::kInvalidEntity, err);
             });
         }
 
         static int s_outliner_cat = 0;
         {
-            auto draw_cat_pill = [&](const char* label, int cat_idx, ImU32 active_color) {
+            auto draw_cat_pill = [&](const char* label, int cat_idx) {
                 const bool active = (s_outliner_cat == cat_idx);
                 if (active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, active_color);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active_color);
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 255));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
                 } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(32, 37, 46, 200));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(48, 56, 70, 255));
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 200));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(180, 190, 205, 230));
                 }
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
@@ -1948,25 +1926,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 ImGui::PopStyleVar(2);
                 ImGui::PopStyleColor(3);
             };
-            draw_cat_pill(AV("filter_all").c_str(), 0, IM_COL32(59, 130, 246, 220));
+            draw_cat_pill(AV("filter_all").c_str(), 0);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill("3D", 1, IM_COL32(79, 140, 255, 220));
+            draw_cat_pill("3D", 1);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill("2D", 2, IM_COL32(16, 185, 129, 220));
+            draw_cat_pill("2D", 2);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_light").c_str(), 3, IM_COL32(245, 158, 11, 220));
+            draw_cat_pill(AV("filter_light").c_str(), 3);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_audio").c_str(), 4, IM_COL32(168, 85, 247, 220));
+            draw_cat_pill(AV("filter_audio").c_str(), 4);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_physics").c_str(), 5, IM_COL32(249, 115, 22, 220));
+            draw_cat_pill(AV("filter_physics").c_str(), 5);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_weather").c_str(), 6, IM_COL32(56, 189, 248, 220));
+            draw_cat_pill(AV("filter_weather").c_str(), 6);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_cable").c_str(), 7, IM_COL32(251, 146, 60, 220));
+            draw_cat_pill(AV("filter_cable").c_str(), 7);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_nav").c_str(), 8, IM_COL32(34, 197, 94, 220));
+            draw_cat_pill(AV("filter_nav").c_str(), 8);
             ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_talents").c_str(), 9, IM_COL32(236, 72, 153, 220));
+            draw_cat_pill(AV("filter_talents").c_str(), 9);
         }
         // Live census: total entities plus selection size, so an empty-looking
         // tree still answers "is the scene really empty".
@@ -2076,29 +2054,30 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                        row.kind);
                 }
 
-                // Feature badge chips on the right side of the row
+                // Feature badge chips on the right side of the row (Unified theme)
                 if (row.feature_mask != 0) {
                     ImDrawList* dl = ImGui::GetWindowDrawList();
                     float bx = rmax.x - 6.0f;
                     const float by = (rmin.y + rmax.y) * 0.5f;
-                    auto draw_chip = [&](const char* tag, ImU32 bg, ImU32 fg) {
+                    auto draw_chip = [&](const char* tag) {
                         const std::string shaped = ui::shape_arabic(tag);
                         const ImVec2 tsz = ImGui::CalcTextSize(shaped.c_str());
                         const float cw = tsz.x + 8.0f;
                         const float ch = 14.0f;
                         bx -= cw;
-                        dl->AddRectFilled(ImVec2(bx, by - ch * 0.5f), ImVec2(bx + cw, by + ch * 0.5f), bg, 3.0f);
-                        dl->AddText(ImVec2(bx + 4.0f, by - tsz.y * 0.5f), fg, shaped.c_str());
+                        dl->AddRectFilled(ImVec2(bx, by - ch * 0.5f), ImVec2(bx + cw, by + ch * 0.5f), IM_COL32(23, 37, 84, 210), 3.0f);
+                        dl->AddRect(ImVec2(bx, by - ch * 0.5f), ImVec2(bx + cw, by + ch * 0.5f), IM_COL32(59, 130, 246, 140), 3.0f);
+                        dl->AddText(ImVec2(bx + 4.0f, by - tsz.y * 0.5f), IM_COL32(191, 219, 254, 255), shaped.c_str());
                         bx -= 4.0f;
                     };
-                    if (row.feature_mask & (1 << 0)) draw_chip(AV("filter_weather").c_str(), IM_COL32(14, 116, 144, 200), IM_COL32(224, 242, 254, 255));
-                    if (row.feature_mask & (1 << 1)) draw_chip(AV("filter_cable").c_str(), IM_COL32(180, 83, 9, 200), IM_COL32(254, 243, 199, 255));
-                    if (row.feature_mask & (1 << 2)) draw_chip(AV("rule_tile").c_str(), IM_COL32(4, 120, 87, 200), IM_COL32(209, 250, 229, 255));
-                    if (row.feature_mask & (1 << 3)) draw_chip(AV("filter_nav").c_str(), IM_COL32(21, 128, 61, 200), IM_COL32(220, 252, 231, 255));
-                    if (row.feature_mask & (1 << 4)) draw_chip(AV("filter_talents").c_str(), IM_COL32(190, 24, 93, 200), IM_COL32(253, 231, 243, 255));
-                    if (row.feature_mask & (1 << 5)) draw_chip(AV("inventory").c_str(), IM_COL32(109, 40, 217, 200), IM_COL32(237, 233, 254, 255));
-                    if (row.feature_mask & (1 << 6)) draw_chip(AV("ragdoll").c_str(), IM_COL32(185, 28, 28, 200), IM_COL32(254, 226, 226, 255));
-                    if (row.feature_mask & (1 << 7)) draw_chip(AV("surface_audio").c_str(), IM_COL32(146, 64, 14, 200), IM_COL32(254, 243, 199, 255));
+                    if (row.feature_mask & (1 << 0)) draw_chip(AV("filter_weather").c_str());
+                    if (row.feature_mask & (1 << 1)) draw_chip(AV("filter_cable").c_str());
+                    if (row.feature_mask & (1 << 2)) draw_chip(AV("rule_tile").c_str());
+                    if (row.feature_mask & (1 << 3)) draw_chip(AV("filter_nav").c_str());
+                    if (row.feature_mask & (1 << 4)) draw_chip(AV("filter_talents").c_str());
+                    if (row.feature_mask & (1 << 5)) draw_chip(AV("inventory").c_str());
+                    if (row.feature_mask & (1 << 6)) draw_chip(AV("ragdoll").c_str());
+                    if (row.feature_mask & (1 << 7)) draw_chip(AV("surface_audio").c_str());
                 }
             }
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
@@ -2335,9 +2314,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // 2D / 3D Dimension Mode Switcher
         const bool is_2d_mode = app.is_2d_mode();
         if (is_2d_mode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 220)); // Emerald
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(52, 211, 153, 255));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(5, 150, 105, 255));
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220)); // Unified SANAD Blue
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
         }
         if (ImGui::Button("2D###vp_mode_2d")) {
             app.set_2d_mode(true);
@@ -2351,7 +2330,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         }
         ImGui::SameLine();
         if (!is_2d_mode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220)); // Electric blue
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220)); // Unified SANAD Blue
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
         }
@@ -2518,13 +2497,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                              ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
                 // 1. Dimension mode [2D] / [3D]
                 const bool is_2d = app.is_2d_mode();
-                if (is_2d) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 220));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(52, 211, 153, 255));
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
-                }
+                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
                 if (ImGui::Button(is_2d ? "[ 2D ]###hud_dim" : "[ 3D ]###hud_dim")) {
                     app.set_2d_mode(!is_2d);
                     if (!is_2d) {
@@ -2551,7 +2525,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 // 3. Grid toggle [⊞ شبكة]
                 bool& grid_on = ui_settings().show_grid;
                 if (grid_on) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(59, 130, 246, 200));
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 200));
                 }
                 if (ImGui::Button((AV("grid") + "###hud_grid").c_str())) {
                     grid_on = !grid_on;
@@ -2568,7 +2542,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 GizmoSnap& hud_snap = app.gizmo_snap();
                 bool hud_snap_on = hud_snap.any();
                 if (hud_snap_on) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(234, 88, 12, 200));
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 200));
                 }
                 if (ImGui::Button((AV("snap") + "###hud_snap").c_str())) {
                     if (!hud_snap_on) {
@@ -2634,7 +2608,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                     if (cable_count > 0) {
                         if (scene_weather != nullptr) ImGui::SameLine();
-                        ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.30f, 1.0f), "| %s: %d", AV("cable_sim").c_str(), cable_count);
+                        ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.0f, 1.0f), "| %s: %d", AV("cable_sim").c_str(), cable_count);
                     }
                     ImGui::End();
                 }
@@ -2872,12 +2846,16 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
 
-            auto weather_pill = [&](const char* name, int preset, ImU32 col) {
+            auto weather_pill = [&](const char* name, int preset) {
                 const bool active = (quick_weather_preset == preset);
                 if (active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, col);
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 255));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
                 } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(38, 44, 56, 200));
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 220));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(203, 213, 225, 255));
                 }
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
                 if (ImGui::Button(name)) {
@@ -2895,22 +2873,22 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
                 ImGui::PopStyleVar();
-                ImGui::PopStyleColor();
+                ImGui::PopStyleColor(3);
             };
 
-            weather_pill(AV("weather_clear").c_str(), 0, IM_COL32(234, 179, 8, 255));
+            weather_pill(AV("weather_clear").c_str(), 0);
             ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_cloudy").c_str(), 1, IM_COL32(59, 130, 246, 255));
+            weather_pill(AV("weather_cloudy").c_str(), 1);
             ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_overcast").c_str(), 2, IM_COL32(100, 116, 139, 255));
+            weather_pill(AV("weather_overcast").c_str(), 2);
             ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_rain").c_str(), 3, IM_COL32(6, 182, 212, 255));
+            weather_pill(AV("weather_rain").c_str(), 3);
 
-            weather_pill(AV("weather_thunderstorm").c_str(), 4, IM_COL32(139, 92, 246, 255));
+            weather_pill(AV("weather_thunderstorm").c_str(), 4);
             ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_foggy").c_str(), 5, IM_COL32(148, 163, 184, 255));
+            weather_pill(AV("weather_foggy").c_str(), 5);
             ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_snow").c_str(), 6, IM_COL32(224, 231, 255, 255));
+            weather_pill(AV("weather_snow").c_str(), 6);
 
             if (ImGui::SliderFloat((AV("fog_density") + "##qfd").c_str(), &quick_fog_density, 0.0f, 0.1f, "%.4f")) {
                 if (current_wc != nullptr) current_wc->fog_density = quick_fog_density;
@@ -2925,13 +2903,15 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::Spacing();
             ImGui::Separator();
 
-            // 2. Quick Create Advanced Systems
+            // 2. Quick Create Advanced Systems (Unified theme)
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.60f, 1.0f), "%s", AV("quick_create_title").c_str());
+            ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.0f, 1.0f), "%s", AV("quick_create_title").c_str());
 
-            auto quick_spawn_button = [&](const char* label, const char* desc, ImU32 col, auto fn) {
-                ImGui::PushStyleColor(ImGuiCol_Button, col);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 80, 105, 255));
+            auto quick_spawn_button = [&](const char* label, const char* desc, auto fn) {
+                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 240));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(37, 99, 235, 200));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(241, 245, 249, 255));
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
                 if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) {
@@ -2941,23 +2921,23 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     ImGui::SetTooltip("%s", desc);
                 }
                 ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(2);
+                ImGui::PopStyleColor(4);
                 ImGui::Spacing();
             };
 
-            quick_spawn_button(("+ " + AV("add_weather")).c_str(), "Atmospheric Weather, Height Fog, Wetness & Wind", IM_COL32(14, 116, 144, 200), [&]{
+            quick_spawn_button(("+ " + AV("add_weather")).c_str(), "Atmospheric Weather, Height Fog, Wetness & Wind", [&]{
                 std::string err; app.create_weather(ecs::kInvalidEntity, err);
             });
-            quick_spawn_button(("+ " + AV("add_cable")).c_str(), "Verlet Physics Cable with Tension & Breakable Dynamics", IM_COL32(180, 83, 9, 200), [&]{
+            quick_spawn_button(("+ " + AV("add_cable")).c_str(), "Verlet Physics Cable with Tension & Breakable Dynamics", [&]{
                 std::string err; app.create_cable(ecs::kInvalidEntity, err);
             });
-            quick_spawn_button(("+ " + AV("add_talent_tree")).c_str(), "Skill & Talent Progression Graph with Tiers & Gates", IM_COL32(190, 24, 93, 200), [&]{
+            quick_spawn_button(("+ " + AV("add_talent_tree")).c_str(), "Skill & Talent Progression Graph with Tiers & Gates", [&]{
                 std::string err; app.create_talent_tree(ecs::kInvalidEntity, err);
             });
-            quick_spawn_button(("+ " + AV("add_flow_field")).c_str(), "Crowd Flow Field Grid for Massive Scale AI Navigation", IM_COL32(21, 128, 61, 200), [&]{
+            quick_spawn_button(("+ " + AV("add_flow_field")).c_str(), "Crowd Flow Field Grid for Massive Scale AI Navigation", [&]{
                 std::string err; app.create_flow_field(ecs::kInvalidEntity, err);
             });
-            quick_spawn_button(("+ " + AV("add_rule_tile")).c_str(), "2D 8-Neighbor Rule Tile Autotiling Map", IM_COL32(4, 120, 87, 200), [&]{
+            quick_spawn_button(("+ " + AV("add_rule_tile")).c_str(), "2D 8-Neighbor Rule Tile Autotiling Map", [&]{
                 std::string err; app.create_rule_tile(ecs::kInvalidEntity, err);
             });
 
@@ -2965,7 +2945,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
             // 3. Active Advanced Systems Census
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.85f, 0.70f, 1.0f, 1.0f), "%s", AV("active_systems_census").c_str());
+            ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.0f, 1.0f), "%s", AV("active_systems_census").c_str());
 
             int n_weather = 0, n_cables = 0, n_talents = 0, n_flow = 0, n_ruletiles = 0, n_inv = 0, n_rag = 0, n_saudio = 0;
             if (w != nullptr) {
@@ -2994,28 +2974,29 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             if (n_weather + n_cables + n_talents + n_flow + n_ruletiles + n_inv + n_rag + n_saudio == 0) {
                 ImGui::TextDisabled("%s", AV("no_active_systems").c_str());
             } else {
-                draw_system_row(AV("weather_system").c_str(), n_weather, ImVec4(0.35f, 0.75f, 1.0f, 1.0f), [&]{
+                const ImVec4 sys_col(0.45f, 0.78f, 1.0f, 1.0f);
+                draw_system_row(AV("weather_system").c_str(), n_weather, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::WeatherComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("cable_sim").c_str(), n_cables, ImVec4(1.0f, 0.65f, 0.25f, 1.0f), [&]{
+                draw_system_row(AV("cable_sim").c_str(), n_cables, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::CableComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("talent_tree").c_str(), n_talents, ImVec4(0.95f, 0.45f, 0.75f, 1.0f), [&]{
+                draw_system_row(AV("talent_tree").c_str(), n_talents, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::TalentComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("flow_field").c_str(), n_flow, ImVec4(0.20f, 0.85f, 0.50f, 1.0f), [&]{
+                draw_system_row(AV("flow_field").c_str(), n_flow, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::FlowFieldComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("rule_tile").c_str(), n_ruletiles, ImVec4(0.35f, 0.90f, 0.65f, 1.0f), [&]{
+                draw_system_row(AV("rule_tile").c_str(), n_ruletiles, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::RuleTileComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("inventory").c_str(), n_inv, ImVec4(0.70f, 0.50f, 0.95f, 1.0f), [&]{
+                draw_system_row(AV("inventory").c_str(), n_inv, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::InventoryComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("ragdoll").c_str(), n_rag, ImVec4(0.95f, 0.40f, 0.40f, 1.0f), [&]{
+                draw_system_row(AV("ragdoll").c_str(), n_rag, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::RagdollComponent>(e)) { app.selection().set_single(e); break; }
                 });
-                draw_system_row(AV("surface_audio").c_str(), n_saudio, ImVec4(1.0f, 0.75f, 0.45f, 1.0f), [&]{
+                draw_system_row(AV("surface_audio").c_str(), n_saudio, sys_col, [&]{
                     for (ecs::Entity e : w->all_entities()) if (w->has<runtime::SurfaceAudioComponent>(e)) { app.selection().set_single(e); break; }
                 });
             }
@@ -3776,50 +3757,54 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::Spacing();
             ImGui::TextDisabled("%s", AV("quick_add_component").c_str());
             {
-                auto attach_pill = [&](const char* label, bool has_it, ImU32 col, auto attach_fn) {
+                auto attach_pill = [&](const char* label, bool has_it, auto attach_fn) {
                     if (has_it) {
-                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 200));
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 255));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
                         std::string checked_label = "v " + std::string(label);
                         ImGui::Button(checked_label.c_str());
                     } else {
-                        ImGui::PushStyleColor(ImGuiCol_Button, col);
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(37, 99, 235, 180));
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(224, 238, 255, 255));
                         std::string add_label = "+ " + std::string(label);
                         if (ImGui::Button(add_label.c_str())) {
                             attach_fn();
                         }
                     }
-                    ImGui::PopStyleColor();
+                    ImGui::PopStyleColor(3);
                 };
 
-                attach_pill(AV("weather_system").c_str(), ic.weather_has, IM_COL32(14, 116, 144, 200), [&]{
+                attach_pill(AV("weather_system").c_str(), ic.weather_has, [&]{
                     std::string err; app.attach_weather(sel, err);
                 });
                 ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("cable_sim").c_str(), ic.cable_has, IM_COL32(180, 83, 9, 200), [&]{
+                attach_pill(AV("cable_sim").c_str(), ic.cable_has, [&]{
                     std::string err; app.attach_cable(sel, err);
                 });
                 ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("talent_tree").c_str(), ic.talent_has, IM_COL32(190, 24, 93, 200), [&]{
+                attach_pill(AV("talent_tree").c_str(), ic.talent_has, [&]{
                     std::string err; app.attach_talent_tree(sel, err);
                 });
                 ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("flow_field").c_str(), ic.flow_has, IM_COL32(21, 128, 61, 200), [&]{
+                attach_pill(AV("flow_field").c_str(), ic.flow_has, [&]{
                     std::string err; app.attach_flow_field(sel, err);
                 });
 
-                attach_pill(AV("rule_tile").c_str(), ic.rule_tile_has, IM_COL32(4, 120, 87, 200), [&]{
+                attach_pill(AV("rule_tile").c_str(), ic.rule_tile_has, [&]{
                     std::string err; app.attach_rule_tile(sel, err);
                 });
                 ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("ragdoll").c_str(), ic.ragdoll_has, IM_COL32(185, 28, 28, 200), [&]{
+                attach_pill(AV("ragdoll").c_str(), ic.ragdoll_has, [&]{
                     std::string err; app.attach_ragdoll(sel, err);
                 });
                 ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("inventory").c_str(), ic.inv_has, IM_COL32(109, 40, 217, 200), [&]{
+                attach_pill(AV("inventory").c_str(), ic.inv_has, [&]{
                     std::string err; app.attach_inventory(sel, err);
                 });
                 ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("surface_audio").c_str(), ic.sa_has, IM_COL32(146, 64, 14, 200), [&]{
+                attach_pill(AV("surface_audio").c_str(), ic.sa_has, [&]{
                     std::string err; app.attach_surface_audio(sel, err);
                 });
             }
