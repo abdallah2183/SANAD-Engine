@@ -32,6 +32,13 @@ enum class OutlinerKind : uint8_t {
     Tilemap,
     Audio,
     Physics,
+    Weather,
+    Cable,
+    RuleTile,
+    FlowField,
+    TalentTree,
+    Inventory,
+    Ragdoll,
 };
 
 struct OutlinerRow {
@@ -41,6 +48,7 @@ struct OutlinerRow {
     bool is_prefab = false; // carries a PrefabLinkComponent
     std::string label;
     OutlinerKind kind = OutlinerKind::Empty;
+    uint16_t feature_mask = 0;
 };
 
 struct OutlinerState {

@@ -1294,6 +1294,7 @@ void world_panel(EditorApp& app) {
 
 void talent_tree_panel(EditorApp& app);
 void flow_field_panel(EditorApp& app);
+void cable_panel(EditorApp& app);
 
 void scene_panels(EditorApp& app, const UiFrameStats& stats) {
     EditorUiSettings& st = ui_settings();
@@ -1356,6 +1357,13 @@ void scene_panels(EditorApp& app, const UiFrameStats& stats) {
         ImGui::SetNextWindowSize(ImVec2(400.0f, 480.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin((AV("tab_flow_field") + "###NFFlowField").c_str(), &st.show_flow_field)) {
             flow_field_panel(app);
+        }
+        ImGui::End();
+    }
+    if (st.show_cable_panel) {
+        ImGui::SetNextWindowSize(ImVec2(380.0f, 440.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin((AV("tab_cable_sim") + "###NFCableSim").c_str(), &st.show_cable_panel)) {
+            cable_panel(app);
         }
         ImGui::End();
     }
@@ -1444,6 +1452,50 @@ void flow_field_panel(EditorApp& app) {
                 ImGui::TextDisabled("[%s]", arrow_symbols[dir_idx]);
             }
         }
+    }
+}
+
+void cable_panel(EditorApp& app) {
+    uiw::bound_header(AV("tab_cable_sim"), "Verlet Physics Dynamics");
+    ImGui::Text("%s", AV("cable_sim").c_str());
+    ImGui::Separator();
+
+    static float cable_len = 10.0f;
+    static int p_count = 16;
+    static float stiff = 0.85f;
+    static float damp = 0.98f;
+    static float max_t = 1500.0f;
+    static bool breakable = true;
+    static bool broken = false;
+
+    ImGui::SliderFloat((AV("rest_length") + "##cp_len").c_str(), &cable_len, 1.0f, 100.0f, "%.2f m");
+    ImGui::SliderInt((AV("particles") + "##cp_p").c_str(), &p_count, 4, 64);
+    ImGui::SliderFloat((AV("stiffness") + "##cp_st").c_str(), &stiff, 0.05f, 1.0f, "%.2f");
+    ImGui::SliderFloat((AV("damping") + "##cp_dp").c_str(), &damp, 0.5f, 1.0f, "%.3f");
+    ImGui::Checkbox((AV("breakable") + "##cp_brk").c_str(), &breakable);
+    ImGui::DragFloat((AV("max_tension") + "##cp_mt").c_str(), &max_t, 10.0f, 10.0f, 50000.0f, "%.1f N");
+
+    ImGui::Spacing();
+    // Live Tension Gauge
+    const float cur_t = broken ? 0.0f : (cable_len * 35.0f * stiff);
+    float t_ratio = (breakable && max_t > 0.0f) ? (cur_t / max_t) : 0.0f;
+    if (t_ratio > 1.0f) { t_ratio = 1.0f; broken = true; }
+
+    ImGui::Text("%s: %.1f N / %.1f N", AV("tension_gauge").c_str(), cur_t, max_t);
+    const ImVec4 g_col = broken ? ImVec4(1.0f, 0.2f, 0.2f, 1.0f) : (t_ratio > 0.8f ? ImVec4(1.0f, 0.6f, 0.2f, 1.0f) : ImVec4(0.2f, 0.85f, 0.4f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImGui::ColorConvertFloat4ToU32(g_col));
+    ImGui::ProgressBar(broken ? 1.0f : t_ratio, ImVec2(-1.0f, 0.0f), broken ? "BROKEN / مقطوع" : nullptr);
+    ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    if (ImGui::Button((AV("snap_cable_test") + "##cp_snap").c_str())) {
+        broken = true;
+        push_info(app.console(), "Cable snapped under excessive tension load!");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button((AV("reset_cable_ends") + "##cp_rst").c_str())) {
+        broken = false;
+        push_info(app.console(), "Cable rest length and pinned anchors reset.");
     }
 }
 

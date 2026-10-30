@@ -86,8 +86,32 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
         // Type glyph: most specific first, so an entity that is both a camera
         // and a mesh still reads as a camera in the tree.
         OutlinerKind kind = OutlinerKind::Empty;
+        uint16_t mask = 0;
+        if (world.has<runtime::WeatherComponent>(f.e)) { mask |= (1 << 0); }
+        if (world.has<runtime::CableComponent>(f.e)) { mask |= (1 << 1); }
+        if (world.has<runtime::RuleTileComponent>(f.e)) { mask |= (1 << 2); }
+        if (world.has<runtime::FlowFieldComponent>(f.e)) { mask |= (1 << 3); }
+        if (world.has<runtime::TalentComponent>(f.e)) { mask |= (1 << 4); }
+        if (world.has<runtime::InventoryComponent>(f.e)) { mask |= (1 << 5); }
+        if (world.has<runtime::RagdollComponent>(f.e)) { mask |= (1 << 6); }
+        if (world.has<runtime::SurfaceAudioComponent>(f.e)) { mask |= (1 << 7); }
+
         if (world.has<runtime::CameraComponent>(f.e)) {
             kind = OutlinerKind::Camera;
+        } else if (world.has<runtime::WeatherComponent>(f.e)) {
+            kind = OutlinerKind::Weather;
+        } else if (world.has<runtime::CableComponent>(f.e)) {
+            kind = OutlinerKind::Cable;
+        } else if (world.has<runtime::RuleTileComponent>(f.e)) {
+            kind = OutlinerKind::RuleTile;
+        } else if (world.has<runtime::FlowFieldComponent>(f.e)) {
+            kind = OutlinerKind::FlowField;
+        } else if (world.has<runtime::TalentComponent>(f.e)) {
+            kind = OutlinerKind::TalentTree;
+        } else if (world.has<runtime::InventoryComponent>(f.e)) {
+            kind = OutlinerKind::Inventory;
+        } else if (world.has<runtime::RagdollComponent>(f.e)) {
+            kind = OutlinerKind::Ragdoll;
         } else if (world.has<runtime::DirectionalLight>(f.e) ||
                    world.has<runtime::PointLightComponent>(f.e) ||
                    world.has<runtime::SpotLightComponent>(f.e)) {
@@ -108,7 +132,7 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
         }
         rows.push_back(OutlinerRow{f.e, f.depth, has_children,
                                   world.has<scene::PrefabLinkComponent>(f.e),
-                                  entity_label(world, f.e), kind});
+                                  entity_label(world, f.e), kind, mask});
         if (has_children && state.is_expanded(f.e)) {
             for (auto it = cit->second.rbegin(); it != cit->second.rend(); ++it) {
                 stack.push_back(Frame{*it, f.depth + 1});

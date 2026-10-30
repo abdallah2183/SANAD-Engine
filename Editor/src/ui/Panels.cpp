@@ -1029,6 +1029,20 @@ ImVec4 outliner_kind_color(OutlinerKind kind) {
             return ImVec4(0.85f, 0.55f, 1.00f, 1.0f); // rich violet
         case OutlinerKind::Physics:
             return ImVec4(1.00f, 0.60f, 0.35f, 1.0f); // sunset orange
+        case OutlinerKind::Weather:
+            return ImVec4(0.35f, 0.75f, 1.00f, 1.0f); // vibrant sky blue
+        case OutlinerKind::Cable:
+            return ImVec4(1.00f, 0.65f, 0.25f, 1.0f); // warm cable amber
+        case OutlinerKind::RuleTile:
+            return ImVec4(0.35f, 0.90f, 0.65f, 1.0f); // vibrant mint
+        case OutlinerKind::FlowField:
+            return ImVec4(0.20f, 0.85f, 0.50f, 1.0f); // emerald green
+        case OutlinerKind::TalentTree:
+            return ImVec4(0.95f, 0.45f, 0.75f, 1.0f); // talent pink
+        case OutlinerKind::Inventory:
+            return ImVec4(0.70f, 0.50f, 0.95f, 1.0f); // inventory purple
+        case OutlinerKind::Ragdoll:
+            return ImVec4(0.95f, 0.40f, 0.40f, 1.0f); // physics coral
         case OutlinerKind::Mesh:
         case OutlinerKind::Empty:
         default:
@@ -1172,6 +1186,68 @@ void outliner_kind_icon(ImDrawList* dl, ImVec2 c, float s, OutlinerKind kind) {
             dl->AddQuadFilled(ctop, r, m, l, top);
             dl->AddQuadFilled(l, m, b, bl, left);
             dl->AddQuadFilled(m, r, br, b, right);
+            break;
+        }
+        case OutlinerKind::Weather: {
+            const ImU32 sun_col = IM_COL32(255, 200, 60, 255);
+            const ImU32 cld_col = IM_COL32(190, 220, 255, 255);
+            dl->AddCircleFilled(ImVec2(c.x + h * 0.3f, c.y - h * 0.3f), h * 0.45f, sun_col, 10);
+            dl->AddCircleFilled(ImVec2(c.x - h * 0.25f, c.y + h * 0.2f), h * 0.38f, cld_col, 10);
+            dl->AddCircleFilled(ImVec2(c.x + h * 0.2f, c.y + h * 0.2f), h * 0.45f, cld_col, 10);
+            dl->AddRectFilled(ImVec2(c.x - h * 0.25f, c.y), ImVec2(c.x + h * 0.2f, c.y + h * 0.5f), cld_col);
+            break;
+        }
+        case OutlinerKind::Cable: {
+            const ImU32 cab_col = IM_COL32(255, 170, 70, 255);
+            const ImVec2 p1(c.x - h * 0.85f, c.y - h * 0.5f);
+            const ImVec2 p2(c.x - h * 0.3f, c.y + h * 0.65f);
+            const ImVec2 p3(c.x + h * 0.3f, c.y + h * 0.65f);
+            const ImVec2 p4(c.x + h * 0.85f, c.y - h * 0.5f);
+            dl->AddBezierCubic(p1, p2, p3, p4, cab_col, t * 1.3f);
+            dl->AddCircleFilled(p1, t * 0.9f, cab_col, 6);
+            dl->AddCircleFilled(p4, t * 0.9f, cab_col, 6);
+            break;
+        }
+        case OutlinerKind::RuleTile: {
+            const ImU32 t1 = IM_COL32(80, 220, 160, 255);
+            const ImU32 t2 = IM_COL32(30, 140, 95, 255);
+            const float q = h * 0.7f;
+            dl->AddRectFilled(ImVec2(c.x - q, c.y - q), ImVec2(c.x, c.y), t1, 1.0f);
+            dl->AddRectFilled(ImVec2(c.x, c.y - q), ImVec2(c.x + q, c.y), t2, 1.0f);
+            dl->AddRectFilled(ImVec2(c.x - q, c.y), ImVec2(c.x, c.y + q), t2, 1.0f);
+            dl->AddRectFilled(ImVec2(c.x, c.y), ImVec2(c.x + q, c.y + q), t1, 1.0f);
+            break;
+        }
+        case OutlinerKind::FlowField: {
+            const ImU32 fl_col = IM_COL32(50, 220, 130, 255);
+            dl->AddLine(ImVec2(c.x - h * 0.7f, c.y - h * 0.3f), ImVec2(c.x + h * 0.6f, c.y - h * 0.3f), fl_col, t);
+            dl->AddTriangleFilled(ImVec2(c.x + h * 0.85f, c.y - h * 0.3f), ImVec2(c.x + h * 0.35f, c.y - h * 0.6f), ImVec2(c.x + h * 0.35f, c.y), fl_col);
+            dl->AddLine(ImVec2(c.x - h * 0.7f, c.y + h * 0.35f), ImVec2(c.x + h * 0.6f, c.y + h * 0.35f), fl_col, t);
+            dl->AddTriangleFilled(ImVec2(c.x + h * 0.85f, c.y + h * 0.35f), ImVec2(c.x + h * 0.35f, c.y + h * 0.05f), ImVec2(c.x + h * 0.35f, c.y + h * 0.65f), fl_col);
+            break;
+        }
+        case OutlinerKind::TalentTree: {
+            const ImU32 tal_col = IM_COL32(245, 120, 190, 255);
+            const float r = h * 0.85f;
+            dl->AddTriangleFilled(ImVec2(c.x, c.y - r), ImVec2(c.x - r * 0.3f, c.y), ImVec2(c.x + r * 0.3f, c.y), tal_col);
+            dl->AddTriangleFilled(ImVec2(c.x, c.y + r), ImVec2(c.x - r * 0.3f, c.y), ImVec2(c.x + r * 0.3f, c.y), tal_col);
+            dl->AddTriangleFilled(ImVec2(c.x - r, c.y), ImVec2(c.x, c.y - r * 0.3f), ImVec2(c.x, c.y + r * 0.3f), tal_col);
+            dl->AddTriangleFilled(ImVec2(c.x + r, c.y), ImVec2(c.x, c.y - r * 0.3f), ImVec2(c.x, c.y + r * 0.3f), tal_col);
+            break;
+        }
+        case OutlinerKind::Inventory: {
+            const ImU32 inv_col = IM_COL32(180, 130, 245, 255);
+            dl->AddRectFilled(ImVec2(c.x - h * 0.7f, c.y - h * 0.5f), ImVec2(c.x + h * 0.7f, c.y + h * 0.75f), inv_col, 2.0f);
+            dl->AddRect(ImVec2(c.x - h * 0.4f, c.y - h * 0.85f), ImVec2(c.x + h * 0.4f, c.y - h * 0.5f), inv_col, 1.0f);
+            break;
+        }
+        case OutlinerKind::Ragdoll: {
+            const ImU32 rag_col = IM_COL32(245, 100, 100, 255);
+            dl->AddCircleFilled(ImVec2(c.x, c.y - h * 0.55f), h * 0.28f, rag_col, 8);
+            dl->AddLine(ImVec2(c.x, c.y - h * 0.25f), ImVec2(c.x, c.y + h * 0.25f), rag_col, t);
+            dl->AddLine(ImVec2(c.x - h * 0.55f, c.y - h * 0.1f), ImVec2(c.x + h * 0.55f, c.y - h * 0.1f), rag_col, t);
+            dl->AddLine(ImVec2(c.x, c.y + h * 0.25f), ImVec2(c.x - h * 0.5f, c.y + h * 0.8f), rag_col, t);
+            dl->AddLine(ImVec2(c.x, c.y + h * 0.25f), ImVec2(c.x + h * 0.5f, c.y + h * 0.8f), rag_col, t);
             break;
         }
         case OutlinerKind::Empty:
@@ -1601,16 +1677,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::DockBuilderDockWindow("World", dock_left_top);
             ImGui::DockBuilderDockWindow("Viewport", dock_center);
             ImGui::DockBuilderDockWindow("Inspector", dock_right);
-            // The dedicated editors dock as tabs beside the Inspector: same
-            // column, one click apart, each a whole panel for one engine
-            // function rather than one more section of the generic inspector.
-            ImGui::DockBuilderDockWindow("NFCameraPanel", dock_right);
-            ImGui::DockBuilderDockWindow("NFLighting", dock_right);
             ImGui::DockBuilderDockWindow("NFEnvironment", dock_right);
             ImGui::DockBuilderDockWindow("NFTalentTree", dock_right);
-            ImGui::DockBuilderDockWindow("NFFlowField", dock_right);
+            ImGui::DockBuilderDockWindow("NFCameraPanel", dock_right);
+            ImGui::DockBuilderDockWindow("NFLighting", dock_right);
             ImGui::DockBuilderDockWindow("Console", dock_bottom);
             ImGui::DockBuilderDockWindow("NFRender", dock_bottom);
+            ImGui::DockBuilderDockWindow("NFFlowField", dock_bottom);
+            ImGui::DockBuilderDockWindow("NFCableSim", dock_bottom);
                 ImGui::DockBuilderFinish(dockspace_id);
                 // DockBuilderFinish does NOT mark the ini settings dirty (it
                 // only re-docks the windows into the new nodes), so a default
@@ -1819,6 +1893,40 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                      sizeof(outliner_filter))) {
             app.outliner().filter_text = outliner_filter;
         }
+
+        // 1-Click Feature Quick-Spawn Bar
+        {
+            auto quick_spawn_pill = [&](const char* label, const char* tip, ImU32 bg, auto action) {
+                ImGui::PushStyleColor(ImGuiCol_Button, bg);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 80, 105, 255));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 2.0f));
+                if (ImGui::Button(label)) {
+                    action();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tip);
+                }
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(2);
+            };
+            quick_spawn_pill(("+ " + AV("filter_weather")).c_str(), "Create Atmospheric Weather entity", IM_COL32(14, 116, 144, 220), [&]{
+                std::string err; app.create_weather(ecs::kInvalidEntity, err);
+            });
+            ImGui::SameLine(0.0f, 3.0f);
+            quick_spawn_pill(("+ " + AV("filter_cable")).c_str(), "Create Cable Simulation entity", IM_COL32(180, 83, 9, 220), [&]{
+                std::string err; app.create_cable(ecs::kInvalidEntity, err);
+            });
+            ImGui::SameLine(0.0f, 3.0f);
+            quick_spawn_pill(("+ " + AV("filter_talents")).c_str(), "Create Talent Progression Tree", IM_COL32(190, 24, 93, 220), [&]{
+                std::string err; app.create_talent_tree(ecs::kInvalidEntity, err);
+            });
+            ImGui::SameLine(0.0f, 3.0f);
+            quick_spawn_pill(("+ " + AV("filter_nav")).c_str(), "Create Flow Field Navigation Grid", IM_COL32(21, 128, 61, 220), [&]{
+                std::string err; app.create_flow_field(ecs::kInvalidEntity, err);
+            });
+        }
+
         static int s_outliner_cat = 0;
         {
             auto draw_cat_pill = [&](const char* label, int cat_idx, ImU32 active_color) {
@@ -1851,6 +1959,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             draw_cat_pill(AV("filter_audio").c_str(), 4, IM_COL32(168, 85, 247, 220));
             ImGui::SameLine(0.0f, 4.0f);
             draw_cat_pill(AV("filter_physics").c_str(), 5, IM_COL32(249, 115, 22, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_weather").c_str(), 6, IM_COL32(56, 189, 248, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_cable").c_str(), 7, IM_COL32(251, 146, 60, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_nav").c_str(), 8, IM_COL32(34, 197, 94, 220));
+            ImGui::SameLine(0.0f, 4.0f);
+            draw_cat_pill(AV("filter_talents").c_str(), 9, IM_COL32(236, 72, 153, 220));
         }
         // Live census: total entities plus selection size, so an empty-looking
         // tree still answers "is the scene really empty".
@@ -1871,10 +1987,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             for (const OutlinerRow& r : rows) {
                 bool keep = false;
                 if (s_outliner_cat == 1) keep = (r.kind == OutlinerKind::Mesh);
-                else if (s_outliner_cat == 2) keep = (r.kind == OutlinerKind::Sprite2D || r.kind == OutlinerKind::Tilemap);
+                else if (s_outliner_cat == 2) keep = (r.kind == OutlinerKind::Sprite2D || r.kind == OutlinerKind::Tilemap || r.kind == OutlinerKind::RuleTile);
                 else if (s_outliner_cat == 3) keep = (r.kind == OutlinerKind::Light || r.kind == OutlinerKind::Sky);
-                else if (s_outliner_cat == 4) keep = (r.kind == OutlinerKind::Audio);
-                else if (s_outliner_cat == 5) keep = (r.kind == OutlinerKind::Physics);
+                else if (s_outliner_cat == 4) keep = (r.kind == OutlinerKind::Audio || (r.feature_mask & (1 << 7)));
+                else if (s_outliner_cat == 5) keep = (r.kind == OutlinerKind::Physics || r.kind == OutlinerKind::Cable || r.kind == OutlinerKind::Ragdoll);
+                else if (s_outliner_cat == 6) keep = (r.kind == OutlinerKind::Weather || (r.feature_mask & (1 << 0)));
+                else if (s_outliner_cat == 7) keep = (r.kind == OutlinerKind::Cable || (r.feature_mask & (1 << 1)));
+                else if (s_outliner_cat == 8) keep = (r.kind == OutlinerKind::FlowField || (r.feature_mask & (1 << 3)));
+                else if (s_outliner_cat == 9) keep = (r.kind == OutlinerKind::TalentTree || (r.feature_mask & (1 << 4)));
                 if (keep) {
                     OutlinerRow flat = r;
                     flat.depth = 0;
@@ -1954,6 +2074,31 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 } else {
                     outliner_kind_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz,
                                        row.kind);
+                }
+
+                // Feature badge chips on the right side of the row
+                if (row.feature_mask != 0) {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    float bx = rmax.x - 6.0f;
+                    const float by = (rmin.y + rmax.y) * 0.5f;
+                    auto draw_chip = [&](const char* tag, ImU32 bg, ImU32 fg) {
+                        const std::string shaped = ui::shape_arabic(tag);
+                        const ImVec2 tsz = ImGui::CalcTextSize(shaped.c_str());
+                        const float cw = tsz.x + 8.0f;
+                        const float ch = 14.0f;
+                        bx -= cw;
+                        dl->AddRectFilled(ImVec2(bx, by - ch * 0.5f), ImVec2(bx + cw, by + ch * 0.5f), bg, 3.0f);
+                        dl->AddText(ImVec2(bx + 4.0f, by - tsz.y * 0.5f), fg, shaped.c_str());
+                        bx -= 4.0f;
+                    };
+                    if (row.feature_mask & (1 << 0)) draw_chip(AV("filter_weather").c_str(), IM_COL32(14, 116, 144, 200), IM_COL32(224, 242, 254, 255));
+                    if (row.feature_mask & (1 << 1)) draw_chip(AV("filter_cable").c_str(), IM_COL32(180, 83, 9, 200), IM_COL32(254, 243, 199, 255));
+                    if (row.feature_mask & (1 << 2)) draw_chip(AV("rule_tile").c_str(), IM_COL32(4, 120, 87, 200), IM_COL32(209, 250, 229, 255));
+                    if (row.feature_mask & (1 << 3)) draw_chip(AV("filter_nav").c_str(), IM_COL32(21, 128, 61, 200), IM_COL32(220, 252, 231, 255));
+                    if (row.feature_mask & (1 << 4)) draw_chip(AV("filter_talents").c_str(), IM_COL32(190, 24, 93, 200), IM_COL32(253, 231, 243, 255));
+                    if (row.feature_mask & (1 << 5)) draw_chip(AV("inventory").c_str(), IM_COL32(109, 40, 217, 200), IM_COL32(237, 233, 254, 255));
+                    if (row.feature_mask & (1 << 6)) draw_chip(AV("ragdoll").c_str(), IM_COL32(185, 28, 28, 200), IM_COL32(254, 226, 226, 255));
+                    if (row.feature_mask & (1 << 7)) draw_chip(AV("surface_audio").c_str(), IM_COL32(146, 64, 14, 200), IM_COL32(254, 243, 199, 255));
                 }
             }
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
@@ -2454,6 +2599,48 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             ImGui::PopStyleVar(3);
         }
 
+        // Live Atmospheric Weather & Systems HUD
+        {
+            const runtime::WeatherComponent* scene_weather = nullptr;
+            int cable_count = 0;
+            if (app.world() != nullptr) {
+                for (ecs::Entity e : app.world()->all_entities()) {
+                    if (const auto* wc = app.world()->get<runtime::WeatherComponent>(e)) {
+                        scene_weather = wc;
+                    }
+                    if (app.world()->has<runtime::CableComponent>(e)) {
+                        cable_count++;
+                    }
+                }
+            }
+            if (scene_weather != nullptr || cable_count > 0) {
+                const ImVec2 img_mn = vp_img_min;
+                ImGui::SetNextWindowPos(ImVec2(img_mn.x + 10.0f, img_mn.y + 10.0f), ImGuiCond_Always);
+                ImGui::SetNextWindowBgAlpha(0.78f);
+                if (ImGui::Begin("##viewport_weather_hud", nullptr,
+                                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
+                    if (scene_weather != nullptr) {
+                        const std::string preset_names[7] = {
+                            AV("weather_clear"), AV("weather_cloudy"),
+                            AV("weather_overcast"), AV("weather_rain"),
+                            AV("weather_thunderstorm"), AV("weather_foggy"),
+                            AV("weather_snow")
+                        };
+                        const int p_idx = (scene_weather->weather_type >= 0 && scene_weather->weather_type < 7) ? scene_weather->weather_type : 0;
+                        ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s: %s", AV("weather_hud").c_str(), preset_names[p_idx].c_str());
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| %s: %.3f | %s: %.1f m/s", AV("fog_density").c_str(), scene_weather->fog_density, AV("wind_speed").c_str(), scene_weather->wind_strength);
+                    }
+                    if (cable_count > 0) {
+                        if (scene_weather != nullptr) ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.30f, 1.0f), "| %s: %d", AV("cable_sim").c_str(), cable_count);
+                    }
+                    ImGui::End();
+                }
+            }
+        }
+
         // Live simulation overlay: what the frame actually stepped, for the
         // "is anything running" glance. Positioned below the floating HUD.
         if (app.runtime() != nullptr && ui_settings().show_viewport_stats) {
@@ -2650,7 +2837,188 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         ecs::World* w = app.world();
         const ecs::Entity sel = app.selection().primary();
         if (w == nullptr || !sel.valid() || !w->is_alive(sel)) {
-            ImGui::TextDisabled("%s", AV("nothing_selected").c_str());
+            // Dashboard header
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s", AV("scene_hub_title").c_str());
+            ImGui::TextDisabled("Scene Environment & Quick Setup");
+
+            const std::string scene_name = app.scene_path().empty() ? AV("untitled_scene") : std::filesystem::path(app.scene_path()).filename().string();
+            ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "%s", scene_name.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("| %s", AVF("stats_entities", app.status().entity_count).c_str());
+            ImGui::Separator();
+
+            // 1. Quick Atmospheric Weather Controller
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s", AV("quick_weather_title").c_str());
+            ImGui::TextDisabled("%s", AV("quick_weather_hint").c_str());
+
+            static int quick_weather_preset = 0;
+            static float quick_fog_density = 0.02f;
+            static float quick_wetness = 0.0f;
+            static float quick_wind_spd = 5.0f;
+
+            runtime::WeatherComponent* current_wc = nullptr;
+            if (w != nullptr) {
+                for (ecs::Entity e : w->all_entities()) {
+                    if (auto* wc = w->get<runtime::WeatherComponent>(e)) {
+                        current_wc = wc;
+                        quick_weather_preset = wc->weather_type;
+                        quick_fog_density = wc->fog_density;
+                        quick_wetness = wc->ground_wetness;
+                        quick_wind_spd = wc->wind_strength;
+                        break;
+                    }
+                }
+            }
+
+            auto weather_pill = [&](const char* name, int preset, ImU32 col) {
+                const bool active = (quick_weather_preset == preset);
+                if (active) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, col);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(38, 44, 56, 200));
+                }
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                if (ImGui::Button(name)) {
+                    quick_weather_preset = preset;
+                    if (current_wc != nullptr) {
+                        current_wc->weather_type = preset;
+                    } else {
+                        std::string err;
+                        app.create_weather(ecs::kInvalidEntity, err);
+                        if (app.world() != nullptr && app.selection().has_selection()) {
+                            if (auto* nw = app.world()->get<runtime::WeatherComponent>(app.selection().primary())) {
+                                nw->weather_type = preset;
+                            }
+                        }
+                    }
+                }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+            };
+
+            weather_pill(AV("weather_clear").c_str(), 0, IM_COL32(234, 179, 8, 255));
+            ImGui::SameLine(0.0f, 4.0f);
+            weather_pill(AV("weather_cloudy").c_str(), 1, IM_COL32(59, 130, 246, 255));
+            ImGui::SameLine(0.0f, 4.0f);
+            weather_pill(AV("weather_overcast").c_str(), 2, IM_COL32(100, 116, 139, 255));
+            ImGui::SameLine(0.0f, 4.0f);
+            weather_pill(AV("weather_rain").c_str(), 3, IM_COL32(6, 182, 212, 255));
+
+            weather_pill(AV("weather_thunderstorm").c_str(), 4, IM_COL32(139, 92, 246, 255));
+            ImGui::SameLine(0.0f, 4.0f);
+            weather_pill(AV("weather_foggy").c_str(), 5, IM_COL32(148, 163, 184, 255));
+            ImGui::SameLine(0.0f, 4.0f);
+            weather_pill(AV("weather_snow").c_str(), 6, IM_COL32(224, 231, 255, 255));
+
+            if (ImGui::SliderFloat((AV("fog_density") + "##qfd").c_str(), &quick_fog_density, 0.0f, 0.1f, "%.4f")) {
+                if (current_wc != nullptr) current_wc->fog_density = quick_fog_density;
+            }
+            if (ImGui::SliderFloat((AV("ground_wetness") + "##qgw").c_str(), &quick_wetness, 0.0f, 1.0f, "%.2f")) {
+                if (current_wc != nullptr) current_wc->ground_wetness = quick_wetness;
+            }
+            if (ImGui::SliderFloat((AV("wind_speed") + "##qws").c_str(), &quick_wind_spd, 0.0f, 50.0f, "%.1f m/s")) {
+                if (current_wc != nullptr) current_wc->wind_strength = quick_wind_spd;
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            // 2. Quick Create Advanced Systems
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.60f, 1.0f), "%s", AV("quick_create_title").c_str());
+
+            auto quick_spawn_button = [&](const char* label, const char* desc, ImU32 col, auto fn) {
+                ImGui::PushStyleColor(ImGuiCol_Button, col);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 80, 105, 255));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+                if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) {
+                    fn();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", desc);
+                }
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(2);
+                ImGui::Spacing();
+            };
+
+            quick_spawn_button(("+ " + AV("add_weather")).c_str(), "Atmospheric Weather, Height Fog, Wetness & Wind", IM_COL32(14, 116, 144, 200), [&]{
+                std::string err; app.create_weather(ecs::kInvalidEntity, err);
+            });
+            quick_spawn_button(("+ " + AV("add_cable")).c_str(), "Verlet Physics Cable with Tension & Breakable Dynamics", IM_COL32(180, 83, 9, 200), [&]{
+                std::string err; app.create_cable(ecs::kInvalidEntity, err);
+            });
+            quick_spawn_button(("+ " + AV("add_talent_tree")).c_str(), "Skill & Talent Progression Graph with Tiers & Gates", IM_COL32(190, 24, 93, 200), [&]{
+                std::string err; app.create_talent_tree(ecs::kInvalidEntity, err);
+            });
+            quick_spawn_button(("+ " + AV("add_flow_field")).c_str(), "Crowd Flow Field Grid for Massive Scale AI Navigation", IM_COL32(21, 128, 61, 200), [&]{
+                std::string err; app.create_flow_field(ecs::kInvalidEntity, err);
+            });
+            quick_spawn_button(("+ " + AV("add_rule_tile")).c_str(), "2D 8-Neighbor Rule Tile Autotiling Map", IM_COL32(4, 120, 87, 200), [&]{
+                std::string err; app.create_rule_tile(ecs::kInvalidEntity, err);
+            });
+
+            ImGui::Separator();
+
+            // 3. Active Advanced Systems Census
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.85f, 0.70f, 1.0f, 1.0f), "%s", AV("active_systems_census").c_str());
+
+            int n_weather = 0, n_cables = 0, n_talents = 0, n_flow = 0, n_ruletiles = 0, n_inv = 0, n_rag = 0, n_saudio = 0;
+            if (w != nullptr) {
+                for (ecs::Entity e : w->all_entities()) {
+                    if (w->has<runtime::WeatherComponent>(e)) n_weather++;
+                    if (w->has<runtime::CableComponent>(e)) n_cables++;
+                    if (w->has<runtime::TalentComponent>(e)) n_talents++;
+                    if (w->has<runtime::FlowFieldComponent>(e)) n_flow++;
+                    if (w->has<runtime::RuleTileComponent>(e)) n_ruletiles++;
+                    if (w->has<runtime::InventoryComponent>(e)) n_inv++;
+                    if (w->has<runtime::RagdollComponent>(e)) n_rag++;
+                    if (w->has<runtime::SurfaceAudioComponent>(e)) n_saudio++;
+                }
+            }
+
+            auto draw_system_row = [&](const char* label, int count, ImVec4 col, auto select_fn) {
+                if (count <= 0) return;
+                ImGui::Bullet();
+                ImGui::TextColored(col, "%s: %d", label, count);
+                ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+                if (ImGui::SmallButton((AV("select") + "##" + label).c_str())) {
+                    select_fn();
+                }
+            };
+
+            if (n_weather + n_cables + n_talents + n_flow + n_ruletiles + n_inv + n_rag + n_saudio == 0) {
+                ImGui::TextDisabled("%s", AV("no_active_systems").c_str());
+            } else {
+                draw_system_row(AV("weather_system").c_str(), n_weather, ImVec4(0.35f, 0.75f, 1.0f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::WeatherComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("cable_sim").c_str(), n_cables, ImVec4(1.0f, 0.65f, 0.25f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::CableComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("talent_tree").c_str(), n_talents, ImVec4(0.95f, 0.45f, 0.75f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::TalentComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("flow_field").c_str(), n_flow, ImVec4(0.20f, 0.85f, 0.50f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::FlowFieldComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("rule_tile").c_str(), n_ruletiles, ImVec4(0.35f, 0.90f, 0.65f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::RuleTileComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("inventory").c_str(), n_inv, ImVec4(0.70f, 0.50f, 0.95f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::InventoryComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("ragdoll").c_str(), n_rag, ImVec4(0.95f, 0.40f, 0.40f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::RagdollComponent>(e)) { app.selection().set_single(e); break; }
+                });
+                draw_system_row(AV("surface_audio").c_str(), n_saudio, ImVec4(1.0f, 0.75f, 0.45f, 1.0f), [&]{
+                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::SurfaceAudioComponent>(e)) { app.selection().set_single(e); break; }
+                });
+            }
         } else {
             // Identity line: the stable Entity id + generation (what undo,
             // logs and the outliner's ###e<id> all key on).
@@ -3403,6 +3771,61 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
                 ImGui::EndPopup();
             }
+
+            // Quick-Add Component Bar
+            ImGui::Spacing();
+            ImGui::TextDisabled("%s", AV("quick_add_component").c_str());
+            {
+                auto attach_pill = [&](const char* label, bool has_it, ImU32 col, auto attach_fn) {
+                    if (has_it) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(16, 185, 129, 200));
+                        std::string checked_label = "v " + std::string(label);
+                        ImGui::Button(checked_label.c_str());
+                    } else {
+                        ImGui::PushStyleColor(ImGuiCol_Button, col);
+                        std::string add_label = "+ " + std::string(label);
+                        if (ImGui::Button(add_label.c_str())) {
+                            attach_fn();
+                        }
+                    }
+                    ImGui::PopStyleColor();
+                };
+
+                attach_pill(AV("weather_system").c_str(), ic.weather_has, IM_COL32(14, 116, 144, 200), [&]{
+                    std::string err; app.attach_weather(sel, err);
+                });
+                ImGui::SameLine(0.0f, 4.0f);
+                attach_pill(AV("cable_sim").c_str(), ic.cable_has, IM_COL32(180, 83, 9, 200), [&]{
+                    std::string err; app.attach_cable(sel, err);
+                });
+                ImGui::SameLine(0.0f, 4.0f);
+                attach_pill(AV("talent_tree").c_str(), ic.talent_has, IM_COL32(190, 24, 93, 200), [&]{
+                    std::string err; app.attach_talent_tree(sel, err);
+                });
+                ImGui::SameLine(0.0f, 4.0f);
+                attach_pill(AV("flow_field").c_str(), ic.flow_has, IM_COL32(21, 128, 61, 200), [&]{
+                    std::string err; app.attach_flow_field(sel, err);
+                });
+
+                attach_pill(AV("rule_tile").c_str(), ic.rule_tile_has, IM_COL32(4, 120, 87, 200), [&]{
+                    std::string err; app.attach_rule_tile(sel, err);
+                });
+                ImGui::SameLine(0.0f, 4.0f);
+                attach_pill(AV("ragdoll").c_str(), ic.ragdoll_has, IM_COL32(185, 28, 28, 200), [&]{
+                    std::string err; app.attach_ragdoll(sel, err);
+                });
+                ImGui::SameLine(0.0f, 4.0f);
+                attach_pill(AV("inventory").c_str(), ic.inv_has, IM_COL32(109, 40, 217, 200), [&]{
+                    std::string err; app.attach_inventory(sel, err);
+                });
+                ImGui::SameLine(0.0f, 4.0f);
+                attach_pill(AV("surface_audio").c_str(), ic.sa_has, IM_COL32(146, 64, 14, 200), [&]{
+                    std::string err; app.attach_surface_audio(sel, err);
+                });
+            }
+            ImGui::Spacing();
+            ImGui::Separator();
+
             if (ImGui::CollapsingHeader((AV("name") + "###Name").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::SetNextItemWidth(-86.0f);
                 ImGui::InputText("##name", ic.name, sizeof(ic.name));

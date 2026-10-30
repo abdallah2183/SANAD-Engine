@@ -1139,8 +1139,10 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             // The rebinding window lives here because it is a VIEW on the
             // project's input table, not a scene object like the panels above.
             ImGui::MenuItem(AV("input_bindings").c_str(), nullptr, &st.show_input);
+            ImGui::MenuItem(AV("tab_environment").c_str(), nullptr, &st.show_environment);
             ImGui::MenuItem(AV("tab_talent_tree").c_str(), nullptr, &st.show_talent_tree);
             ImGui::MenuItem(AV("tab_flow_field").c_str(), nullptr, &st.show_flow_field);
+            ImGui::MenuItem(AV("tab_cable_sim").c_str(), nullptr, &st.show_cable_panel);
             ImGui::EndMenu();
         }
 
@@ -1359,6 +1361,30 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         create_primitive_button(app, "##tb_ground", Icon::Ground, PrimitiveKind::Ground, "add_ground", btn_sz);
         ImGui::SameLine();
         create_primitive_button(app, "##tb_cube", Icon::Cube, PrimitiveKind::Cube, "add_cube", btn_sz);
+
+        ImGui::SameLine(0.0f, 8.0f);
+        toolbar_divider(btn_sz);
+
+        // Advanced Systems & Tools Quick-Toggles
+        if (text_toolbar_button("##tb_env", AV("weather_system"), st.show_environment, btn_sz)) {
+            st.show_environment = !st.show_environment;
+        }
+        ImGui::SameLine();
+        if (text_toolbar_button("##tb_talent", AV("talent_tree"), st.show_talent_tree, btn_sz)) {
+            st.show_talent_tree = !st.show_talent_tree;
+        }
+        ImGui::SameLine();
+        if (text_toolbar_button("##tb_flow", AV("flow_field"), st.show_flow_field, btn_sz)) {
+            st.show_flow_field = !st.show_flow_field;
+        }
+        ImGui::SameLine();
+        if (text_toolbar_button("##tb_cable", AV("cable_sim"), st.show_cable_panel, btn_sz)) {
+            st.show_cable_panel = !st.show_cable_panel;
+        }
+        ImGui::SameLine();
+        if (text_toolbar_button("##tb_reset_layout", AV("reset_layout"), false, btn_sz)) {
+            st.reset_layout_requested = true;
+        }
 
         ImGui::SameLine(0.0f, 8.0f);
         toolbar_divider(btn_sz);

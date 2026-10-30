@@ -94,15 +94,16 @@ struct EditorUiSettings {
     // used to open floating over the viewport and Begin() had no close
     // button wired, so X could not dismiss them.
     bool show_lighting = false;
-    bool show_environment = false;
+    bool show_environment = true;
     bool show_camera_panel = false;
     bool show_render = true;
     bool show_world = false; // diagnostics: opened from the Window menu
     /// The rebinding window. Off by default like the others; opened from the
     /// View menu.
     bool show_input = false;
-    bool show_talent_tree = false;
-    bool show_flow_field = false;
+    bool show_talent_tree = true;
+    bool show_flow_field = true;
+    bool show_cable_panel = true;
 };
 
 EditorUiSettings& ui_settings();
