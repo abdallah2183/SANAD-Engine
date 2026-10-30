@@ -115,22 +115,53 @@ int select_cascade(float view_depth) {
 
 // --- Filtering --------------------------------------------------------------
 //
-// Fixed 9-tap Poisson disk, unit radius (scaled to kShadowFilterRadius texels
-// at the call site). Same tap count as the 3x3 grid it replaced — identical
-// ALU and texture cost — but the offsets are not a periodic lattice, so a
-// shadow edge stepping across the filter lands on different offset
-// combinations instead of repeating one grid phase. That repetition is what
-// showed up as stepped bands along every shadow edge.
-const vec2 kShadowTaps[9] = vec2[9](
-    vec2( 0.0000000,  0.0000000),
-    vec2( 0.5054701,  0.3288777),
-    vec2( 0.4147301, -0.5262884),
-    vec2(-0.4282048, -0.3955864),
-    vec2(-0.5349605,  0.4020852),
-    vec2( 0.9475536,  0.2156003),
-    vec2( 0.3655724,  0.9498603),
-    vec2(-0.4122908,  0.9846612),
-    vec2(-0.9664947, -0.2188046)
+// 16-tap golden-ratio Vogel disk distribution with per-fragment stochastic rotation
+// and receiver-plane slope tracking.
+// Mathematically optimal 2D low-discrepancy circular distribution.
+// Rotating the disk per-fragment via interleaved gradient noise (IGN) breaks up
+// discrete PCF banding steps into smooth, continuous, photorealistic soft penumbras.
+float shadow_ign(vec2 screen_pos) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(screen_pos, magic.xy)));
+}
+
+// Receiver plane depth slope in shadow map UV space:
+// Allows PCF kernel taps to track the surface slope analytically, eliminating
+// filter-radius self-shadow acne on sloped surfaces without excessive bias.
+vec2 shadow_depth_slope(vec2 uv, float z) {
+    vec2 duv_dx = dFdx(uv);
+    vec2 duv_dy = dFdy(uv);
+    float dz_dx = dFdx(z);
+    float dz_dy = dFdy(z);
+    float det = duv_dx.x * duv_dy.y - duv_dx.y * duv_dy.x;
+    if (abs(det) < 1e-10) {
+        return vec2(0.0);
+    }
+    float inv_det = 1.0 / det;
+    return vec2(
+        (dz_dx * duv_dy.y - dz_dy * duv_dx.y) * inv_det,
+        (dz_dy * duv_dx.x - dz_dx * duv_dy.x) * inv_det
+    );
+}
+
+const int kShadowTapCount = 16;
+const vec2 kShadowTaps[16] = vec2[16](
+    vec2(  0.1767767,   0.0000000),
+    vec2( -0.2257722,   0.2068258),
+    vec2(  0.0345581,  -0.3937712),
+    vec2(  0.2845712,   0.3711728),
+    vec2( -0.5222232,  -0.0923739),
+    vec2(  0.4946954,  -0.3146847),
+    vec2( -0.1654659,   0.6155250),
+    vec2( -0.3155615,  -0.6075944),
+    vec2(  0.6846422,   0.2500302),
+    vec2( -0.7122561,   0.2940090),
+    vec2(  0.3433545,  -0.7337286),
+    vec2(  0.2537302,   0.8089320),
+    vec2( -0.7647459,  -0.4431859),
+    vec2(  0.8971340,  -0.1972324),
+    vec2( -0.5475069,   0.7787722),
+    vec2( -0.1264868,  -0.9760897)
 );
 
 // How far the disk reaches, in texels. Wide enough that the bilinear depth
@@ -186,14 +217,22 @@ float sample_cascade(vec3 pos, int cascade, float NoL) {
     vec2 lo = tile + vec2(texel * 0.5);
     vec2 hi = tile + vec2(scale - texel * 0.5);
 
+    vec2 depth_slope = shadow_depth_slope(uv, ndc.z);
+    float angle = shadow_ign(gl_FragCoord.xy) * 6.28318530718;
+    float s = sin(angle);
+    float c = cos(angle);
+    mat2 rot = mat2(c, -s, s, c);
+
     float occ = 0.0;
-    for (int k = 0; k < 9; ++k) {
-        vec2 tap = clamp(uv + kShadowTaps[k] * (kShadowFilterRadius * texel),
-                         lo, hi);
+    for (int k = 0; k < 16; ++k) {
+        vec2 offset = rot * kShadowTaps[k] * (kShadowFilterRadius * texel);
+        vec2 tap = clamp(uv + offset, lo, hi);
+        vec2 actual_offset = tap - uv;
+        float z_receiver = ndc.z + dot(depth_slope, actual_offset);
         float map_depth = texture(shadow_map, tap).r;
-        occ += (ndc.z - bias > map_depth) ? 1.0 : 0.0;
+        occ += (z_receiver - bias > map_depth) ? 1.0 : 0.0;
     }
-    return occ / 9.0;
+    return occ * 0.0625;
 }
 
 // Directional shadow factor across the cascade atlas.
@@ -285,14 +324,22 @@ float sample_local_shadow(vec3 pos, int tile, float NoL) {
     vec2 lo = tile_uv + vec2(texel * 0.5);
     vec2 hi = tile_uv + vec2(scale - texel * 0.5);
 
+    vec2 depth_slope = shadow_depth_slope(uv, ndc.z);
+    float angle = shadow_ign(gl_FragCoord.xy) * 6.28318530718;
+    float s = sin(angle);
+    float c = cos(angle);
+    mat2 rot = mat2(c, -s, s, c);
+
     float occ = 0.0;
-    for (int k = 0; k < 9; ++k) {
-        vec2 tap = clamp(uv + kShadowTaps[k] * (kShadowFilterRadius * texel),
-                         lo, hi);
+    for (int k = 0; k < 16; ++k) {
+        vec2 offset = rot * kShadowTaps[k] * (kShadowFilterRadius * texel);
+        vec2 tap = clamp(uv + offset, lo, hi);
+        vec2 actual_offset = tap - uv;
+        float z_receiver = ndc.z + dot(depth_slope, actual_offset);
         float map_depth = texture(local_shadow_map, tap).r;
-        occ += (ndc.z - bias > map_depth) ? 1.0 : 0.0;
+        occ += (z_receiver - bias > map_depth) ? 1.0 : 0.0;
     }
-    return occ / 9.0;
+    return occ * 0.0625;
 }
 
 // A point light's shadow factor. The enabled check is per-tile and tiles are
