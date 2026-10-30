@@ -517,6 +517,7 @@ add_executable(AITests
     AITests/test_ai_world.cpp
     AITests/test_eqs_and_advanced_bt.cpp
     AITests/test_bt_services_and_blackboard.cpp
+    AITests/test_cover_system.cpp
 )
 target_include_directories(AITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AITests PRIVATE NFCore NFAI)

@@ -15,6 +15,7 @@ set(NFAI_SOURCES
     src/UtilityAI.cpp
     src/AIWorld.cpp
     src/EQS.cpp
+    src/CoverSystem.cpp
 )
 
 nf_engine_library(NFAI
