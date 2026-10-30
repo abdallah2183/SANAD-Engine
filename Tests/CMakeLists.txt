@@ -609,6 +609,7 @@ add_executable(StreamingTests
     StreamingTests/test_streaming.cpp
     StreamingTests/test_stream_merge.cpp
     StreamingTests/test_world_partition.cpp
+    StreamingTests/test_hlod.cpp
 )
 target_include_directories(StreamingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(StreamingTests PRIVATE NFCore NFScene NFEcs NFRuntime NFAssets)

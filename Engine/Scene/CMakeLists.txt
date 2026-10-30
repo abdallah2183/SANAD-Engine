@@ -9,6 +9,7 @@ set(NFSCENE_SOURCES
     src/Prefab.cpp
     src/Spline.cpp
     src/WorldPartition.cpp
+    src/HLOD.cpp
 )
 
 nf_engine_library(NFScene
