@@ -8,6 +8,7 @@ set(NFSCENE_SOURCES
     src/Scene.cpp
     src/Prefab.cpp
     src/Spline.cpp
+    src/WorldPartition.cpp
 )
 
 nf_engine_library(NFScene
