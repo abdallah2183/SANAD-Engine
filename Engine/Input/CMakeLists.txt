@@ -8,6 +8,7 @@ nf_engine_library(NFInput
     SOURCES
         src/InputAction.cpp
         src/InputContext.cpp
+        src/InputGesture.cpp
         src/InputMapper.cpp
         src/InputNames.cpp
     DEPENDS NFCore NFPlatform

@@ -465,6 +465,7 @@ nf_target_set_warnings(PlatformTests)
 add_executable(InputTests
     TestFramework.cpp
     InputTests/test_input.cpp
+    InputTests/test_input_gestures.cpp
 )
 target_include_directories(InputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(InputTests PRIVATE NFCore NFPlatform NFInput)
@@ -576,6 +577,7 @@ nf_target_set_warnings(FoliageTests)
 add_executable(WaterTests
     TestFramework.cpp
     WaterTests/test_water.cpp
+    WaterTests/test_water_ripples.cpp
 )
 target_include_directories(WaterTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(WaterTests PRIVATE NFCore NFWater)
