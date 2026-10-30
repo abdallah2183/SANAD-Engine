@@ -20,6 +20,7 @@ set(NFANIMATION_SOURCES
     src/BlendSpace.cpp
     src/FABRIK.cpp
     src/BoneMask.cpp
+    src/FootPlacementIK.cpp
 )
 
 nf_engine_library(NFAnimation

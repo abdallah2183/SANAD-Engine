@@ -19,6 +19,7 @@ set(NFGAMEPLAY_SOURCES
     src/Inventory.cpp
     src/Dialogue.cpp
     src/GameplayAttributes.cpp
+    src/Equipment.cpp
     src/SaveGame.cpp
 )
 

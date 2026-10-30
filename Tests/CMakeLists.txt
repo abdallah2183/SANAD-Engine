@@ -363,6 +363,7 @@ add_executable(AnimationTests
     AnimationTests/test_skinning.cpp
     AnimationTests/test_blend_space_and_fabrik.cpp
     AnimationTests/test_notifies_and_montage.cpp
+    AnimationTests/test_foot_placement_ik.cpp
 )
 target_include_directories(AnimationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(AnimationTests PRIVATE NFCore NFAnimation)
@@ -408,6 +409,7 @@ add_executable(GameplayTests
     GameplayTests/test_abilities.cpp
     GameplayTests/test_gameplay_effects.cpp
     GameplayTests/test_cues_and_execution.cpp
+    GameplayTests/test_equipment.cpp
 )
 target_include_directories(GameplayTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(GameplayTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio)
