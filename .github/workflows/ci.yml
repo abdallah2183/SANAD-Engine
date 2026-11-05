@@ -21,6 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check documentation links and required assets
+        shell: pwsh
+        run: python Scripts/check_docs.py
+
       # Lavapipe is Mesa's software Vulkan implementation. Installing it means
       # the headless GPU tests actually execute on a runner with no GPU instead
       # of reporting SKIPPED, so the RHI/rendering suites get real coverage.

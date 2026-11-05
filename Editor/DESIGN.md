@@ -1,3 +1,5 @@
+> **Historical editor reference.** Scope and limitations below describe the named phases. For current behavior, see the [Editor guide](../Docs/Editor_Guide.md) and [architecture](../Docs/Architecture.md).
+
 # SANAD Editor — Design (Phase 4 + Phase 5)
 
 ## Identity

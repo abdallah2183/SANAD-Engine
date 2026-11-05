@@ -1,60 +1,48 @@
-# Contributing | المساهمة
+# Contributing
 
-Thanks for your interest in SANAD / محرك سَنَد. Contributions of code,
-docs, samples, and Arabic-first UX are all welcome.
+[Documentation](Docs/README.md) · [Build and test](Docs/Build_and_Test.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
-## How to contribute
+Contributions to C++ systems, tools, samples, documentation and the Arabic editor are welcome. Keep changes focused so another contributor can reproduce and review them.
 
-1. **Fork & clone**, then branch: `git checkout -b feature/my-change`
-2. **Build & test** before opening a PR:
-   ```bat
-   build_nf.bat
-   .\build\DebugNinja\bin\RuntimeTests.exe
-   ```
-3. **Open a Pull Request** describing what changed and why.
+## Development workflow
 
-Looking for a place to start? Issues tagged **`good first issue`** are
-beginner-friendly (docs, samples, editor UX).
+1. Fork and clone the repository, then create a branch for one change.
+2. Read the repository's [agent/project contract](AGENTS.md) and relevant module instructions.
+3. Build with `build_nf.bat Release` or the appropriate Debug configuration.
+4. Run the suites and checks relevant to the change; preserve failures and skips in your report.
+5. Open a pull request explaining the problem, resulting behavior and verification.
 
-## Ground rules
+```bat
+build_nf.bat Release
+build\Release\bin\EditorTests.exe
+ctest --test-dir build\Release --output-on-failure
+```
 
-- **Layer invariants:** `Assets` never links `Rendering`; `Rendering` never
-  links `ECS`/`Scene` — binding happens only in `NFRuntime`. Enforced by
-  `Scripts/check_layering.sh`.
-- **Zero validation errors / zero leaks** for anything touching the Vulkan RHI.
-- **Deterministic stepping:** the runtime simulation loop stays deterministic
-  and headless-testable.
-- **C++23**, `/W4 /WX` — a warning is a failed build.
-- **Behavior must be tested, not described.** A feature is done when a suite
-  proves it; "the code exists" is not the claim.
+Full prerequisites and commands are in [Build and test](Docs/Build_and_Test.md).
 
-## Contribution areas
+## Engineering rules
 
-Graphics & shaders · physics & destruction · scripting (Lua/C#) · audio ·
-networking · **Arabic RTL editor & localization** · asset pipelines · docs
-& samples.
+- Use the native project/runtime workflow. A SANAD game is a `.nfproj` project, not a web application or another engine's project.
+- Keep module boundaries intact: Assets must not depend on Rendering/RHI, and Rendering must not depend on ECS/Scene.
+- Keep compiler warnings actionable; the build uses warnings as errors.
+- For rendering changes, report Vulkan validation results and resource cleanup.
+- Test changed behavior with a reproduction that would catch a regression.
+- Keep authored source separate from `Cache/`, `dist/` and other generated output.
 
----
+## Documentation and media
 
-<div dir="rtl">
+- Put user workflows in `Docs/`, release records in `Docs/Releases/` and historical plans/reviews in `Docs/Archive/`.
+- Keep `README.md` and `README.ar.md` aligned in scope and navigation. Link to detailed references instead of copying them into the landing page.
+- Use current, native screenshots, with version and capture context. Follow the [media policy](Docs/media/README.md); do not add development crops or repeated website copies.
+- Run `python Scripts/check_docs.py` to validate local links and required assets.
+- Do not rewrite historical release results as current verification.
 
-## المساهمة
+## Pull request information
 
-شكراً لاهتمامك بـ **محرك سَنَد**. نرحّب بمساهمات الكود والتوثيق والأمثلة
-وتجربة المحرر العربية.
+Describe the concrete trigger or problem, what changes for the user, and how you verified it. Include limitations, hardware-dependent skips and screenshots only when relevant. Do not claim that a file compiles or a test passes unless you observed it.
 
-**الخطوات:** انسخ المستودع (Fork) → أنشئ فرعاً → ابنِ واختبر (`build_nf.bat`
-ثم شغّل مجموعات الاختبار) → افتح Pull Request بوصف واضح.
+For a security issue, use [private reporting](SECURITY.md) rather than a public bug report.
 
-**القواعد:** فصل الطبقات صارم (`Scripts/check_layering.sh`) · صفر أخطاء تحقق
-Vulkan وصفر تسريبات · خطوات المحاكاة حتمية · C++23 مع `/W4 /WX` · كل ميزة
-يجب أن يُثبتها اختبار، لا أن تُوصَف فقط.
+## بالعربية
 
-**المجالات:** الرسوميات والتظليل · الفيزياء والتدمير · البرمجة (Lua/C#) ·
-الصوت · الشبكات · **المحرر العربي والتعريب** · خطوط الأصول · التوثيق والأمثلة.
-
-</div>
-
----
-
-<sub>Project lead: [Abdallah (@abdallah2183)](https://github.com/abdallah2183)</sub>
+اختر تغييرًا محددًا، ابنِ المحرك، ثم اختبر السلوك الذي تغير. اشرح المشكلة والنتيجة والتحقق في طلب الدمج. لتحسين التوثيق، حافظ على صفحة رئيسية مختصرة ومراجع واضحة وصور حديثة دون تكرار. قواعد [السلوك](CODE_OF_CONDUCT.md) تنطبق على جميع المساهمات.

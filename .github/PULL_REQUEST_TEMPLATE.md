@@ -1,15 +1,16 @@
-## 📝 ملخص التغييرات | Summary of Changes
-يرجى تقديم وصف موجز وواضح للتغييرات والميزات التي يضيفها هذا الـ PR.
+## Summary / ملخص
 
-## 🎯 الأهداف المحققة | Resolved Issues
-- Fixes #(issue number)
-- Closes #(issue number)
+Describe the problem and resulting behavior. Link the related issue if there is one.
 
-## ✅ قائمة التحقق قبل الدمج | Verification Checklist
-- [ ] الكود تم بناؤه بنجاح دون أي تحذيرات أو أخطاء (`/W4 /WX`).
-- [ ] الاختبارات المؤتمتة تمر بنجاح 100% دون أي فشل.
-- [ ] لا توجد أي أخطاء من طبقات فحص Vulkan (Zero Validation Layer Errors).
-- [ ] تم الحفاظ على استقلالية الطبقات (Assets لا تعتمد على RHI، Rendering لا تعتمد على ECS).
-- [ ] تم توثيق الميزة أو التعديل إذا لزم الأمر.
+## Verification / التحقق
 
-شكراً جزيلاً لمساهمتك في بناء محرك SANAD! 🌟
+List the commands/checks you actually ran and their results. Record failures, skipped cases and any hardware constraints.
+
+- Build configuration:
+- Relevant suites or reproduction:
+- Documentation check (when applicable): `python Scripts/check_docs.py`
+- Vulkan validation/resource cleanup (when applicable):
+
+## Screenshots or notes / الصور والملاحظات
+
+Include current native captures only when the change affects visible behavior. State any remaining limitation or reviewer setup.

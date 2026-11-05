@@ -180,26 +180,33 @@ foreach ($src in @('AGENTS.md', 'CLAUDE.md', 'llms.txt')) {
     if (Test-Path $p) { Copy-Item $p $stage -Force }
 }
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $stage
-$releaseNotes = Join-Path $repo "RELEASE_NOTES_$verNum.md"
-if (Test-Path -LiteralPath $releaseNotes) { Copy-Item -LiteralPath $releaseNotes -Destination $stage }
+$releaseNotes = Join-Path $repo "Docs\Releases\$verNum.md"
+if (-not (Test-Path -LiteralPath $releaseNotes)) { throw "Missing release notes: $releaseNotes" }
+Copy-Item -LiteralPath $releaseNotes -Destination (Join-Path $stage "RELEASE_NOTES_$verNum.md")
 
 # --- Docs: the .md the launcher OPENS + the images it LOADS as card thumbnails
 $docsDst = Join-Path $stage 'Docs'
-foreach ($src in @('Docs\Demo_Release.md', 'Docs\Getting_Started_Ar.md', 'Docs\Tutorial_Ar.md',
-                   'Docs\Lua_Scripting_Ar.md', 'Docs\Asset_Import.md', 'Docs\Blender_Pipeline.md',
-                   'Docs\AI_Game_Guide.md')) {
-    $p = Join-Path $repo $src
-    if (Test-Path $p) { Copy-Item $p $docsDst -Force }
+$docsSrc = Join-Path $repo 'Docs'
+# Preserve the documentation hierarchy so moved release/reference links work.
+# Copy Markdown and current PNG captures only, never old local media takes.
+foreach ($file in Get-ChildItem -LiteralPath $docsSrc -Recurse -File -Filter '*.md') {
+    $relative = $file.FullName.Substring($docsSrc.Length).TrimStart('\', '/')
+    $target = Join-Path $docsDst $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath $file.FullName -Destination $target -Force
 }
-$p = Join-Path $repo 'ROADMAP.md'
-if (Test-Path $p) { Copy-Item $p (Join-Path $docsDst 'ROADMAP.md') -Force }
-$p = Join-Path $repo 'README.md'
-if (Test-Path $p) { Copy-Item $p (Join-Path $docsDst 'README-repo.md') -Force }
+foreach ($src in @('README.md', 'README.ar.md', 'CHANGELOG.md', 'CONTRIBUTING.md',
+                   'SUPPORT.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'ROADMAP.md')) {
+    Copy-Item -LiteralPath (Join-Path $repo $src) -Destination $stage -Force
+}
 $needThumbs = @('shot_game.png', 'shot_vehicle.png', 'shot_editor_en.png', 'shot_editor_ar.png')
 $missing = @()
 foreach ($t in $needThumbs) {
     $p = Join-Path $repo "Docs\images\$t"
     if (Test-Path $p) { Copy-Item $p (Join-Path $stage 'Docs\images') } else { $missing += $t }
+}
+foreach ($extra in @('editor_lighting_ar.png', 'editor_input_ar.png')) {
+    Copy-Item -LiteralPath (Join-Path $repo "Docs\images\$extra") -Destination (Join-Path $stage 'Docs\images') -Force
 }
 if ($missing.Count -gt 0) { throw "Docs/images is missing: $($missing -join ', '). The launcher would draw grey placeholder cards." }
 Write-Host ("  Docs/                   images/ ({0} thumbnails, REQUIRED)" -f $needThumbs.Count)
@@ -208,12 +215,19 @@ Write-Host ("  Docs/                   images/ ({0} thumbnails, REQUIRED)" -f $n
 $fontSrc = Join-Path $repo 'Resources\fonts\Amiri-Regular.ttf'
 if (-not (Test-Path $fontSrc)) { throw 'Resources/fonts/Amiri-Regular.ttf is missing. The Arabic UI cannot render without it.' }
 Copy-Item $fontSrc (Join-Path $stage 'Resources\fonts') -Force
+foreach ($notice in @('OFL.txt', 'FONTS.md')) {
+    Copy-Item -LiteralPath (Join-Path $repo "Resources\fonts\$notice") -Destination (Join-Path $stage 'Resources\fonts') -Force
+}
 Write-Host '  Resources/fonts/    Amiri-Regular.ttf (REQUIRED)'
 
 # --- Icon + README ------------------------------------------------------------
 Copy-Item (Join-Path $repo 'Editor\resources\SANAD.png') $stage -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $stage 'Editor\resources') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'Editor\resources\SANAD.png') -Destination (Join-Path $stage 'Editor\resources') -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $stage 'Resources\Branding') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'Resources\Branding\sanad_logo.jpg') -Destination (Join-Path $stage 'Resources\Branding') -Force
 $readme = @"
-SANAD Engine $version (Windows x64) - demo build
+SANAD Engine $version (Windows x64) - portable release
 ================================================
 WHAT THIS IS
     The SANAD editor and tools, a Release build (optimised, no debug asserts).
@@ -258,7 +272,8 @@ DOCS
     Docs\Tutorial_Ar.md          - 20-minute tutorial (Arabic)
     Docs\Lua_Scripting_Ar.md     - scripting reference (Arabic)
     Docs\Asset_Import.md         - models, materials, textures
-    README-repo.md, ROADMAP.md   - the repository docs
+    Docs\README.md              - documentation index
+    CHANGELOG.md, ROADMAP.md     - releases and current direction
 
 WHERE THE VERSION NUMBER COMES FROM
     One place: project(VERSION) and NF_VERSION_SUFFIX in CMakeLists.txt.

@@ -1,11 +1,15 @@
-Fonts vendored for the SANAD editor (Phase 15: Arabic RTL UI).
+# Bundled fonts
 
-Amiri-Regular.ttf
-  Upstream: https://github.com/aliftype/amiri (Amiri typeface by AlifType)
-  License: SIL Open Font License 1.1 (see OFL.txt in this directory).
-  Usage: merged into the ImGui font atlas (see Editor/src/ui/UiBackend.cpp)
-  so Arabic UI strings — shaped by NF/UI/ArabicShaper — render with full
-  presentation forms (FB50-FDFF, FE70-FEFF) plus the Arabic blocks.
+[Repository](../../README.md) · [Documentation](../../Docs/README.md)
 
-OFL.txt
-  The license text, copied from the upstream repository.
+## Amiri
+
+| Item | Detail |
+|:---|:---|
+| File | `Amiri-Regular.ttf` |
+| Typeface | Amiri, by AlifType |
+| Upstream | [aliftype/amiri](https://github.com/aliftype/amiri) |
+| License | SIL Open Font License 1.1; see [OFL.txt](OFL.txt) |
+| Use | Arabic companion font in the native editor's ImGui atlas |
+
+Arabic UI text is shaped by the engine before display. Keep the font and its license together when packaging the editor. The bundled license text is retained unchanged.

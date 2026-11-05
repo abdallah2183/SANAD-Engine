@@ -1,5 +1,7 @@
 # Gamepad Manual Checklist (G1)
 
+[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+
 Xbox-compatible XInput pad on Windows x64. Automated coverage lives in
 `Tests/InputTests` (edge/hold/release, XInput mask, sticks, disconnect);
 this file is the live hardware path only.
@@ -7,7 +9,7 @@ this file is the live hardware path only.
 ## Prerequisites
 
 - Windows PC with Vulkan-capable GPU
-- Built `NFSampleVehicleDemo.exe` (`bash .workbuddy-ai/nfb.sh --target NFSampleVehicleDemo`)
+- Built `NFSampleVehicleDemo.exe` (`build_nf.bat Release`)
 - Xbox pad (or XInput-compatible) connected before or during the run
 - `xinput1_4.dll` / `xinput1_3.dll` / `xinput9_1_0.dll` present (default on Win10+)
 

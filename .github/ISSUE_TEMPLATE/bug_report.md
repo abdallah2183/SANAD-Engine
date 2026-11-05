@@ -1,24 +1,32 @@
 ---
-name: الإبلاغ عن مشكلة | Bug Report
-about: أبلغ عن خطأ أو مشكلة واجهتها في المحرك للمساعدة في إصلاحها
-title: "[BUG] "
+name: "Bug report / بلاغ خطأ"
+about: "Report a reproducible engine, editor or tool problem"
+title: "[Bug] "
 labels: bug
-assignees: ''
 ---
 
-### 🐛 وصف المشكلة | Bug Description
-وصف واضح للمشكلة أو الخطأ الذي حدث.
+## Problem / المشكلة
 
-### 🔄 خطوات إعادة المشكلة | Steps to Reproduce
-1. شغل الأمر '...'
-2. افتح المشهد '....'
-3. شاهد رسالة الخطأ '....'
+What happened, and what did you expect?
 
-### 💻 بيئة التشغيل | Environment
-- نظام التشغيل (OS): Windows 10 / 11
-- بطاقة الرسوميات (GPU):
-- إصدار Vulkan SDK:
-- إصدار المجمع (Compiler): MSVC / Visual Studio
+## Reproduction / خطوات التكرار
 
-### 📋 مخرجات السجل أو الفاليديشن | Logs or Validation Errors
-انسخ هنا أي مخرجات من سجل المحرك (Console) أو أخطاء Vulkan Validation Layers.
+1.
+2.
+3.
+
+Include a minimal `.nfproj`/scene or exact command when possible. Remove private files and personal paths.
+
+## Environment / البيئة
+
+- Engine version or commit:
+- Portable download or source build:
+- Windows version:
+- GPU and driver:
+- Build configuration, if relevant:
+
+## Evidence / التشخيص
+
+Paste the relevant log, exit code and Vulkan validation errors. Add a screenshot if it clarifies the problem.
+
+For a security vulnerability, use the private reporting path in `SECURITY.md` instead of posting exploit details here.

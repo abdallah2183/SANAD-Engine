@@ -1,5 +1,7 @@
 # GPU profiling
 
+[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+
 SANAD can read **real GPU time** with Vulkan timestamp queries: one duration
 for the whole frame and, optionally, one duration per RenderGraph pass. There
 are two consumers:

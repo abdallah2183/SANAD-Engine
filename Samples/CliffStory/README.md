@@ -4,7 +4,7 @@ A 2D story-climb built on the engine's `NFScene2D` layer, and the first game in
 the tree to render through it.
 
 ```
-build\DebugNinja\bin\NFSampleCliffStory.exe
+build\Release\bin\NFSampleCliffStory.exe
 ```
 
 A lantern-bearer climbs 130 units of stone to relight the shrine at the top. The

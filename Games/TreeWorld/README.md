@@ -3,7 +3,7 @@
 A small third-person game made **with SANAD Engine** (not HTML): walk a low-poly
 explorer through a misty forest and collect five fireflies.
 
-![TreeWorld](Screenshot.png)
+![TreeWorld source opened in the SANAD 0.8.0 editor](../../Docs/images/shot_editor_en.png)
 
 ## Run
 
@@ -67,14 +67,12 @@ python Tools\Props\make_props.py
 
 `Content/Scripts/explorer.lua` uses the native Lua API:
 
-- `nf.axis("move_x"/"move_z")` for input,
-- `nf.entity_pos` / `nf.set_entity_pos` to move the body and place the head,
-  hair, arms and legs around it,
+- `nf.camera_move()` for camera-relative input,
+- `nf.entity_pos` / `nf.set_entity_pos` to move the explorer entity,
 - `nf.find_entity` + `nf.set_entity_scale` to collect fireflies,
 - `print` for the score/win log.
 
-The character is six sibling entities rather than a parent chain, because the
-scene loader's hierarchy guard is strict; the script keeps the parts together.
+The current explorer is the rigged entity described above. Its Lua script drives movement and collectible behavior.
 
 ## Style note
 

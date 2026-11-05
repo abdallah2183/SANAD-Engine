@@ -570,7 +570,7 @@
     <!-- Navigation -->
     <nav>
         <a href="#" class="nav-brand">
-            <img src="Docs/images/sanad_logo.jpg" alt="SANAD Engine Logo">
+            <img src="Resources/Branding/sanad_logo.jpg" alt="SANAD Engine Logo">
             <span class="brand-title">محرك سَنَد | SANAD</span>
         </a>
 
@@ -593,7 +593,7 @@
     <!-- Hero Section -->
     <header class="hero container">
         <div class="logo-wrapper">
-            <img src="Docs/images/sanad_logo.jpg" alt="SANAD Engine Logo">
+            <img src="Resources/Branding/sanad_logo.jpg" alt="SANAD Engine Logo">
         </div>
         <div class="hero-badge-container">
             <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.8.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
@@ -660,22 +660,17 @@
             </div>
 
             <div class="feature-card">
-                <img src="Docs/images/shot_treeworld.png" alt="TreeWorld game" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
+                <img src="Docs/images/shot_editor_ar.png" alt="TreeWorld game" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
                 <span class="feature-tag">Playable</span>
                 <h3 data-i18n="show_game_title">لعبة عاملة: TreeWorld</h3>
                 <p data-i18n="show_game_desc">عالم شجر حي بشخصية هيكلية، كاميرا تتبع، ظلال متتالية، وضباب — يُبنى ويُلعب بمحرك سند نفسه.</p>
             </div>
 
             <div class="feature-card">
-                <video id="joltVideo" muted loop playsinline preload="none"
-                       style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;background:#0d1119;display:none;"
-                       onclick="if (this.paused) { this.play(); } else { this.pause(); }"></video>
-                <div id="joltVideoPlaceholder" style="width:100%;height:200px;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;background:linear-gradient(135deg,#10141d,#1a2030);display:flex;align-items:center;justify-content:center;color:#9aa5be;font-size:0.9rem;">
-                    <span data-i18n="show_jolt_placeholder">الفيديو قيد التسجيل — ابقَ بالمرصاد</span>
-                </div>
-                <span class="feature-tag">Jolt Physics</span>
-                <h3 data-i18n="show_jolt_title">مركبات وقيود Jolt</h3>
-                <p data-i18n="show_jolt_desc">مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومغطاة باختبارات المحرك.</p>
+                <img src="Docs/images/editor_lighting_ar.png" alt="SANAD 0.8.0 lighting panel" loading="lazy" style="width:100%;border-radius:10px;border:1px solid var(--border-subtle);margin-bottom:12px;">
+                <span class="feature-tag">Editor 0.8.0</span>
+                <h3 data-i18n="show_jolt_title">الإضاءة والظلال</h3>
+                <p data-i18n="show_jolt_desc">لوحة الإضاءة في الإصدار 0.8.0، مع التحكم باتجاه الشمس وشدة الإضاءة والظلال.</p>
             </div>
 
             <div class="feature-card">
@@ -696,15 +691,15 @@
             </div>
             <div class="stat-card">
                 <div class="stat-num">0</div>
-                <div class="stat-label" data-i18n="stat_val">أخطاء Vulkan Validation (خالٍ من التسريب)</div>
+                <div class="stat-label" data-i18n="stat_val">أخطاء تحقق في اختبار المحرر</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">C++23</div>
                 <div class="stat-label" data-i18n="stat_cpp">معيار C++ الحديث للأداء الأقصى</div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">100%</div>
-                <div class="stat-label" data-i18n="stat_det">محاكاة حتمية متوافقة مع الخوادم</div>
+                <div class="stat-num">2828</div>
+                <div class="stat-label" data-i18n="stat_det">اختبارات ناجحة مسجلة للإصدار 0.8.0</div>
             </div>
         </div>
     </section>
@@ -736,7 +731,7 @@
             </div>
 
             <div class="feature-card">
-                <span class="feature-tag">Jolt Physics</span>
+                <span class="feature-tag">Editor 0.8.0</span>
                 <h3 data-i18n="feat_jolt_title">فيزياء Jolt المتقدمة ومركباتها</h3>
                 <p data-i18n="feat_jolt_desc">خلفية Jolt v5.6 حتمية: مركبات بعجلاتها ومحركها، قيود قابلة للنسخ بين الأجسام، راجدول، استعلامات مشهد (Raycast/Sweep/Overlap)، مستشعرات، CCD، وأشكال كبسولة/محدبة/شبكية.</p>
             </div>
@@ -829,63 +824,24 @@
     <section class="container" id="roadmap">
         <div class="section-header">
             <h2 data-i18n="roadmap_title">خارطة طريق التطوير</h2>
-            <p data-i18n="roadmap_desc">38 مرحلة مكتملة — 0.5.0 يغلق مرحلة الصورة واليد، والمرحلة التالية مفتوحة للمساهمة</p>
+            <p data-i18n="roadmap_desc">الإصدار الحالي، نتائج التحقق، واتجاه التطوير موثقة في المستودع</p>
         </div>
 
         <div class="roadmap-grid">
             <div class="roadmap-card done">
-                <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 1–15: الأساس المعماري</h4>
-                <ul>
-                    <li>Vulkan RHI، تصيير مؤجل PBR، وRenderGraph</li>
-                    <li>ECS موجهة للبيانات، فيزياء حتمية، تحريك هيكلي، وصوت 3D</li>
-                    <li>محرر ImGui، Lua 5.4، استيراد النماذج، وواجهة عربية RTL</li>
-                    <li>ظلال اتجاهية، سماء إجرائية، وLOD شبكي</li>
-                </ul>
+                <span class="roadmap-status done">0.8.0</span>
+                <h4>الإصدار الحالي</h4>
+                <ul><li>محرر أصلي عربي وإنجليزي على Windows x64</li><li>تحسين المشاهد والتراجع والملفات والتحكم والسجل</li><li><a href="https://github.com/abdallah2183/SANAD-Engine/blob/main/Docs/Releases/0.8.0.md">ملاحظات الإصدار</a></li></ul>
             </div>
-
             <div class="roadmap-card done">
-                <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 16–25: Jolt والعالم الحي</h4>
-                <ul>
-                    <li>Jolt v5.6: مركبات، قيود، راجدول، Cloth، CCD، وأشكال مركبة</li>
-                    <li>شبكات UDP موثوقة، سيرفر Authoritative، وتنبؤ عميل، ونسخ الأجسام والقيود</li>
-                    <li>تدمير هندسي، ظلال متتالية، وذكاء إدراكي</li>
-                    <li>طبقة 2D، تأليف السكربت في المحرر، والتوصيل الشامل</li>
-                </ul>
+                <span class="roadmap-status done">Release verification</span>
+                <h4>نتائج تحقق منشورة</h4>
+                <ul><li>26 حزمة اختبار: 2828 ناجحًا، بلا إخفاقات، و3 متخطاة</li><li>اختبار المحرر: 180 إطارًا وصفر أخطاء تحقق Vulkan</li><li>إنشاء مشروع وبناؤه وتشغيله من الحزمة المحمولة</li></ul>
             </div>
-
-            <div class="roadmap-card done">
-                <span class="roadmap-status done">مكتمل ومثبت</span>
-                <h4>Phase 26–30: التوصيل والكاميرا</h4>
-                <ul>
-                    <li>معالجة لاحقة: Bloom، تصحيح ألوان HDR، وحدّة</li>
-                    <li>NavMesh ووكلاء، ومركبات Jolt داخل المشهد</li>
-                    <li>كاميرا بيد اللاعب: فأرة وعصا، تقريب، ومحاذاة تلقائية</li>
-                    <li>حركة منسوبة للكاميرا عبر nf.camera_move</li>
-                </ul>
-            </div>
-
-            <div class="roadmap-card done">
-                <span class="roadmap-status done">مكتمل ومثبت — 0.5.0</span>
-                <h4>Phase 31–38: الصورة واليد</h4>
-                <ul>
-                    <li>مفاتيح قابلة لإعادة الربط وملف bindings.nfinput</li>
-                    <li>FXAA فوق LDR، ADS، ارتداد، اهتزاز، وإعدادات لاعب</li>
-                    <li>ملصقات مسقطة، مقياس رسم 0.25–2×، ودقة ديناميكية</li>
-                    <li>ديناميكيات صوت ماستر: ضاغط ومحدّد ذروة</li>
-                    <li>26 حزمة اختبار، وحزمة 0.5.0 المحمولة منشورة</li>
-                </ul>
-            </div>
-
             <div class="roadmap-card active">
-                <span class="roadmap-status active">مفتوح للمساهمة</span>
-                <h4>التالي: ما بعد 0.5.0</h4>
-                <ul>
-                    <li>توقيع Windows عام موثوق ومثبّت داخل الإصدار</li>
-                    <li>استكشاف Linux، عينات إضافية، وتحسينات عرض</li>
-                    <li>قنوات المساهمة مفتوحة للمطورين</li>
-                </ul>
+                <span class="roadmap-status active">مفتوح للمقترحات</span>
+                <h4>اتجاه التطوير</h4>
+                <ul><li>تحسين سير العمل والعينات والتوزيع</li><li>توثيق وصور حديثة مع كل إصدار</li><li><a href="https://github.com/abdallah2183/SANAD-Engine/blob/main/ROADMAP.md">خارطة الطريق الحالية</a></li></ul>
             </div>
         </div>
     </section>
@@ -1103,8 +1059,8 @@
                 show_ar_desc: "تشكيل سياقي للحروف، ligatures، وترتيب RTL بخط أميري — أول محرك ألعاب بواجهة عربية حقيقية.",
                 show_game_title: "لعبة عاملة: TreeWorld",
                 show_game_desc: "عالم شجر حي بشخصية هيكلية، كاميرا تتبع، ظلال متتالية، وضباب — يُبنى ويُلعب بمحرك سند نفسه.",
-                show_jolt_title: "مركبات وقيود Jolt",
-                show_jolt_desc: "مركبة بعجلاتها ومحركها، نسخ القيود بين الأجسام، راجدول، واستعلامات المشهد — كلها حتمية ومغطاة باختبارات المحرك.",
+                show_jolt_title: "الإضاءة والظلال",
+                show_jolt_desc: "لوحة الإضاءة في الإصدار 0.8.0، مع التحكم باتجاه الشمس وشدة الإضاءة والظلال.",
                 show_vehicle_title: "ديمو قابل للعب: قيادة مركبة",
                 show_vehicle_desc: "سيارة Jolt حقيقية بعجلات مرئية وكاميرا تتبع: قد بـ WASD، اجمع البوابات الذهبية وحطم الصناديق — NFSampleVehicleDemo.",
                 show_jolt_placeholder: "الفيديو قيد التسجيل — ابقَ بالمرصاد",
@@ -1133,9 +1089,9 @@
                 hero_cta_explore: "استعراض المميزات",
                 canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
                 stat_tests: "أحدث إصدار عام — 26 حزمة اختبار",
-                stat_val: "أخطاء Vulkan Validation (خالٍ من التسريب)",
+                stat_val: "أخطاء تحقق في اختبار المحرر",
                 stat_cpp: "معيار C++ الحديث للأداء الأقصى",
-                stat_det: "محاكاة حتمية متوافقة مع الخوادم",
+                stat_det: "Recorded passing tests for 0.8.0",
                 features_title: "الأنظمة والمزايا الأساسية",
                 features_desc: "صُمم كل نظام ليعمل باستقلالية تامة وكفاءة عالية مع جدولة متعددة الخيوط",
                 feat_rhi_title: "تصيير مؤجل حديث PBR",
@@ -1157,7 +1113,7 @@
                 callout_btn_pr: "فتح مساهمة عبر Pull Request",
                 callout_btn_guide: "دليل المساهمة (CONTRIBUTING.md)",
                 roadmap_title: "خارطة طريق التطوير",
-                roadmap_desc: "38 مرحلة مكتملة — 0.5.0 يغلق مرحلة الصورة واليد، والمرحلة التالية مفتوحة للمساهمة",
+                roadmap_desc: "الإصدار الحالي، نتائج التحقق، واتجاه التطوير موثقة في المستودع",
                 quick_title: "البدء السريع: البناء والتشغيل",
                 quick_desc: "ابنِ 0.8.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة"
             },
@@ -1172,8 +1128,8 @@
                 show_ar_desc: "Contextual shaping, ligatures, and RTL ordering in the Amiri typeface — the first game engine with a real Arabic UI.",
                 show_game_title: "Playable: TreeWorld",
                 show_game_desc: "A living forest with a skinned explorer, follow camera, cascaded shadows, and fog — built and played by SANAD itself.",
-                show_jolt_title: "Jolt Vehicles & Constraints",
-                show_jolt_desc: "Wheeled vehicle with engine, constraint cloning between bodies, ragdolls, and scene queries — deterministic and covered by the engine suites.",
+                show_jolt_title: "Lighting and shadows",
+                show_jolt_desc: "The 0.8.0 lighting panel edits sun direction, light intensity and shadows.",
                 show_vehicle_title: "Playable Demo: Vehicle Driving",
                 show_vehicle_desc: "A real Jolt car with visible wheels and chase camera: drive with WASD, collect golden gates and smash crates — NFSampleVehicleDemo.",
                 show_jolt_placeholder: "Video coming soon — stay tuned",
@@ -1202,9 +1158,9 @@
                 hero_cta_explore: "Explore Features",
                 canvas_hint: "Click and drag to orbit the 3D entity in world space",
                 stat_tests: "Current Public Release — 26 Test Suites",
-                stat_val: "Vulkan Validation Errors (Zero Leaks)",
+                stat_val: "Validation errors in editor acceptance",
                 stat_cpp: "Modern C++23 ISO Standard",
-                stat_det: "Deterministic & Server-Authoritative Ready",
+                stat_det: "Recorded passing tests for 0.8.0",
                 features_title: "Core Architecture and Subsystems",
                 features_desc: "Every subsystem is isolated behind strict abstraction layers with multi-threaded scheduling.",
                 feat_rhi_title: "Modern Vulkan 1.2+ PBR Renderer",
@@ -1226,7 +1182,7 @@
                 callout_btn_pr: "Submit a Pull Request",
                 callout_btn_guide: "Read Contributing Guide",
                 roadmap_title: "Development Roadmap",
-                roadmap_desc: "38 completed phases — 0.5.0 closes the image-and-hand phase, and the next milestone is open for contributions.",
+                roadmap_desc: "The current release, recorded verification and development direction are documented in the repository.",
                 quick_title: "Quick Start: Build & Run",
                 quick_desc: "Build 0.8.0 on Windows with CMake and Visual Studio 2022 / Ninja — or download the portable package."
             }
@@ -1249,23 +1205,6 @@
             });
         });
 
-        // Jolt showcase video: play if the capture exists, otherwise show a
-        // placeholder so the card never renders a broken element.
-        (function () {
-            const video = document.getElementById('joltVideo');
-            const placeholder = document.getElementById('joltVideoPlaceholder');
-            if (!video) return;
-            video.src = 'Docs/images/vid_jolt.mp4';
-            video.addEventListener('error', function () {
-                video.style.display = 'none';
-                if (placeholder) placeholder.style.display = 'flex';
-            });
-            video.addEventListener('loadeddata', function () {
-                video.style.display = 'block';
-                if (placeholder) placeholder.style.display = 'none';
-                video.play().catch(function () {});
-            });
-        })();
     </script>
 </body>
 </html>

@@ -1,5 +1,7 @@
 # SANAD Asset Import — the mesh read path
 
+[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+
 Everything the engine can **write**, it can now **read back**. That symmetry is
 the whole point of this document: before `nf::assets::MeshImport` existed, the
 engine exported six mesh formats (`MeshExport`) and imported exactly one
@@ -30,8 +32,7 @@ buffer, no UVs and no vertex normals; geometry is flat-shaded and UVs default to
 zero"* — and the editor shows those warnings on the import row.
 
 **FBX is not supported, deliberately.** FBX is a proprietary binary format
-requiring a large vendored parser. The project's standing decision (see
-`.workbuddy-ai/agents/model-g2-assets.md`) is the **glTF-first route**: export
+requiring a large vendored parser. The supported authoring workflow is the **glTF-first route**: export
 from Blender with the shipped add-on
 (`Templates/Blender/nf_gltf_export.py`, one click under
 `File > Export > SANAD glTF`), which carries mesh, skeleton, clips and

@@ -1,5 +1,7 @@
 # Blender → SANAD Character Pipeline (glTF-first)
 
+[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+
 Blender export plus strict source validation for a skinned, animated character.
 The current engine can read the source data and sample it through the animation
 API, but it does **not** yet cook or render a complete character. No FBX and no
@@ -39,10 +41,10 @@ setting-by-setting rationale).
 # Export: File > Export > SANAD glTF (.glb)  →  Hero.glb
 
 # Strict character source validation. This writes no file.
-.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --character --info
+.\build\Release\bin\NFModelImporter.exe --input Hero.glb --character --info
 
 # Report-only for inspection; also writes no file.
-.\build\DebugNinja\bin\NFModelImporter.exe --input Hero.glb --info
+.\build\Release\bin\NFModelImporter.exe --input Hero.glb --info
 ```
 
 `--character` requires all of the following and prints the full import ledger

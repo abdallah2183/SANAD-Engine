@@ -6,13 +6,13 @@ and the packaged player.
 
 ## Supported versions
 
-| Version | Supported |
-|:---|:---:|
-| `main` (latest commit) | ✅ |
-| 0.5.0 public release | ✅ (security fixes only) |
-| 0.4.0 and older | ❌ |
+| Target | Reporting scope |
+|:---|:---|
+| `main` | Current development tree |
+| 0.8.0 | Current public release |
+| Earlier releases | Include the affected version and whether the issue reproduces on the current release |
 
-Security fixes land on `main` first. There is no long-term support branch yet.
+Fixes land on `main` first. There is no long-term support branch or published support schedule.
 
 ## Report a vulnerability
 
@@ -29,8 +29,7 @@ If private reporting is unavailable, contact the maintainer through the GitHub
 profile at <https://github.com/abdallah2183> and ask for a private channel before
 sharing details.
 
-You can expect an acknowledgement within **7 days** and a status update within
-**30 days**. Please allow time for a fix before publishing.
+The maintainer will coordinate reproduction, a fix and disclosure through the private report. No fixed response-time service level is published.
 
 ## Scope
 
@@ -55,7 +54,7 @@ Out of scope:
 
 ## Binary signing
 
-The 0.5.0 release is a **portable zip** signed with the self-signed
+The 0.8.0 release is a **portable zip** signed with the self-signed
 `SANAD Dev Build` certificate, not a publicly trusted code-signing certificate.
 Windows may show "Unknown publisher" or block a downloaded executable. Verify the
 SHA-256 from the release page and build from source if you need a binary you

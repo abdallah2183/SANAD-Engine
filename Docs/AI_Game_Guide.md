@@ -1,5 +1,7 @@
 # Make a game with SANAD — the AI/agent guide
 
+[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+
 > **This is a native C++23 + Vulkan engine.** A game is a `.nfproj` project,
 > `.nfscene` text scenes, Lua gameplay, and `NFPlayer.exe`. It is **not** an
 > HTML/JS project. Do not create `index.html`, `package.json`, a web server, or

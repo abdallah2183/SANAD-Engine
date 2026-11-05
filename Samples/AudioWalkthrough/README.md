@@ -9,8 +9,8 @@ This folder is sample content, not engine code. Everything it does is public
 ## Run it
 
 ```bash
-bash .workbuddy-ai/nfb.sh --target NFSampleAudioWalkthrough
-build/DebugNinja/bin/NFSampleAudioWalkthrough.exe
+build_nf.bat Release
+build/Release/bin/NFSampleAudioWalkthrough.exe
 ```
 
 Flags:
@@ -86,8 +86,4 @@ machine with working audio output.
 
 ## What this demo does *not* cover
 
-The walkthrough is reachable from C++ today. Driving it from a `.nfscene` (so a
-game gets it with zero code) needs `Engine/Runtime` to mix through `AudioScene`
-and to parse zone/music/bus keys — that is not G5's column, so it is filed as a
-Request in `.workbuddy-ai/COORDINATION.md`. Until it lands, a developer using
-`.nfscene` audio still writes the `AudioScene` wiring themselves.
+This walkthrough exercises the public C++ `AudioScene` API and its generated WAV output. It is not proof of every authored `.nfscene` audio path. Check the runtime integration used by your project and run `AudioTests` / `RuntimeTests` for that scope.

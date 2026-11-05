@@ -6,7 +6,7 @@ materials, textures); `Cache/` and `dist/` are generated and ignored.
 
 | Game | What it shows | Run |
 |:---|:---|:---|
-| [TreeWorld](TreeWorld/) | Third-person character, misty forest, 63 entities, Lua input, fog/post-processing, procedural bark/leaf textures, five collectible fireflies | `nf run --project Games\TreeWorld\TreeWorld.nfproj` |
+| [TreeWorld](TreeWorld) | Third-person character, misty forest, Lua input, fog/post-processing, procedural bark/leaf textures, five collectible fireflies | `nf run --project Games\TreeWorld\TreeWorld.nfproj` |
 
 ```bat
 :: from the engine repository root

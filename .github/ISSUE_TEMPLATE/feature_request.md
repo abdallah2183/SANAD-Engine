@@ -1,21 +1,22 @@
 ---
-name: اقتراح ميزة جديدة | Feature Request
-about: اقترح ميزة جديدة أو فكرة لتطوير محرك SANAD
-title: "[FEATURE] "
-labels: enhancement, contribution
-assignees: ''
+name: "Feature request / اقتراح ميزة"
+about: "Describe a concrete workflow or capability that is missing"
+title: "[Feature] "
+labels: enhancement
 ---
 
-### 💡 وصف الميزة المقترحة | Feature Description
-اكتب وصفاً واضحاً وموجزاً للميزة التي ترغب في إضافتها إلى المحرك.
+## Use case / الاستخدام
 
-### 🎯 الهدف والفائدة | Motivation & Use Case
-كيف ستفيد هذه الميزة مطوري الألعاب أو تحسن من أداء المحرك؟
+What are you trying to accomplish, and what blocks it today?
 
-### 🛠️ مقترح الحل أو التنفيذ التقني | Proposed Implementation
-إذا كان لديك تصور عن كيفية تنفيذها برمجياً (مثلاً: إضافة Component جديد في الـ ECS أو ممر جديد في الـ RenderGraph)، شاركنا به هنا.
+## Proposed behavior / السلوك المقترح
 
-### 🌟 هل ترغب في تنفيذ هذه الميزة بنفسك؟ | Would you like to work on this?
-- [ ] نعم، أود العمل عليها وإرسال Pull Request!
-- [ ] أحتاج لمساعدة وتوجيه من الفريق.
-- [ ] أقترح الفكرة فقط للمهتمين.
+Describe the user-visible result, not only an implementation detail.
+
+## Scope and alternatives / النطاق والبدائل
+
+What is the smallest useful version? Which alternatives have you tried?
+
+## Verification / التحقق
+
+How could a contributor demonstrate that this works?

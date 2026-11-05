@@ -1,21 +1,21 @@
 ---
-name: الانضمام للمساهمة | Contributor Proposal
-about: أعلن عن رغبتك في تطوير ميزة معينة من خارطة الطريق (Roadmap)
-title: "[CONTRIBUTION] "
-labels: help wanted, good first issue
-assignees: ''
+name: "Contribution proposal / مقترح مساهمة"
+about: "Agree on a focused change before starting substantial work"
+title: "[Proposal] "
 ---
 
-### 👋 مرحباً! من أنت وما هو مجال اهتمامك؟
-أخبرنا قليلاً عن نفسك ومجال خبرتك البرمجية (C++, Vulkan, Audio, UI, Documentation...).
+## Area / المجال
 
-### 🚀 الجزئية التي ترغب في العمل عليها من خارطة الطريق (ROADMAP):
-- [ ] الرسوميات والظلال (Graphics / Shaders)
-- [ ] محرك الصوتيات (MiniAudio integration)
-- [ ] دعم السكربت (C# / Lua)
-- [ ] تعريب الواجهة ودعم الخطوط العربية (ImGui Arabic Fonts / RTL)
-- [ ] أدوات الاستيراد والنماذج (glTF / FBX Importer)
-- [ ] التوثيق والدروس التعليمية (Docs & Tutorials)
+Editor, rendering, physics, gameplay, asset pipeline, samples, documentation or Arabic UX.
 
-### 💬 أي أفكار أو تفاصيل إضافية تحب مشاركتها:
-شاركنا تصورك ورؤيتك وسنكون سعداء بمناقشتها معك وتقديم الدعم لك!
+## Proposed change / التغيير
+
+Link the existing issue or describe the concrete problem.
+
+## Scope / النطاق
+
+List the modules or documents involved, the intended outcome and what is outside this change.
+
+## Verification / التحقق
+
+Describe the build, test or native demonstration you plan to use. See `CONTRIBUTING.md` for the contribution workflow.
