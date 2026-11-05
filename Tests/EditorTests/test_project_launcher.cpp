@@ -101,6 +101,19 @@ NF_TEST(launcher_prunes_projects_that_no_longer_exist) {
     NF_CHECK(recent[0] == real.string());
 }
 
+NF_TEST(launcher_recent_keeps_unicode_projects_and_rejects_directories) {
+    const auto tmp = temp_dir_for("nf_launcher_unicode");
+    const auto project = tmp / launcher_path_from_utf8("مشروع.nfproj");
+    { std::ofstream out(project); out << "stub"; NF_CHECK(out.good()); }
+    const auto unicode_path = project.u8string();
+    const std::string project_utf8(unicode_path.begin(), unicode_path.end());
+    const auto dir_path = tmp.u8string();
+    std::vector<std::string> recent = {project_utf8, std::string(dir_path.begin(), dir_path.end())};
+    prune_missing_projects(recent);
+    NF_CHECK(recent.size() == 1u);
+    NF_CHECK(recent.front() == project_utf8);
+}
+
 // --- name validation ---------------------------------------------------------
 
 NF_TEST(launcher_accepts_ordinary_project_names) {

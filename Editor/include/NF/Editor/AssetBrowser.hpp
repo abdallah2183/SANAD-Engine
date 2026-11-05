@@ -72,8 +72,13 @@ std::string mount_of(const std::string& logical_path);
 /// Parent folder of a file ("content://Meshes/cube.nfmesh" -> "content://Meshes").
 /// A root-level file folds to its mount ("content://x" -> "content://").
 std::string asset_folder_of(const std::string& logical_path);
-/// Sorted unique folders present in the listing.
+/// Sorted unique parent folders and their ancestors, including intermediate
+/// folders which contain only subfolders.
 std::vector<std::string> asset_folders(const std::vector<AssetEntry>& entries);
+// Disk folders include empty directories and do not depend on the file filter.
+std::vector<std::string> list_asset_directories(assets::VirtualFileSystem& vfs,
+                                                 const std::string& mount);
+std::string join_asset_path(const std::string& folder, const std::string& name);
 /// Direct file children of `folder` ("" = mount root), sorted by path.
 std::vector<AssetEntry> assets_in_folder(const std::vector<AssetEntry>& entries,
                                          const std::string& folder);

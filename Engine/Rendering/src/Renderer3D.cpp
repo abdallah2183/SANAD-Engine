@@ -3315,7 +3315,7 @@ Vec3 tonemap(Vec3 hdr, float exposure, TonemapMode mode) {
     // Narkowicz fit, not a hand-tuned approximation — the shader spells the
     // same polynomial, and simplifying one side only desyncs the CPU mirror.
     const auto op = [exposure, mode](f32 c) -> f32 {
-        const f32 x = c * exposure;
+        const f32 x = std::max(0.0f, c * exposure);
         switch (mode) {
             case TonemapMode::Exponential: return 1.0f - std::exp(-x);
             case TonemapMode::ACES: {

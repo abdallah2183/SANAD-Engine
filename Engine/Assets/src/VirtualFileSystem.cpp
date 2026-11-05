@@ -124,7 +124,9 @@ VFSResult<std::filesystem::path> VirtualFileSystem::resolve_internal(std::string
     }
 
     std::filesystem::path physical = matched->physical;
-    if (!normalized_rel.empty()) physical /= normalized_rel;
+    if (!normalized_rel.empty()) {
+        physical /= std::filesystem::path(std::u8string(normalized_rel.begin(), normalized_rel.end()));
+    }
     if (normalized_parts.empty()) {
         // The mount root itself ("content://"): it is trivially within the
         // mount. (Previously this fell into the file-parent check below and
@@ -139,13 +141,17 @@ VFSResult<std::filesystem::path> VirtualFileSystem::resolve_internal(std::string
     std::filesystem::path canonical_target = std::filesystem::weakly_canonical(physical, ec);
     if (ec) canonical_target = std::filesystem::absolute(physical, ec);
     // Simple prefix check: canonical_target must start with canonical_physical
-    std::string canon_phys_str = to_forward_slashes(canonical_physical.string());
-    std::string canon_target_str = to_forward_slashes(canonical_target.string());
+    const auto path_utf8 = [](const std::filesystem::path& path) {
+        const auto value = path.generic_u8string();
+        return std::string(value.begin(), value.end());
+    };
+    std::string canon_phys_str = path_utf8(canonical_physical);
+    std::string canon_target_str = path_utf8(canonical_target);
     // Normalize both to have trailing slash for directory check
     if (!canon_phys_str.ends_with("/")) canon_phys_str += "/";
     if (!canon_target_str.ends_with("/")) {
         // For file, check its parent is within
-        std::string parent = to_forward_slashes(canonical_target.parent_path().string());
+        std::string parent = path_utf8(canonical_target.parent_path());
         if (!parent.ends_with("/")) parent += "/";
         if (parent.rfind(canon_phys_str, 0) != 0 && canon_target_str.rfind(canon_phys_str, 0) != 0) {
             return VFSResult<std::filesystem::path>::failure("Resolved path escapes mount root for '" + path_str + "'");

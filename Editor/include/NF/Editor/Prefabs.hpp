@@ -23,11 +23,12 @@ std::vector<ecs::Entity> collect_subtree(const ecs::World& world, ecs::Entity ro
 // remapping internal parents; dst_parent (alive or invalid) becomes the new
 // root's parent. Returns the new root (invalid on dead root).
 ecs::Entity clone_subtree(const ecs::World& src, ecs::Entity root, ecs::World& dst,
-                           ecs::Entity dst_parent);
+                           ecs::Entity dst_parent, std::vector<ecs::Entity>* all_created = nullptr);
 
 // Clones every root of a prefab scene under dst_parent. Returns new roots.
 std::vector<ecs::Entity> clone_prefab_roots(const scene::Scene& prefab, ecs::World& dst,
-                                            ecs::Entity dst_parent);
+                                            ecs::Entity dst_parent,
+                                            std::vector<ecs::Entity>* all_created = nullptr);
 
 // Template roots: entities with no live parent inside the prefab scene.
 std::vector<ecs::Entity> prefab_template_roots(const scene::Scene& prefab);

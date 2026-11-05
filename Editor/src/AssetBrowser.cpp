@@ -11,6 +11,13 @@ namespace nf::editor {
 
 namespace {
 
+// Logical asset paths and the editor UI use UTF-8. On Windows path::string()
+// uses the current ANSI code page and can throw or corrupt non-Latin names.
+std::string generic_utf8(const std::filesystem::path& path) {
+    const auto text = path.generic_u8string();
+    return std::string(text.begin(), text.end());
+}
+
 std::string to_lower_str(const std::string& s) {
     std::string out = s;
     for (char& c : out) {
@@ -79,7 +86,7 @@ std::vector<AssetEntry> list_content_assets(assets::VirtualFileSystem& vfs, asse
     // the mount path on Windows and silently drop every file.
     auto resolved = vfs.resolve("content://");
     if (resolved.ok) {
-        const std::string base = resolved.value.generic_string();
+        const std::string base = generic_utf8(resolved.value);
         std::error_code ec;
         for (auto it = std::filesystem::recursive_directory_iterator(resolved.value, ec);
              it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
@@ -89,11 +96,11 @@ std::vector<AssetEntry> list_content_assets(assets::VirtualFileSystem& vfs, asse
             if (!it->is_regular_file(ec) || ec) {
                 continue;
             }
-            std::string ext = it->path().extension().string();
+            std::string ext = generic_utf8(it->path().extension());
             for (char& c : ext) {
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             }
-            const std::string full = it->path().generic_string();
+            const std::string full = generic_utf8(it->path());
             if (full.size() <= base.size() || full.compare(0, base.size(), base) != 0) {
                 continue;
             }
@@ -243,15 +250,22 @@ std::string asset_folder_of(const std::string& logical_path) {
 std::vector<std::string> asset_folders(const std::vector<AssetEntry>& entries) {
     std::vector<std::string> out;
     for (const auto& e : entries) {
-        const std::string folder = asset_folder_of(e.logical_path);
+        std::string folder = asset_folder_of(e.logical_path);
         if (folder.empty()) {
             continue;
         }
-        if (std::find(out.begin(), out.end(), folder) == out.end()) {
+        const std::string mount = mount_of(e.logical_path);
+        // A file in Models/Characters/Hero must expose Models and Characters
+        // too, even when those ancestors contain no files of their own.
+        for (;;) {
             out.push_back(folder);
+            const std::string parent = parent_folder_of(folder);
+            if (parent.empty() || parent == folder || parent == mount) break;
+            folder = parent;
         }
     }
     std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 
@@ -269,9 +283,40 @@ std::vector<AssetEntry> assets_in_folder(const std::vector<AssetEntry>& entries,
     return out;
 }
 
+std::string join_asset_path(const std::string& folder, const std::string& name) {
+    if (folder.empty()) return name;
+    return folder + (folder.ends_with('/') ? "" : "/") + name;
+}
+
+std::vector<std::string> list_asset_directories(assets::VirtualFileSystem& vfs,
+                                                 const std::string& mount) {
+    std::vector<std::string> out;
+    if (mount != "content://" && mount != "project://") return out;
+    const auto root = vfs.resolve(mount);
+    if (!root.ok) return out;
+    std::error_code ec;
+    const auto options = std::filesystem::directory_options::skip_permission_denied;
+    for (auto it = std::filesystem::recursive_directory_iterator(root.value, options, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if (!it->is_directory(ec) || ec) continue;
+        const auto name = to_lower_str(generic_utf8(it->path().filename()));
+        if (name.starts_with('.') || name == "cache" || name == "build" || name == "dist" ||
+            it->is_symlink(ec)) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        const auto relative = it->path().lexically_relative(root.value);
+        if (!relative.empty()) out.push_back(mount + generic_utf8(relative));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 std::vector<std::string> subfolders_in_folder(const std::vector<std::string>& folders,
                                               const std::string& folder) {
-    const std::string prefix = folder.empty() ? std::string{} : folder + "/";
+    // Mount roots already end in '/': appending one made content:/// and hid
+    // every top-level folder from both the tree and the file pane.
+    const std::string prefix = folder.empty() || folder.ends_with('/') ? folder : folder + "/";
     std::vector<std::string> out;
     for (const auto& f : folders) {
         if (f.size() <= prefix.size() || f.compare(0, prefix.size(), prefix) != 0) {
@@ -453,15 +498,20 @@ void toggle_favorite(AssetBrowserState& state, const std::string& folder) {
 }
 
 void browser_navigate_to(AssetBrowserState& state, const std::string& folder) {
-    if (state.current_folder == folder) {
+    const std::string current = state.current_folder.empty()
+        ? (state.browser_root == 1 ? "project://" : "content://") : state.current_folder;
+    if (current == folder) {
+        state.current_folder = folder;
         return;
     }
     // Cap history so a long session cannot grow it without bound.
-    if (state.back_stack.size() > 100) {
+    if (state.back_stack.size() >= 100) {
         state.back_stack.erase(state.back_stack.begin());
     }
-    state.back_stack.push_back(state.current_folder);
+    state.back_stack.push_back(current);
     state.current_folder = folder;
+    if (folder.starts_with("project://")) state.browser_root = 1;
+    else if (folder.starts_with("content://")) state.browser_root = 0;
     state.forward_stack.clear();
 }
 
@@ -479,6 +529,8 @@ bool browser_go_back(AssetBrowserState& state) {
     }
     state.forward_stack.push_back(state.current_folder);
     state.current_folder = state.back_stack.back();
+    if (state.current_folder.starts_with("project://")) state.browser_root = 1;
+    else if (state.current_folder.starts_with("content://")) state.browser_root = 0;
     state.back_stack.pop_back();
     return true;
 }
@@ -489,6 +541,8 @@ bool browser_go_forward(AssetBrowserState& state) {
     }
     state.back_stack.push_back(state.current_folder);
     state.current_folder = state.forward_stack.back();
+    if (state.current_folder.starts_with("project://")) state.browser_root = 1;
+    else if (state.current_folder.starts_with("content://")) state.browser_root = 0;
     state.forward_stack.pop_back();
     return true;
 }
@@ -585,7 +639,7 @@ std::vector<AssetEntry> list_project_assets(assets::VirtualFileSystem& vfs) {
     if (!resolved.ok) {
         return out; // no project mounted: an empty listing, not an error
     }
-    const std::string base = resolved.value.generic_string();
+    const std::string base = generic_utf8(resolved.value);
     std::error_code ec;
     for (auto it = std::filesystem::recursive_directory_iterator(resolved.value, ec);
          it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
@@ -606,7 +660,7 @@ std::vector<AssetEntry> list_project_assets(assets::VirtualFileSystem& vfs) {
         // entry is not a regular file, so that test `continue`s first and the
         // iterator still descends into the dot-directory -- which is exactly
         // what let the worktree through.
-        const std::string name = it->path().filename().string();
+        const std::string name = generic_utf8(it->path().filename());
         if (!name.empty() && name.front() == '.') {
             if (it->is_directory(ec) && !ec) {
                 it.disable_recursion_pending(); // do not walk it at all
@@ -627,19 +681,19 @@ std::vector<AssetEntry> list_project_assets(assets::VirtualFileSystem& vfs) {
         // filtered out every asset of a project that happened to live under a
         // directory whose name starts with "dist". Only a whole component
         // named "dist" (or ".git", "build", "Cache") is the generated output.
-        const std::string dir = it->path().parent_path().generic_string();
+        const std::string dir = generic_utf8(it->path().parent_path());
         if (has_path_component(dir, "dist") || has_path_component(dir, ".git") ||
             has_path_component(dir, "build") || has_path_component(dir, "Cache")) {
             continue;
         }
-        const assets::AssetType type = project_asset_type_for(it->path().extension().string());
+        const assets::AssetType type = project_asset_type_for(generic_utf8(it->path().extension()));
         if (type == assets::AssetType::Unknown) {
             continue;
         }
         // Same lexical strip as list_content_assets: never std::filesystem::
         // relative(), whose canonicalization can disagree with the mount path on
         // Windows and silently drop every file.
-        const std::string full = it->path().generic_string();
+        const std::string full = generic_utf8(it->path());
         if (full.size() <= base.size() || full.compare(0, base.size(), base) != 0) {
             continue;
         }

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>محرك سَنَد | SANAD Engine</title>
-    <meta name="description" content="محرك سَنَد (SANAD Engine) 0.5.0 — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
+    <meta name="description" content="محرك سَنَد (SANAD Engine) 0.8.0 — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -596,18 +596,18 @@
             <img src="assets/logo.jpg" alt="SANAD Engine Logo">
         </div>
         <div class="hero-badge-container">
-            <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.5.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
+            <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.8.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
             <span class="author-badge" data-i18n="author_badge">المؤسس والقائم على العمل: عبدالله (Abdallah)</span>
         </div>
         <h1>
             <span data-i18n="hero_title">محرك سَنَد | SANAD Engine</span>
         </h1>
         <p class="hero-desc" data-i18n="hero_subtitle">
-            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.5.0 يضيف FXAA، ملصقات مسقطة، مقياس رسم فائق، دقة ديناميكية، وتصويب ADS.
+            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.8.0 يحسّن شاشات المحرر ومتصفح الملفات والكاميرا والتحكم والسجل والاستيراد والتصدير.
         </p>
         <div class="hero-cta-group">
-            <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_download">
-                تنزيل 0.5.0
+            <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_download">
+                تنزيل 0.8.0
             </a>
             <a href="#quickstart" class="btn-secondary" data-i18n="hero_cta_build">
                 البناء والتشغيل
@@ -692,7 +692,7 @@
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">0.5.0</div>
+                <div class="stat-num">0.8.0</div>
                 <div class="stat-label" data-i18n="stat_tests">أحدث إصدار عام — 26 حزمة اختبار</div>
             </div>
             <div class="stat-card">
@@ -895,7 +895,7 @@
     <section class="container" id="quickstart" style="margin-bottom: 5rem;">
         <div class="section-header">
             <h2 data-i18n="quick_title">البدء السريع: البناء والتشغيل</h2>
-            <p data-i18n="quick_desc">ابنِ 0.5.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة</p>
+            <p data-i18n="quick_desc">ابنِ 0.8.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة</p>
         </div>
 
         <div class="code-box">
@@ -903,7 +903,7 @@
             <div><span class="code-cmd">git clone</span> <span class="code-arg">https://github.com/abdallah2183/SANAD-Engine.git</span></div>
             <div><span class="code-cmd">cd</span> <span class="code-arg">SANAD-Engine</span></div>
             <br>
-            <div class="code-comment"># 2. بناء الإصدار 0.5.0 (Build Release)</div>
+            <div class="code-comment"># 2. بناء الإصدار 0.8.0 (Build Release)</div>
             <div><span class="code-cmd">build_nf.bat</span> <span class="code-arg">Release</span></div>
             <br>
             <div class="code-comment"># 3. تشغيل محرر سند (Run SANAD Editor)</div>
@@ -917,7 +917,7 @@
             <div><span class="code-cmd">.\build\Release\bin\nf.exe</span> <span class="code-arg">run --project Games\MyGame\MyGame.nfproj</span></div>
         </div>
         <p style="margin-top: 1rem; color: var(--text-secondary);">
-            تفضّل عدم البناء؟ <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.5.0" style="color: var(--primary-orange);">نزّل حزمة 0.5.0 المحمولة</a>.
+            تفضّل عدم البناء؟ <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0" style="color: var(--primary-orange);">نزّل حزمة 0.8.0 المحمولة</a>.
         </p>
     </section>
 
@@ -1126,11 +1126,11 @@
                 nav_roadmap: "خارطة الطريق",
                 nav_quickstart: "البدء السريع",
                 btn_github: "مستودع GitHub",
-                hero_badge: "الإصدار 0.5.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
+                hero_badge: "الإصدار 0.8.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
                 author_badge: "المؤسس والقائم على العمل: عبدالله (Abdallah)",
                 hero_title: "محرك سَنَد | SANAD Engine",
-                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.5.0 يضيف FXAA، ملصقات مسقطة، مقياس رسم فائق، دقة ديناميكية، وتصويب ADS.",
-                hero_cta_download: "تنزيل 0.5.0",
+                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.8.0 يحسّن شاشات المحرر ومتصفح الملفات والكاميرا والتحكم والسجل والاستيراد والتصدير.",
+                hero_cta_download: "تنزيل 0.8.0",
                 hero_cta_build: "البناء والتشغيل",
                 hero_cta_explore: "استعراض المميزات",
                 canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
@@ -1161,7 +1161,7 @@
                 roadmap_title: "خارطة طريق التطوير",
                 roadmap_desc: "38 مرحلة مكتملة — 0.5.0 يغلق مرحلة الصورة واليد، والمرحلة التالية مفتوحة للمساهمة",
                 quick_title: "البدء السريع: البناء والتشغيل",
-                quick_desc: "ابنِ 0.5.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة"
+                quick_desc: "ابنِ 0.8.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة"
             },
             en: {
                 nav_features: "Features",
@@ -1196,11 +1196,11 @@
                 nav_roadmap: "Roadmap",
                 nav_quickstart: "Quickstart",
                 btn_github: "GitHub Repository",
-                hero_badge: "SANAD 0.5.0 — Extensible Arabic 3D Game Engine",
+                hero_badge: "SANAD 0.8.0 — Extensible Arabic 3D Game Engine",
                 author_badge: "Founder & Project Lead: Abdallah",
                 hero_title: "SANAD Engine | محرك سند",
-                hero_subtitle: "High-performance 3D game engine built with modern C++23, a low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio. 0.5.0 adds FXAA, projected decals, supersampling, dynamic resolution, and ADS.",
-                hero_cta_download: "Download 0.5.0",
+                hero_subtitle: "High-performance 3D game engine built with modern C++23, a low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio. 0.8.0 improves editor panels, the file browser, camera controls, input rebinding, console and import/export.",
+                hero_cta_download: "Download 0.8.0",
                 hero_cta_build: "Build and Run",
                 hero_cta_explore: "Explore Features",
                 canvas_hint: "Click and drag to orbit the 3D entity in world space",
@@ -1231,7 +1231,7 @@
                 roadmap_title: "Development Roadmap",
                 roadmap_desc: "38 completed phases — 0.5.0 closes the image-and-hand phase, and the next milestone is open for contributions.",
                 quick_title: "Quick Start: Build & Run",
-                quick_desc: "Build 0.5.0 on Windows with CMake and Visual Studio 2022 / Ninja — or download the portable package."
+                quick_desc: "Build 0.8.0 on Windows with CMake and Visual Studio 2022 / Ninja — or download the portable package."
             }
         };
 

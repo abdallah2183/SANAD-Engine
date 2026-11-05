@@ -71,6 +71,7 @@ bool ui_handle_win32_message(void* hwnd, uint32_t msg, uint64_t wparam, int64_t 
 // except through explicit widget-triggered intents returned below.
 struct UiIntents {
     bool open_scene_dialog_confirm = false;
+    bool open_scene_approved = false;
     std::string open_scene_path;
     bool save_as_confirm = false;
     std::string save_as_path;

@@ -19,6 +19,9 @@
 #include <NF/Editor/Inspector.hpp>
 #include <NF/Editor/ToolbarUi.hpp>
 #include <NF/Editor/UiText.hpp>
+#include <NF/Editor/UiEditCache.hpp>
+#include <NF/Editor/UiTextInput.hpp>
+#include <NF/Editor/InputBindingCapture.hpp>
 #include <NF/Editor/UiTheme.hpp>
 #include <NF/Editor/UiWidgets.hpp>
 
@@ -35,6 +38,7 @@
 #include <NF/Vfx/Components.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
@@ -191,6 +195,7 @@ bool sun_dial(SunAngles& a, float size) {
 /// Cached edit state, reset when the bound light changes (same contract the
 /// Inspector's cache keeps).
 struct LightCache {
+    UiEditCacheKey key;
     ecs::Entity entity;
     LightEdit edit{};
     SunAngles angles{};
@@ -209,7 +214,8 @@ void lighting_panel(EditorApp& app) {
     }
     const ecs::Entity light = scene_light_entity(*w);
     LightCache& c = light_cache();
-    if (!c.valid || c.entity != light) {
+    const bool refresh = c.key.refresh(w, light, app.scene_serial(), app.edit_revision());
+    if (!c.valid || refresh) {
         c.entity = light;
         c.valid = true;
         if (light.valid()) {
@@ -232,17 +238,18 @@ void lighting_panel(EditorApp& app) {
     }
 
     if (section(AV("sun").c_str())) {
+        const bool side_by_side = ImGui::GetContentRegionAvail().x >= 430.0f;
         const float dial = 128.0f;
         const float x0 = ImGui::GetCursorPosX();
         sun_dial(c.angles, dial);
-        ImGui::SameLine(0.0f, 14.0f);
+        if (side_by_side) ImGui::SameLine(0.0f, 14.0f);
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(150.0f);
         ImGui::DragFloat((AV("azimuth") + "##az").c_str(), &c.angles.azimuth_deg, 1.0f, 0.0f,
-                         360.0f, AVF("deg_fmt", 0.0).c_str());
+                         360.0f, AV("deg_fmt").c_str());
         ImGui::SetNextItemWidth(150.0f);
         ImGui::DragFloat((AV("elevation") + "##el").c_str(), &c.angles.elevation_deg, 0.5f, -10.0f,
-                         90.0f, AVF("deg_fmt", 0.0).c_str());
+                         90.0f, AV("deg_fmt").c_str());
         ImGui::Spacing();
         // Recompute BEFORE printing. The dials above write the angles, and the
         // direction readout used to be printed first and derived second, so it
@@ -302,6 +309,7 @@ void lighting_panel(EditorApp& app) {
 // --- Environment ------------------------------------------------------------
 
 struct SkyCache {
+    UiEditCacheKey key;
     ecs::Entity entity;
     SkyEdit edit{};
     float time_of_day = 12.0f;
@@ -373,7 +381,8 @@ void environment_panel(EditorApp& app) {
     }
     const ecs::Entity sky = scene_sky_entity(*w);
     SkyCache& c = sky_cache();
-    if (!c.valid || c.entity != sky) {
+    const bool refresh = c.key.refresh(w, sky, app.scene_serial(), app.edit_revision());
+    if (!c.valid || refresh) {
         c.entity = sky;
         c.valid = true;
         if (sky.valid()) {
@@ -516,6 +525,7 @@ void environment_panel(EditorApp& app) {
 // --- Camera -----------------------------------------------------------------
 
 struct CameraCache {
+    UiEditCacheKey key;
     ecs::Entity entity;
     CameraEdit edit{};
     TransformEdit xf{};
@@ -532,10 +542,10 @@ void camera_panel(EditorApp& app) {
     if (w == nullptr) {
         return;
     }
-    const std::vector<ecs::Entity> cams = w->query<runtime::CameraComponent>();
-    const ecs::Entity cam = cams.empty() ? ecs::kInvalidEntity : cams.front();
+    const ecs::Entity cam = scene_camera_entity(*w);
     CameraCache& c = camera_cache();
-    if (!c.valid || c.entity != cam) {
+    const bool refresh = c.key.refresh(w, cam, app.scene_serial(), app.edit_revision());
+    if (!c.valid || refresh) {
         c.entity = cam;
         c.valid = true;
         if (cam.valid()) {
@@ -590,12 +600,13 @@ void camera_panel(EditorApp& app) {
     // to follow, the pivot on it, the distance and the angles, how fast the
     // camera catches up, and what it does when a tree is in the way.
     if (section(AV("follow").c_str())) {
+        ImGui::TextUnformatted(AV("follow_target").c_str());
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputText((AV("follow_target") + "##cft").c_str(), c.edit.follow_target.data(),
-                         c.edit.follow_target.capacity());
+        input_text("##cft", c.edit.follow_target);
         hint(AV("follow_hint"));
+        ImGui::TextUnformatted(AV("follow_pivot").c_str());
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragFloat3((AV("follow_pivot") + "##cpv").c_str(), &c.edit.pivot_x, 0.05f);
+        ImGui::DragFloat3("##cpv", &c.edit.pivot_x, 0.05f);
         ImGui::SetNextItemWidth(150.0f);
         ImGui::DragFloat((AV("follow_distance") + "##cd").c_str(), &c.edit.distance, 0.1f, 0.0f,
                          100.0f, "%.2f");
@@ -619,7 +630,7 @@ void camera_panel(EditorApp& app) {
     // the difference between a camera the player watches and a camera the
     // player turns, and every one of them is a taste — which is why they are
     // scene data and not constants in the runtime.
-    if (section(AV("aim").c_str())) {
+    if (section(AV("aim").c_str(), false)) {
         ImGui::Checkbox((AV("aim_mouse") + "##cam_mouse").c_str(), &c.edit.mouse_look);
         hint(AV("aim_hint"));
         ImGui::SetNextItemWidth(150.0f);
@@ -690,7 +701,7 @@ void camera_panel(EditorApp& app) {
     // player owns, stored in a file outside the project and applied on top of
     // whatever the camera above says. A scale of 1.0 and an FOV of 0 mean
     // "the scene's", which is why an untouched panel changes nothing.
-    if (section(AV("player_settings").c_str())) {
+    if (section(AV("player_settings").c_str(), false)) {
         // Load once, so the panel shows the FILE rather than the defaults.
         if (!app.player_settings_loaded()) {
             std::string ignored;
@@ -699,7 +710,7 @@ void camera_panel(EditorApp& app) {
         runtime::PlayerSettings& ps = app.player_settings();
         ImGui::TextDisabled("%s: %s%s", AV("settings_file").c_str(),
                             runtime::Runtime::kDefaultPlayerSettingsPath,
-                            app.player_settings_file_exists() ? "" : " (none)");
+                            app.player_settings_file_exists() ? "" : AV("settings_file_absent").c_str());
         ImGui::SetNextItemWidth(150.0f);
         ImGui::DragFloat((AV("look_scale") + "##ps_look").c_str(), &ps.look_scale, 0.01f, 0.05f,
                          10.0f, "%.2f");
@@ -868,10 +879,12 @@ void camera_panel(EditorApp& app) {
     }
 
     if (section(AV("transform").c_str())) {
+        ImGui::TextUnformatted(AV("position").c_str());
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragFloat3((AV("position") + "##cp").c_str(), &c.xf.px, 0.05f);
+        ImGui::DragFloat3("##cp", &c.xf.px, 0.05f);
+        ImGui::TextUnformatted(AV("rotation").c_str());
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragFloat3((AV("rotation") + "##cr").c_str(), &c.xf.rx, 0.5f);
+        ImGui::DragFloat3("##cr", &c.xf.rx, 0.5f);
         hint(AV("camera_transform_hint"));
     }
 
@@ -896,60 +909,6 @@ void camera_panel(EditorApp& app) {
 // --- Input bindings ---------------------------------------------------------
 
 namespace {
-
-/// ImGui key -> Windows virtual-key code, for the keys a player actually
-/// binds. Deliberately not exhaustive: a key that is not here simply cannot
-/// be captured, which is better than guessing a code and writing a binding
-/// that never fires.
-bool imgui_key_to_vk(ImGuiKey key, nf::u16& out) {
-    if (key >= ImGuiKey_A && key <= ImGuiKey_Z) {
-        out = static_cast<nf::u16>('A' + (key - ImGuiKey_A));
-        return true;
-    }
-    if (key >= ImGuiKey_0 && key <= ImGuiKey_9) {
-        out = static_cast<nf::u16>('0' + (key - ImGuiKey_0));
-        return true;
-    }
-    if (key >= ImGuiKey_F1 && key <= ImGuiKey_F12) {
-        out = static_cast<nf::u16>(0x70 + (key - ImGuiKey_F1));
-        return true;
-    }
-    switch (key) {
-    case ImGuiKey_Space: out = 0x20; return true;
-    case ImGuiKey_Enter: out = 0x0D; return true;
-    case ImGuiKey_Tab: out = 0x09; return true;
-    case ImGuiKey_Backspace: out = 0x08; return true;
-    case ImGuiKey_Escape: out = 0x1B; return true;
-    case ImGuiKey_LeftShift:
-    case ImGuiKey_RightShift: out = 0x10; return true;
-    case ImGuiKey_LeftCtrl:
-    case ImGuiKey_RightCtrl: out = 0x11; return true;
-    case ImGuiKey_LeftAlt:
-    case ImGuiKey_RightAlt: out = 0x12; return true;
-    case ImGuiKey_UpArrow: out = 0x26; return true;
-    case ImGuiKey_DownArrow: out = 0x28; return true;
-    case ImGuiKey_LeftArrow: out = 0x25; return true;
-    case ImGuiKey_RightArrow: out = 0x27; return true;
-    case ImGuiKey_Delete: out = 0x2E; return true;
-    case ImGuiKey_Insert: out = 0x2D; return true;
-    case ImGuiKey_Home: out = 0x24; return true;
-    case ImGuiKey_End: out = 0x23; return true;
-    case ImGuiKey_PageUp: out = 0x21; return true;
-    case ImGuiKey_PageDown: out = 0x22; return true;
-    case ImGuiKey_Minus: out = 0xBD; return true;
-    case ImGuiKey_Equal: out = 0xBB; return true;
-    case ImGuiKey_Comma: out = 0xBC; return true;
-    case ImGuiKey_Period: out = 0xBE; return true;
-    case ImGuiKey_Slash: out = 0xBF; return true;
-    case ImGuiKey_Semicolon: out = 0xBA; return true;
-    case ImGuiKey_Apostrophe: out = 0xDE; return true;
-    case ImGuiKey_LeftBracket: out = 0xDB; return true;
-    case ImGuiKey_RightBracket: out = 0xDD; return true;
-    case ImGuiKey_Backslash: out = 0xDC; return true;
-    case ImGuiKey_GraveAccent: out = 0xC0; return true;
-    default: return false;
-    }
-}
 
 /// One binding, as the file spells it: `-key:A`, `pad:lb`, `mouse:right`.
 std::string binding_label(const nf::runtime::InputBinding& b) {
@@ -976,10 +935,8 @@ std::string binding_label(const nf::runtime::InputBinding& b) {
 } // namespace
 
 void input_panel(EditorApp& app) {
-    // Captured by reference below; one capture at a time, which is what a
-    // "press a key" affordance means.
-    static std::string s_capture_action;
-
+    static InputBindingCapture capture;
+    static std::string action_search;
     if (!app.input_bindings_loaded()) {
         std::string ignored;
         app.load_input_bindings(ignored); // no file is the normal case
@@ -987,93 +944,8 @@ void input_panel(EditorApp& app) {
 
     ImGui::TextDisabled("%s: %s%s", AV("settings_file").c_str(),
                         EditorApp::kInputBindingsPath,
-                        app.input_bindings_file_exists() ? "" : " (none)");
+                        app.input_bindings_file_exists() ? "" : AV("settings_file_absent").c_str());
     hint(AV("bindings_hint"));
-
-    // While a capture is armed, the next key or mouse click becomes the
-    // binding. Escape cancels — the one key that must always be able to say
-    // "not this".
-    if (!s_capture_action.empty()) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            s_capture_action.clear();
-        } else {
-            nf::u16 code = 0;
-            nf::runtime::BindingSource source = nf::runtime::BindingSource::Key;
-            bool captured = false;
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                code = 0x01;
-                source = nf::runtime::BindingSource::MouseButton;
-                captured = true;
-            } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                code = 0x02;
-                source = nf::runtime::BindingSource::MouseButton;
-                captured = true;
-            } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-                code = 0x04;
-                source = nf::runtime::BindingSource::MouseButton;
-                captured = true;
-            } else {
-                for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END && !captured; ++k) {
-                    const auto key = static_cast<ImGuiKey>(k);
-                    if (ImGui::IsKeyPressed(key, false) && imgui_key_to_vk(key, code)) {
-                        captured = true;
-                    }
-                }
-            }
-            if (captured) {
-                app.input_bindings().set(s_capture_action,
-                                         {nf::runtime::InputBinding{source, code, 1.0f}});
-                s_capture_action.clear();
-            }
-        }
-    }
-
-    if (ImGui::BeginChild("##bindings", ImVec2(0.0f, 320.0f), ImGuiChildFlags_Borders)) {
-        for (const auto& [action, list] : nf::runtime::binding_rows(app.input_bindings())) {
-            ImGui::PushID(action.c_str());
-            std::string shown;
-            for (size_t i = 0; i < list.size(); ++i) {
-                shown += (i == 0) ? "" : ", ";
-                shown += binding_label(list[i]);
-            }
-            if (shown.empty()) {
-                shown = "—";
-            }
-            ImGui::TextUnformatted(action.c_str());
-            ImGui::SameLine(170.0f);
-            ImGui::TextDisabled("%s", shown.c_str());
-            ImGui::SameLine(330.0f);
-            if (s_capture_action == action) {
-                ImGui::TextColored(theme::accent(), "%s", AV("press_a_key").c_str());
-            } else if (ImGui::SmallButton((AV("rebind") + "##rb").c_str())) {
-                s_capture_action = action;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton((AV("reset") + "##rs").c_str())) {
-                app.reset_binding(action);
-            }
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndChild();
-
-    // One control, two actions: whichever fires first is the one the player
-    // gets, and nothing in the runtime can explain that. The list is capped
-    // because the point is to make the player look, not to enumerate.
-    const auto conflicts = nf::runtime::find_binding_conflicts(app.input_bindings());
-    if (!conflicts.empty()) {
-        ImGui::TextColored(theme::warning(), "%s: %d", AV("binding_conflicts").c_str(),
-                           static_cast<int>(conflicts.size()));
-        for (size_t i = 0; i < conflicts.size() && i < 4; ++i) {
-            const nf::runtime::InputBinding as_binding{conflicts[i].source, conflicts[i].code,
-                                                       1.0f};
-            ImGui::BulletText("%s / %s: %s", conflicts[i].action_a.c_str(),
-                              conflicts[i].action_b.c_str(), binding_label(as_binding).c_str());
-        }
-        if (conflicts.size() > 4) {
-            ImGui::BulletText("…");
-        }
-    }
 
     if (ImGui::Button((AV("save") + "##bind_save").c_str())) {
         std::string err;
@@ -1090,6 +962,66 @@ void input_panel(EditorApp& app) {
             push_error(app.console(), "Reload input bindings failed", err);
         }
     }
+
+    ImGui::SetNextItemWidth(-1.0f);
+    input_text_with_hint("##bindingsearch", AV("bindings_search").c_str(), action_search);
+    const bool wide = ImGui::GetContentRegionAvail().x >= 490.0f;
+    const float list_height = std::clamp(ImGui::GetContentRegionAvail().y - 45.0f, 90.0f, 360.0f);
+    if (ImGui::BeginChild("##bindings", ImVec2(0.0f, list_height), ImGuiChildFlags_Borders)) {
+        const bool table = wide && ImGui::BeginTable("##bindingtable", 3, ImGuiTableFlags_BordersInnerH);
+        if (table) {
+            ImGui::TableSetupColumn("##action", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("##binding", ImGuiTableColumnFlags_WidthStretch, 1.4f);
+            ImGui::TableSetupColumn("##buttons", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        }
+        for (const auto& [action, list] : nf::runtime::binding_rows(app.input_bindings())) {
+            if (!binding_action_matches(action, action_search)) continue;
+            ImGui::PushID(action.c_str());
+            std::string shown;
+            for (size_t i = 0; i < list.size(); ++i) {
+                shown += (i == 0) ? "" : ", ";
+                shown += binding_label(list[i]);
+            }
+            if (shown.empty()) shown = "--";
+            if (table) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+            }
+            ImGui::TextWrapped("%s", action.c_str());
+            if (table) ImGui::TableSetColumnIndex(1);
+            ImGui::TextWrapped("%s", shown.c_str());
+            if (table) ImGui::TableSetColumnIndex(2);
+            if (ImGui::SmallButton((AV("rebind") + "##rb").c_str())) capture.begin(action);
+            ImGui::SameLine();
+            if (ImGui::SmallButton((AV("reset") + "##rs").c_str())) app.reset_binding(action);
+            if (!table) ImGui::Separator();
+            ImGui::PopID();
+        }
+        if (table) ImGui::EndTable();
+    }
+    ImGui::EndChild();
+    input_binding_capture_popup(capture, app.input_bindings());
+
+    // One control, two actions: whichever fires first is the one the player
+    // gets, and nothing in the runtime can explain that. The list is capped
+    // because the point is to make the player look, not to enumerate.
+    const auto conflicts = nf::runtime::find_binding_conflicts(app.input_bindings());
+    if (!conflicts.empty() && ImGui::CollapsingHeader(
+            (AVF("bindings_conflicts_fmt", conflicts.size()) + "###bindingconflicts").c_str())) {
+        ImGui::TextColored(theme::warning(), "%s: %d", AV("binding_conflicts").c_str(),
+                           static_cast<int>(conflicts.size()));
+        for (size_t i = 0; i < conflicts.size() && i < 4; ++i) {
+            const nf::runtime::InputBinding as_binding{conflicts[i].source, conflicts[i].code,
+                                                       1.0f};
+            ImGui::BulletText("%s / %s: %s", conflicts[i].action_a.c_str(),
+                              conflicts[i].action_b.c_str(), binding_label(as_binding).c_str());
+        }
+        if (conflicts.size() > 4) {
+            ImGui::BulletText("…");
+        }
+    }
+
+
 }
 
 // --- Render & performance ---------------------------------------------------
@@ -1292,9 +1224,16 @@ void world_panel(EditorApp& app) {
 
 } // namespace
 
-void talent_tree_panel(EditorApp& app);
-void flow_field_panel(EditorApp& app);
-void cable_panel(EditorApp& app);
+namespace {
+void activate_panel_tab() {
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if (window->DockNode != nullptr) {
+        window->DockNode->SelectedTabId = window->TabId;
+        if (window->DockNode->TabBar != nullptr)
+            window->DockNode->TabBar->NextSelectedTabId = window->TabId;
+    }
+}
+} // namespace
 
 void scene_panels(EditorApp& app, const UiFrameStats& stats) {
     EditorUiSettings& st = ui_settings();
@@ -1304,198 +1243,83 @@ void scene_panels(EditorApp& app, const UiFrameStats& stats) {
     // taking its dock id from there — the panel came up floating over the
     // outliner. The docked panels in Panels.cpp pass no flags either.
 
+    static bool was_show_lighting = false;
+    const bool focus_show_lighting = st.show_lighting && !was_show_lighting;
+    was_show_lighting = st.show_lighting;
     if (st.show_lighting) {
+        if (focus_show_lighting) ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowSize(ImVec2(340.0f, 460.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_lighting") + "###NFLighting").c_str(), &st.show_lighting)) {
+        const bool visible = ImGui::Begin((AV("tab_lighting") + "###NFLighting").c_str(), &st.show_lighting);
+        if (focus_show_lighting) activate_panel_tab();
+        if (visible) {
             lighting_panel(app);
         }
         ImGui::End();
     }
+    static bool was_show_environment = false;
+    const bool focus_show_environment = st.show_environment && !was_show_environment;
+    was_show_environment = st.show_environment;
     if (st.show_environment) {
+        if (focus_show_environment) ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowSize(ImVec2(340.0f, 460.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_environment") + "###NFEnvironment").c_str(), &st.show_environment)) {
+        const bool visible = ImGui::Begin((AV("tab_environment") + "###NFEnvironment").c_str(), &st.show_environment);
+        if (focus_show_environment) activate_panel_tab();
+        if (visible) {
             environment_panel(app);
         }
         ImGui::End();
     }
+    static bool was_show_camera_panel = false;
+    const bool focus_show_camera_panel = st.show_camera_panel && !was_show_camera_panel;
+    was_show_camera_panel = st.show_camera_panel;
     if (st.show_camera_panel) {
+        if (focus_show_camera_panel) ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowSize(ImVec2(340.0f, 420.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_camera") + "###NFCameraPanel").c_str(), &st.show_camera_panel)) {
+        const bool visible = ImGui::Begin((AV("tab_camera") + "###NFCameraPanel").c_str(), &st.show_camera_panel);
+        if (focus_show_camera_panel) activate_panel_tab();
+        if (visible) {
             camera_panel(app);
         }
         ImGui::End();
     }
+    static bool was_show_render = false;
+    const bool focus_show_render = st.show_render && !was_show_render;
+    was_show_render = st.show_render;
     if (st.show_render) {
+        if (focus_show_render) ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowSize(ImVec2(360.0f, 420.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_render") + "###NFRender").c_str(), &st.show_render)) {
+        const bool visible = ImGui::Begin((AV("tab_render") + "###NFRender").c_str(), &st.show_render);
+        if (focus_show_render) activate_panel_tab();
+        if (visible) {
             render_panel(app, stats);
         }
         ImGui::End();
     }
+    static bool was_show_input = false;
+    const bool focus_show_input = st.show_input && !was_show_input;
+    was_show_input = st.show_input;
     if (st.show_input) {
+        if (focus_show_input) ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowSize(ImVec2(420.0f, 460.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("input_bindings") + "###NFInput").c_str(), &st.show_input)) {
+        const bool visible = ImGui::Begin((AV("input_bindings") + "###NFInput").c_str(), &st.show_input);
+        if (focus_show_input) activate_panel_tab();
+        if (visible) {
             input_panel(app);
         }
         ImGui::End();
     }
+    static bool was_show_world = false;
+    const bool focus_show_world = st.show_world && !was_show_world;
+    was_show_world = st.show_world;
     if (st.show_world) {
+        if (focus_show_world) ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowSize(ImVec2(340.0f, 420.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_world") + "###NFWorld").c_str(), &st.show_world)) {
+        const bool visible = ImGui::Begin((AV("tab_world") + "###NFWorld").c_str(), &st.show_world);
+        if (focus_show_world) activate_panel_tab();
+        if (visible) {
             world_panel(app);
         }
         ImGui::End();
-    }
-    if (st.show_talent_tree) {
-        ImGui::SetNextWindowSize(ImVec2(380.0f, 480.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_talent_tree") + "###NFTalentTree").c_str(), &st.show_talent_tree)) {
-            talent_tree_panel(app);
-        }
-        ImGui::End();
-    }
-    if (st.show_flow_field) {
-        ImGui::SetNextWindowSize(ImVec2(400.0f, 480.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_flow_field") + "###NFFlowField").c_str(), &st.show_flow_field)) {
-            flow_field_panel(app);
-        }
-        ImGui::End();
-    }
-    if (st.show_cable_panel) {
-        ImGui::SetNextWindowSize(ImVec2(380.0f, 440.0f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((AV("tab_cable_sim") + "###NFCableSim").c_str(), &st.show_cable_panel)) {
-            cable_panel(app);
-        }
-        ImGui::End();
-    }
-}
-
-void talent_tree_panel(EditorApp& app) {
-    (void)app;
-    uiw::bound_header(AV("tab_talent_tree"), "Progression Graph");
-    ImGui::Text("%s", AV("talent_tree").c_str());
-    ImGui::Separator();
-
-    static int sample_points = 5;
-    static int spent_points = 0;
-    ImGui::Text("%s: %d", AV("available_points").c_str(), sample_points);
-    ImGui::SameLine();
-    ImGui::Text("| %s: %d", AV("spent_points").c_str(), spent_points);
-
-    const char* tiers[3] = {"Tier 0: Fundamentals", "Tier 1: Specialization", "Tier 2: Keystone Perks"};
-    struct DemoTalent { const char* name; int rank; int max_rank; const char* type; };
-    static DemoTalent demo_talents[3][2] = {
-        { {"Iron Will", 1, 3, "PassiveStat"}, {"Eagle Eye", 0, 3, "PassiveStat"} },
-        { {"Whirlwind Strike", 0, 1, "ActiveAbility"}, {"Shadow Step", 0, 1, "ActiveAbility"} },
-        { {"Avatar of War", 0, 1, "KeystonePerk"}, {"Immortal Spirit", 0, 1, "KeystonePerk"} }
-    };
-
-    for (int t = 0; t < 3; ++t) {
-        if (section(tiers[t])) {
-            for (int i = 0; i < 2; ++i) {
-                ImGui::PushID(t * 10 + i);
-                ImGui::BulletText("%s [%s]", demo_talents[t][i].name, demo_talents[t][i].type);
-                ImGui::SameLine();
-                ImGui::Text("(Rank %d/%d)", demo_talents[t][i].rank, demo_talents[t][i].max_rank);
-                ImGui::SameLine();
-                if (ImGui::SmallButton("+")) {
-                    if (sample_points > 0 && demo_talents[t][i].rank < demo_talents[t][i].max_rank) {
-                        demo_talents[t][i].rank++;
-                        sample_points--;
-                        spent_points++;
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::SmallButton("-")) {
-                    if (demo_talents[t][i].rank > 0) {
-                        demo_talents[t][i].rank--;
-                        sample_points++;
-                        spent_points--;
-                    }
-                }
-                ImGui::PopID();
-            }
-        }
-    }
-}
-
-void flow_field_panel(EditorApp& app) {
-    uiw::bound_header(AV("tab_flow_field"), "AI Crowd Navigation");
-    ImGui::Text("%s", AV("flow_field").c_str());
-    ImGui::Separator();
-
-    static int grid_sz = 32;
-    static float csize = 1.0f;
-    static int goal_x = 16;
-    static int goal_y = 16;
-    ImGui::SliderInt((AV("grid_width") + "##ffp_w").c_str(), &grid_sz, 8, 128);
-    ImGui::DragFloat((AV("cell_size") + "##ffp_cs").c_str(), &csize, 0.1f, 0.2f, 10.0f, "%.2f m");
-    ImGui::SliderInt((AV("target_x") + "##ffp_gx").c_str(), &goal_x, 0, grid_sz - 1);
-    ImGui::SliderInt((AV("target_y") + "##ffp_gy").c_str(), &goal_y, 0, grid_sz - 1);
-
-    if (ImGui::Button(AV("recalculate_flow").c_str())) {
-        push_info(app.console(), "Wavefront integration complete for 10,000+ agents towards (" + std::to_string(goal_x) + ", " + std::to_string(goal_y) + ")");
-    }
-
-    ImGui::Spacing();
-    ImGui::TextDisabled("Grid Flow Vectors Preview (Goal at [%d, %d]):", goal_x / 4, goal_y / 4);
-    const char* arrow_symbols[8] = { "^", "/", ">", "\\", "v", "/", "<", "\\" };
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
-            if (x > 0) ImGui::SameLine();
-            if (x == goal_x / 4 && y == goal_y / 4) {
-                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "[*]");
-            } else {
-                int dx = (goal_x / 4) - x;
-                int dy = (goal_y / 4) - y;
-                float angle = std::atan2(static_cast<float>(dy), static_cast<float>(dx));
-                int dir_idx = static_cast<int>(std::round(angle / (3.14159265f / 4.0f))) & 7;
-                ImGui::TextDisabled("[%s]", arrow_symbols[dir_idx]);
-            }
-        }
-    }
-}
-
-void cable_panel(EditorApp& app) {
-    uiw::bound_header(AV("tab_cable_sim"), "Verlet Physics Dynamics");
-    ImGui::Text("%s", AV("cable_sim").c_str());
-    ImGui::Separator();
-
-    static float cable_len = 10.0f;
-    static int p_count = 16;
-    static float stiff = 0.85f;
-    static float damp = 0.98f;
-    static float max_t = 1500.0f;
-    static bool breakable = true;
-    static bool broken = false;
-
-    ImGui::SliderFloat((AV("rest_length") + "##cp_len").c_str(), &cable_len, 1.0f, 100.0f, "%.2f m");
-    ImGui::SliderInt((AV("particles") + "##cp_p").c_str(), &p_count, 4, 64);
-    ImGui::SliderFloat((AV("stiffness") + "##cp_st").c_str(), &stiff, 0.05f, 1.0f, "%.2f");
-    ImGui::SliderFloat((AV("damping") + "##cp_dp").c_str(), &damp, 0.5f, 1.0f, "%.3f");
-    ImGui::Checkbox((AV("breakable") + "##cp_brk").c_str(), &breakable);
-    ImGui::DragFloat((AV("max_tension") + "##cp_mt").c_str(), &max_t, 10.0f, 10.0f, 50000.0f, "%.1f N");
-
-    ImGui::Spacing();
-    // Live Tension Gauge
-    const float cur_t = broken ? 0.0f : (cable_len * 35.0f * stiff);
-    float t_ratio = (breakable && max_t > 0.0f) ? (cur_t / max_t) : 0.0f;
-    if (t_ratio > 1.0f) { t_ratio = 1.0f; broken = true; }
-
-    ImGui::Text("%s: %.1f N / %.1f N", AV("tension_gauge").c_str(), cur_t, max_t);
-    const ImVec4 g_col = broken ? ImVec4(1.0f, 0.2f, 0.2f, 1.0f) : (t_ratio > 0.8f ? ImVec4(1.0f, 0.6f, 0.2f, 1.0f) : ImVec4(0.2f, 0.85f, 0.4f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImGui::ColorConvertFloat4ToU32(g_col));
-    ImGui::ProgressBar(broken ? 1.0f : t_ratio, ImVec2(-1.0f, 0.0f), broken ? "BROKEN / مقطوع" : nullptr);
-    ImGui::PopStyleColor();
-
-    ImGui::Spacing();
-    if (ImGui::Button((AV("snap_cable_test") + "##cp_snap").c_str())) {
-        broken = true;
-        push_info(app.console(), "Cable snapped under excessive tension load!");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button((AV("reset_cable_ends") + "##cp_rst").c_str())) {
-        broken = false;
-        push_info(app.console(), "Cable rest length and pinned anchors reset.");
     }
 }
 

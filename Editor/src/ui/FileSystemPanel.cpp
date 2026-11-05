@@ -26,8 +26,10 @@
 #include <shellapi.h>
 #endif
 #include <NF/Editor/FileSystemPanel.hpp>
+#include <NF/Editor/AssetRename.hpp>
 #include <NF/Editor/UiText.hpp>
 #include <NF/Editor/UiTextInput.hpp>
+#include <NF/Editor/UiPathText.hpp>
 #include <NF/Editor/UiTheme.hpp>
 #include <NF/Editor/UiRenderer.hpp>
 
@@ -51,16 +53,16 @@ void open_in_os_file_manager(const EditorApp& app, const std::string& logical_pa
 #ifdef _WIN32
     auto resolved = app.vfs().resolve(logical_path);
     if (resolved.ok && !resolved.value.empty()) {
-        std::string p = resolved.value.string();
-        for (char& c : p) {
-            if (c == '/') {
-                c = '\\';
+        std::wstring p = resolved.value.wstring();
+        for (wchar_t& c : p) {
+            if (c == L'/') {
+                c = L'\\';
             }
         }
-        const DWORD attr = ::GetFileAttributesA(p.c_str());
+        const DWORD attr = ::GetFileAttributesW(p.c_str());
         const bool is_dir = (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
-        const std::string param = is_dir ? ("\"" + p + "\"") : ("/select,\"" + p + "\"");
-        ::ShellExecuteA(nullptr, "open", "explorer.exe", param.c_str(), nullptr, SW_SHOWDEFAULT);
+        const std::wstring param = is_dir ? (L"\"" + p + L"\"") : (L"/select,\"" + p + L"\"");
+        ::ShellExecuteW(nullptr, L"open", L"explorer.exe", param.c_str(), nullptr, SW_SHOWDEFAULT);
     }
 #else
     (void)app;
@@ -247,7 +249,7 @@ std::string ellipsize_to_width(const std::string& text, float max_w) {
     std::string out = text;
     while (out.size() > 4 &&
            ImGui::CalcTextSize((out + "...").c_str()).x > max_w) {
-        out.pop_back();
+        remove_last_utf8_character(out);
     }
     if (out.size() <= 4) {
         return "...";
@@ -272,6 +274,8 @@ struct RenameState {
     bool requested = false;
     std::string from;
     std::string name;
+    std::string error;
+    bool focus = false;
 };
 RenameState& rename_state() {
     static RenameState s;
@@ -299,6 +303,8 @@ void begin_rename(RenameState& s, const std::string& from) {
     s.open = true;
     s.requested = true;
     s.from = from;
+    s.error.clear();
+    s.focus = true;
     // Prefill with the current file name (not the whole path): the user is
     // renaming within the folder they are standing in. The name is a
     // std::string, not a fixed buffer: it becomes the destination FILE NAME,
@@ -313,39 +319,39 @@ std::string renamed_path(const std::string& from, const std::string& new_name) {
     if (folder.empty()) {
         return new_name;
     }
-    return folder + "/" + new_name;
+    return join_asset_path(folder, new_name);
 }
 
-// Returns true when a rename completed this frame (so the caller can drop a
-// confirmation line). Any failure is reported to the console and the modal is
-// closed either way: keeping it open on an error with no message next to it is
-// worse than closing with the error in the console.
+// Keep the entered name and show the error beside it if a rename fails, so a
+// typo or existing destination can be corrected without starting over.
 //
-// The state is cleared FULLY — the name and the source path go with the flag.
-// A second commit in the same frame (the Enter key AND the button, or two
-// callers) would otherwise rename the file twice and push a spurious error.
+// A successful commit clears the pending interaction. On failure the caller
+// keeps it open and lets the user edit the same input.
 bool finish_rename(EditorApp& app, RenameState& s) {
     const std::string typed(s.name);
     const std::string from(s.from);
-    s.open = false;
-    s.requested = false;
-    s.name.clear();
-    s.from.clear();
-    // An emptied box is a cancel, not a rename to "". Refusing here rather than
-    // in EditorApp keeps the modal responsive: the user gets nothing at all,
-    // which reads as "the field was empty, I did not mean that".
-    if (typed.empty()) {
+    // Keep the dialog open on an empty or invalid name so the user sees the
+    // problem and can correct it without reopening the operation.
+    if (!valid_asset_rename_leaf(typed)) {
+        s.error = AV("rename_leaf_invalid");
         return false;
     }
     const std::string to = renamed_path(from, typed);
     if (to == from) {
+        s.open = false;
         return false; // retyped the same name: nothing to do, nothing to report
     }
     std::string err;
     if (!app.rename_asset(from, to, err)) {
+        s.error = err;
         push_error(app.console(), AV("rename_failed"), err);
         return false;
     }
+    s.open = false;
+    s.requested = false;
+    s.name.clear();
+    s.from.clear();
+    s.error.clear();
     push_info(app.console(), AVF("renamed_fmt", to.c_str()));
     return true;
 }
@@ -451,6 +457,32 @@ void dispatch_open(EditorApp& app, UiIntents& intents, const AssetEntry& e) {
             push_info(app.console(), std::string("Opened in ") + kind + ": " + info);
         }
     }
+}
+
+// Search results, list rows and grid cells expose the same actions. Keeping
+// these together prevents search from hiding rename/delete and avoids a menu
+// saying "show in folder" when it only copied a path.
+void file_context_menu(EditorApp& app, UiIntents& intents, const AssetEntry& e) {
+    if (!ImGui::BeginPopupContextItem("##file_actions")) return;
+    if (e.type == assets::AssetType::Scene || fs_ends_with(e.logical_path, ".nfscene")) {
+        if (ImGui::MenuItem(AV("open_scene").c_str())) {
+            intents.open_scene_dialog_confirm = true;
+            intents.open_scene_path = e.logical_path;
+        }
+    }
+    if (ImGui::MenuItem(AV("rename_asset").c_str())) begin_rename(rename_state(), e.logical_path);
+    if (ImGui::MenuItem(AV("show_in_explorer").c_str())) open_in_os_file_manager(app, e.logical_path);
+    if (e.type == assets::AssetType::Script && ImGui::MenuItem(AV("open_in_vs").c_str())) {
+        std::string kind, err;
+        if (!app.open_asset_in_ide(e.logical_path, kind, err))
+            push_error(app.console(), "Open in IDE failed", err);
+        else
+            push_info(app.console(), std::string("Opened in ") + kind + ": " + e.logical_path);
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem(AV("delete_asset").c_str()))
+        confirm_state() = {true, true, e.logical_path, false};
+    ImGui::EndPopup();
 }
 
 // Recursive folder tree. Ancestors of the current folder stay open so the
@@ -656,11 +688,13 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                 }
                 ImGui::PopID();
             };
-            for (const std::string& f : bs.back_stack) {
+            const auto back_snapshot = bs.back_stack;
+            const auto forward_snapshot = bs.forward_stack;
+            for (const std::string& f : back_snapshot) {
                 hist_row(f, false);
             }
             hist_row(nav_base, true);
-            for (auto it = bs.forward_stack.rbegin(); it != bs.forward_stack.rend(); ++it) {
+            for (auto it = forward_snapshot.rbegin(); it != forward_snapshot.rend(); ++it) {
                 hist_row(*it, false);
             }
         }
@@ -862,7 +896,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
     // --- Data ---------------------------------------------------------------
     const std::vector<AssetEntry> all_entries = app.browser_entries();
     const bool searching = !bs.filter_text.empty();
-    const std::vector<std::string> all_folders = asset_folders(all_entries);
+    const std::vector<std::string> all_folders = app.browser_folders();
     std::vector<std::string> nav_subfolders;
     std::vector<AssetEntry> nav_files;
     std::vector<AssetEntry> search_entries;
@@ -927,7 +961,8 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
             // not what identifies it. A persisted favourites list with a repeat
             // (or a future merge) would otherwise submit two items with one ID.
             int fav_index = 0;
-            for (const std::string& fav : bs.favorites) {
+            const auto favorites_snapshot = bs.favorites;
+            for (const std::string& fav : favorites_snapshot) {
                 ImGui::PushID(fav_index++);
                 const bool is_cur = (fav == nav_base);
                 if (ImGui::Selectable(
@@ -999,18 +1034,27 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                             std::string(file_name_of(e.logical_path)) + "  [" +
                             icon_type_tag(ik) + "]  (" +
                             folder_display_name(asset_folder_of(e.logical_path)) + ")";
-                        if (ImGui::Selectable(label.c_str(), selected)) {
+                        if (ImGui::Selectable(label.c_str(), selected,
+                                              ImGuiSelectableFlags_AllowDoubleClick)) {
                             bs.selected_path = e.logical_path;
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                                dispatch_open(app, intents, e);
                         }
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip("%s", e.logical_path.c_str());
-                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                                dispatch_open(app, intents, e);
-                            }
                         }
+                        file_context_menu(app, intents, e);
                         if (e.type == assets::AssetType::Mesh &&
                             ImGui::BeginDragDropSource()) {
                             ImGui::SetDragDropPayload("NF_MESH", e.logical_path.c_str(),
+                                                      e.logical_path.size() + 1);
+                            ImGui::Text("%s", e.logical_path.c_str());
+                            ImGui::EndDragDropSource();
+                        }
+                        if ((fs_ends_with(e.logical_path, ".nfprefab") ||
+                             fs_ends_with(e.logical_path, ".nfscene")) &&
+                            ImGui::BeginDragDropSource()) {
+                            ImGui::SetDragDropPayload("NF_PREFAB", e.logical_path.c_str(),
                                                       e.logical_path.size() + 1);
                             ImGui::Text("%s", e.logical_path.c_str());
                             ImGui::EndDragDropSource();
@@ -1101,41 +1145,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("%s", e.logical_path.c_str());
                     }
-                    if (ImGui::BeginPopupContextItem("##filectx")) {
-                        if (e.type == assets::AssetType::Scene ||
-                            fs_ends_with(e.logical_path, ".nfscene")) {
-                            if (ImGui::MenuItem(AV("open_scene").c_str())) {
-                                intents.open_scene_dialog_confirm = true;
-                                intents.open_scene_path = e.logical_path;
-                            }
-                        }
-                        if (ImGui::MenuItem(AV("rename_asset").c_str())) {
-                            begin_rename(rename_state(), e.logical_path);
-                        }
-                        if (ImGui::MenuItem(AV("show_in_folder").c_str())) {
-                            ImGui::SetClipboardText(e.logical_path.c_str());
-                            push_info(app.console(), "Path copied: " + e.logical_path);
-                        }
-                        if (e.type == assets::AssetType::Script) {
-                            if (ImGui::MenuItem(AV("open_in_vs").c_str())) {
-                                std::string kind, err;
-                                if (!app.open_asset_in_ide(e.logical_path, kind, err)) {
-                                    push_error(app.console(), "Open in IDE failed", err);
-                                } else {
-                                    push_info(app.console(),
-                                              std::string("Opened in ") + kind + ": " +
-                                                  e.logical_path);
-                                }
-                            }
-                        }
-                        // Destructive verbs last, behind a separator, so a
-                        // stray click on the top of the menu cannot reach them.
-                        ImGui::Separator();
-                        if (ImGui::MenuItem(AV("delete_asset").c_str())) {
-                            confirm_state() = {true, true, e.logical_path, false};
-                        }
-                        ImGui::EndPopup();
-                    }
+                    file_context_menu(app, intents, e);
                     // NOTE: no inline "open in IDE" button here on purpose. Every
                     // script row used to carry SameLine + SmallButton with the
                     // full "open in VS" label, which overflowed the narrow
@@ -1143,6 +1153,14 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                     // double-click (dispatch_open) or the right-click menu above.
                     if (e.type == assets::AssetType::Mesh && ImGui::BeginDragDropSource()) {
                         ImGui::SetDragDropPayload("NF_MESH", e.logical_path.c_str(),
+                                                  e.logical_path.size() + 1);
+                        ImGui::Text("%s", e.logical_path.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+                    if ((fs_ends_with(e.logical_path, ".nfprefab") ||
+                         fs_ends_with(e.logical_path, ".nfscene")) &&
+                        ImGui::BeginDragDropSource()) {
+                        ImGui::SetDragDropPayload("NF_PREFAB", e.logical_path.c_str(),
                                                   e.logical_path.size() + 1);
                         ImGui::Text("%s", e.logical_path.c_str());
                         ImGui::EndDragDropSource();
@@ -1276,39 +1294,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
                         dispatch_open(app, intents, e);
                     }
                 }
-                if (ImGui::BeginPopupContextItem("##gfcellctx")) {
-                    if (e.type == assets::AssetType::Scene ||
-                        fs_ends_with(e.logical_path, ".nfscene")) {
-                        if (ImGui::MenuItem(AV("open_scene").c_str())) {
-                            intents.open_scene_dialog_confirm = true;
-                            intents.open_scene_path = e.logical_path;
-                        }
-                    }
-                    if (ImGui::MenuItem(AV("rename_asset").c_str())) {
-                        begin_rename(rename_state(), e.logical_path);
-                    }
-                    if (ImGui::MenuItem(AV("show_in_explorer").c_str())) {
-                        open_in_os_file_manager(app, e.logical_path);
-                        push_info(app.console(), "Revealed in Explorer: " + e.logical_path);
-                    }
-                    if (e.type == assets::AssetType::Script) {
-                        if (ImGui::MenuItem(AV("open_in_vs").c_str())) {
-                            std::string kind, err;
-                            if (!app.open_asset_in_ide(e.logical_path, kind, err)) {
-                                push_error(app.console(), "Open in IDE failed", err);
-                            } else {
-                                push_info(app.console(),
-                                          std::string("Opened in ") + kind + ": " +
-                                              e.logical_path);
-                            }
-                        }
-                    }
-                    ImGui::Separator();
-                    if (ImGui::MenuItem(AV("delete_asset").c_str())) {
-                        confirm_state() = {true, true, e.logical_path, false};
-                    }
-                    ImGui::EndPopup();
-                }
+                file_context_menu(app, intents, e);
                 ImGui::EndGroup();
                 if (e.type == assets::AssetType::Mesh && ImGui::BeginDragDropSource()) {
                     ImGui::SetDragDropPayload("NF_MESH", e.logical_path.c_str(),
@@ -1336,7 +1322,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
         if (ImGui::BeginPopupContextWindow("##fsempty", ImGuiPopupFlags_MouseButtonRight)) {
             if (ImGui::MenuItem(AV("new_folder").c_str())) {
                 std::string err;
-                const std::string created = nav_base + "/NewFolder";
+                const std::string created = join_asset_path(nav_base, "NewFolder");
                 if (!app.create_asset_folder(created, err)) {
                     push_error(app.console(), "Create folder failed", err);
                 } else {
@@ -1355,7 +1341,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
             }
             if (ImGui::MenuItem(AV("new_material").c_str())) {
                 std::string err;
-                const std::string created = nav_base + "/NewMaterial.nfmat";
+                const std::string created = join_asset_path(nav_base, "NewMaterial.nfmat");
                 if (!app.save_material("content://Materials/Default", created, err)) {
                     push_error(app.console(), "Create material failed", err);
                 } else {
@@ -1461,7 +1447,7 @@ void filesystem_panel(EditorApp& app, UiIntents& intents) {
         }
         if (ImGui::Button(AV("new_folder").c_str())) {
             std::string err;
-            const std::string created = nav_base + "/" + new_folder_name;
+            const std::string created = join_asset_path(nav_base, new_folder_name);
             if (!app.create_asset_folder(created, err)) {
                 push_error(app.console(), "Create folder failed", err);
             } else {
@@ -1525,11 +1511,13 @@ void draw_rename_modal(EditorApp& app) {
         s.open = false;
         s.name.clear();
         s.from.clear();
+        s.error.clear();
         return;
     }
     if (s.open) {
         ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 320.0f));
-        input_text("##renametext", s.name);
+        if (s.focus) { ImGui::SetKeyboardFocusHere(); s.focus = false; }
+        if (input_text("##renametext", s.name)) s.error.clear();
         // Enter commits, Escape abandons — but only while the text field has
         // the focus. The key test is GLOBAL, so an Enter pressed anywhere else
         // in the editor (the inspector, the console) used to commit the
@@ -1537,6 +1525,10 @@ void draw_rename_modal(EditorApp& app) {
         const bool name_focused = ImGui::IsItemFocused();
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", AV("name_no_spaces").c_str());
+        }
+        if (!s.error.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", AV("rename_failed").c_str());
+            ImGui::TextWrapped("%s", s.error.c_str());
         }
         ImGui::Separator();
         // Cancel first: the safe action is the one a stray Enter lands on
@@ -1550,9 +1542,8 @@ void draw_rename_modal(EditorApp& app) {
         ImGui::SameLine();
         if (ImGui::Button(AV("rename_asset").c_str(), ImVec2(100.0f, 0.0f))) {
             (void)finish_rename(app, s);
-        }
-        if (name_focused && (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-                             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))) {
+        } else if (s.open && name_focused && (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
+                                               ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))) {
             (void)finish_rename(app, s);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {

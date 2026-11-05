@@ -38,6 +38,8 @@ set(NFEDITOR_CORE_SOURCES
     src/AudioPreview.cpp
     src/ExternalIde.cpp
     src/ui/UiRenderer.cpp
+    src/ui/ConsolePanel.cpp
+    src/ui/InputBindingCapture.cpp
 )
 
 add_library(NFEditorCore STATIC

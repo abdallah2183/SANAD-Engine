@@ -30,7 +30,10 @@ param(
     # root. CI builds into build/ci (a Debug tree) while a release build lives
     # in build/release, and hard-coding one of them made the other impossible
     # to package.
-    [string]$BuildDir = 'build\release'
+    [string]$BuildDir = 'build\release',
+    # Explicit source samples: local/untracked projects and packaged game
+    # experiments must never leak into a public engine release.
+    [string[]]$GameNames = @('TreeWorld')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +60,14 @@ $dist = Join-Path $repo 'dist'
 $stage = Join-Path $dist "stage\SANAD-$version"
 $setupName = "SANAD-$version-Windows-x64-Setup.exe"
 $zipName = "SANAD-$version-Windows-x64-Portable.zip"
+
+# Check the absolute destination before any recursive cleanup.
+$repo = [System.IO.Path]::GetFullPath($repo)
+$stage = [System.IO.Path]::GetFullPath($stage)
+$stageRoot = [System.IO.Path]::GetFullPath((Join-Path $repo 'dist\stage')) + '\'
+if (-not $stage.StartsWith($stageRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Stage is outside the release workspace: $stage"
+}
 
 # --- Build (unless skipped) ---------------------------------------------------
 $needBins = @('SANADEditor.exe', 'NFGamePlayer.exe')
@@ -142,11 +153,23 @@ Write-Host ("  Templates/              {0,8} files  ({1})" -f $n, $tplNames)
 
 # --- Sample games (source projects; Cache/ and dist/ are never shipped) -------
 $gamesSrc = Join-Path $repo 'Games'
-if (Test-Path $gamesSrc) {
-    Copy-Item $gamesSrc (Join-Path $stage 'Games') -Recurse -Force
+if ($GameNames.Count -gt 0) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $stage 'Games') | Out-Null
+    foreach ($gameName in $GameNames) {
+        if ($gameName -notmatch '^[A-Za-z0-9_-]+$') { throw "Invalid sample name: $gameName" }
+        $sample = Join-Path $gamesSrc $gameName
+        if (-not (Test-Path -LiteralPath $sample -PathType Container)) { throw "Missing sample: $sample" }
+        Copy-Item -LiteralPath $sample -Destination (Join-Path $stage 'Games') -Recurse -Force
+    }
     Get-ChildItem (Join-Path $stage 'Games') -Recurse -Directory |
         Where-Object { $_.Name -in @('Cache', 'dist') } |
-        Remove-Item -Recurse -Force
+        ForEach-Object {
+            $generatedPath = [System.IO.Path]::GetFullPath($_.FullName)
+            if (-not $generatedPath.StartsWith($stage + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing cleanup outside stage: $generatedPath"
+            }
+            Remove-Item -LiteralPath $generatedPath -Recurse -Force
+        }
     $g = (Get-ChildItem (Join-Path $stage 'Games') -Recurse -File).Count
     Write-Host ("  Games/                  {0,8} files  (TreeWorld source)" -f $g)
 }
@@ -156,6 +179,9 @@ foreach ($src in @('AGENTS.md', 'CLAUDE.md', 'llms.txt')) {
     $p = Join-Path $repo $src
     if (Test-Path $p) { Copy-Item $p $stage -Force }
 }
+Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $stage
+$releaseNotes = Join-Path $repo "RELEASE_NOTES_$verNum.md"
+if (Test-Path -LiteralPath $releaseNotes) { Copy-Item -LiteralPath $releaseNotes -Destination $stage }
 
 # --- Docs: the .md the launcher OPENS + the images it LOADS as card thumbnails
 $docsDst = Join-Path $stage 'Docs'

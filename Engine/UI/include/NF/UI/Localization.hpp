@@ -25,6 +25,9 @@ Language current_language();
 /// table — NOT a linear scan per call (tr runs per widget per frame).
 std::string tr(const char* key);
 
+/// Look up a specific language without changing the active UI language.
+std::string tr_for_language(const char* key, Language lang);
+
 /// Number of UNIQUE keys registered (for tests/tools).
 unsigned tr_key_count();
 

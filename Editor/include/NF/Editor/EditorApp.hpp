@@ -35,6 +35,7 @@
 #include <NF/Runtime/InputBindings.hpp>
 
 #include <cstdint>
+#include <set>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -96,6 +97,7 @@ public:
     /// (frame pacing, for example) and must reset it when this changes. Ordinary
     /// edits do not advance it; a successful new/open/recovery does.
     uint64_t scene_serial() const { return m_scene_serial; }
+    uint64_t edit_revision() const { return m_edit_revision; }
     assets::VirtualFileSystem& vfs() { return m_vfs; }
     const assets::VirtualFileSystem& vfs() const { return m_vfs; }
 
@@ -110,15 +112,17 @@ public:
         // Opening a project navigates the browser to its files (Unity shows
         // your game, not the engine install); the user can flip back to
         // Content with the root combo.
-        m_browser.browser_root = 1;
+        m_browser.browser_root = m_project_path.empty() ? 0 : 1;
         m_browser.current_folder.clear();
+        m_browser.back_stack.clear();
+        m_browser.forward_stack.clear();
         m_browser_cache_dirty = true;
         // The import scratch file lands inside the user's own project folder
         // (its Cache folder, which is git-ignored and holds cooked output):
         // a sandboxed process may not write to the system temp directory, and
         // the scene validation then failed for a file the user never touched.
         if (!m_project_path.empty()) {
-            m_imports.set_scratch_dir(std::filesystem::path(m_project_path) / "Cache");
+            m_imports.set_scratch_dir(std::filesystem::path(m_project_path).parent_path() / "Cache");
         }
     }
     const std::string& project_path() const { return m_project_path; }
@@ -653,6 +657,7 @@ public:
     /// TTL): a full recursive walk plus per-mesh registry lookups every frame
     /// costs real milliseconds on large projects and shows nothing new.
     void invalidate_browser() { m_browser_cache_dirty = true; }
+    std::vector<std::string> browser_folders();
     PlaySession& play_session() { return m_play; }
     ViewportState& viewport() { return m_viewport; }
     GizmoMode gizmo_mode() const { return m_gizmo_mode; }
@@ -783,6 +788,7 @@ private:
 
     std::string m_scene_path;
     uint64_t m_scene_serial = 0;
+    uint64_t m_edit_revision = 0;
     std::string m_project_path;
     std::string m_project_name;
     bool m_2d_mode = false;
@@ -798,11 +804,17 @@ private:
     mutable bool m_outliner_cache_valid = false;
     mutable const ecs::World* m_outliner_cache_world = nullptr;
     mutable std::size_t m_outliner_cache_count = 0;
+    mutable std::set<uint32_t> m_outliner_cache_collapsed;
+    mutable bool m_outliner_cache_searching = false;
+    mutable uint64_t m_outliner_cache_scene_serial = 0;
     CommandStack m_stack;
     ImportQueue m_imports;
     HotReload m_hot;
     AssetBrowserState m_browser;
     std::vector<AssetEntry> m_browser_cache;
+    std::vector<std::string> m_browser_folder_cache;
+    int m_browser_cached_root = -1;
+    void refresh_browser_cache();
     double m_browser_cache_age = 1e9;
     bool m_browser_cache_dirty = true;
     PlaySession m_play;

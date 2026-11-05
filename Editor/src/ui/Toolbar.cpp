@@ -16,6 +16,9 @@
 // console or editor that mangles UTF-8 cannot corrupt the source.
 
 #include <NF/Editor/ToolbarUi.hpp>
+#include <NF/Editor/ShadowSettingsDraft.hpp>
+#include <NF/Editor/UiPathText.hpp>
+#include <NF/Editor/UiTextInput.hpp>
 #include <NF/Editor/UiTheme.hpp>
 #include <NF/Editor/ProjectLauncher.hpp> // save_language() for the live toggles
 
@@ -621,44 +624,69 @@ bool play_button(EditorApp& app, float btn_sz = 28.0f) {
 // exactly what the Import/Export request was about.
 
 #ifdef _WIN32
-/// Win32 Save-As. False means the user cancelled (out_path untouched) — never a
-/// hard error, because cancelling is a normal thing to do.
+// Convert with explicit lengths so the embedded NULs in a Win32 filter
+// survive, and Arabic UI text is not interpreted using the system ANSI page.
+std::wstring dialog_wide(const std::string& text) {
+    if (text.empty()) return {};
+    const int count = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                             static_cast<int>(text.size()), nullptr, 0);
+    if (count <= 0) return {};
+    std::wstring result(static_cast<size_t>(count), L'\0');
+    ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                          static_cast<int>(text.size()), result.data(), count);
+    return result;
+}
+
+std::string dialog_utf8(const wchar_t* text) {
+    const int count = ::WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (count <= 1) return {};
+    std::string result(static_cast<size_t>(count), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, text, -1, result.data(), count, nullptr, nullptr);
+    result.pop_back();
+    return result;
+}
+
 bool save_file_dialog(const std::string& title, const std::string& filter,
                       const std::string& default_ext, std::string& out_path) {
-    char buffer[MAX_PATH * 2] = {};
-    std::snprintf(buffer, sizeof(buffer), "%s", out_path.c_str());
-    OPENFILENAMEA ofn{};
+    wchar_t buffer[32768] = {};
+    const std::wstring initial = dialog_wide(out_path);
+    if (initial.size() >= std::size(buffer)) return false;
+    std::copy(initial.begin(), initial.end(), buffer);
+    const std::wstring wide_title = dialog_wide(title);
+    const std::wstring wide_filter = dialog_wide(filter);
+    const std::wstring wide_ext = dialog_wide(default_ext);
+    OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = ::GetActiveWindow();
-    ofn.lpstrFilter = filter.c_str();
+    ofn.lpstrFilter = wide_filter.c_str();
     ofn.lpstrFile = buffer;
-    ofn.nMaxFile = sizeof(buffer);
-    ofn.lpstrTitle = title.c_str();
-    ofn.lpstrDefExt = default_ext.c_str();
+    ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+    ofn.lpstrTitle = wide_title.c_str();
+    ofn.lpstrDefExt = wide_ext.c_str();
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
-    if (::GetSaveFileNameA(&ofn) != TRUE) {
-        return false;
-    }
-    out_path = buffer;
-    return true;
+    if (::GetSaveFileNameW(&ofn) != TRUE) return false;
+    out_path = dialog_utf8(buffer);
+    return !out_path.empty();
 }
 
 bool open_file_dialog(const std::string& title, const std::string& filter, std::string& out_path) {
-    char buffer[MAX_PATH * 2] = {};
-    std::snprintf(buffer, sizeof(buffer), "%s", out_path.c_str());
-    OPENFILENAMEA ofn{};
+    wchar_t buffer[32768] = {};
+    const std::wstring initial = dialog_wide(out_path);
+    if (initial.size() >= std::size(buffer)) return false;
+    std::copy(initial.begin(), initial.end(), buffer);
+    const std::wstring wide_title = dialog_wide(title);
+    const std::wstring wide_filter = dialog_wide(filter);
+    OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = ::GetActiveWindow();
-    ofn.lpstrFilter = filter.c_str();
+    ofn.lpstrFilter = wide_filter.c_str();
     ofn.lpstrFile = buffer;
-    ofn.nMaxFile = sizeof(buffer);
-    ofn.lpstrTitle = title.c_str();
+    ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+    ofn.lpstrTitle = wide_title.c_str();
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (::GetOpenFileNameA(&ofn) != TRUE) {
-        return false;
-    }
-    out_path = buffer;
-    return true;
+    if (::GetOpenFileNameW(&ofn) != TRUE) return false;
+    out_path = dialog_utf8(buffer);
+    return !out_path.empty();
 }
 #else
 bool save_file_dialog(const std::string&, const std::string&, const std::string&, std::string&) {
@@ -679,37 +707,28 @@ std::string export_filter() {
     std::string f;
     for (const assets::MeshFormat fmt : assets::mesh_formats()) {
         const std::string ext = assets::mesh_format_extension(fmt);
-        f += std::string(assets::mesh_format_name(fmt)) + " (*." + ext + ")\0*." + ext;
-        f += '\0';
+        append_file_filter(f, std::string(assets::mesh_format_name(fmt)) + " (*." + ext + ")", "*." + ext);
     }
-    f += "All files (*.*)\0*.*";
-    f += '\0';
-    f += '\0';
+    append_file_filter(f, "All files (*.*)", "*.*");
+    f.push_back('\0');
     return f;
 }
 
-/// Extensions the import queue accepts (ImportQueue sniffs the same set).
 std::string import_filter() {
     std::string f;
-    f += "Models (*.gltf;*.glb;*.nfmesh)\0*.gltf;*.glb;*.nfmesh";
-    f += '\0';
-    f += "Textures (*.png;*.jpg;*.jpeg;*.bmp;*.tga)\0*.png;*.jpg;*.jpeg;*.bmp;*.tga";
-    f += '\0';
-    f += "Audio (*.wav;*.ogg;*.mp3)\0*.wav;*.ogg;*.mp3";
-    f += '\0';
-    f += "All files (*.*)\0*.*";
-    f += '\0';
-    f += '\0';
+    // The queue is the source of truth for supported formats.
+    const std::string accepted = ImportQueue::accepted_extension_glob();
+    append_file_filter(f, "Supported assets (" + accepted + ")", accepted);
+    append_file_filter(f, "All files (*.*)", "*.*");
+    f.push_back('\0');
     return f;
 }
 
 std::string scene_filter() {
     std::string f;
-    f += "SANAD Scene (*.nfscene)\0*.nfscene";
-    f += '\0';
-    f += "All files (*.*)\0*.*";
-    f += '\0';
-    f += '\0';
+    append_file_filter(f, "SANAD Scene (*.nfscene)", "*.nfscene");
+    append_file_filter(f, "All files (*.*)", "*.*");
+    f.push_back('\0');
     return f;
 }
 /// Sky presets behind the Create > Sky and Settings buttons. They are the same
@@ -1007,6 +1026,88 @@ void sync_snap_from_settings(EditorApp& app, const EditorUiSettings& settings) {
 } // namespace
 void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     EditorUiSettings& st = ui_settings();
+    // Both new and open go through one confirmation. The chosen open path is
+    // retained only until approval or cancel; a cancelled picker never swaps.
+    static std::string new_scene_error;
+    static std::string pending_open_path;
+    auto execute_scene_switch = [&]() {
+        if (pending_open_path.empty()) return app.new_scene(new_scene_error);
+        intents.open_scene_dialog_confirm = true;
+        intents.open_scene_approved = true;
+        intents.open_scene_path = pending_open_path;
+        pending_open_path.clear();
+        return true;
+    };
+    if (st.request_new_scene || !st.request_scene_path.empty()) {
+        pending_open_path = std::move(st.request_scene_path);
+        st.request_scene_path.clear();
+        st.request_new_scene = false;
+        new_scene_error.clear();
+        if (app.playing()) {
+            pending_open_path.clear();
+            push_error_console(app, "Scene switch failed", "Stop play mode before switching scenes");
+        } else if (app.dirty()) {
+            ImGui::OpenPopup("###new_scene_confirm");
+        } else if (!execute_scene_switch()) {
+            push_error_console(app, "Scene switch failed", new_scene_error);
+        }
+    }
+    const auto new_scene_title = AV(pending_open_path.empty() ? "new_scene" : "open_scene") + "###new_scene_confirm";
+    if (ImGui::BeginPopupModal(new_scene_title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const char* unsaved_message_key = pending_open_path.empty() ? "new_scene_unsaved" : "open_scene_unsaved";
+        ImGui::TextWrapped("%s", AV(unsaved_message_key).c_str());
+        if (!new_scene_error.empty()) ImGui::TextWrapped("%s", new_scene_error.c_str());
+        auto save_and_switch = [&](bool force_save_as) {
+            new_scene_error.clear();
+            bool saved = false;
+            const std::string& path = app.scene_path();
+            if (!force_save_as && (path.rfind("content://", 0) == 0 || path.rfind("project://", 0) == 0)) {
+                saved = app.save(new_scene_error);
+            } else {
+                std::string picked;
+                if (save_file_dialog(AV("save_scene_as"), scene_filter(), "nfscene", picked))
+                    saved = app.save_as(picked, new_scene_error);
+            }
+            if (saved && app.materials_dirty()) {
+                new_scene_error = AV("new_scene_materials");
+            } else if (saved && execute_scene_switch()) {
+                ImGui::CloseCurrentPopup();
+            }
+        };
+        if (ImGui::Button(AV("save").c_str())) save_and_switch(false);
+        ImGui::SameLine();
+        if (ImGui::Button(AV("save_scene_as").c_str())) save_and_switch(true);
+        ImGui::SameLine();
+        if (ImGui::Button(AV("new_scene_discard").c_str())) {
+            new_scene_error.clear();
+            if (execute_scene_switch()) ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(AV("cancel").c_str()) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            pending_open_path.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    // Ctrl+S on an untitled scene and Ctrl+Shift+S both use the same native
+    // Save As path as the File menu. The picker is recorded on the UI thread.
+    if (st.request_save_as) {
+        st.request_save_as = false;
+        std::string picked;
+        if (!app.playing() && save_file_dialog(AV("save_scene_as"), scene_filter(), "nfscene", picked)) {
+            intents.save_as_confirm = true;
+            intents.save_as_path = picked;
+        }
+    }
+
+    if (st.request_open_scene) {
+        st.request_open_scene = false;
+        std::string picked;
+        if (!app.playing() && open_file_dialog(AV("open_scene"), scene_filter(), picked)) {
+            intents.open_scene_dialog_confirm = true;
+            intents.open_scene_path = picked;
+        }
+    }
 
     // --- Menu bar -------------------------------------------------------------
     ImGui::PushStyleColor(ImGuiCol_MenuBarBg, IM_COL32(18, 21, 27, 255));
@@ -1015,10 +1116,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu(AV("file").c_str())) {
             if (ImGui::MenuItem(AV("new_scene").c_str(), "Ctrl+N")) {
-                std::string err;
-                if (!app.new_scene(err)) {
-                    push_error_console(app, "New scene failed", err);
-                }
+                st.request_new_scene = true;
             }
             if (ImGui::MenuItem(AV("open_scene").c_str(), "Ctrl+O")) {
                 // A real picker: the scene list is not the only place a scene can
@@ -1030,13 +1128,17 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
             if (ImGui::MenuItem(AV("save_scene").c_str(), "Ctrl+S")) {
-                std::string err;
-                if (!app.save(err)) {
-                    push_error_console(app, "Save failed", err);
+                if (app.scene_path().empty() && !app.playing()) {
+                    st.request_save_as = true;
+                } else {
+                    std::string err;
+                    if (!app.save(err)) push_error_console(app, "Save failed", err);
                 }
             }
             if (ImGui::MenuItem(AV("save_scene_as").c_str(), "Ctrl+Shift+S")) {
-                std::string picked = app.scene_path();
+                std::string picked;
+                if (const auto physical = app.vfs().resolve(app.scene_path()); physical.ok)
+                    picked = physical.value.string();
                 if (save_file_dialog(AV("save_scene_as"), scene_filter(), "nfscene", picked)) {
                     intents.save_as_confirm = true;
                     intents.save_as_path = picked;
@@ -1139,14 +1241,21 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             // The rebinding window lives here because it is a VIEW on the
             // project's input table, not a scene object like the panels above.
             ImGui::MenuItem(AV("input_bindings").c_str(), nullptr, &st.show_input);
+            ImGui::MenuItem(AV("tab_lighting").c_str(), nullptr, &st.show_lighting);
             ImGui::MenuItem(AV("tab_environment").c_str(), nullptr, &st.show_environment);
-            ImGui::MenuItem(AV("tab_talent_tree").c_str(), nullptr, &st.show_talent_tree);
-            ImGui::MenuItem(AV("tab_flow_field").c_str(), nullptr, &st.show_flow_field);
-            ImGui::MenuItem(AV("tab_cable_sim").c_str(), nullptr, &st.show_cable_panel);
+            ImGui::MenuItem(AV("tab_camera").c_str(), nullptr, &st.show_camera_panel);
+            ImGui::MenuItem(AV("tab_render").c_str(), nullptr, &st.show_render);
+            ImGui::MenuItem(AV("tab_world").c_str(), nullptr, &st.show_world);
+            ImGui::Separator();
+            if (ImGui::MenuItem(AV("reset_layout").c_str())) {
+                st.reset_layout_requested = true;
+            }
             ImGui::EndMenu();
         }
 
         if (ImGui::BeginMenu(AV("create").c_str())) {
+            if (ImGui::MenuItem(AV("palette_title").c_str())) st.request_add_object = true;
+            ImGui::Separator();
             create_menu_contents(app);
             ImGui::EndMenu();
         }
@@ -1311,10 +1420,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
 
         // 1. Scene / Project actions
         if (icon_button("##tb_new", Icon::New, AV("new_scene") + " (Ctrl+N)", false, btn_sz)) {
-            std::string err;
-            if (!app.new_scene(err)) {
-                push_error_console(app, "New scene failed", err);
-            }
+            st.request_new_scene = true;
         }
         ImGui::SameLine();
         if (icon_button("##tb_open", Icon::Open, AV("open_scene") + " (Ctrl+O)", false, btn_sz)) {
@@ -1326,9 +1432,11 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         }
         ImGui::SameLine();
         if (icon_button("##tb_save", Icon::Save, AV("save_scene") + " (Ctrl+S)", false, btn_sz)) {
-            std::string err;
-            if (!app.save(err)) {
-                push_error_console(app, "Save failed", err);
+            if (app.scene_path().empty() && !app.playing()) {
+                st.request_save_as = true;
+            } else {
+                std::string err;
+                if (!app.save(err)) push_error_console(app, "Save failed", err);
             }
         }
 
@@ -1365,30 +1473,6 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         ImGui::SameLine(0.0f, 8.0f);
         toolbar_divider(btn_sz);
 
-        // Advanced Systems & Tools Quick-Toggles
-        if (text_toolbar_button("##tb_env", AV("weather_system"), st.show_environment, btn_sz)) {
-            st.show_environment = !st.show_environment;
-        }
-        ImGui::SameLine();
-        if (text_toolbar_button("##tb_talent", AV("talent_tree"), st.show_talent_tree, btn_sz)) {
-            st.show_talent_tree = !st.show_talent_tree;
-        }
-        ImGui::SameLine();
-        if (text_toolbar_button("##tb_flow", AV("flow_field"), st.show_flow_field, btn_sz)) {
-            st.show_flow_field = !st.show_flow_field;
-        }
-        ImGui::SameLine();
-        if (text_toolbar_button("##tb_cable", AV("cable_sim"), st.show_cable_panel, btn_sz)) {
-            st.show_cable_panel = !st.show_cable_panel;
-        }
-        ImGui::SameLine();
-        if (text_toolbar_button("##tb_reset_layout", AV("reset_layout"), false, btn_sz)) {
-            st.reset_layout_requested = true;
-        }
-
-        ImGui::SameLine(0.0f, 8.0f);
-        toolbar_divider(btn_sz);
-
         // 4. Undo / Redo & Settings
         if (icon_button("##tb_undo", Icon::Undo, AV("undo") + " (Ctrl+Z)", false, btn_sz)) {
             std::string err;
@@ -1421,9 +1505,16 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(2);
 // --- Settings window ------------------------------------------------------
+    static ShadowSettingsDraft shadow_draft;
+    if (!st.show_settings) shadow_draft = {};
     if (st.show_settings) {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_FirstUseEver);
+        const float settings_height = std::max(1.0f, vp->WorkSize.y - 32.0f);
+        const float settings_width = std::max(1.0f, vp->WorkSize.x - 32.0f);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(360.0f, settings_width), 100.0f),
+                                            ImVec2(settings_width, settings_height));
+        ImGui::SetNextWindowSize(ImVec2(std::min(500.0f, settings_width),
+                                        std::min(580.0f, settings_height)), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(
             ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -1515,21 +1606,22 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                     ImGui::TextDisabled("%s", AV("no_light_settings").c_str());
                 } else {
                     bool has_light = false;
-                    LightEdit le = read_light(*world, light, has_light);
+                    const LightEdit live = read_light(*world, light, has_light);
+                    shadow_draft.sync(light, live, world);
                     ImGui::SetNextItemWidth(200.0f);
-                    ImGui::SliderFloat(AV("shadow_strength").c_str(), &le.shadow_strength, 0.0f, 1.0f);
+                    ImGui::SliderFloat(AV("shadow_strength").c_str(), &shadow_draft.strength, 0.0f, 1.0f);
                     ImGui::SetNextItemWidth(200.0f);
-                    ImGui::DragFloat(AV("shadow_bias").c_str(), &le.shadow_bias, 0.00005f, 0.0f,
+                    ImGui::DragFloat(AV("shadow_bias").c_str(), &shadow_draft.bias, 0.00005f, 0.0f,
                                      0.01f, "%.5f");
                     ImGui::SetNextItemWidth(200.0f);
                     // Cascades are whole tiles of the atlas, so the only
                     // meaningful values are 1..kMaxShadowCascades — a slider,
                     // not a drag, same range as the Inspector.
-                    ImGui::SliderInt(AV("shadow_cascades").c_str(), &le.shadow_cascades, 1,
+                    ImGui::SliderInt(AV("shadow_cascades").c_str(), &shadow_draft.cascades, 1,
                                      static_cast<int>(rendering::kMaxShadowCascades));
                     if (ImGui::Button((AV("apply") + "##rendering").c_str())) {
                         std::string err;
-                        if (!app.set_light(light, le, err)) {
+                        if (!app.set_light(light, shadow_draft.merge(live), err)) {
                             push_error_console(app, "Shadow settings failed", err);
                         }
                     }
@@ -1596,27 +1688,29 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("import_model") + "###NFImport").c_str(), &st.show_import)) {
-            static char src[MAX_PATH * 2] = {};
-            static char dst[128] = "content://Meshes";
+            static std::string src;
+            static std::string dst = "content://Meshes";
+            static bool overwrite = false;
             ImGui::TextDisabled("%s", AV("import_source").c_str());
             ImGui::SetNextItemWidth(-140.0f);
-            ImGui::InputText("###src", src, sizeof(src));
+            input_text("###src", src);
             ImGui::SameLine();
             if (ImGui::Button(AV("browse").c_str())) {
                 std::string picked = src;
                 if (open_file_dialog(AV("import_model"), import_filter(), picked)) {
-                    std::snprintf(src, sizeof(src), "%s", picked.c_str());
+                    src = picked;
                 }
             }
             ImGui::TextDisabled("%s", AV("import_to").c_str());
             ImGui::SetNextItemWidth(-140.0f);
-            ImGui::InputText("###dst", dst, sizeof(dst));
+            input_text("###dst", dst);
             ImGui::Separator();
-            ImGui::BeginDisabled(src[0] == '\0');
+            ImGui::Checkbox((AV("overwrite") + "###import_overwrite").c_str(), &overwrite);
+            ImGui::BeginDisabled(src.empty());
             if (ImGui::Button(AV("import_model").c_str(), ImVec2(160.0f, 0.0f))) {
                 size_t job = 0;
                 std::string err;
-                if (!app.import_file(src, dst, true, job, err)) {
+                if (!app.import_file(src, dst, overwrite, job, err)) {
                     push_error_console(app, "Import failed", err);
                 } else {
                     push_info_console(app,
@@ -1670,10 +1764,10 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("export") + "###NFExport").c_str(), &st.show_export)) {
-            static char path[MAX_PATH * 2] = {};
+            static std::string path;
             const std::vector<assets::MeshFormat>& formats = assets::mesh_formats();
             st.export_format = std::clamp(st.export_format, 0, static_cast<int>(formats.size()) - 1);
-            const assets::MeshFormat fmt = formats[static_cast<size_t>(st.export_format)];
+            assets::MeshFormat fmt = formats[static_cast<size_t>(st.export_format)];
 
             ImGui::TextWrapped("%s", AV("export_hint").c_str());
             ImGui::Separator();
@@ -1699,37 +1793,30 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                              static_cast<int>(names.size()))) {
                 // Changing the format rewrites the extension, so a .glb is never
                 // written into a file the user named .obj.
-                std::string base(path);
-                const size_t dot = base.find_last_of('.');
-                if (dot != std::string::npos && dot > 0) {
-                    base.erase(dot);
-                }
-                if (base.empty()) {
-                    base = suggested_export_name(app);
-                }
-                std::snprintf(path, sizeof(path), "%s.%s", base.c_str(),
-                              assets::mesh_format_extension(fmt));
+                fmt = formats[static_cast<size_t>(st.export_format)];
+                path = export_path_for_extension(path.empty() ? suggested_export_name(app) : path,
+                                                  assets::mesh_format_extension(fmt));
             }
-            if (path[0] == '\0') {
-                const std::string base = suggested_export_name(app);
-                std::snprintf(path, sizeof(path), "%s.%s", base.c_str(),
-                              assets::mesh_format_extension(fmt));
+            if (path.empty()) {
+                path = export_path_for_extension(suggested_export_name(app),
+                                                  assets::mesh_format_extension(fmt));
             }
 
             ImGui::TextDisabled("%s", AV("output_path").c_str());
             ImGui::SetNextItemWidth(-150.0f);
-            ImGui::InputText("###export_path", path, sizeof(path));
+            input_text("###export_path", path);
             ImGui::SameLine();
             if (ImGui::Button(AV("browse").c_str())) {
                 std::string picked = path;
                 if (save_file_dialog(AV("export"), export_filter(),
                                      assets::mesh_format_extension(fmt), picked)) {
-                    std::snprintf(path, sizeof(path), "%s", picked.c_str());
+                    path = picked;
                 }
             }
             ImGui::Separator();
             if (ImGui::Button(AV("export").c_str(), ImVec2(160.0f, 0.0f))) {
                 std::string err;
+                path = export_path_for_extension(path, assets::mesh_format_extension(fmt));
                 const size_t n = app.export_meshes_to_file(path, fmt, st.export_whole_scene, err);
                 if (n == 0) {
                     push_error_console(app, "Export failed", err);

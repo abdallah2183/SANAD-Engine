@@ -19,8 +19,8 @@
 
 <br>
 
-[**What's new in 0.7.0**](RELEASE_NOTES_0.7.0.md) ·
-[**Download 0.7.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.7.0) ·
+[**What's new in 0.8.0**](RELEASE_NOTES_0.8.0.md) ·
+[**Download 0.8.0**](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0) ·
 [**Watch the 43s demo**](Docs/media/demo.mp4) ·
 [**Docs**](Docs/) ·
 [**العربية**](README.ar.md)
@@ -34,7 +34,7 @@
 ---
 
 > [!IMPORTANT]
-> **0.7.0 is a public release, not a beta.** It ships as a **portable Windows x64
+> **0.8.0 is a public release, not a beta.** It ships as a **portable Windows x64
 > zip** built from this tree, with a SHA-256 checksum. The executables are signed
 > with the self-signed **`SANAD Dev Build`** certificate, not a publicly trusted
 > one, so Windows may still show "Unknown publisher". Do not disable Smart App
@@ -63,12 +63,12 @@
 
 ### 1. Download
 
-Grab the portable build from the [0.7.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.7.0):
+Grab the portable build from the [0.8.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0):
 
 | File | What to do |
 |:---|:---|
-| [`SANAD-0.7.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.7.0/SANAD-0.7.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
-| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.7.0/SHA256SUMS.txt) | SHA-256 checksum for the portable zip |
+| [`SANAD-0.8.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.8.0/SANAD-0.8.0-Windows-x64-Portable.zip) | Extract anywhere → run `SANADEditor.exe` |
+| [`SHA256SUMS.txt`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.8.0/SHA256SUMS.txt) | SHA-256 checksum for the portable zip |
 
 > [!NOTE]
 > There is **no installer in this release yet**. The portable zip carries a
@@ -144,37 +144,21 @@ build\Release\bin\nf.exe run --project Games\TreeWorld\TreeWorld.nfproj
 ```
 
 > [!NOTE]
-> TreeWorld ships **in the 0.7.0 portable zip** under `Games/`, and on
+> TreeWorld ships **in the 0.8.0 portable zip** under `Games/`, and on
 > **`main`** as source. `nf run --project Games\TreeWorld\TreeWorld.nfproj`
 > builds and plays it from the repository; the packaged copy plays the same
 > scene standalone.
 
-## ✨ What's in 0.7.0
+## ✨ What's in 0.8.0
 
-- **Combat feedback, from one scene line** — `Feedback: flash_time=0.06
-  flash_size=0.26 tracer_time=0.1 tracer_length=7 tracer_width=0.03
-  impact_time=8 impact_size=0.18 shot_volume=0.6 impact_volume=0.4` turns the
-  shot and impact events the engine already publishes into a muzzle flash per
-  volley, a tracer per pellet, and a projected scorch decal per surface hit.
-- **No new GPU pass, no new asset** — flashes and tracers are render-only
-  `RenderWorld` objects on one shared procedural cube; the scorch is a decal.
-  The gunshot and impact are procedural one-shots, so a game does not need a WAV
-  to hear its own gun.
-- **Opt-in, byte-for-byte compatible** — a scene without the line draws and
-  mixes exactly what it did in 0.5.0. The component round-trips through the real
-  writer/reader, bad values are refused by key name, and the validator warns on
-  out-of-range tuning.
-- **Events land where the player can see them** — the director ingests the
-  previous frame's events after `begin_frame()`, ages before ingest, and holds
-  cues until a whole audio block is mixed, so the first shot of a fight is
-  neither dropped nor inaudible.
-- **`Ballistics.nfscene` demonstrates it** — the shipped scene opts in, so the
-  projectile-vs-hitscan showcase now shows and hears the fight.
-- **Everything from 0.5.0 remains** — FXAA on the tonemapped image, ADS, mouse
-  buttons, camera shake and recoil, decals, render scale, dynamic resolution,
-  master dynamics, and player settings.
-- **Docs that match the build** — [release notes](RELEASE_NOTES_0.7.0.md),
-  [demo notes](Docs/Demo_Release.md), and a five-minute quick start.
+- **Editor panels that stay in sync** — Inspector, Camera, Lighting and Environment refresh after undo, redo and scene changes. Opening a panel selects its dock tab.
+- **A usable file browser** — empty and nested folders, correct mount navigation, stable history/favourites, UTF-8 names, and folder navigation independent of file filters.
+- **Safer editing workflows** — undoable object creation/deletion/duplication, restored prefab relationships, scene switching with unsaved-change handling, and corrected asset renames.
+- **Camera and input fixes** — the active camera is edited, follow-target text grows safely, rebinding has an explicit capture dialog and Cancel, and actions are searchable.
+- **Console and import/export polish** — filtered severity counts include Fatal, multiline messages copy intact, scrolling respects reading position, and export extensions follow the chosen format.
+- **Rendering fixes** — preserve viewport alpha through tonemapping and keep the backbuffer in the correct state for the UI pass.
+
+See [0.8.0 release notes](RELEASE_NOTES_0.8.0.md) for verification and portable-package details.
 
 ## 🔬 GPU profiling (development tree)
 

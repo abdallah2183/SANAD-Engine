@@ -399,6 +399,9 @@ void main() {
     // can shape the image first and then land it on a look.
     hdr = apply_lut(hdr);
 
+    // Contrast can push dark HDR values below zero. Tone mapping negative
+    // light, especially the ACES rational curve, turns shadows bright.
+    hdr = max(hdr, vec3(0.0));
     vec3 mapped;
     if (pc.tonemap_mode < 0.5) {
         // Exponential (default).

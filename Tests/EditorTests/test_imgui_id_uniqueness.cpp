@@ -239,6 +239,7 @@ const BeginEndPair kBeginEndPairs[] = {
     {"BeginCombo", "EndCombo"},
     {"BeginListBox", "EndListBox"},
     {"BeginPopup", "EndPopup"},
+    {"BeginPopupModal", "EndPopup"},
     {"BeginPopupContextItem", "EndPopup"},
     {"BeginPopupContextWindow", "EndPopup"},
     {"BeginPopupContextVoid", "EndPopup"},

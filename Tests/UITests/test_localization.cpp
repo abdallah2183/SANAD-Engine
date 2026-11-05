@@ -34,6 +34,13 @@ NF_TEST(localization_arabic_translates) {
     NF_CHECK(tr("sky") == "Sky");
 }
 
+NF_TEST(localization_explicit_language_does_not_change_ui_language) {
+    set_language(Language::English);
+    NF_CHECK(tr_for_language("sky", Language::Arabic) == "السماء");
+    NF_CHECK(current_language() == Language::English);
+    NF_CHECK(tr("sky") == "Sky");
+}
+
 NF_TEST(localization_unknown_key_returns_key) {
     set_language(Language::English);
     NF_CHECK(tr("no_such_key_xyz") == "no_such_key_xyz");

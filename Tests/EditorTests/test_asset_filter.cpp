@@ -2,11 +2,15 @@
 
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Test/TestPaths.hpp>
+#include <NF/Test/RHITestCommon.hpp>
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
 #include <NF/Editor/AssetBrowser.hpp>
 #include <NF/Editor/Console.hpp>
 #include <NF/Editor/EditorApp.hpp>
+#include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
+#include <NF/Scene/Scene.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -161,12 +165,95 @@ NF_TEST(editor_project_listing_shows_only_the_projects_assets) {
     NF_CHECK(saw_scene);
 }
 
+NF_TEST(editor_browser_mount_roots_show_top_level_and_nested_folders) {
+    editor::AssetEntry nested, other, root_file;
+    nested.logical_path = "content://Models/Characters/Hero/body.nfmesh";
+    other.logical_path = "project://Content/المشاهد/المرحلة.nfscene";
+    root_file.logical_path = "content://Root.nfscene";
+    const auto folders = editor::asset_folders({nested, nested, other, root_file});
+    const auto content = editor::subfolders_in_folder(folders, "content://");
+    NF_CHECK_EQ(content.size(), 1u);
+    NF_CHECK(content.front() == "content://Models");
+    const auto project = editor::subfolders_in_folder(folders, "project://");
+    NF_CHECK_EQ(project.size(), 1u);
+    NF_CHECK(project.front() == "project://Content");
+    const auto models = editor::subfolders_in_folder(folders, "content://Models");
+    NF_CHECK_EQ(models.size(), 1u);
+    NF_CHECK(models.front() == "content://Models/Characters");
+    const auto characters = editor::subfolders_in_folder(folders, models.front());
+    NF_CHECK_EQ(characters.size(), 1u);
+    NF_CHECK(characters.front() == "content://Models/Characters/Hero");
+    NF_CHECK_EQ(editor::assets_in_folder({nested}, characters.front()).size(), 1u);
+    NF_CHECK(editor::subfolders_in_folder(folders, "content://Model").empty());
+    NF_CHECK_EQ(folders.size(), 6u); // no duplicate ancestors or nested mount roots
+}
+
 NF_TEST(editor_project_listing_is_empty_without_a_project_mount) {
     // No project:// mounted (engine-tree mode): an empty listing, never a crash
     // and never a fallback that silently shows the engine's content under a
     // project-shaped header.
     assets::VirtualFileSystem vfs;
     NF_CHECK(editor::list_project_assets(vfs).empty());
+}
+
+NF_TEST(editor_browser_empty_folders_survive_filters_and_root_changes) {
+    const auto root = nf::test::temp_dir("nf_browser_empty_folders");
+    std::filesystem::create_directories(root / "Content" / "Empty" / "Nested");
+    std::filesystem::create_directories(root / "Content" / "Cache" / "Hidden");
+    std::filesystem::create_directories(root / "Content" / ".tool" / "Hidden");
+    std::filesystem::create_directories(root / "Content" / "Distribution");
+    assets::VirtualFileSystem vfs;
+    NF_CHECK(vfs.mount("content://", root / "Content").ok);
+    NF_CHECK(vfs.mount("project://", root).ok);
+    assets::AssetRegistry reg;
+    assets::AssetManager manager(vfs, reg);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    auto folders = app.browser_folders();
+    NF_CHECK(std::find(folders.begin(), folders.end(), "content://Empty/Nested") != folders.end());
+    NF_CHECK_EQ(folders.size(), 3u);
+    app.browser().filter_text = "nothing_matches";
+    app.browser().filter_type = static_cast<int>(assets::AssetType::Mesh);
+    NF_CHECK(app.browser_entries().empty());
+    NF_CHECK(app.browser_folders() == folders);
+    std::string err;
+    NF_CHECK(app.create_asset_folder("content://Created", err));
+    folders = app.browser_folders();
+    NF_CHECK(std::find(folders.begin(), folders.end(), "content://Created") != folders.end());
+    app.browser().browser_root = 1; // immediate switch, without waiting for cache expiry
+    folders = app.browser_folders();
+    NF_CHECK(std::find(folders.begin(), folders.end(), "project://Content/Created") != folders.end());
+    for (const auto& folder : folders) NF_CHECK(folder.starts_with("project://"));
+    std::filesystem::remove_all(root);
+}
+
+NF_TEST(editor_browser_path_join_keeps_the_mount_separator_canonical) {
+    NF_CHECK(editor::join_asset_path("content://", "Scene.nfscene") == "content://Scene.nfscene");
+    NF_CHECK(editor::join_asset_path("project://Folder", "File.lua") == "project://Folder/File.lua");
+    NF_CHECK(editor::join_asset_path("", "Name") == "Name");
+}
+
+NF_TEST(editor_asset_list_preserves_unicode_paths_and_search) {
+    const auto root = nf::test::temp_root() / std::filesystem::path(u8"nf_مشروع_الأصول");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    const auto folder = root / "Content" / std::filesystem::path(u8"المشاهد");
+    std::filesystem::create_directories(folder);
+    const auto scene = folder / std::filesystem::path(u8"المرحلة.nfscene");
+    { std::ofstream out(scene); out << "scene"; NF_CHECK(out.good()); }
+    assets::VirtualFileSystem vfs;
+    vfs.mount("project://", root);
+    vfs.mount("content://", root / "Content");
+    assets::AssetRegistry registry;
+
+    const auto project = editor::list_project_assets(vfs);
+    const auto content = editor::list_content_assets(vfs, registry);
+    NF_CHECK_EQ(project.size(), 1u);
+    NF_CHECK_EQ(content.size(), 1u);
+    NF_CHECK(project.front().logical_path == "project://Content/المشاهد/المرحلة.nfscene");
+    NF_CHECK(content.front().logical_path == "content://المشاهد/المرحلة.nfscene");
+    NF_CHECK_EQ(editor::filter_assets(project, "المرحلة", -1).size(), 1u);
+    std::filesystem::remove_all(root, ec);
 }
 
 NF_TEST(editor_asset_folder_navigation_is_pure) {
@@ -307,6 +394,23 @@ NF_TEST(editor_filesystem_breadcrumbs_split_and_resolve) {
                 std::string("content://Meshes/Box"));
 }
 
+NF_TEST(editor_browser_history_restores_the_root_and_bounds_long_sessions) {
+    editor::AssetBrowserState state;
+    editor::browser_navigate_to(state, "content://");
+    NF_CHECK(state.back_stack.empty());
+    editor::browser_navigate_to(state, "content://Meshes");
+    editor::browser_navigate_to(state, "project://Scenes");
+    NF_CHECK_EQ(state.browser_root, 1);
+    NF_CHECK(editor::browser_go_back(state));
+    NF_CHECK_EQ(state.browser_root, 0);
+    NF_CHECK(state.current_folder == "content://Meshes");
+    NF_CHECK(editor::browser_go_forward(state));
+    NF_CHECK_EQ(state.browser_root, 1);
+    for (int i = 0; i < 250; ++i)
+        editor::browser_navigate_to(state, "project://Folder" + std::to_string(i));
+    NF_CHECK_EQ(state.back_stack.size(), 100u);
+}
+
 // --- Delete / rename at the app layer ---------------------------------------
 //
 // The VFS tests cover the filesystem refusals; these cover the layer the
@@ -369,6 +473,29 @@ NF_TEST(editor_delete_asset_refuses_a_folder_without_recursive) {
     NF_CHECK(f.app.delete_asset("content://Meshes", true, err));
     NF_CHECK(!f.vfs.exists("content://Meshes").value);
     NF_CHECK(f.vfs.exists("content://Scenes/Level.nfscene").ok);
+}
+
+NF_TEST(editor_delete_asset_protects_open_scene_and_ancestors_by_file_identity) {
+    const auto& gpu = nf::test::require_gpu();
+    FileOpsFixture f("nf_ed_del_open_scene");
+    f.vfs.mount("project://", f.tmp);
+    std::filesystem::create_directories(f.tmp / "Content" / "ScenesBackup");
+    (void)f.vfs.write_text("content://ScenesBackup/other.nfscene", "other");
+    scene::Scene authored("OpenScene");
+    std::string err;
+    NF_CHECK(runtime::save_scene_to_vfs(f.vfs, "content://Scenes/Level.nfscene", authored, err));
+    runtime::Runtime runtime(f.vfs, f.reg, f.manager, *gpu.device, nullptr);
+    f.app.attach_runtime(&runtime);
+    NF_CHECK(f.app.open_scene("content://Scenes/Level.nfscene", err));
+
+    NF_CHECK(!f.app.delete_asset("content://Scenes/Level.nfscene", false, err));
+    NF_CHECK(!f.app.delete_asset("project://Content/Scenes/Level.nfscene", false, err));
+    NF_CHECK(!f.app.delete_asset("content://Scenes/../Scenes/Level.nfscene", false, err));
+    NF_CHECK(!f.app.delete_asset("content://Scenes", true, err));
+    NF_CHECK(!f.app.delete_asset("project://Content", true, err));
+    NF_CHECK(f.vfs.exists("content://Scenes/Level.nfscene").value);
+    NF_CHECK(f.app.delete_asset("content://ScenesBackup", true, err));
+    NF_CHECK(f.vfs.exists("content://Scenes/Level.nfscene").value);
 }
 
 NF_TEST(editor_delete_asset_drops_a_stale_dock_selection) {

@@ -4,6 +4,9 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <NF/Editor/UiShell.hpp>
+#include <NF/Editor/ConsolePanel.hpp>
+#include <NF/Editor/UiEditCache.hpp>
+#include <NF/Editor/AddObjectCatalog.hpp>
 #include <NF/Editor/ToolbarUi.hpp>
 #include <NF/Editor/ProjectLauncher.hpp> // start_here choice persisted with the shell settings
 
@@ -54,6 +57,7 @@ namespace {
 
 // Persistent per-widget edit state (reset when the inspected entity changes).
 struct InspectorCache {
+    UiEditCacheKey key;
     ecs::Entity entity;
     bool valid = false;
     char name[129]{};
@@ -582,38 +586,6 @@ const char* level_name(LogLevel l) {
     return "?";
 }
 
-ImVec4 level_color(LogLevel l) {
-    switch (l) {
-        case LogLevel::Warn: return ImVec4(1.0f, 0.75f, 0.25f, 1.0f);
-        case LogLevel::Error:
-        case LogLevel::Fatal: return ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
-        default: return ImVec4(0.75f, 0.78f, 0.82f, 1.0f);
-    }
-}
-
-// Short label for the per-line category tag. Keep in sync with
-// Logger::LogCategory; None renders as "-" so an uncategorised message still
-// gets a visible separator.
-const char* category_name(LogCategory c) {
-    switch (c) {
-        case LogCategory::None: return "-";
-        case LogCategory::Core: return "Core";
-        case LogCategory::Render: return "Render";
-        case LogCategory::Physics: return "Physics";
-        case LogCategory::Audio: return "Audio";
-        case LogCategory::Network: return "Network";
-        case LogCategory::Asset: return "Asset";
-        case LogCategory::Editor: return "Editor";
-        case LogCategory::Script: return "Script";
-        case LogCategory::ECS: return "ECS";
-        case LogCategory::Platform: return "Platform";
-        case LogCategory::RHI: return "RHI";
-        case LogCategory::Jobs: return "Jobs";
-        case LogCategory::Scene: return "Scene";
-        default: return "?";
-    }
-}
-
 const char* entity_label_ptr(EditorApp& app, ecs::Entity e) {
     thread_local std::string scratch;
     if (const ecs::World* w = app.world()) {
@@ -987,21 +959,6 @@ void draw_orientation_gizmo(ImDrawList* dl, const ImVec2& max, const rendering::
 // The conflict only surfaced once the panel was tall enough to show two lines of
 // one category at once, which is why it appeared after a layout change.
 //
-// A chip is a LABEL. A label must not consume an ID.
-void draw_category_chip(const char* text) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const ImVec2 ts = ImGui::CalcTextSize(text);
-    const float pad_x = 6.0f;
-    const float h = ts.y + 4.0f;
-    const ImVec2 a(pos.x, pos.y);
-    const ImVec2 b(pos.x + ts.x + pad_x * 2.0f, pos.y + h);
-    dl->AddRectFilled(a, b, IM_COL32(52, 56, 63, 255), 3.0f);
-    dl->AddText(ImVec2(a.x + pad_x, a.y + 2.0f), IM_COL32(168, 176, 188, 255), text);
-    // Reserve the space the chip occupies so SameLine() lands after it.
-    ImGui::Dummy(ImVec2(b.x - a.x, h));
-}
-
 // Row tint per entity type in the outliner.
 //
 // A colour, not an icon glyph. The UI font has no icon glyphs — Toolbar.cpp
@@ -1559,9 +1516,7 @@ void draw_start_here(EditorApp& app) {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
         std::string err;
         if (ImGui::Button((AV("start_here_step1") + "##nf_sh_1").c_str(), wide)) {
-            if (!app.new_scene(err)) {
-                push_error(app.console(), "New scene failed", err);
-            }
+            st.request_new_scene = true;
         }
         if (ImGui::Button((AV("start_here_step2") + "##nf_sh_2").c_str(), wide)) {
             if (!app.create_primitive(PrimitiveKind::Ground, ecs::kInvalidEntity, err)) {
@@ -1585,6 +1540,130 @@ void draw_start_here(EditorApp& app) {
         LauncherSettings saved = load_settings();
         saved.start_here = false;
         save_settings(saved);
+    }
+}
+
+// Searchable object picker: all actions call the same undoable editor commands
+// used by the menus. Labels are translated for display; search uses logical text.
+void draw_add_object_dialog(EditorApp& app) {
+    static char query[160]{};
+    static int selected = -1;
+    static ecs::Entity parent = ecs::kInvalidEntity;
+    static std::string error;
+    static bool focus_search = false;
+    static bool add_at_root = false;
+    if (ui_settings().request_add_object) {
+        ui_settings().request_add_object = false;
+        if (!app.playing()) {
+            parent = app.selection().has_selection() ? app.selection().primary() : ecs::kInvalidEntity;
+            query[0] = '\0'; selected = -1; error.clear(); focus_search = true; add_at_root = false;
+            ImGui::OpenPopup("###add_object_dialog");
+        }
+    }
+    ImGui::SetNextWindowSize(ImVec2(590.0f, 530.0f), ImGuiCond_Appearing);
+    const auto title = AV("palette_title") + "###add_object_dialog";
+    bool open = true;
+    // OpenPopup uses the stable ID, independent of the translated title.
+    // BeginPopupModal hashes the suffix after ###.
+    if (ImGui::BeginPopupModal(title.c_str(), &open, ImGuiWindowFlags_NoCollapse)) {
+        if (parent.valid()) {
+            ImGui::Text("%s: %s", AV("palette_parent").c_str(), entity_label_ptr(app, parent));
+            ImGui::Checkbox(AV("palette_parent_root").c_str(), &add_at_root);
+        } else {
+            ImGui::TextDisabled("%s", AV("palette_parent_root").c_str());
+        }
+        ImGui::SetNextItemWidth(-1.0f);
+        if (focus_search) { ImGui::SetKeyboardFocusHere(); focus_search = false; }
+        if (ImGui::InputTextWithHint("##object_search", AV("palette_search").c_str(), query, sizeof(query)))
+            selected = -1;
+        // Keep a usable selection after filtering and let the search field act
+        // as a keyboard-driven picker, without requiring a mouse click.
+        const auto matches_entry = [&](const AddObjectEntry& entry) {
+            return add_object_matches(entry, ui::tr(entry.label_key), query,
+                                      ui::tr_for_language(entry.label_key, ui::Language::Arabic));
+        };
+        std::vector<int> matches;
+        for (size_t i = 0; i < kAddObjects.size(); ++i) {
+            if (matches_entry(kAddObjects[i]))
+                matches.push_back(static_cast<int>(i));
+        }
+        if (selected < 0 && !matches.empty()) selected = matches.front();
+        bool keyboard_moved = false;
+        if (!matches.empty() && (ImGui::IsKeyPressed(ImGuiKey_DownArrow) ||
+                                 ImGui::IsKeyPressed(ImGuiKey_UpArrow))) {
+            auto it = std::find(matches.begin(), matches.end(), selected);
+            int index = it == matches.end() ? 0 : static_cast<int>(it - matches.begin());
+            index += ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+            index = std::clamp(index, 0, static_cast<int>(matches.size()) - 1);
+            selected = matches[static_cast<size_t>(index)];
+            keyboard_moved = true;
+        }
+        bool create_requested = selected >= 0 && ImGui::IsKeyPressed(ImGuiKey_Enter);
+        ImGui::BeginChild("##object_list", ImVec2(0.0f, 285.0f), true);
+        const char* groups[] = {"palette_basic", "palette_2d", "palette_light", "palette_world", "palette_advanced"};
+        bool any = false;
+        for (int group = 0; group < 5; ++group) {
+            bool group_has_match = false;
+            for (const auto& entry : kAddObjects) {
+                if (static_cast<int>(entry.group) == group && matches_entry(entry)) group_has_match = true;
+            }
+            if (!group_has_match) continue;
+            any = true;
+            ImGui::TextDisabled("%s", AV(groups[group]).c_str());
+            for (size_t i = 0; i < kAddObjects.size(); ++i) {
+                const auto& entry = kAddObjects[i];
+                if (static_cast<int>(entry.group) != group || !matches_entry(entry)) continue;
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Selectable(AV(entry.label_key).c_str(), selected == static_cast<int>(i),
+                                      ImGuiSelectableFlags_AllowDoubleClick)) {
+                    selected = static_cast<int>(i);
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) create_requested = true;
+                }
+                if (keyboard_moved && selected == static_cast<int>(i)) ImGui::SetScrollHereY();
+                ImGui::PopID();
+            }
+            ImGui::Spacing();
+        }
+        if (!any) ImGui::TextDisabled("%s", AV("palette_no_match").c_str());
+        ImGui::EndChild();
+        ImGui::TextDisabled("%s", AV("palette_description").c_str());
+        ImGui::TextWrapped("%s", selected >= 0 ? AV(kAddObjects[static_cast<size_t>(selected)].description_key).c_str()
+                                                : AV("palette_select").c_str());
+        if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
+        ImGui::BeginDisabled(selected < 0 || app.playing());
+        if (ImGui::Button(AV("create").c_str(), ImVec2(120, 0))) create_requested = true;
+        if (create_requested && selected >= 0 && !app.playing()) {
+            error.clear();
+            const ecs::Entity target_parent = add_at_root ? ecs::kInvalidEntity : parent;
+            bool ok = false;
+            switch (kAddObjects[static_cast<size_t>(selected)].kind) {
+            case AddObjectKind::Empty: ok = app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(app.status().entity_count), target_parent, error); break;
+            case AddObjectKind::Cube: ok = app.create_primitive(PrimitiveKind::Cube, target_parent, error); break;
+            case AddObjectKind::Sphere: ok = app.create_primitive(PrimitiveKind::Sphere, target_parent, error); break;
+            case AddObjectKind::Quad: ok = app.create_primitive(PrimitiveKind::Quad, target_parent, error); break;
+            case AddObjectKind::Ground: ok = app.create_primitive(PrimitiveKind::Ground, target_parent, error); break;
+            case AddObjectKind::Sprite: ok = app.create_sprite(target_parent, error); break;
+            case AddObjectKind::Tilemap: ok = app.create_tilemap(target_parent, error); break;
+            case AddObjectKind::Camera: ok = app.create_camera(target_parent, error); break;
+            case AddObjectKind::Sun: ok = app.create_directional_light(target_parent, error); break;
+            case AddObjectKind::PointLight: ok = app.create_point_light(target_parent, error); break;
+            case AddObjectKind::SpotLight: ok = app.create_spot_light(target_parent, error); break;
+            case AddObjectKind::Audio: ok = app.create_audio_emitter(target_parent, error); break;
+            case AddObjectKind::Sky: ok = app.create_sky_entity(target_parent, error); break;
+            case AddObjectKind::Weather: ok = app.create_weather(target_parent, error); break;
+            case AddObjectKind::Cable: ok = app.create_cable(target_parent, error); break;
+            case AddObjectKind::RuleTile: ok = app.create_rule_tile(target_parent, error); break;
+            case AddObjectKind::FlowField: ok = app.create_flow_field(target_parent, error); break;
+            case AddObjectKind::Talent: ok = app.create_talent_tree(target_parent, error); break;
+            }
+            if (ok) ImGui::CloseCurrentPopup();
+            else push_error(app.console(), "Create object failed", error);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(AV("cancel").c_str(), ImVec2(120, 0)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 }
 
@@ -1650,17 +1729,14 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // "Assets" is the FileSystem browser's window ID (kept so existing
             // layouts survive the upgrade) — see the note at its Begin().
             ImGui::DockBuilderDockWindow("Assets", dock_left_bottom);
-            ImGui::DockBuilderDockWindow("World", dock_left_top);
+            ImGui::DockBuilderDockWindow("NFWorld", dock_left_top);
             ImGui::DockBuilderDockWindow("Viewport", dock_center);
             ImGui::DockBuilderDockWindow("Inspector", dock_right);
             ImGui::DockBuilderDockWindow("NFEnvironment", dock_right);
-            ImGui::DockBuilderDockWindow("NFTalentTree", dock_right);
             ImGui::DockBuilderDockWindow("NFCameraPanel", dock_right);
             ImGui::DockBuilderDockWindow("NFLighting", dock_right);
             ImGui::DockBuilderDockWindow("Console", dock_bottom);
             ImGui::DockBuilderDockWindow("NFRender", dock_bottom);
-            ImGui::DockBuilderDockWindow("NFFlowField", dock_bottom);
-            ImGui::DockBuilderDockWindow("NFCableSim", dock_bottom);
                 ImGui::DockBuilderFinish(dockspace_id);
                 // DockBuilderFinish does NOT mark the ini settings dirty (it
                 // only re-docks the windows into the new nodes), so a default
@@ -1678,113 +1754,13 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
     // --- Left: Scene Outliner --------------------------------------------------
     if (ImGui::Begin((AV("outliner") + "###Outliner").c_str())) {
-        // Quick-Add Primitives / Entities Menu
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 200));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
+        // One searchable entry point for scene objects. The selected entity is
+        // captured when the dialog opens, so a delayed click cannot reparent it.
+        ImGui::BeginDisabled(app.playing());
         if (ImGui::Button(AV("outliner_add_entity").c_str())) {
-            ImGui::OpenPopup("##outliner_add_popup");
+            ui_settings().request_add_object = true;
         }
-        ImGui::PopStyleColor(3);
-        if (ImGui::BeginPopup("##outliner_add_popup")) {
-            const ecs::Entity parent = app.selection().has_selection() ? app.selection().primary() : ecs::kInvalidEntity;
-            std::string err;
-            if (ImGui::MenuItem(AV("cube").c_str())) {
-                if (!app.create_primitive(PrimitiveKind::Cube, parent, err)) {
-                    push_error(app.console(), "Create cube failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("sphere").c_str())) {
-                if (!app.create_primitive(PrimitiveKind::Sphere, parent, err)) {
-                    push_error(app.console(), "Create sphere failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("quad").c_str())) {
-                if (!app.create_primitive(PrimitiveKind::Quad, parent, err)) {
-                    push_error(app.console(), "Create quad failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("ground").c_str())) {
-                if (!app.create_primitive(PrimitiveKind::Ground, parent, err)) {
-                    push_error(app.console(), "Create ground failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("sprite_2d").c_str())) {
-                if (!app.create_sprite(parent, err)) {
-                    push_error(app.console(), "Create sprite failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("tilemap_2d").c_str())) {
-                if (!app.create_tilemap(parent, err)) {
-                    push_error(app.console(), "Create tilemap failed", err);
-                }
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem(AV("camera").c_str())) {
-                if (!app.create_camera(parent, err)) {
-                    push_error(app.console(), "Create camera failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("light_sun").c_str())) {
-                if (!app.create_directional_light(parent, err)) {
-                    push_error(app.console(), "Create light failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("point_light").c_str())) {
-                if (!app.create_point_light(parent, err)) {
-                    push_error(app.console(), "Create point light failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("spot_light").c_str())) {
-                if (!app.create_spot_light(parent, err)) {
-                    push_error(app.console(), "Create spot light failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("audio_source").c_str())) {
-                if (!app.create_audio_emitter(parent, err)) {
-                    push_error(app.console(), "Create audio source failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("sky").c_str())) {
-                if (!app.create_sky_entity(parent, err)) {
-                    push_error(app.console(), "Create sky failed", err);
-                }
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem(AV("add_weather").c_str())) {
-                if (!app.create_weather(parent, err)) {
-                    push_error(app.console(), "Create weather failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("add_cable").c_str())) {
-                if (!app.create_cable(parent, err)) {
-                    push_error(app.console(), "Create cable failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("add_rule_tile").c_str())) {
-                if (!app.create_rule_tile(parent, err)) {
-                    push_error(app.console(), "Create rule tile failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("add_flow_field").c_str())) {
-                if (!app.create_flow_field(parent, err)) {
-                    push_error(app.console(), "Create flow field failed", err);
-                }
-            }
-            if (ImGui::MenuItem(AV("add_talent_tree").c_str())) {
-                if (!app.create_talent_tree(parent, err)) {
-                    push_error(app.console(), "Create talent tree failed", err);
-                }
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem(AV("create_empty").c_str())) {
-                const int n = static_cast<int>(app.status().entity_count);
-                if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n), parent, err)) {
-                    push_error(app.console(), "Create entity failed", err);
-                }
-            }
-            ImGui::EndPopup();
-        }
+        ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
@@ -1870,81 +1846,21 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             app.outliner().filter_text = outliner_filter;
         }
 
-        // 1-Click Feature Quick-Spawn Bar (Unified SANAD theme)
-        {
-            auto quick_spawn_pill = [&](const char* label, const char* tip, auto action) {
-                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(37, 99, 235, 180));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(241, 245, 249, 255));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 2.5f));
-                if (ImGui::Button(label)) {
-                    action();
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", tip);
-                }
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(4);
-            };
-            quick_spawn_pill(("+ " + AV("filter_weather")).c_str(), "Create Atmospheric Weather entity", [&]{
-                std::string err; app.create_weather(ecs::kInvalidEntity, err);
-            });
-            ImGui::SameLine(0.0f, 3.0f);
-            quick_spawn_pill(("+ " + AV("filter_cable")).c_str(), "Create Cable Simulation entity", [&]{
-                std::string err; app.create_cable(ecs::kInvalidEntity, err);
-            });
-            ImGui::SameLine(0.0f, 3.0f);
-            quick_spawn_pill(("+ " + AV("filter_talents")).c_str(), "Create Talent Progression Tree", [&]{
-                std::string err; app.create_talent_tree(ecs::kInvalidEntity, err);
-            });
-            ImGui::SameLine(0.0f, 3.0f);
-            quick_spawn_pill(("+ " + AV("filter_nav")).c_str(), "Create Flow Field Navigation Grid", [&]{
-                std::string err; app.create_flow_field(ecs::kInvalidEntity, err);
-            });
-        }
-
+        // A single category picker stays usable even in a narrow scene panel.
+        // The old row of ten pills extended beyond the panel and hid filters.
         static int s_outliner_cat = 0;
-        {
-            auto draw_cat_pill = [&](const char* label, int cat_idx) {
-                const bool active = (s_outliner_cat == cat_idx);
-                if (active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 255));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
-                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 200));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
-                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(180, 190, 205, 230));
-                }
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 2.0f));
-                if (ImGui::Button(label)) {
-                    s_outliner_cat = (active && cat_idx != 0) ? 0 : cat_idx;
-                }
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(3);
-            };
-            draw_cat_pill(AV("filter_all").c_str(), 0);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill("3D", 1);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill("2D", 2);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_light").c_str(), 3);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_audio").c_str(), 4);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_physics").c_str(), 5);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_weather").c_str(), 6);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_cable").c_str(), 7);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_nav").c_str(), 8);
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_cat_pill(AV("filter_talents").c_str(), 9);
+        const std::array<std::string, 10> categories = {
+            AV("filter_all"), "3D", "2D", AV("filter_light"), AV("filter_audio"),
+            AV("filter_physics"), AV("filter_weather"), AV("filter_cable"),
+            AV("filter_nav"), AV("filter_talents")};
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        if (ImGui::BeginCombo("##outliner_category", categories[static_cast<size_t>(s_outliner_cat)].c_str())) {
+            for (size_t i = 0; i < categories.size(); ++i) {
+                if (ImGui::Selectable(categories[i].c_str(), s_outliner_cat == static_cast<int>(i)))
+                    s_outliner_cat = static_cast<int>(i);
+                if (s_outliner_cat == static_cast<int>(i)) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
         }
         // Live census: total entities plus selection size, so an empty-looking
         // tree still answers "is the scene really empty".
@@ -2114,7 +2030,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // buttons offer, where the pointer already is. Delete is undoable
             // (Ctrl+Z restores), matching the button's safety contract.
             if (ImGui::BeginPopupContextItem("##rowctx")) {
-                if (ImGui::MenuItem((AV("frame_selection") + "   F").c_str())) {
+                if (ImGui::MenuItem(AV("frame_selection").c_str(), "F")) {
                     app.selection().set_single(row.entity);
                     intents.nav_frame = 1;
                 }
@@ -2252,6 +2168,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     }
     ImGui::End();
 
+    // The create menu must also work when the Outliner is collapsed or hidden.
+    // Draw the modal in a stable root scope, independently of that panel.
+    draw_add_object_dialog(app);
+
     // --- Center: Viewport ------------------------------------------------------
     if (ImGui::Begin((AV("viewport") + "###Viewport").c_str())) {
         // Game view banner: while playing the viewport IS the game — same
@@ -2271,18 +2191,18 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             }
             ImGui::PopStyleColor(3);
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                               "● GAME RUNNING — Arrows/WASD move, Space jumps, Shift sprints");
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                               AV("game_running_hint").c_str());
             ImGui::Separator();
         }
-        const float avail_w = ImGui::GetContentRegionAvail().x;
-        const float avail_h = ImGui::GetContentRegionAvail().y;
         // --- Gizmo toolbar (P2): mode / space / grid snapping ---
         // W/E/R switch the mode, but only when the viewport window is focused
         // and nothing is capturing text input — otherwise the console filter
         // and the rename field would steal every keystroke.
         {
-            const bool can_hotkey = !ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused();
+            const bool can_hotkey = !app.playing() && !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+                                    !ImGui::GetIO().WantTextInput && !ImGui::GetIO().KeyCtrl &&
+                                    ImGui::IsWindowFocused();
             if (can_hotkey) {
                 if (ImGui::IsKeyPressed(ImGuiKey_W)) {
                     app.set_gizmo_mode(GizmoMode::Translate);
@@ -2295,22 +2215,6 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
         }
-        // Active mode is a held accent button; "###gizmo_*" keeps widget IDs
-        // stable so flipping the mode never re-arms hover.
-        const ImVec4 kActiveBtn(0.298f, 0.553f, 1.000f, 0.85f); // matches UiBackend accent
-        const GizmoMode cur_mode = app.gizmo_mode();
-        auto mode_button = [&](GizmoMode m, const char* label) {
-            const bool on = (cur_mode == m);
-            if (on) {
-                ImGui::PushStyleColor(ImGuiCol_Button, kActiveBtn);
-            }
-            if (ImGui::Button(label)) {
-                app.set_gizmo_mode(m);
-            }
-            if (on) {
-                ImGui::PopStyleColor();
-            }
-        };
         // 2D / 3D Dimension Mode Switcher
         const bool is_2d_mode = app.is_2d_mode();
         if (is_2d_mode) {
@@ -2346,34 +2250,6 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        // Gizmo labels translate (AV) with stable ###ids so the widget identity
-        // survives a language switch; the temporaries outlive the Button call.
-        mode_button(GizmoMode::Translate, (AV("move") + "###gizmo_move").c_str());
-        ImGui::SameLine();
-        mode_button(GizmoMode::Rotate, (AV("rotate") + "###gizmo_rotate").c_str());
-        ImGui::SameLine();
-        mode_button(GizmoMode::Scale, (AV("scale_tool") + "###gizmo_scale").c_str());
-        ImGui::SameLine();
-        // Space toggle: the label is the space a click switches TO (the hint
-        // in parens names the active one).
-        const bool local_space = app.gizmo_space() == GizmoSpace::Local;
-        // A3b: the button shows the space you would switch TO. The ID after
-        // ### stays English so the widget identity survives a language switch.
-        const std::string space_label = local_space ? AV("world_space") : AV("local_space");
-        if (ImGui::Button((space_label + "###gizmo_space").c_str())) {
-            app.set_gizmo_space(local_space ? GizmoSpace::World : GizmoSpace::Local);
-        }
-        if (ImGui::IsItemHovered()) {
-            // Built, not formatted: a %s placeholder inside a SHAPED Arabic
-            // string would be reordered by the shaper along with the text.
-            ImGui::SetTooltip("%s: %s", AV("transform_space").c_str(),
-                              (local_space ? AV("local_space") : AV("world_space")).c_str());
-        }
-        ImGui::SameLine();
-        // Frame the selection / frame everything. Two buttons rather than one
-        // with a modifier: they are both common, and a modifier-only variant is
-        // undiscoverable. Disabled (greyed, not hidden) when there is nothing
-        // selected, so the toolbar does not reflow as the selection changes.
         ImGui::BeginDisabled(!app.selection().has_selection() || app.playing());
         if (ImGui::Button((AV("frame_selection") + "###frame_sel").c_str())) {
             intents.nav_frame = 1;
@@ -2388,31 +2264,6 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", AV("frame_all_hint").c_str());
-        }
-        ImGui::SameLine();
-        // Grid snapping (P2). A step of 0 disables its channel, so the
-        // checkbox is "any channel on"; enabling with all steps at zero seeds
-        // usable defaults rather than a checkbox that snaps to nothing.
-        GizmoSnap& snap = app.gizmo_snap();
-        bool snap_on = snap.any();
-        if (ImGui::Checkbox((AV("snap") + "###gizmo_snap").c_str(), &snap_on)) {
-            if (snap_on && !snap.any()) {
-                snap = GizmoSnap{0.25f, 15.0f, 0.25f};
-            } else if (!snap_on) {
-                snap = GizmoSnap{};
-            }
-        }
-        if (snap_on) {
-            ImGui::SameLine();
-            ImGui::PushItemWidth(72.0f);
-            ImGui::DragFloat((AV("move") + "###snap_move").c_str(), &snap.translate_step, 0.05f, 0.0f, 64.0f,
-                             "%.2f");
-            ImGui::SameLine();
-            ImGui::DragFloat((AV("rotate") + "###snap_rot").c_str(), &snap.rotate_step_deg, 1.0f, 0.0f, 180.0f,
-                             "%.0f");
-            ImGui::SameLine();
-            ImGui::DragFloat((AV("scale") + "###snap_scale").c_str(), &snap.scale_step, 0.05f, 0.0f, 4.0f, "%.2f");
-            ImGui::PopItemWidth();
         }
         // Lit-pixel counter: a renderer diagnostic, English on purpose (same
         // decision as the profiler block below). It sits behind the same
@@ -2429,7 +2280,12 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         // ImGui samples UV (0,0) at the widget top — default UVs would show
         // the scene upside down (and mirror every NDC gesture vertically
         // while the centre still hits, which is exactly how this survived).
-        ImVec2 img_size(avail_w > 0.0f ? avail_w : 10.0f, avail_h - 24.0f > 0.0f ? avail_h - 24.0f : 10.0f);
+        // Measure after the controls: their height changes with DPI, language
+        // and play mode. Reserve two hint lines below the image.
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const float hints = 2.0f * ImGui::GetTextLineHeightWithSpacing() +
+                            ImGui::GetStyle().ItemSpacing.y;
+        ImVec2 img_size(std::max(1.0f, available.x), std::max(1.0f, available.y - hints));
         // Feed the displayed size back: the shell renders the offscreen
         // target at the panel size, never the window size — otherwise the
         // image stretches whenever the docked panel aspect differs from
@@ -2484,137 +2340,6 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             draw_orientation_gizmo(ImGui::GetWindowDrawList(), vp_img_max, vp_cam);
             gizmo_hover = draw_transform_gizmo(app, vp_cam, vp_img_min, vp_img_max);
         }
-        // Interactive floating HUD overlay over the viewport image
-        {
-            ImGui::SetNextWindowPos(ImVec2(vp_img_min.x + 10.0f, vp_img_min.y + 10.0f), ImGuiCond_Always);
-            ImGui::SetNextWindowBgAlpha(0.80f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 0.0f));
-            if (ImGui::Begin("##viewport_hud_overlay", nullptr,
-                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
-                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                             ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
-                // 1. Dimension mode [2D] / [3D]
-                const bool is_2d = app.is_2d_mode();
-                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(96, 165, 250, 255));
-                if (ImGui::Button(is_2d ? "[ 2D ]###hud_dim" : "[ 3D ]###hud_dim")) {
-                    app.set_2d_mode(!is_2d);
-                    if (!is_2d) {
-                        app.set_gizmo_mode(GizmoMode::Translate);
-                    }
-                }
-                ImGui::PopStyleColor(2);
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", is_2d ? ui::tr("view_mode_2d").c_str() : ui::tr("view_mode_3d").c_str());
-                }
-
-                ImGui::SameLine();
-                // 2. Coordinate space switch [عالمي] / [محلي]
-                const bool hud_local_space = app.gizmo_space() == GizmoSpace::Local;
-                const std::string space_str = hud_local_space ? AV("local_space") : AV("world_space");
-                if (ImGui::Button((space_str + "###hud_space").c_str())) {
-                    app.set_gizmo_space(hud_local_space ? GizmoSpace::World : GizmoSpace::Local);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", (hud_local_space ? AV("local_space") : AV("world_space")).c_str());
-                }
-
-                ImGui::SameLine();
-                // 3. Grid toggle [⊞ شبكة]
-                bool& grid_on = ui_settings().show_grid;
-                if (grid_on) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 200));
-                }
-                if (ImGui::Button((AV("grid") + "###hud_grid").c_str())) {
-                    grid_on = !grid_on;
-                }
-                if (grid_on) {
-                    ImGui::PopStyleColor();
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", AV("grid").c_str());
-                }
-
-                ImGui::SameLine();
-                // 4. Snap toggle [🧲 مغناطيس]
-                GizmoSnap& hud_snap = app.gizmo_snap();
-                bool hud_snap_on = hud_snap.any();
-                if (hud_snap_on) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 200));
-                }
-                if (ImGui::Button((AV("snap") + "###hud_snap").c_str())) {
-                    if (!hud_snap_on) {
-                        hud_snap = GizmoSnap{0.25f, 15.0f, 0.25f};
-                    } else {
-                        hud_snap = GizmoSnap{};
-                    }
-                }
-                if (hud_snap_on) {
-                    ImGui::PopStyleColor();
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", AV("snap").c_str());
-                }
-
-                ImGui::SameLine();
-                // 5. Frame button [F]
-                ImGui::BeginDisabled(!app.selection().has_selection() || app.playing());
-                if (ImGui::Button("F###hud_frame")) {
-                    intents.nav_frame = 1;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", AV("frame_selection_hint").c_str());
-                }
-                ImGui::EndDisabled();
-            }
-            ImGui::End();
-            ImGui::PopStyleVar(3);
-        }
-
-        // Live Atmospheric Weather & Systems HUD
-        {
-            const runtime::WeatherComponent* scene_weather = nullptr;
-            int cable_count = 0;
-            if (app.world() != nullptr) {
-                for (ecs::Entity e : app.world()->all_entities()) {
-                    if (const auto* wc = app.world()->get<runtime::WeatherComponent>(e)) {
-                        scene_weather = wc;
-                    }
-                    if (app.world()->has<runtime::CableComponent>(e)) {
-                        cable_count++;
-                    }
-                }
-            }
-            if (scene_weather != nullptr || cable_count > 0) {
-                const ImVec2 img_mn = vp_img_min;
-                ImGui::SetNextWindowPos(ImVec2(img_mn.x + 10.0f, img_mn.y + 10.0f), ImGuiCond_Always);
-                ImGui::SetNextWindowBgAlpha(0.78f);
-                if (ImGui::Begin("##viewport_weather_hud", nullptr,
-                                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-                                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
-                    if (scene_weather != nullptr) {
-                        const std::string preset_names[7] = {
-                            AV("weather_clear"), AV("weather_cloudy"),
-                            AV("weather_overcast"), AV("weather_rain"),
-                            AV("weather_thunderstorm"), AV("weather_foggy"),
-                            AV("weather_snow")
-                        };
-                        const int p_idx = (scene_weather->weather_type >= 0 && scene_weather->weather_type < 7) ? scene_weather->weather_type : 0;
-                        ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s: %s", AV("weather_hud").c_str(), preset_names[p_idx].c_str());
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("| %s: %.3f | %s: %.1f m/s", AV("fog_density").c_str(), scene_weather->fog_density, AV("wind_speed").c_str(), scene_weather->wind_strength);
-                    }
-                    if (cable_count > 0) {
-                        if (scene_weather != nullptr) ImGui::SameLine();
-                        ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.0f, 1.0f), "| %s: %d", AV("cable_sim").c_str(), cable_count);
-                    }
-                    ImGui::End();
-                }
-            }
-        }
-
         // Live simulation overlay: what the frame actually stepped, for the
         // "is anything running" glance. Positioned below the floating HUD.
         if (app.runtime() != nullptr && ui_settings().show_viewport_stats) {
@@ -2811,209 +2536,24 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         ecs::World* w = app.world();
         const ecs::Entity sel = app.selection().primary();
         if (w == nullptr || !sel.valid() || !w->is_alive(sel)) {
-            // Dashboard header
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s", AV("scene_hub_title").c_str());
-            ImGui::TextDisabled("Scene Environment & Quick Setup");
-
-            const std::string scene_name = app.scene_path().empty() ? AV("untitled_scene") : std::filesystem::path(app.scene_path()).filename().string();
-            ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "%s", scene_name.c_str());
-            ImGui::SameLine();
-            ImGui::TextDisabled("| %s", AVF("stats_entities", app.status().entity_count).c_str());
-            ImGui::Separator();
-
-            // 1. Quick Atmospheric Weather Controller
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s", AV("quick_weather_title").c_str());
-            ImGui::TextDisabled("%s", AV("quick_weather_hint").c_str());
-
-            static int quick_weather_preset = 0;
-            static float quick_fog_density = 0.02f;
-            static float quick_wetness = 0.0f;
-            static float quick_wind_spd = 5.0f;
-
-            runtime::WeatherComponent* current_wc = nullptr;
-            if (w != nullptr) {
-                for (ecs::Entity e : w->all_entities()) {
-                    if (auto* wc = w->get<runtime::WeatherComponent>(e)) {
-                        current_wc = wc;
-                        quick_weather_preset = wc->weather_type;
-                        quick_fog_density = wc->fog_density;
-                        quick_wetness = wc->ground_wetness;
-                        quick_wind_spd = wc->wind_strength;
-                        break;
-                    }
-                }
-            }
-
-            auto weather_pill = [&](const char* name, int preset) {
-                const bool active = (quick_weather_preset == preset);
-                if (active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 255));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
-                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 220));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
-                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(203, 213, 225, 255));
-                }
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                if (ImGui::Button(name)) {
-                    quick_weather_preset = preset;
-                    if (current_wc != nullptr) {
-                        current_wc->weather_type = preset;
-                    } else {
-                        std::string err;
-                        app.create_weather(ecs::kInvalidEntity, err);
-                        if (app.world() != nullptr && app.selection().has_selection()) {
-                            if (auto* nw = app.world()->get<runtime::WeatherComponent>(app.selection().primary())) {
-                                nw->weather_type = preset;
-                            }
-                        }
-                    }
-                }
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor(3);
-            };
-
-            weather_pill(AV("weather_clear").c_str(), 0);
-            ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_cloudy").c_str(), 1);
-            ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_overcast").c_str(), 2);
-            ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_rain").c_str(), 3);
-
-            weather_pill(AV("weather_thunderstorm").c_str(), 4);
-            ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_foggy").c_str(), 5);
-            ImGui::SameLine(0.0f, 4.0f);
-            weather_pill(AV("weather_snow").c_str(), 6);
-
-            if (ImGui::SliderFloat((AV("fog_density") + "##qfd").c_str(), &quick_fog_density, 0.0f, 0.1f, "%.4f")) {
-                if (current_wc != nullptr) current_wc->fog_density = quick_fog_density;
-            }
-            if (ImGui::SliderFloat((AV("ground_wetness") + "##qgw").c_str(), &quick_wetness, 0.0f, 1.0f, "%.2f")) {
-                if (current_wc != nullptr) current_wc->ground_wetness = quick_wetness;
-            }
-            if (ImGui::SliderFloat((AV("wind_speed") + "##qws").c_str(), &quick_wind_spd, 0.0f, 50.0f, "%.1f m/s")) {
-                if (current_wc != nullptr) current_wc->wind_strength = quick_wind_spd;
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-
-            // 2. Quick Create Advanced Systems (Unified theme)
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.0f, 1.0f), "%s", AV("quick_create_title").c_str());
-
-            auto quick_spawn_button = [&](const char* label, const char* desc, auto fn) {
-                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 240));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(37, 99, 235, 200));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(29, 78, 216, 255));
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(241, 245, 249, 255));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
-                if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) {
-                    fn();
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", desc);
-                }
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(4);
-                ImGui::Spacing();
-            };
-
-            quick_spawn_button(("+ " + AV("add_weather")).c_str(), "Atmospheric Weather, Height Fog, Wetness & Wind", [&]{
-                std::string err; app.create_weather(ecs::kInvalidEntity, err);
-            });
-            quick_spawn_button(("+ " + AV("add_cable")).c_str(), "Verlet Physics Cable with Tension & Breakable Dynamics", [&]{
-                std::string err; app.create_cable(ecs::kInvalidEntity, err);
-            });
-            quick_spawn_button(("+ " + AV("add_talent_tree")).c_str(), "Skill & Talent Progression Graph with Tiers & Gates", [&]{
-                std::string err; app.create_talent_tree(ecs::kInvalidEntity, err);
-            });
-            quick_spawn_button(("+ " + AV("add_flow_field")).c_str(), "Crowd Flow Field Grid for Massive Scale AI Navigation", [&]{
-                std::string err; app.create_flow_field(ecs::kInvalidEntity, err);
-            });
-            quick_spawn_button(("+ " + AV("add_rule_tile")).c_str(), "2D 8-Neighbor Rule Tile Autotiling Map", [&]{
-                std::string err; app.create_rule_tile(ecs::kInvalidEntity, err);
-            });
-
-            ImGui::Separator();
-
-            // 3. Active Advanced Systems Census
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.0f, 1.0f), "%s", AV("active_systems_census").c_str());
-
-            int n_weather = 0, n_cables = 0, n_talents = 0, n_flow = 0, n_ruletiles = 0, n_inv = 0, n_rag = 0, n_saudio = 0;
-            if (w != nullptr) {
-                for (ecs::Entity e : w->all_entities()) {
-                    if (w->has<runtime::WeatherComponent>(e)) n_weather++;
-                    if (w->has<runtime::CableComponent>(e)) n_cables++;
-                    if (w->has<runtime::TalentComponent>(e)) n_talents++;
-                    if (w->has<runtime::FlowFieldComponent>(e)) n_flow++;
-                    if (w->has<runtime::RuleTileComponent>(e)) n_ruletiles++;
-                    if (w->has<runtime::InventoryComponent>(e)) n_inv++;
-                    if (w->has<runtime::RagdollComponent>(e)) n_rag++;
-                    if (w->has<runtime::SurfaceAudioComponent>(e)) n_saudio++;
-                }
-            }
-
-            auto draw_system_row = [&](const char* label, int count, ImVec4 col, auto select_fn) {
-                if (count <= 0) return;
-                ImGui::Bullet();
-                ImGui::TextColored(col, "%s: %d", label, count);
-                ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
-                if (ImGui::SmallButton((AV("select") + "##" + label).c_str())) {
-                    select_fn();
-                }
-            };
-
-            if (n_weather + n_cables + n_talents + n_flow + n_ruletiles + n_inv + n_rag + n_saudio == 0) {
-                ImGui::TextDisabled("%s", AV("no_active_systems").c_str());
-            } else {
-                const ImVec4 sys_col(0.45f, 0.78f, 1.0f, 1.0f);
-                draw_system_row(AV("weather_system").c_str(), n_weather, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::WeatherComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("cable_sim").c_str(), n_cables, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::CableComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("talent_tree").c_str(), n_talents, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::TalentComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("flow_field").c_str(), n_flow, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::FlowFieldComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("rule_tile").c_str(), n_ruletiles, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::RuleTileComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("inventory").c_str(), n_inv, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::InventoryComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("ragdoll").c_str(), n_rag, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::RagdollComponent>(e)) { app.selection().set_single(e); break; }
-                });
-                draw_system_row(AV("surface_audio").c_str(), n_saudio, sys_col, [&]{
-                    for (ecs::Entity e : w->all_entities()) if (w->has<runtime::SurfaceAudioComponent>(e)) { app.selection().set_single(e); break; }
-                });
-            }
+            ImGui::TextWrapped("%s", AV("inspector_select_hint").c_str());
         } else {
             // Identity line: the stable Entity id + generation (what undo,
             // logs and the outliner's ###e<id> all key on).
             rt_disabled_str(AVF("inspector_entity_gen", static_cast<unsigned>(sel.id),
                                 static_cast<unsigned>(sel.generation)));
             InspectorCache& ic = inspector_cache();
-            if (!ic.valid || !(ic.entity == sel)) {
+            const bool same_scene = ic.key.same_scene(w, app.scene_serial());
+            const bool refresh = ic.key.refresh(w, sel, app.scene_serial(), app.edit_revision());
+            if (!ic.valid || refresh) {
                 // A drag in progress targets the old material: fold it into
                 // one undo step before the cache is overwritten below.
-                if (ic.mat_live) {
+                if (ic.mat_live && same_scene) {
                     std::string commit_err;
                     app.commit_material_params(ic.mat_path, ic.mat_before, commit_err);
                     ic.mat_live = false;
                 }
+                ic.mat_live = false;
                 ic.entity = sel;
                 ic.valid = true;
                 ic.error.clear();
@@ -3752,64 +3292,6 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
                 ImGui::EndPopup();
             }
-
-            // Quick-Add Component Bar
-            ImGui::Spacing();
-            ImGui::TextDisabled("%s", AV("quick_add_component").c_str());
-            {
-                auto attach_pill = [&](const char* label, bool has_it, auto attach_fn) {
-                    if (has_it) {
-                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 255));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(59, 130, 246, 255));
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
-                        std::string checked_label = "v " + std::string(label);
-                        ImGui::Button(checked_label.c_str());
-                    } else {
-                        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(37, 99, 235, 180));
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(224, 238, 255, 255));
-                        std::string add_label = "+ " + std::string(label);
-                        if (ImGui::Button(add_label.c_str())) {
-                            attach_fn();
-                        }
-                    }
-                    ImGui::PopStyleColor(3);
-                };
-
-                attach_pill(AV("weather_system").c_str(), ic.weather_has, [&]{
-                    std::string err; app.attach_weather(sel, err);
-                });
-                ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("cable_sim").c_str(), ic.cable_has, [&]{
-                    std::string err; app.attach_cable(sel, err);
-                });
-                ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("talent_tree").c_str(), ic.talent_has, [&]{
-                    std::string err; app.attach_talent_tree(sel, err);
-                });
-                ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("flow_field").c_str(), ic.flow_has, [&]{
-                    std::string err; app.attach_flow_field(sel, err);
-                });
-
-                attach_pill(AV("rule_tile").c_str(), ic.rule_tile_has, [&]{
-                    std::string err; app.attach_rule_tile(sel, err);
-                });
-                ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("ragdoll").c_str(), ic.ragdoll_has, [&]{
-                    std::string err; app.attach_ragdoll(sel, err);
-                });
-                ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("inventory").c_str(), ic.inv_has, [&]{
-                    std::string err; app.attach_inventory(sel, err);
-                });
-                ImGui::SameLine(0.0f, 4.0f);
-                attach_pill(AV("surface_audio").c_str(), ic.sa_has, [&]{
-                    std::string err; app.attach_surface_audio(sel, err);
-                });
-            }
-            ImGui::Spacing();
-            ImGui::Separator();
 
             if (ImGui::CollapsingHeader((AV("name") + "###Name").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::SetNextItemWidth(-86.0f);
@@ -7306,23 +6788,6 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 ImGui::Text("%s: %d", AV("rule_count").c_str(), ic.rt_count);
                 ImGui::Checkbox((AV("auto_update_map") + "##rt_auto").c_str(), &ic.rt_auto_update);
 
-                ImGui::TextDisabled("%s", AV("neighbor_pattern").c_str());
-                static int grid_sample[3][3] = {{1, 1, 1}, {1, 1, 1}, {0, 1, 0}};
-                for (int gy = 0; gy < 3; ++gy) {
-                    for (int gx = 0; gx < 3; ++gx) {
-                        if (gx > 0) ImGui::SameLine();
-                        ImGui::PushID(gy * 3 + gx);
-                        const bool active = grid_sample[gy][gx] != 0;
-                        if (active) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(37, 99, 235, 220));
-                        else ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(50, 55, 65, 200));
-                        if (ImGui::Button((gy == 1 && gx == 1) ? "[T]" : (active ? "[X]" : "[ ]"), ImVec2(28.0f, 24.0f))) {
-                            if (gy != 1 || gx != 1) grid_sample[gy][gx] = active ? 0 : 1;
-                        }
-                        ImGui::PopStyleColor();
-                        ImGui::PopID();
-                    }
-                }
-
                 if (ImGui::Button((AV("apply") + "##ruletile").c_str())) {
                     runtime::RuleTileComponent rtc;
                     rtc.default_tile_id = static_cast<u32>(ic.rt_default_id);
@@ -7393,30 +6858,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 ImGui::InputText(AV("tree_id").c_str(), ic.tt_id, sizeof(ic.tt_id));
                 ImGui::InputText(AV("tree_name").c_str(), ic.tt_name, sizeof(ic.tt_name));
                 ImGui::DragInt((AV("available_points") + "##tt_pts").c_str(), &ic.tt_available, 1.0f, 0, 999);
-                ImGui::Text("%s: %d", AV("spent_points").c_str(), ic.tt_spent);
-
-                ImGui::Separator();
-                ImGui::TextDisabled("Nodes Preview (3 Tiers)");
-                const char* sample_nodes[3] = {"Combat Mastery (Tier 0)", "Armor Piercing (Tier 1)", "Berserker Rage (Tier 2 - Keystone)"};
-                for (int ni = 0; ni < 3; ++ni) {
-                    ImGui::BulletText("%s", sample_nodes[ni]);
-                    ImGui::SameLine();
-                    ImGui::PushID(ni);
-                    if (ImGui::SmallButton("+")) {
-                        if (ic.tt_available > 0) {
-                            ic.tt_available--;
-                            ic.tt_spent++;
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("-")) {
-                        if (ic.tt_spent > 0) {
-                            ic.tt_spent--;
-                            ic.tt_available++;
-                        }
-                    }
-                    ImGui::PopID();
-                }
+                ImGui::DragInt((AV("spent_points") + "##tt_spent").c_str(), &ic.tt_spent, 1.0f, 0, 999);
 
                 if (ImGui::Button((AV("apply") + "##talent").c_str())) {
                     runtime::TalentComponent tt;
@@ -7446,7 +6888,8 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
 
             if (ic.ragdoll_has && ImGui::CollapsingHeader((AV("ragdoll_blend") + "###RagdollBlend").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Checkbox((AV("enabled") + "##rd_en").c_str(), &ic.ragdoll_enabled);
-                ImGui::SliderFloat((AV("blend_weight") + "##rd_wt").c_str(), &ic.rd_weight, 0.0f, 1.0f, "%.2f (0=Anim, 1=Ragdoll)");
+                ImGui::SliderFloat((AV("blend_weight") + "##rd_wt").c_str(), &ic.rd_weight, 0.0f, 1.0f, "%.2f");
+                ImGui::TextDisabled("%s", AV("ragdoll_blend_hint").c_str());
                 const char* rd_poses[4] = {"pose_inactive", "pose_ragdoll", "pose_getup_face_up", "pose_getup_face_down"};
                 if (ImGui::BeginCombo(AV("pose_state").c_str(), AV(rd_poses[std::clamp(ic.rd_pose, 0, 3)]).c_str())) {
                     for (int i = 0; i < 4; ++i) {
@@ -7459,7 +6902,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SliderFloat("Blend Duration##rd_dur", &ic.rd_duration, 0.05f, 3.0f, "%.2f s");
+                ImGui::SliderFloat((AV("blend_duration") + "##rd_dur").c_str(), &ic.rd_duration, 0.05f, 3.0f, "%.2f s");
                 ImGui::Checkbox((AV("preserve_momentum") + "##rd_mom").c_str(), &ic.rd_momentum);
 
                 if (ImGui::Button((AV("apply") + "##ragdoll").c_str())) {
@@ -7547,7 +6990,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SliderFloat("Volume Scale##sa_v", &ic.sa_vol, 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat((AV("volume_scale") + "##sa_v").c_str(), &ic.sa_vol, 0.0f, 2.0f, "%.2f");
                 ImGui::SliderFloat((AV("pitch_variation") + "##sa_p").c_str(), &ic.sa_pitch, 0.0f, 0.5f, "%.2f");
                 ImGui::Checkbox((AV("wetness_modulation") + "##sa_w").c_str(), &ic.sa_wetness);
 
@@ -7618,158 +7061,8 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
 
 
     if (ImGui::Begin((AV("console") + "###Console").c_str())) {
-        static int level_filter = 2; // Info+
-        // A3b: the labels must OUTLIVE the Combo call. AV() returns a
-        // std::string BY VALUE, so writing .c_str() of the temporary straight
-        // into the array leaves five dangling pointers the moment the statement
-        // ends — the same use-after-free the sky preset combo had. Own the
-        // strings first, then point at them.
-        const std::string level_labels[5] = {AV("console_trace"), AV("console_debug"),
-                                             AV("console_info"), AV("console_warn"),
-                                             AV("console_error")};
-        const char* levels[5] = {level_labels[0].c_str(), level_labels[1].c_str(),
-                                 level_labels[2].c_str(), level_labels[3].c_str(),
-                                 level_labels[4].c_str()};
-
-        // Live severity counts
-        const std::vector<LogMessage> all_logs = app.console().filtered(LogLevel::Trace);
-        const int count_all = static_cast<int>(all_logs.size());
-        int count_info = 0;
-        int count_warn = 0;
-        int count_error = 0;
-        for (const auto& log_m : all_logs) {
-            if (log_m.level == LogLevel::Error) count_error++;
-            else if (log_m.level == LogLevel::Warn) count_warn++;
-            else count_info++;
-        }
-
-        // Row 1: Interactive quick severity filter pills
-        auto draw_severity_pill = [&](const std::string& name, int lvl, int cnt, ImVec4 active_col) {
-            const bool is_sel = (level_filter == lvl);
-            if (is_sel) {
-                ImGui::PushStyleColor(ImGuiCol_Button, active_col);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(active_col.x * 1.15f, active_col.y * 1.15f, active_col.z * 1.15f, 1.0f));
-            }
-            const std::string pill_text = name + " (" + std::to_string(cnt) + ")###pill_lvl_" + std::to_string(lvl);
-            if (ImGui::Button(pill_text.c_str())) {
-                level_filter = lvl;
-            }
-            if (is_sel) {
-                ImGui::PopStyleColor(2);
-            }
-        };
-
-        draw_severity_pill(AV("filter_all"), 0, count_all, ImVec4(0.25f, 0.45f, 0.85f, 0.9f));
-        ImGui::SameLine();
-        draw_severity_pill(level_labels[2], 2, count_info, ImVec4(0.18f, 0.58f, 0.88f, 0.9f));
-        ImGui::SameLine();
-        draw_severity_pill(level_labels[3], 3, count_warn, ImVec4(0.85f, 0.58f, 0.15f, 0.9f));
-        ImGui::SameLine();
-        draw_severity_pill(level_labels[4], 4, count_error, ImVec4(0.88f, 0.22f, 0.25f, 0.9f));
-
-        ImGui::SameLine();
-        ImGui::TextDisabled("|");
-        ImGui::SameLine();
-
-        static int category_filter = 0;
-        const char* categories[] = {"All",  "Core", "Render", "Physics", "Audio",
-                                    "Network", "Asset", "Editor", "Script", "ECS",
-                                    "Platform", "RHI",  "Jobs",   "Scene"};
-        const LogCategory category_values[] = {
-            LogCategory::All,     LogCategory::Core,    LogCategory::Render,
-            LogCategory::Physics, LogCategory::Audio,   LogCategory::Network,
-            LogCategory::Asset,   LogCategory::Editor,  LogCategory::Script,
-            LogCategory::ECS,     LogCategory::Platform, LogCategory::RHI,
-            LogCategory::Jobs,    LogCategory::Scene};
-        const int cat_index =
-            (category_filter >= 0 && category_filter < IM_ARRAYSIZE(category_values))
-                ? category_filter
-                : 0;
-        const LogCategory selected = category_values[cat_index];
-        static char search[128] = "";
-        const nf::editor::ConsoleBuffer::Filter filter{
-            static_cast<LogLevel>(level_filter),
-            (selected == LogCategory::All) ? LogCategory::All : selected,
-            std::string(search)};
-        const std::vector<LogMessage> lines = app.console().filtered(filter);
-
-        if (ImGui::Button((AV("copy_all_logs") + "###btn_copy_all_logs").c_str())) {
-            std::string full_txt;
-            for (const auto& log_m : lines) {
-                full_txt += "[" + std::string(category_name(log_m.category)) + "] " + log_m.text + "\n";
-            }
-            ImGui::SetClipboardText(full_txt.c_str());
-        }
-        ImGui::SameLine();
-        if (ImGui::Button(AV("clear").c_str())) {
-            app.console().clear();
-        }
-        ImGui::SameLine();
-        rt_disabled_str(AVF("console_dropped", app.console().dropped()));
-
-        // Row 2: Category, Search box, and Autoscroll
-        ImGui::Combo(AV("category").c_str(), &category_filter, categories, 14);
-        ImGui::SameLine();
-        ImGui::PushItemWidth(220.0f);
-        const std::string search_hint = AV("console_search_hint");
-        ImGui::InputTextWithHint("##consolesearch", search_hint.c_str(), search,
-                                 IM_ARRAYSIZE(search));
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        static bool auto_scroll = true;
-        ImGui::Checkbox(AV("autoscroll").c_str(), &auto_scroll);
-        // --- Polished log rows: level dot + category chip + message ---------
-        // Denser than the old "[LEVEL][Category] text" line: a colored dot
-        // carries severity at a glance, the category is a muted chip, and the
-        // message keeps full width. Same data, same filters, faster scanning.
-        if (ImGui::BeginChild("##consolelines", ImVec2(0, 0), true)) {
-            // Clipped like the outliner: shaping runs only for visible rows,
-            // not for the whole backlog every frame.
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(lines.size()));
-            while (clipper.Step()) {
-                for (int li = clipper.DisplayStart; li < clipper.DisplayEnd; ++li) {
-                    const LogMessage& m = lines[static_cast<size_t>(li)];
-                    ImVec4 dot = level_color(m.level);
-                    const ImVec2 p = ImGui::GetCursorScreenPos();
-                    const float row_w = ImGui::GetContentRegionAvail().x;
-                    const float row_h = ImGui::GetTextLineHeightWithSpacing();
-                    ImDrawList* dl = ImGui::GetWindowDrawList();
-                    if (m.level == LogLevel::Error) {
-                        dl->AddRectFilled(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(239, 68, 68, 28), 3.0f);
-                        dl->AddRect(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(239, 68, 68, 60), 3.0f);
-                    } else if (m.level == LogLevel::Warn) {
-                        dl->AddRectFilled(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(245, 158, 11, 22), 3.0f);
-                        dl->AddRect(p, ImVec2(p.x + row_w, p.y + row_h), IM_COL32(245, 158, 11, 50), 3.0f);
-                    }
-                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
-                    dl->AddCircleFilled(
-                        ImVec2(p.x + 6.0f, p.y + 8.0f), 4.0f,
-                        IM_COL32(static_cast<int>(dot.x * 255.0f),
-                                 static_cast<int>(dot.y * 255.0f),
-                                 static_cast<int>(dot.z * 255.0f), 255));
-                    ImGui::SameLine(0.0f, 2.0f);
-                    draw_category_chip(category_name(m.category));
-                    ImGui::SameLine();
-                    // Message text is arbitrary (asset paths, engine errors, an
-                    // Arabic entity name in a rename failure), so shape it for
-                    // display and avoid the %s format path entirely.
-                    const std::string shaped = ui::shape_arabic(m.text);
-                    ImGui::TextColored(level_color(m.level), "%s", shaped.c_str());
-                    if (ImGui::BeginPopupContextItem("##logctx")) {
-                        if (ImGui::MenuItem(AV("copy_log_message").c_str())) {
-                            ImGui::SetClipboardText(m.text.c_str());
-                        }
-                        ImGui::EndPopup();
-                    }
-                }
-            }
-            clipper.End();
-            if (auto_scroll && !lines.empty()) {
-                ImGui::SetScrollHereY(1.0f);
-            }
-        }
-        ImGui::EndChild();
+        static ConsolePanelState console_state;
+        console_panel(app.console(), console_state);
     }
     ImGui::End();
 

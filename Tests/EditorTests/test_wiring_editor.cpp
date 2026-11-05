@@ -27,6 +27,7 @@
 #include <NF/Vfx/Components.hpp>
 #include <NF/Audio/Components.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -95,6 +96,102 @@ std::vector<u8> make_wav_mono16(u32 rate, float freq, float seconds) {
 }
 
 } // namespace
+
+NF_TEST(editor_create_objects_undo_redo_preserves_components_and_parent) {
+    const GpuFixture& f = require_gpu();
+    const auto tmp = wiring_temp_dir("nf_ed_create_undo");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+    AssetRegistry reg;
+    AssetManager manager(vfs, reg);
+    runtime::Runtime runtime(vfs, reg, manager, *f.device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, reg, manager, console);
+    app.attach_runtime(&runtime);
+    std::string err;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+    ecs::World& world = runtime.edit_scene()->world();
+    const ecs::Entity parent = world.all_entities().front();
+    using Create = bool (editor::EditorApp::*)(ecs::Entity, std::string&);
+    using Check = bool (*)(ecs::World&, ecs::Entity);
+    const std::pair<Create, Check> cases[] = {
+        {&editor::EditorApp::create_directional_light, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::DirectionalLight>(e); }},
+        {&editor::EditorApp::create_point_light, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::PointLightComponent>(e); }},
+        {&editor::EditorApp::create_spot_light, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::SpotLightComponent>(e); }},
+        {&editor::EditorApp::create_sprite, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::SpriteComponent>(e); }},
+        {&editor::EditorApp::create_tilemap, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::TilemapComponent>(e); }},
+        {&editor::EditorApp::create_audio_emitter, [](ecs::World& w, ecs::Entity e) { return w.has<audio::AudioComponent>(e); }},
+        {&editor::EditorApp::create_camera, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::CameraComponent>(e); }},
+        {&editor::EditorApp::create_sky_entity, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::SkyComponent>(e); }},
+        {&editor::EditorApp::create_weather, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::WeatherComponent>(e); }},
+        {&editor::EditorApp::create_cable, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::CableComponent>(e); }},
+        {&editor::EditorApp::create_rule_tile, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::RuleTileComponent>(e) && w.has<runtime::TilemapComponent>(e); }},
+        {&editor::EditorApp::create_flow_field, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::FlowFieldComponent>(e); }},
+        {&editor::EditorApp::create_talent_tree, [](ecs::World& w, ecs::Entity e) { return w.has<runtime::TalentComponent>(e); }},
+    };
+    for (const auto& [create, check] : cases) {
+        app.outliner().set_expanded(parent, false);
+        NF_CHECK((app.*create)(parent, err));
+        NF_CHECK(app.outliner().is_expanded(parent));
+        ecs::Entity created = app.stack().last_target();
+        NF_CHECK(world.is_alive(created) && check(world, created));
+        NF_CHECK(world.get<scene::Transform>(created)->parent == parent);
+        const auto rows_before_undo = app.outliner_rows();
+        NF_CHECK(std::any_of(rows_before_undo.begin(), rows_before_undo.end(),
+                             [created](const auto& row) { return row.entity == created; }));
+        NF_CHECK(app.undo(err));
+        NF_CHECK(!world.is_alive(created));
+        const auto rows_after_undo = app.outliner_rows();
+        NF_CHECK(std::none_of(rows_after_undo.begin(), rows_after_undo.end(),
+                              [created](const auto& row) { return row.entity == created; }));
+        NF_CHECK(app.redo(err));
+        created = app.stack().last_target();
+        NF_CHECK(world.is_alive(created) && check(world, created));
+        NF_CHECK(world.get<scene::Transform>(created)->parent == parent);
+        const auto rows_after_redo = app.outliner_rows();
+        NF_CHECK(std::any_of(rows_after_redo.begin(), rows_after_redo.end(),
+                             [created](const auto& row) { return row.entity == created; }));
+        NF_CHECK(app.undo(err));
+    }
+    NF_CHECK(app.create_primitive(editor::PrimitiveKind::Ground, parent, err));
+    ecs::Entity ground = app.stack().last_target();
+    NF_CHECK(world.has<physics::ColliderComponent>(ground));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.redo(err));
+    ground = app.stack().last_target();
+    NF_CHECK(world.has<physics::ColliderComponent>(ground));
+    NF_CHECK(world.has<physics::RigidBodyComponent>(ground));
+    NF_CHECK(world.get<scene::Transform>(ground)->parent == parent);
+    NF_CHECK(app.undo(err));
+
+    // Undo and redo a newly created three-level hierarchy. Entity generations
+    // change on recreation, so the pending child commands must follow them.
+    NF_CHECK(app.create_entity("Parent", ecs::kInvalidEntity, err));
+    const ecs::Entity first_parent = app.stack().last_target();
+    NF_CHECK(app.create_camera(first_parent, err));
+    const ecs::Entity first_camera = app.stack().last_target();
+    NF_CHECK(app.create_point_light(first_camera, err));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.redo(err));
+    const ecs::Entity restored_parent = app.stack().last_target();
+    NF_CHECK(app.redo(err));
+    const ecs::Entity restored_camera = app.stack().last_target();
+    NF_CHECK(world.get<scene::Transform>(restored_camera)->parent == restored_parent);
+    NF_CHECK(app.redo(err));
+    const ecs::Entity restored_light = app.stack().last_target();
+    NF_CHECK(world.get<scene::Transform>(restored_light)->parent == restored_camera);
+    NF_CHECK(app.rename_entity(restored_light, "Hall Lamp", err));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.redo(err));
+    const ecs::Entity recreated_light = app.stack().last_target();
+    NF_CHECK(app.redo(err));
+    NF_CHECK(world.get<scene::NameComponent>(recreated_light)->name == "Hall Lamp");
+}
 
 NF_TEST(editor_destructible_attach_edit_detach) {
     const GpuFixture& f = require_gpu();
@@ -487,6 +584,7 @@ NF_TEST(editor_asset_folder_create_and_project_root) {
 
     // Opening the project flips the browser to its files.
     app.set_project((tmp / "Proj" / "Game.nfproj").string(), "Game");
+    NF_CHECK(app.import_queue().scratch_dir() == tmp / "Proj" / "Cache");
     NF_CHECK_EQ(app.browser().browser_root, 1);
     const auto entries = app.browser_entries();
     bool saw_script = false;
@@ -504,6 +602,15 @@ NF_TEST(editor_asset_folder_create_and_project_root) {
         }
     }
     NF_CHECK(saw_folder);
+
+    // An engine-only session has no project mount and must not retain the
+    // previous project's navigation history or open its nonexistent root.
+    app.browser().back_stack.push_back("project://Scripts");
+    app.browser().forward_stack.push_back("project://Old");
+    app.set_project("", "");
+    NF_CHECK_EQ(app.browser().browser_root, 0);
+    NF_CHECK(app.browser().back_stack.empty());
+    NF_CHECK(app.browser().forward_stack.empty());
 
     std::filesystem::remove_all(tmp);
 }
@@ -558,4 +665,4 @@ NF_TEST(editor_every_add_menu_component_attaches) {
     NF_CHECK(!world.query<runtime::SkyComponent>().empty());
 
     std::filesystem::remove_all(tmp);
-}
+}

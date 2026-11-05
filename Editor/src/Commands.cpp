@@ -2,7 +2,10 @@
 #include <NF/Core/Logger.hpp>
 #include <NF/Editor/Prefabs.hpp>
 #include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/Transform.hpp>
+
+#include <algorithm>
 
 namespace nf::editor {
 
@@ -13,13 +16,23 @@ void CommandStack::push(std::unique_ptr<ICommand> cmd, ecs::World& world) {
     cmd->apply(world);
     m_undo.push_back(std::move(cmd));
     m_redo.clear();
+    m_redo_targets.clear();
 }
 
 bool CommandStack::undo(ecs::World& world) {
     if (m_undo.empty()) {
         return false;
     }
+    m_redo_targets.push_back(m_undo.back()->target());
     m_undo.back()->undo(world);
+    std::vector<std::pair<ecs::Entity, ecs::Entity>> remaps;
+    m_undo.back()->collect_undo_remaps(remaps);
+    for (const auto& [previous, replacement] : remaps) {
+        for (size_t i = 0; i + 1 < m_undo.size(); ++i)
+            m_undo[i]->remap_entity(previous, replacement);
+        for (auto& pending : m_redo) pending->remap_entity(previous, replacement);
+        for (auto& target : m_redo_targets) if (target == previous) target = replacement;
+    }
     m_redo.push_back(std::move(m_undo.back()));
     m_undo.pop_back();
     return true;
@@ -29,7 +42,17 @@ bool CommandStack::redo(ecs::World& world) {
     if (m_redo.empty()) {
         return false;
     }
+    const ecs::Entity previous = m_redo_targets.back();
+    m_redo_targets.pop_back();
     m_redo.back()->apply(world);
+    std::vector<std::pair<ecs::Entity, ecs::Entity>> remaps;
+    m_redo.back()->collect_redo_remaps(previous, remaps);
+    for (const auto& [old_entity, new_entity] : remaps) {
+        // The command being replayed already holds its new live handles.
+        for (size_t i = 0; i + 1 < m_redo.size(); ++i)
+            m_redo[i]->remap_entity(old_entity, new_entity);
+        for (auto& target : m_redo_targets) if (target == old_entity) target = new_entity;
+    }
     m_undo.push_back(std::move(m_redo.back()));
     m_redo.pop_back();
     return true;
@@ -38,6 +61,7 @@ bool CommandStack::redo(ecs::World& world) {
 void CommandStack::clear() {
     m_undo.clear();
     m_redo.clear();
+    m_redo_targets.clear();
 }
 
 ecs::Entity CommandStack::last_target() const {
@@ -94,30 +118,14 @@ std::unique_ptr<DeleteEntityCommand> DeleteEntityCommand::capture(ecs::World& wo
     auto cmd = std::unique_ptr<DeleteEntityCommand>(new DeleteEntityCommand());
     cmd->m_original = e;
     cmd->m_restored = e;
+    cmd->m_snapshot = std::make_unique<scene::Scene>("Deleted entity snapshot");
+    cmd->m_snapshot_entity = cmd->m_snapshot->world().create_entity();
+    runtime::copy_scene_entity(world, e, cmd->m_snapshot->world(), cmd->m_snapshot_entity);
     if (const auto* t = world.get<scene::Transform>(e)) {
-        cmd->m_had_transform = true;
-        cmd->m_transform = *t;
         cmd->m_parent = t->parent;
     }
     if (const auto* n = world.get<scene::NameComponent>(e)) {
-        cmd->m_had_name = true;
-        cmd->m_name = *n;
-    }
-    if (const auto* m = world.get<runtime::MeshComponent>(e)) {
-        cmd->m_had_mesh = true;
-        cmd->m_mesh = *m;
-    }
-    if (const auto* c = world.get<runtime::CameraComponent>(e)) {
-        cmd->m_had_camera = true;
-        cmd->m_camera = *c;
-    }
-    if (const auto* l = world.get<runtime::DirectionalLight>(e)) {
-        cmd->m_had_light = true;
-        cmd->m_light = *l;
-    }
-    if (const auto* p = world.get<scene::PrefabLinkComponent>(e)) {
-        cmd->m_had_prefab = true;
-        cmd->m_prefab = *p;
+        cmd->m_name = n->name;
     }
     cmd->m_children = scene::get_children(world, e);
     return cmd;
@@ -130,6 +138,7 @@ void DeleteEntityCommand::apply(ecs::World& world) {
     if (!victim.valid() || !world.is_alive(victim)) {
         return;
     }
+    m_original = victim;
     // Re-attach children to our own parent so the subtree survives.
     ecs::Entity new_parent = ecs::kInvalidEntity;
     if (const auto* t = world.get<scene::Transform>(victim)) {
@@ -149,26 +158,10 @@ void DeleteEntityCommand::apply(ecs::World& world) {
 
 void DeleteEntityCommand::undo(ecs::World& world) {
     ecs::Entity e = world.create_entity();
-    if (m_had_transform) {
-        scene::Transform t = m_transform;
-        t.parent = ecs::kInvalidEntity; // set below via set_parent (cycle-safe)
-        t.dirty = true;
-        world.add<scene::Transform>(e, t);
-    }
-    if (m_had_name) {
-        world.add<scene::NameComponent>(e, m_name);
-    }
-    if (m_had_mesh) {
-        world.add<runtime::MeshComponent>(e, m_mesh);
-    }
-    if (m_had_camera) {
-        world.add<runtime::CameraComponent>(e, m_camera);
-    }
-    if (m_had_light) {
-        world.add<runtime::DirectionalLight>(e, m_light);
-    }
-    if (m_had_prefab) {
-        world.add<scene::PrefabLinkComponent>(e, m_prefab);
+    runtime::copy_scene_entity(m_snapshot->world(), m_snapshot_entity, world, e);
+    if (auto* t = world.get<scene::Transform>(e)) {
+        t->parent = ecs::kInvalidEntity; // reattach via set_parent below
+        t->dirty = true;
     }
     if (m_parent.valid() && world.is_alive(m_parent)) {
         scene::set_parent(world, e, m_parent);
@@ -183,8 +176,8 @@ void DeleteEntityCommand::undo(ecs::World& world) {
 }
 
 std::string DeleteEntityCommand::label() const {
-    if (m_had_name && !m_name.name.empty()) {
-        return "Delete '" + m_name.name + "'";
+    if (!m_name.empty()) {
+        return "Delete '" + m_name + "'";
     }
     return "Delete entity";
 }
@@ -954,6 +947,7 @@ std::unique_ptr<DeleteSubtreeCommand> DeleteSubtreeCommand::capture(ecs::World& 
         return nullptr;
     }
     auto cmd = std::unique_ptr<DeleteSubtreeCommand>(new DeleteSubtreeCommand());
+    cmd->m_snapshot = std::make_unique<scene::Scene>("Deleted subtree snapshot");
     // Root-first order (parents before children) for undo; apply destroys in
     // reverse.
     std::vector<ecs::Entity> stack{root};
@@ -973,30 +967,11 @@ std::unique_ptr<DeleteSubtreeCommand> DeleteSubtreeCommand::capture(ecs::World& 
     for (ecs::Entity e : order) {
         Entry en;
         en.original = e;
+        en.snapshot = cmd->m_snapshot->world().create_entity();
+        runtime::copy_scene_entity(world, e, cmd->m_snapshot->world(), en.snapshot);
         if (const auto* t = world.get<scene::Transform>(e)) {
             en.had_transform = true;
-            en.transform = *t;
             en.orig_parent = t->parent;
-        }
-        if (const auto* n = world.get<scene::NameComponent>(e)) {
-            en.had_name = true;
-            en.name = *n;
-        }
-        if (const auto* m = world.get<runtime::MeshComponent>(e)) {
-            en.had_mesh = true;
-            en.mesh = *m;
-        }
-        if (const auto* c = world.get<runtime::CameraComponent>(e)) {
-            en.had_camera = true;
-            en.camera = *c;
-        }
-        if (const auto* l = world.get<runtime::DirectionalLight>(e)) {
-            en.had_light = true;
-            en.light = *l;
-        }
-        if (const auto* p = world.get<scene::PrefabLinkComponent>(e)) {
-            en.had_prefab = true;
-            en.prefab = *p;
         }
         cmd->m_entries.push_back(en);
     }
@@ -1004,6 +979,19 @@ std::unique_ptr<DeleteSubtreeCommand> DeleteSubtreeCommand::capture(ecs::World& 
 }
 
 void DeleteSubtreeCommand::apply(ecs::World& world) {
+    // Redo destroys the last restored generation. Update parent references
+    // together before replacing the original handles, so a later undo can
+    // rebuild the hierarchy for any number of undo/redo cycles.
+    std::vector<std::pair<ecs::Entity, ecs::Entity>> replacements;
+    for (const auto& en : m_entries) {
+        if (en.restored.valid() && world.is_alive(en.restored))
+            replacements.emplace_back(en.original, en.restored);
+    }
+    for (auto& en : m_entries) {
+        for (const auto& [before, after] : replacements)
+            if (en.orig_parent == before) en.orig_parent = after;
+        if (en.restored.valid() && world.is_alive(en.restored)) en.original = en.restored;
+    }
     for (auto it = m_entries.rbegin(); it != m_entries.rend(); ++it) {
         if (world.is_alive(it->original)) {
             world.destroy_entity(it->original);
@@ -1023,26 +1011,10 @@ void DeleteSubtreeCommand::undo(ecs::World& world) {
         ecs::Entity ne = world.create_entity();
         remap[en.original.id] = ne;
         en.restored = ne;
-        if (en.had_transform) {
-            scene::Transform t = en.transform;
-            t.parent = ecs::kInvalidEntity;
-            t.dirty = true;
-            world.add<scene::Transform>(ne, t);
-        }
-        if (en.had_name) {
-            world.add<scene::NameComponent>(ne, en.name);
-        }
-        if (en.had_mesh) {
-            world.add<runtime::MeshComponent>(ne, en.mesh);
-        }
-        if (en.had_camera) {
-            world.add<runtime::CameraComponent>(ne, en.camera);
-        }
-        if (en.had_light) {
-            world.add<runtime::DirectionalLight>(ne, en.light);
-        }
-        if (en.had_prefab) {
-            world.add<scene::PrefabLinkComponent>(ne, en.prefab);
+        runtime::copy_scene_entity(m_snapshot->world(), en.snapshot, world, ne);
+        if (auto* t = world.get<scene::Transform>(ne)) {
+            t->parent = ecs::kInvalidEntity;
+            t->dirty = true;
         }
     }
     for (auto& en : m_entries) {
@@ -1066,6 +1038,22 @@ std::string DeleteSubtreeCommand::label() const {
     return "Delete subtree";
 }
 
+void DeleteSubtreeCommand::collect_undo_remaps(
+    std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+    for (const auto& en : m_entries)
+        if (en.original.valid() && en.restored.valid() && en.original != en.restored)
+            out.emplace_back(en.original, en.restored);
+}
+
+void DeleteSubtreeCommand::remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) {
+    for (auto& en : m_entries) {
+        if (en.original == old_entity) en.original = new_entity;
+        if (en.restored == old_entity) en.restored = new_entity;
+        if (en.orig_parent == old_entity) en.orig_parent = new_entity;
+    }
+    if (m_restored_root == old_entity) m_restored_root = new_entity;
+}
+
 // --- InstantiatePrefabCommand ---------------------------------------------------
 
 InstantiatePrefabCommand::InstantiatePrefabCommand(scene::Scene prefab_template, std::string prefab_path,
@@ -1079,22 +1067,31 @@ void InstantiatePrefabCommand::apply(ecs::World& world) {
     // Transplant every template root under the parent, tagging the link
     // (nested links inside the template are preserved verbatim). Track the
     // FULL subtrees (not just roots) so undo destroys every copy.
-    const std::vector<ecs::Entity> roots = clone_prefab_roots(m_template, world, parent);
+    const std::vector<ecs::Entity> roots = clone_prefab_roots(m_template, world, parent, &m_created);
     for (ecs::Entity r : roots) {
         world.add<scene::PrefabLinkComponent>(r, scene::PrefabLinkComponent{m_path});
-        const std::vector<ecs::Entity> members = collect_subtree(world, r);
-        m_created.insert(m_created.end(), members.begin(), members.end());
     }
     scene::propagate_transforms(world);
 }
 
 void InstantiatePrefabCommand::undo(ecs::World& world) {
+    m_previous_created = m_created;
     for (auto it = m_created.rbegin(); it != m_created.rend(); ++it) {
         if (world.is_alive(*it)) {
             world.destroy_entity(*it);
         }
     }
     m_created.clear();
+}
+
+void InstantiatePrefabCommand::collect_redo_remaps(
+    ecs::Entity, std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+    const size_t count = std::min(m_previous_created.size(), m_created.size());
+    for (size_t i = 0; i < count; ++i) {
+        if (m_previous_created[i].valid() && m_created[i].valid() &&
+            m_previous_created[i] != m_created[i])
+            out.emplace_back(m_previous_created[i], m_created[i]);
+    }
 }
 
 std::string InstantiatePrefabCommand::label() const {
@@ -1131,6 +1128,21 @@ std::string RevertPrefabCommand::label() const {
 
 ecs::Entity RevertPrefabCommand::target() const {
     return (m_inst != nullptr) ? m_inst->target() : ecs::kInvalidEntity;
+}
+
+void RevertPrefabCommand::collect_undo_remaps(
+    std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+    if (m_del) m_del->collect_undo_remaps(out);
+}
+
+void RevertPrefabCommand::collect_redo_remaps(
+    ecs::Entity previous, std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+    if (m_inst) m_inst->collect_redo_remaps(previous, out);
+}
+
+void RevertPrefabCommand::remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) {
+    if (m_del) m_del->remap_entity(old_entity, new_entity);
+    if (m_inst) m_inst->remap_entity(old_entity, new_entity);
 }
 
 } // namespace nf::editor

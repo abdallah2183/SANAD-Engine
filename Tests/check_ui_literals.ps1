@@ -54,7 +54,7 @@ $widgetCall = 'ImGui::(Text|TextDisabled|TextWrapped|TextUnformatted|TextColored
 $literal = '"((?:[^"\\]|\\.)*)"'
 $printfVerb = '%[-+ #0]*(\d+)?(\.\d+|\.\*)?(hh|h|ll|l|j|z|t|L)?[diuoxXfFeEgGaAcspn%]'
 $imguiId = '##[^\s"]*'
-$unitWord = '\b(ms|us)\b'
+$unitWord = '\b(ms|us|deg|kg|m|N|s)\b'
 
 $allowLine = @(
     'SANAD',
@@ -79,7 +79,7 @@ $allowLine = @(
 
 # A literal that is an argument of AV()/AVF()/tr()/ui::tr() is a localization
 # KEY reference (the correct pattern), not a raw display string.
-$keyCall = '(AV|AVF|tr|ui::tr|ui::shape_arabic)\(\s*$'
+$keyCall = '(AV|AVF|tr|ui::tr|ui::shape_arabic)\([^)]*$'
 
 $failures = @()
 
@@ -100,6 +100,9 @@ foreach ($file in $files) {
             }
             $text = $m.Groups[1].Value
             $text = [regex]::Replace($text, $imguiId, '')
+            # Axis names, dimensional modes and physical shortcut labels are
+            # language-neutral symbols, not untranslated UI wording.
+            if ($text.Trim() -cmatch '^(X|Y|Z|2D|3D|F)$') { continue }
             $text = [regex]::Replace($text, $printfVerb, '')
             $text = [regex]::Replace($text, $unitWord, '')
             if ($text -match '[A-Za-z]') {

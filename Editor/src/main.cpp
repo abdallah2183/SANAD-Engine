@@ -52,6 +52,7 @@
 #include <imgui_internal.h> // ImGuiContext::DebugDrawIdConflictsId — the ID-conflict log
 
 #include <array>
+#include <initializer_list>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -84,6 +85,54 @@ void show_startup_error(const char* message) {
 #endif
 }
 
+// Opt-in mailbox: the MCP host creates a private directory and passes its path.
+// Requests run on the editor thread and therefore use the same undoable commands
+// as the UI. Unique request names keep late responses from satisfying a later call.
+void poll_mcp_bridge(nf::editor::EditorApp& app, const std::string& directory) {
+    if (directory.empty()) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(fs::path(std::u8string(directory.begin(), directory.end())), ec)) {
+        if (entry.path().extension() != ".req") continue;
+        const fs::path request = entry.path();
+        std::ifstream in(request, std::ios::binary);
+        std::string cmd;
+        std::getline(in, cmd);
+        in.close();
+        fs::remove(request, ec);
+        std::string output, error;
+        if (cmd == "status") {
+            auto st = app.status();
+            output = "OK\n" + app.project_path() + "\n" + app.scene_path() + "\n" +
+                std::to_string(st.entity_count) + "\n" + (st.dirty ? "1" : "0") + "\n" +
+                (st.playing ? "1" : "0") + "\n";
+        } else if (cmd == "list") {
+            output = "OK\n";
+            if (auto* world = app.world()) {
+                for (auto e : world->all_entities()) {
+                    const auto* name = world->get<nf::scene::NameComponent>(e);
+                    output += std::to_string(e.id) + ":" + std::to_string(e.generation) + " ";
+                    if (name) output += name->name;
+                    output += "\n";
+                }
+            }
+        } else if (cmd == "undo") {
+            output = app.undo(error) ? "OK\n" : "ERROR\n" + error;
+        } else if (cmd == "create_cube" || cmd == "create_sphere" || cmd == "create_ground" || cmd == "create_quad") {
+            auto kind = cmd == "create_cube" ? nf::editor::PrimitiveKind::Cube :
+                        cmd == "create_sphere" ? nf::editor::PrimitiveKind::Sphere :
+                        cmd == "create_ground" ? nf::editor::PrimitiveKind::Ground : nf::editor::PrimitiveKind::Quad;
+            output = app.create_primitive(kind, nf::ecs::kInvalidEntity, error) ? "OK\n" : "ERROR\n" + error;
+        } else {
+            output = "ERROR\nUnknown editor operation";
+        }
+        fs::path result = request; result.replace_extension(".res");
+        fs::path temporary = request; temporary.replace_extension(".tmp");
+        { std::ofstream out(temporary, std::ios::binary); out << output; }
+        fs::rename(temporary, result, ec);
+    }
+}
+
 struct EditorConfig {
     // Empty means "not specified": a project's startup scene is used when one
     // is open, otherwise the historical default.
@@ -112,6 +161,7 @@ struct EditorConfig {
     // Empty means "open the engine tree", which is how the editor has always
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
+    std::string mcp_bridge; // explicitly enabled local bridge directory
     // --screenshot: where to write the last composited frame. Empty = off.
     std::string screenshot_path;
     // --resize-test: drive the window through a size cycle while the run is
@@ -123,6 +173,7 @@ struct EditorConfig {
     // automation runs want the scene, not an onboarding card on top of it.
     bool no_start_here = false;
     bool open_settings = false;
+    std::string open_panel;
     bool open_shortcuts = false;
     bool open_about = false;
     bool open_import = false;
@@ -212,6 +263,8 @@ EditorConfig parse_args(int argc, char** argv) {
             c.project_path = argv[++i];
         } else if (!value_of("--project=").empty()) {
             c.project_path = value_of("--project=");
+        } else if (arg == "--mcp-bridge" && i + 1 < argc) {
+            c.mcp_bridge = argv[++i];
         } else if (arg == "--validation") {
             c.validation = true;
         } else if (arg == "--novsync") {
@@ -236,6 +289,8 @@ EditorConfig parse_args(int argc, char** argv) {
             c.no_start_here = true;
         } else if (arg == "--open-settings") {
             c.open_settings = true;
+        } else if (arg == "--open-panel" && i + 1 < argc) {
+            c.open_panel = argv[++i];
         } else if (arg == "--open-shortcuts") {
             c.open_shortcuts = true;
         } else if (arg == "--open-about") {
@@ -264,6 +319,7 @@ EditorConfig parse_args(int argc, char** argv) {
                         "                      harness (deterministic captures)\n"
                         "  --no-ibl          Light with the scalar ambient (pre-IBL look)\n"
                         "  --no-ssao         Skip ambient occlusion (pre-SSAO look)\n"
+                        "  --open-panel <name>  Open input, camera, lighting, environment, render or world\n"
                         "  --no-start-here   Start without the first-run guide (captures)");
             std::exit(0);
         }
@@ -898,6 +954,19 @@ int main(int argc, char** argv) {
         if (cfg.open_settings) {
             nf::editor::ui_settings().show_settings = true;
         }
+        if (!cfg.open_panel.empty()) {
+            auto& settings = nf::editor::ui_settings();
+            if (cfg.open_panel == "input") settings.show_input = true;
+            else if (cfg.open_panel == "camera") settings.show_camera_panel = true;
+            else if (cfg.open_panel == "lighting") settings.show_lighting = true;
+            else if (cfg.open_panel == "environment") settings.show_environment = true;
+            else if (cfg.open_panel == "render") settings.show_render = true;
+            else if (cfg.open_panel == "world") settings.show_world = true;
+            else {
+                NF_LOG_ERROR(nf::LogCategory::Editor, "Unknown panel '{}'", cfg.open_panel);
+                return 1;
+            }
+        }
         if (cfg.open_shortcuts) {
             nf::editor::ui_settings().show_shortcuts = true;
         }
@@ -1206,9 +1275,22 @@ int main(int argc, char** argv) {
 
         std::string last_title;
         while (true) {
+            poll_mcp_bridge(app, cfg.mcp_bridge);
             if (!cfg.headless) {
                 window.poll_events();
                 if (window.should_close()) {
+                    // Restore the edit snapshot before recovery or save. The live
+                    // play world can contain transient gameplay changes.
+                    if (app.playing()) {
+                        std::string stop_err;
+                        if (!app.stop(stop_err)) {
+                            ::MessageBoxA(static_cast<HWND>(window.native_handle()),
+                                          ("Could not stop play mode: " + stop_err).c_str(),
+                                          "SANAD Editor", MB_OK | MB_ICONERROR);
+                            window.clear_close_request();
+                            continue;
+                        }
+                    }
                     if (!app.dirty()) {
                         break;
                     }
@@ -1245,6 +1327,17 @@ int main(int argc, char** argv) {
                             ::MessageBoxA(static_cast<HWND>(window.native_handle()),
                                           ("Could not save the scene:\n" + save_err).c_str(),
                                           "SANAD Editor", MB_OK | MB_ICONERROR);
+                            window.clear_close_request();
+                            continue;
+                        }
+                        // Saving the scene does not save separately edited
+                        // material files. Never report success and close while
+                        // those pending changes still exist.
+                        if (app.materials_dirty()) {
+                            ::MessageBoxW(static_cast<HWND>(window.native_handle()),
+                                          L"احفظ الخامات المعدلة من المفتش قبل الإغلاق.\n"
+                                          L"Save edited materials in the Inspector before closing.",
+                                          L"SANAD Editor", MB_OK | MB_ICONWARNING);
                             window.clear_close_request();
                             continue;
                         }
@@ -1398,7 +1491,19 @@ int main(int argc, char** argv) {
             // to gameplay through EditorPlayInput). Editor shortcuts that
             // would fight the game — gizmo modes, delete — stay disabled; Esc
             // stops play so the user can always get back to editing.
-            if (!cfg.headless && !automation) {
+            const bool ui_owns_shortcuts = !cfg.headless && !automation &&
+                (ImGui::GetIO().WantTextInput ||
+                 ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel));
+            if (ui_owns_shortcuts) {
+                // Keep edge state current while the UI consumes keys, so a key
+                // held when a dialog closes cannot unexpectedly edit the scene.
+                for (int key : std::initializer_list<int>{VK_F1, VK_ESCAPE, VK_DELETE, 'P', 'W', 'E', 'R', 'F', 'X',
+                                                           'Z', 'Y', 'S', 'O', 'N', 'I', 'D'}) {
+                    (void)key_edge(key);
+                }
+            }
+            if (!cfg.headless && !automation && !ui_owns_shortcuts &&
+                ::GetForegroundWindow() == static_cast<HWND>(window.native_handle())) {
                 // F1 and Ctrl+P work in BOTH modes. F1 because the moment a
                 // user is hunting for a key is often while the game is running,
                 // and Ctrl+P because play/stop is one action, not two.
@@ -1426,13 +1531,13 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else {
-                    if (key_edge('W')) {
+                    if (!key_down(VK_CONTROL) && !key_down(VK_RBUTTON) && !ImGui::GetIO().WantTextInput && key_edge('W')) {
                         app.set_gizmo_mode(nf::editor::GizmoMode::Translate);
                     }
-                    if (key_edge('E')) {
+                    if (!key_down(VK_CONTROL) && !key_down(VK_RBUTTON) && !ImGui::GetIO().WantTextInput && key_edge('E')) {
                         app.set_gizmo_mode(nf::editor::GizmoMode::Rotate);
                     }
-                    if (key_edge('R')) {
+                    if (!key_down(VK_CONTROL) && !key_down(VK_RBUTTON) && !ImGui::GetIO().WantTextInput && key_edge('R')) {
                         app.set_gizmo_mode(nf::editor::GizmoMode::Scale);
                     }
                     // F focuses/frames the camera on the currently selected entity
@@ -1445,7 +1550,7 @@ int main(int argc, char** argv) {
                     // X toggles the gizmo's transform space. The toolbar button
                     // was the only way to reach Local/World, so the single most
                     // repeated look-dev toggle had no key.
-                    if (key_edge('X')) {
+                    if (!key_down(VK_CONTROL) && !key_down(VK_RBUTTON) && !ImGui::GetIO().WantTextInput && key_edge('X')) {
                         app.set_gizmo_space(app.gizmo_space() == nf::editor::GizmoSpace::Local
                                                 ? nf::editor::GizmoSpace::World
                                                 : nf::editor::GizmoSpace::Local);
@@ -1471,21 +1576,25 @@ int main(int argc, char** argv) {
                         }
                     }
                     if (key_down(VK_CONTROL) && key_edge('S')) {
-                        std::string e;
-                        if (!app.save(e)) {
-                            NF_LOG_ERROR(nf::LogCategory::Editor, "Save failed: {}", e);
+                        if (!app.playing() && (key_down(VK_SHIFT) || app.scene_path().empty())) {
+                            nf::editor::ui_settings().request_save_as = true;
                         } else {
-                            NF_LOG_INFO(nf::LogCategory::Editor, "Save: OK {}", app.scene_path());
+                            std::string e;
+                            if (!app.save(e)) {
+                                NF_LOG_ERROR(nf::LogCategory::Editor, "Save failed: {}", e);
+                            } else {
+                                NF_LOG_INFO(nf::LogCategory::Editor, "Save: OK {}", app.scene_path());
+                            }
                         }
                     }
                     // The File menu has always PRINTED Ctrl+N / Ctrl+I / Ctrl+E
                     // next to these items; until now nothing listened for them,
                     // so the menu was promising a chord the editor ignored.
+                    if (key_down(VK_CONTROL) && key_edge('O')) {
+                        nf::editor::ui_settings().request_open_scene = true;
+                    }
                     if (key_down(VK_CONTROL) && key_edge('N')) {
-                        std::string e;
-                        if (!app.new_scene(e)) {
-                            NF_LOG_WARN(nf::LogCategory::Editor, "New scene: {}", e);
-                        }
+                        nf::editor::ui_settings().request_new_scene = true;
                     }
                     if (key_down(VK_CONTROL) && key_edge('I')) {
                         nf::editor::ui_settings().show_import = true;
@@ -2066,15 +2175,19 @@ int main(int argc, char** argv) {
                 }
 
                 if (ui_in.open_scene_dialog_confirm && !ui_in.open_scene_path.empty()) {
-                    std::string e;
-                    const auto t0 = std::chrono::steady_clock::now();
-                    const bool opened = app.open_scene(ui_in.open_scene_path, e);
-                    scene_open_us = static_cast<uint64_t>(std::chrono::duration_cast<
-                                                          std::chrono::microseconds>(
-                                                          std::chrono::steady_clock::now() - t0)
-                                                          .count());
-                    if (!opened) {
-                        NF_LOG_ERROR(nf::LogCategory::Editor, "Open scene failed: {}", e);
+                    if (!ui_in.open_scene_approved) {
+                        nf::editor::ui_settings().request_scene_path = ui_in.open_scene_path;
+                    } else {
+                        std::string e;
+                        const auto t0 = std::chrono::steady_clock::now();
+                        const bool opened = app.open_scene(ui_in.open_scene_path, e);
+                        scene_open_us = static_cast<uint64_t>(std::chrono::duration_cast<
+                                                              std::chrono::microseconds>(
+                                                              std::chrono::steady_clock::now() - t0)
+                                                              .count());
+                        if (!opened) {
+                            NF_LOG_ERROR(nf::LogCategory::Editor, "Open scene failed: {}", e);
+                        }
                     }
                 }
                 if (ui_in.save_as_confirm && !ui_in.save_as_path.empty()) {

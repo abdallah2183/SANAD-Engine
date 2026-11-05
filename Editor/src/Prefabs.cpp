@@ -51,7 +51,7 @@ void copy_components(const ecs::World& src, ecs::Entity se, ecs::World& dst, ecs
 } // namespace
 
 ecs::Entity clone_subtree(const ecs::World& src, ecs::Entity root, ecs::World& dst,
-                           ecs::Entity dst_parent) {
+                           ecs::Entity dst_parent, std::vector<ecs::Entity>* all_created) {
     const std::vector<ecs::Entity> members = collect_subtree(src, root);
     if (members.empty()) {
         return ecs::kInvalidEntity;
@@ -61,6 +61,7 @@ ecs::Entity clone_subtree(const ecs::World& src, ecs::Entity root, ecs::World& d
     bool first = true;
     for (ecs::Entity se : members) {
         ecs::Entity de = dst.create_entity();
+        if (all_created) all_created->push_back(de);
         remap[se.id] = de;
         copy_components(src, se, dst, de);
         if (first) {
@@ -105,10 +106,11 @@ std::vector<ecs::Entity> prefab_template_roots(const scene::Scene& prefab) {
 }
 
 std::vector<ecs::Entity> clone_prefab_roots(const scene::Scene& prefab, ecs::World& dst,
-                                            ecs::Entity dst_parent) {
+                                            ecs::Entity dst_parent,
+                                            std::vector<ecs::Entity>* all_created) {
     std::vector<ecs::Entity> created;
     for (ecs::Entity r : prefab_template_roots(prefab)) {
-        ecs::Entity ne = clone_subtree(prefab.world(), r, dst, dst_parent);
+        ecs::Entity ne = clone_subtree(prefab.world(), r, dst, dst_parent, all_created);
         if (ne.valid()) {
             created.push_back(ne);
         }

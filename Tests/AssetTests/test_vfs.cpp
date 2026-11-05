@@ -203,3 +203,17 @@ NF_TEST(vfs_rename_refuses_a_mount_root) {
     NF_CHECK(!r.ok);
     NF_CHECK(f.vfs.exists("content://top.txt").ok);
 }
+
+NF_TEST(vfs_utf8_scene_name_round_trip) {
+    VirtualFileSystem vfs;
+    const auto tmp = nf::test::temp_root() / "nf_vfs_utf8_names";
+    std::filesystem::create_directories(tmp);
+    NF_CHECK(vfs.mount("content://", tmp).ok);
+    const std::u8string filename = u8"مشهد.nfscene";
+    const std::string logical = "content://" + std::string(filename.begin(), filename.end());
+    NF_CHECK(vfs.write_text(logical, "scene").ok);
+    NF_CHECK(std::filesystem::exists(tmp / std::filesystem::path(filename)));
+    const auto read = vfs.read_text(logical);
+    NF_CHECK(read.ok && read.value == "scene");
+    std::filesystem::remove_all(tmp);
+}

@@ -78,11 +78,21 @@ inline void remember_project(std::vector<std::string>& recent, const std::string
 /// Drops entries whose .nfproj no longer exists. A project the user moved or
 /// deleted since last session is the normal case here, not an error — offering
 /// it would just produce a failed open.
+inline std::filesystem::path launcher_path_from_utf8(const std::string& text) {
+    return std::filesystem::path(std::u8string(text.begin(), text.end()));
+}
+
 inline void prune_missing_projects(std::vector<std::string>& recent) {
     recent.erase(std::remove_if(recent.begin(), recent.end(),
                                 [](const std::string& p) {
                                     std::error_code ec;
-                                    return !std::filesystem::exists(p, ec);
+                                    const auto path = launcher_path_from_utf8(p);
+                                    const bool exists = std::filesystem::exists(path, ec);
+                                    // A temporary access error must not erase a recent project.
+                                    if (ec) return false;
+                                    if (!exists) return true;
+                                    const bool is_file = std::filesystem::is_regular_file(path, ec);
+                                    return !is_file && !ec;
                                 }),
                  recent.end());
 }

@@ -18,6 +18,8 @@
 #include <NF/Scene/PrefabLink.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Audio/Components.hpp>
 
 #include <filesystem>
 
@@ -97,10 +99,51 @@ NF_TEST(prefab_instantiate_command_undo) {
     NF_CHECK(link2 != nullptr && link2->prefab_path == "content://Prefabs/T.nfscene");
 }
 
+NF_TEST(prefab_redo_preserves_edits_to_multiple_children) {
+    scene::Scene tpl("Template");
+    const ecs::Entity root = make_named(tpl, "Root");
+    make_named(tpl, "Left", root);
+    make_named(tpl, "Right", root);
+    scene::Scene scene("History");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    stack.push(std::make_unique<editor::InstantiatePrefabCommand>(
+                   std::move(tpl), "content://Prefabs/Example.nfscene", ecs::kInvalidEntity), world);
+    const ecs::Entity first_root = stack.last_target();
+    const auto children = scene::get_children(world, first_root);
+    NF_CHECK(children.size() == 2);
+    for (const auto child : children) {
+        const auto original_name = world.get<scene::NameComponent>(child)->name;
+        stack.push(std::make_unique<editor::RenameCommand>(child, original_name + " edited"), world);
+    }
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(world.alive_entity_count() == 0);
+    NF_CHECK(stack.redo(world));
+    const auto restored_children = scene::get_children(world, stack.last_target());
+    NF_CHECK(restored_children.size() == 2);
+    NF_CHECK(stack.redo(world));
+    NF_CHECK(stack.redo(world));
+    bool left = false, right = false;
+    for (const auto child : restored_children) {
+        const auto& name = world.get<scene::NameComponent>(child)->name;
+        left |= name == "Left edited";
+        right |= name == "Right edited";
+    }
+    NF_CHECK(left && right);
+}
+
 NF_TEST(prefab_delete_subtree_command) {
     scene::Scene scene("Del");
     ecs::Entity root = make_named(scene, "Root");
-    make_named(scene, "Child", root);
+    const ecs::Entity child = make_named(scene, "Child", root);
+    physics::RigidBodyComponent body;
+    body.mass = 9.0f;
+    scene.world().add<physics::RigidBodyComponent>(root, body);
+    audio::AudioComponent sound;
+    sound.volume = 0.42f;
+    scene.world().add<audio::AudioComponent>(child, sound);
     make_named(scene, "Outside");
 
     editor::CommandStack stack;
@@ -121,6 +164,8 @@ NF_TEST(prefab_delete_subtree_command) {
             if (t != nullptr && t->parent.valid()) {
                 const auto* pn = scene.world().get<scene::NameComponent>(t->parent);
                 found = (pn != nullptr && pn->name == "Root");
+                NF_CHECK_NEAR(scene.world().get<physics::RigidBodyComponent>(t->parent)->mass, 9.0f, 1e-6f);
+                NF_CHECK_NEAR(scene.world().get<audio::AudioComponent>(e)->volume, 0.42f, 1e-6f);
             }
         }
     }
@@ -130,6 +175,79 @@ NF_TEST(prefab_delete_subtree_command) {
 
     // Dead roots are rejected cleanly.
     NF_CHECK(editor::DeleteSubtreeCommand::capture(scene.world(), root, err) == nullptr);
+}
+
+NF_TEST(prefab_delete_subtree_remaps_all_previous_commands) {
+    scene::Scene scene("DeleteTreeHistory");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    stack.push(std::make_unique<editor::CreateEntityCommand>("TreeRoot"), world);
+    const ecs::Entity root = stack.last_target();
+    stack.push(std::make_unique<editor::CreateEntityCommand>("TreeChild", root), world);
+    const ecs::Entity child = stack.last_target();
+    std::string err;
+    auto del = editor::DeleteSubtreeCommand::capture(world, root, err);
+    NF_CHECK(del != nullptr);
+    stack.push(std::move(del), world);
+    NF_CHECK(stack.undo(world));
+    const ecs::Entity restored_child = stack.last_target();
+    NF_CHECK(world.is_alive(restored_child));
+    const ecs::Entity restored_root = world.get<scene::Transform>(restored_child)->parent;
+    NF_CHECK(world.is_alive(restored_root));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.is_alive(restored_child));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.is_alive(restored_root));
+    NF_CHECK(stack.redo(world));
+    const ecs::Entity recreated_root = stack.last_target();
+    NF_CHECK(stack.redo(world));
+    const ecs::Entity recreated_child = stack.last_target();
+    NF_CHECK(world.get<scene::Transform>(recreated_child)->parent == recreated_root);
+    NF_CHECK(stack.redo(world));
+    NF_CHECK(!world.is_alive(recreated_root) && !world.is_alive(recreated_child));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(world.alive_entity_count() == 2u);
+    ecs::Entity child_again = ecs::kInvalidEntity;
+    for (const ecs::Entity e : world.all_entities()) {
+        const auto* name = world.get<scene::NameComponent>(e);
+        if (name && name->name == "TreeChild") child_again = e;
+    }
+    NF_CHECK(child_again.valid());
+    const ecs::Entity root_again = world.get<scene::Transform>(child_again)->parent;
+    NF_CHECK(world.is_alive(root_again));
+    NF_CHECK(world.get<scene::NameComponent>(root_again)->name == "TreeRoot");
+    NF_CHECK(child.valid());
+}
+
+NF_TEST(prefab_revert_undo_remaps_original_creation) {
+    scene::Scene scene("RevertHistory");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    stack.push(std::make_unique<editor::CreateEntityCommand>("Original"), world);
+    const ecs::Entity original = stack.last_target();
+    std::string err;
+    auto deletion = editor::DeleteSubtreeCommand::capture(world, original, err);
+    NF_CHECK(deletion != nullptr);
+    scene::Scene template_scene("Template");
+    make_named(template_scene, "TemplateRoot");
+    auto inst = std::make_unique<editor::InstantiatePrefabCommand>(
+        std::move(template_scene), "content://Prefabs/Example.nfscene", ecs::kInvalidEntity);
+    stack.push(std::make_unique<editor::RevertPrefabCommand>(std::move(deletion), std::move(inst)), world);
+    NF_CHECK(!world.is_alive(original));
+    NF_CHECK(stack.undo(world));
+    const ecs::Entity restored = stack.last_target();
+    NF_CHECK(world.is_alive(restored));
+    NF_CHECK(world.get<scene::NameComponent>(restored)->name == "Original");
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.is_alive(restored));
+    NF_CHECK(stack.redo(world));
+    const ecs::Entity recreated = stack.last_target();
+    NF_CHECK(stack.redo(world));
+    NF_CHECK(!world.is_alive(recreated));
+    NF_CHECK(stack.undo(world));
+    const ecs::Entity restored_again = stack.last_target();
+    NF_CHECK(world.is_alive(restored_again));
+    NF_CHECK(world.get<scene::NameComponent>(restored_again)->name == "Original");
 }
 
 NF_TEST(prefab_app_create_apply_revert) {

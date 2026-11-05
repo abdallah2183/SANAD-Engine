@@ -17,6 +17,8 @@
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Physics/Components.hpp>
+#include <NF/Audio/Components.hpp>
 
 #include <filesystem>
 
@@ -86,6 +88,19 @@ NF_TEST(editor_delete_undo_restores) {
     mesh.mesh_id = assets::AssetId::from_string("f04e488b-4dc8-414b-baee-e3c50e8829ad");
     mesh.material = "content://Materials/Default";
     scene.world().add<runtime::MeshComponent>(victim, mesh);
+    runtime::PointLightComponent light;
+    light.intensity = 4.25f;
+    scene.world().add<runtime::PointLightComponent>(victim, light);
+    runtime::SpriteComponent sprite;
+    sprite.texture = "content://Textures/example.png";
+    scene.world().add<runtime::SpriteComponent>(victim, sprite);
+    physics::RigidBodyComponent body;
+    body.mass = 7.0f;
+    scene.world().add<physics::RigidBodyComponent>(victim, body);
+    scene.world().add<physics::ColliderComponent>(victim, physics::ColliderComponent{});
+    audio::AudioComponent audio;
+    audio.volume = 0.37f;
+    scene.world().add<audio::AudioComponent>(victim, audio);
     scene::set_parent(scene.world(), victim, parent);
     ecs::Entity child = scene.world().create_entity();
     scene.world().add<scene::Transform>(child, scene::Transform{});
@@ -112,12 +127,52 @@ NF_TEST(editor_delete_undo_restores) {
     const auto* n = scene.world().get<scene::NameComponent>(restored);
     NF_CHECK(n != nullptr && n->name == "Victim");
     NF_CHECK(scene.world().has<runtime::MeshComponent>(restored));
+    NF_CHECK(scene.world().has<runtime::PointLightComponent>(restored));
+    NF_CHECK_NEAR(scene.world().get<runtime::PointLightComponent>(restored)->intensity, 4.25f, 1e-6f);
+    NF_CHECK(scene.world().get<runtime::SpriteComponent>(restored)->texture == "content://Textures/example.png");
+    NF_CHECK_NEAR(scene.world().get<physics::RigidBodyComponent>(restored)->mass, 7.0f, 1e-6f);
+    NF_CHECK(scene.world().has<physics::ColliderComponent>(restored));
+    NF_CHECK_NEAR(scene.world().get<audio::AudioComponent>(restored)->volume, 0.37f, 1e-6f);
+    NF_CHECK(scene.world().get<scene::Transform>(restored)->parent == parent);
     // Child re-attached to the restored entity.
     const auto* tc = scene.world().get<scene::Transform>(child);
     NF_CHECK(tc != nullptr && tc->parent == restored);
 
     NF_CHECK(stack.redo(scene.world()));
     NF_CHECK(!scene.world().is_alive(restored));
+    NF_CHECK(scene.world().get<scene::Transform>(child)->parent == parent);
+    NF_CHECK(stack.undo(scene.world()));
+    const ecs::Entity restored_again = scene.world().get<scene::Transform>(child)->parent;
+    NF_CHECK(scene.world().is_alive(restored_again));
+    NF_CHECK(scene.world().has<physics::ColliderComponent>(restored_again));
+    NF_CHECK_NEAR(scene.world().get<audio::AudioComponent>(restored_again)->volume, 0.37f, 1e-6f);
+}
+
+NF_TEST(editor_undo_delete_remaps_earlier_create_and_edit) {
+    scene::Scene scene("CreateEditDeleteUndo");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    stack.push(std::make_unique<editor::CreateEntityCommand>("Original"), world);
+    const ecs::Entity original = stack.last_target();
+    stack.push(std::make_unique<editor::RenameCommand>(original, "Renamed"), world);
+    std::string err;
+    auto deletion = editor::DeleteEntityCommand::capture(world, original, err);
+    NF_CHECK(deletion != nullptr);
+    stack.push(std::move(deletion), world);
+    NF_CHECK(stack.undo(world));
+    const ecs::Entity restored = stack.last_target();
+    NF_CHECK(world.is_alive(restored));
+    NF_CHECK(world.get<scene::NameComponent>(restored)->name == "Renamed");
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(world.get<scene::NameComponent>(restored)->name == "Original");
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.is_alive(restored));
+    NF_CHECK(stack.redo(world));
+    const ecs::Entity recreated = stack.last_target();
+    NF_CHECK(stack.redo(world));
+    NF_CHECK(world.get<scene::NameComponent>(recreated)->name == "Renamed");
+    NF_CHECK(stack.redo(world));
+    NF_CHECK(!world.is_alive(recreated));
 }
 
 // --- A4: Delete is immediate and undoable -----------------------------------
@@ -205,4 +260,31 @@ NF_TEST(editor_delete_is_immediate_and_undoable) {
     NF_CHECK(app.status().entity_count == before + 1);
     // The restored entity is still a mesh, not a name-only husk.
     NF_CHECK(app.world()->has<runtime::MeshComponent>(*restored));
+
+    // Undoing creation after undoing deletion must remove the newly restored
+    // handle; redoing both steps must recreate and delete it again.
+    NF_CHECK(app.undo(err));
+    NF_CHECK(!app.world()->is_alive(*restored));
+    NF_CHECK(app.redo(err));
+    const ecs::Entity recreated_cube = app.stack().last_target();
+    NF_CHECK(app.world()->has<runtime::MeshComponent>(recreated_cube));
+    NF_CHECK(app.redo(err));
+    NF_CHECK(!app.world()->is_alive(recreated_cube));
+
+    NF_CHECK(app.create_camera(ecs::kInvalidEntity, err));
+    const ecs::Entity new_camera = app.stack().last_target();
+    NF_CHECK(app.delete_entity(new_camera, err));
+    NF_CHECK(app.undo(err));
+    // An authored scene may already contain a camera with the same name; the
+    // preceding create command tracks the exact restored entity handle.
+    const ecs::Entity restored_camera = app.stack().last_target();
+    NF_CHECK(app.world()->is_alive(restored_camera));
+    NF_CHECK(app.world()->has<runtime::CameraComponent>(restored_camera));
+    NF_CHECK(app.undo(err));
+    NF_CHECK(!app.world()->is_alive(restored_camera));
+    NF_CHECK(app.redo(err));
+    const ecs::Entity recreated_camera = app.stack().last_target();
+    NF_CHECK(app.world()->has<runtime::CameraComponent>(recreated_camera));
+    NF_CHECK(app.redo(err));
+    NF_CHECK(!app.world()->is_alive(recreated_camera));
 }

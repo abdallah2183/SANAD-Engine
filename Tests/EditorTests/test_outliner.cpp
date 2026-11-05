@@ -2,12 +2,23 @@
 // collapse, and cyclic-hierarchy rejection.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Test/TestPaths.hpp>
+#include <NF/Test/RHITestCommon.hpp>
+#include <NF/Assets/AssetManager.hpp>
+#include <NF/Assets/AssetRegistry.hpp>
+#include <NF/Assets/VirtualFileSystem.hpp>
+#include <NF/Editor/Console.hpp>
+#include <NF/Editor/EditorApp.hpp>
 #include <NF/Editor/Commands.hpp>
 #include <NF/Editor/Outliner.hpp>
 #include <NF/Editor/Selection.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
+#include <NF/Runtime/Runtime.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
+
+#include <filesystem>
 
 using namespace nf;
 
@@ -19,6 +30,49 @@ static ecs::Entity make_named(scene::Scene& scene, const std::string& name, ecs:
         scene::set_parent(scene.world(), e, parent);
     }
     return e;
+}
+
+NF_TEST(editor_outliner_cache_tracks_collapse_search_and_scene_switch) {
+    const auto& fixture = nf::test::require_gpu();
+    const auto tmp = nf::test::temp_root() / "nf_outliner_cache_navigation";
+    std::filesystem::create_directories(tmp / "Content");
+    std::filesystem::create_directories(tmp / "Cache");
+    assets::VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    scene::Scene first("First");
+    const auto root = make_named(first, "Root");
+    make_named(first, "Hidden Child", root);
+    scene::Scene second("Second");
+    const auto other = make_named(second, "Other Root");
+    make_named(second, "Other Child", other);
+    std::string err;
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://first.nfscene", first, err));
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://second.nfscene", second, err));
+    assets::AssetRegistry registry;
+    assets::AssetManager manager(vfs, registry);
+    runtime::Runtime runtime(vfs, registry, manager, *fixture.device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, registry, manager, console);
+    app.attach_runtime(&runtime);
+    NF_CHECK(app.open_scene("content://first.nfscene", err));
+    auto rows = app.outliner_rows();
+    NF_CHECK_EQ(rows.size(), 2u);
+    const auto live_root = rows[0].entity;
+    app.outliner().set_expanded(live_root, false);
+    NF_CHECK_EQ(app.outliner_rows().size(), 1u);
+    app.outliner().filter_text = "Hidden";
+    rows = app.outliner_rows();
+    NF_CHECK_EQ(rows.size(), 1u);
+    NF_CHECK(rows[0].label == "Hidden Child");
+    app.outliner().filter_text.clear();
+    NF_CHECK_EQ(app.outliner_rows().size(), 1u);
+    app.outliner().set_expanded(live_root, true);
+    NF_CHECK_EQ(app.outliner_rows().size(), 2u);
+    NF_CHECK(app.open_scene("content://second.nfscene", err));
+    rows = app.outliner_rows();
+    NF_CHECK_EQ(rows.size(), 2u);
+    NF_CHECK(rows[0].label == "Other Root");
 }
 
 NF_TEST(editor_outliner_hierarchy) {

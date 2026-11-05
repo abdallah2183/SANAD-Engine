@@ -49,6 +49,78 @@ size_t alive_count(const scene::Scene& scene) {
 
 } // namespace
 
+NF_TEST(duplicate_redo_tracks_all_recreated_children_for_later_edits) {
+    scene::Scene scene("DuplicateRedoChildren");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    const ecs::Entity root = add_named(scene, "Root", ecs::kInvalidEntity);
+    add_named(scene, "Child A", root);
+    add_named(scene, "Child B", root);
+    std::string err;
+    auto cmd = editor::DuplicateEntitiesCommand::capture(scene, {root}, err);
+    NF_CHECK(cmd != nullptr);
+    stack.push(std::move(cmd), world);
+    const ecs::Entity copy = stack.last_target();
+    const auto children = scene::get_children(world, copy);
+    NF_CHECK_EQ(children.size(), 2u);
+    stack.push(std::make_unique<editor::RenameCommand>(children[1], "Renamed copy child"), world);
+    NF_CHECK(stack.undo(world)); // rename
+    NF_CHECK(stack.undo(world)); // duplicate
+    NF_CHECK(stack.redo(world)); // duplicate with fresh handles
+    const ecs::Entity recreated_copy = stack.last_target();
+    const auto recreated_children = scene::get_children(world, recreated_copy);
+    NF_CHECK_EQ(recreated_children.size(), 2u);
+    NF_CHECK(stack.redo(world)); // rename must target the recreated child
+    size_t renamed = 0;
+    for (ecs::Entity child : recreated_children) {
+        const auto* name = world.get<scene::NameComponent>(child);
+        if (name && name->name == "Renamed copy child") ++renamed;
+    }
+    NF_CHECK_EQ(renamed, 1u);
+}
+
+NF_TEST(duplicate_undo_removes_children_restored_after_deletion) {
+    scene::Scene scene("DuplicateDeletedChild");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    const ecs::Entity root = add_named(scene, "Root", ecs::kInvalidEntity);
+    add_named(scene, "Child", root);
+    std::string err;
+    auto cmd = editor::DuplicateEntitiesCommand::capture(scene, {root}, err);
+    NF_CHECK(cmd != nullptr);
+    stack.push(std::move(cmd), world);
+    const ecs::Entity copy = stack.last_target();
+    const auto children = scene::get_children(world, copy);
+    NF_CHECK_EQ(children.size(), 1u);
+    auto del = editor::DeleteEntityCommand::capture(world, children[0], err);
+    NF_CHECK(del != nullptr);
+    stack.push(std::move(del), world);
+    NF_CHECK(stack.undo(world)); // restore deleted child with a new handle
+    NF_CHECK_EQ(scene::get_children(world, copy).size(), 1u);
+    NF_CHECK(stack.undo(world)); // remove the whole duplicate including child
+    NF_CHECK_EQ(alive_count(scene), 2u);
+}
+
+NF_TEST(duplicate_redo_follows_recreated_parent) {
+    scene::Scene scene("DuplicateParentRedo");
+    auto& world = scene.world();
+    editor::CommandStack stack;
+    stack.push(std::make_unique<editor::CreateEntityCommand>("Parent"), world);
+    const ecs::Entity parent = stack.last_target();
+    const ecs::Entity source = add_named(scene, "Child", parent);
+    std::string err;
+    auto cmd = editor::DuplicateEntitiesCommand::capture(scene, {source}, err);
+    NF_CHECK(cmd != nullptr);
+    stack.push(std::move(cmd), world);
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(stack.redo(world));
+    const ecs::Entity new_parent = stack.last_target();
+    NF_CHECK(stack.redo(world));
+    const ecs::Entity new_copy = stack.last_target();
+    NF_CHECK(scene::get_parent(world, new_copy) == new_parent);
+}
+
 NF_TEST(duplicate_copies_a_whole_subtree_in_one_step) {
     scene::Scene scene("DupSubtree");
     editor::CommandStack stack;

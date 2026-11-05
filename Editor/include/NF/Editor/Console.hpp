@@ -9,6 +9,7 @@
 #include <NF/Core/Logger.hpp>
 
 #include <cstddef>
+#include <array>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -37,6 +38,15 @@ public:
         std::string text;
     };
     std::vector<LogMessage> filtered(const Filter& filter) const;
+    struct Snapshot {
+        std::vector<LogMessage> lines;
+        // Counts at each minimum severity, including messages below the
+        // current level floor, but respecting the text/category query.
+        std::array<size_t, 6> level_counts{};
+        size_t total = 0;
+        size_t dropped = 0;
+    };
+    Snapshot snapshot(const Filter& filter) const;
     size_t size() const;
 
 private:
@@ -46,5 +56,9 @@ private:
 };
 
 LogSink make_console_sink(ConsoleBuffer& buffer);
+
+const char* console_category_name(LogCategory category);
+// Clipboard export keeps logical UTF-8 and multiline text, plus diagnostic tags.
+std::string format_console_lines(const std::vector<LogMessage>& lines);
 
 } // namespace nf::editor

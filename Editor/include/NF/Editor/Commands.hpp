@@ -24,6 +24,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nf::runtime {
@@ -39,6 +40,25 @@ public:
     virtual void undo(ecs::World& world) = 0;
     virtual std::string label() const = 0;
     virtual ecs::Entity target() const { return ecs::kInvalidEntity; }
+    // Commands that recreate an entity during undo report the handle they
+    // destroyed so earlier commands can follow the new generation.
+    virtual ecs::Entity undo_remap_source() const { return ecs::kInvalidEntity; }
+    virtual void collect_undo_remaps(std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+        const ecs::Entity previous = undo_remap_source();
+        const ecs::Entity replacement = target();
+        if (previous.valid() && replacement.valid() && previous != replacement)
+            out.emplace_back(previous, replacement);
+    }
+    // A command may recreate several entities on redo, not just its root.
+    virtual void collect_redo_remaps(ecs::Entity previous,
+                                    std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+        const ecs::Entity replacement = target();
+        if (previous.valid() && replacement.valid() && previous != replacement)
+            out.emplace_back(previous, replacement);
+    }
+    // Redo can recreate an entity with a new generation. Pending create
+    // commands must follow that replacement when it was their parent.
+    virtual void remap_entity(ecs::Entity, ecs::Entity) {}
 };
 
 class CommandStack {
@@ -61,6 +81,7 @@ public:
 private:
     std::vector<std::unique_ptr<ICommand>> m_undo;
     std::vector<std::unique_ptr<ICommand>> m_redo;
+    std::vector<ecs::Entity> m_redo_targets;
 };
 
 // Creates an empty entity (Transform + Name, optional parent).
@@ -71,6 +92,10 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_created; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_parent == old_entity) m_parent = new_entity;
+        if (m_created == old_entity) m_created = new_entity;
+    }
 
 private:
     std::string m_name;
@@ -99,6 +124,9 @@ public:
         return m_created_roots.empty() ? ecs::kInvalidEntity : m_created_roots.front();
     }
     const std::vector<ecs::Entity>& created_roots() const { return m_created_roots; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override;
+    void collect_redo_remaps(ecs::Entity previous,
+                             std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const override;
 
 private:
     DuplicateEntitiesCommand() = default;
@@ -112,6 +140,7 @@ private:
     std::vector<Root> m_roots;
     std::vector<ecs::Entity> m_created_roots;
     std::vector<ecs::Entity> m_created_all;
+    std::vector<ecs::Entity> m_previous_created_all;
 };
 
 // Deletes an entity, snapshotting its components and child links.
@@ -125,23 +154,21 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_restored; }
+    ecs::Entity undo_remap_source() const override { return m_original; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_original == old_entity) m_original = new_entity;
+        if (m_restored == old_entity) m_restored = new_entity;
+        if (m_parent == old_entity) m_parent = new_entity;
+        for (auto& child : m_children) if (child == old_entity) child = new_entity;
+    }
 
 private:
     DeleteEntityCommand() = default;
     ecs::Entity m_original = ecs::kInvalidEntity;
     ecs::Entity m_restored = ecs::kInvalidEntity;
-    bool m_had_transform = false;
-    scene::Transform m_transform{};
-    bool m_had_name = false;
-    scene::NameComponent m_name{};
-    bool m_had_mesh = false;
-    runtime::MeshComponent m_mesh{};
-    bool m_had_camera = false;
-    runtime::CameraComponent m_camera{};
-    bool m_had_light = false;
-    runtime::DirectionalLight m_light{};
-    bool m_had_prefab = false;
-    scene::PrefabLinkComponent m_prefab{};
+    std::unique_ptr<scene::Scene> m_snapshot;
+    ecs::Entity m_snapshot_entity = ecs::kInvalidEntity;
+    std::string m_name;
     ecs::Entity m_parent = ecs::kInvalidEntity;
     std::vector<ecs::Entity> m_children;
 };
@@ -156,6 +183,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -173,6 +203,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
     // Writes the 9 TRS fields + dirty. Shared with SetTransformsCommand: the
     // multi-entity gizmo transaction applies the same write to every entry.
     static void write_pos_rot_scale(ecs::World& world, ecs::Entity e, const scene::Transform& v);
@@ -205,6 +238,10 @@ public:
     ecs::Entity target() const override {
         return m_entries.empty() ? ecs::kInvalidEntity : m_entries.front().entity;
     }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        for (auto& entry : m_entries)
+            if (entry.entity == old_entity) entry.entity = new_entity;
+    }
     size_t size() const { return m_entries.size(); }
 
 private:
@@ -220,6 +257,11 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+        if (m_old_parent == old_entity) m_old_parent = new_entity;
+        if (m_new_parent == old_entity) m_new_parent = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -236,6 +278,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -258,6 +303,10 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_created; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_parent == old_entity) m_parent = new_entity;
+        if (m_created == old_entity) m_created = new_entity;
+    }
 
 private:
     std::string m_name;
@@ -277,6 +326,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -300,6 +352,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -318,6 +373,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -338,6 +396,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -357,6 +418,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -373,6 +437,9 @@ class SetLightCommand : public ICommand {public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -390,6 +457,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -408,6 +478,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -431,6 +504,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -454,6 +530,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -479,6 +558,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -499,6 +581,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -515,6 +600,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -532,6 +620,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -548,6 +639,9 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_entity; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_entity == old_entity) m_entity = new_entity;
+    }
 
 private:
     ecs::Entity m_entity;
@@ -566,26 +660,19 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override { return m_restored_root; }
+    void collect_undo_remaps(std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const override;
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override;
 
 private:
     DeleteSubtreeCommand() = default;
     struct Entry {
         ecs::Entity original;
         bool had_transform = false;
-        scene::Transform transform{};
-        bool had_name = false;
-        scene::NameComponent name{};
-        bool had_mesh = false;
-        runtime::MeshComponent mesh{};
-        bool had_camera = false;
-        runtime::CameraComponent camera{};
-        bool had_light = false;
-        runtime::DirectionalLight light{};
-        bool had_prefab = false;
-        scene::PrefabLinkComponent prefab{};
+        ecs::Entity snapshot;
         ecs::Entity orig_parent;
         ecs::Entity restored;
     };
+    std::unique_ptr<scene::Scene> m_snapshot;
     std::vector<Entry> m_entries; // root-first order
     ecs::Entity m_restored_root;
 };
@@ -604,12 +691,19 @@ public:
     ecs::Entity target() const override {
         return m_created.empty() ? ecs::kInvalidEntity : m_created.front();
     }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_parent == old_entity) m_parent = new_entity;
+        for (auto& created : m_created) if (created == old_entity) created = new_entity;
+    }
+    void collect_redo_remaps(ecs::Entity previous,
+                             std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const override;
 
 private:
     scene::Scene m_template;
     std::string m_path;
     ecs::Entity m_parent;
     std::vector<ecs::Entity> m_created;
+    std::vector<ecs::Entity> m_previous_created;
 };
 
 // Revert = delete instance subtree + instantiate fresh from file, as ONE
@@ -622,6 +716,10 @@ public:
     void undo(ecs::World& world) override;
     std::string label() const override;
     ecs::Entity target() const override;
+    void collect_undo_remaps(std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const override;
+    void collect_redo_remaps(ecs::Entity previous,
+                             std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const override;
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override;
 
 private:
     std::unique_ptr<DeleteSubtreeCommand> m_del;

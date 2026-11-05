@@ -14,11 +14,50 @@
 
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Editor/ToolbarUi.hpp>
+#include <NF/Editor/ShadowSettingsDraft.hpp>
+#include <NF/Editor/AddObjectCatalog.hpp>
 #include <NF/Rendering/Sky.hpp>
 #include <NF/Runtime/RuntimeSceneTypes.hpp>
 #include <NF/Scene/Scene.hpp>
+#include <NF/UI/Localization.hpp>
 
 using namespace nf;
+
+NF_TEST(editor_shadow_settings_retain_edits_until_apply_and_preserve_other_light_fields) {
+    editor::ShadowSettingsDraft draft;
+    editor::LightEdit live;
+    const ecs::Entity light{12, 1};
+    draft.sync(light, live);
+    draft.strength = 0.4f;
+    draft.bias = 0.003f;
+    draft.cascades = 2;
+    // These are the repeated UI frames between dragging and pressing Apply.
+    for (int i = 0; i < 6; ++i) draft.sync(light, live);
+    live.color_r = 0.25f;
+    live.intensity = 3.0f;
+    live.shadow_distance = 65.0f;
+    draft.sync(light, live);
+    const auto applied = draft.merge(live);
+    NF_CHECK_NEAR(applied.shadow_strength, 0.4f, 1e-6f);
+    NF_CHECK_NEAR(applied.shadow_bias, 0.003f, 1e-6f);
+    NF_CHECK_EQ(applied.shadow_cascades, 2);
+    NF_CHECK_EQ(applied.color_r, live.color_r);
+    NF_CHECK_EQ(applied.intensity, live.intensity);
+    NF_CHECK_EQ(applied.shadow_distance, live.shadow_distance);
+    // External shadow changes (such as undo) replace an obsolete draft.
+    live.shadow_strength = 0.7f;
+    draft.sync(light, live);
+    NF_CHECK_EQ(draft.strength, live.shadow_strength);
+    draft.strength = 0.2f;
+    draft.sync(ecs::Entity{13, 1}, live);
+    NF_CHECK_EQ(draft.strength, live.shadow_strength);
+    // Different scenes can reuse the same entity id and generation.
+    scene::Scene first("First"), second("Second");
+    draft.sync(light, live, &first.world());
+    draft.strength = 0.1f;
+    draft.sync(light, live, &second.world());
+    NF_CHECK_EQ(draft.strength, live.shadow_strength);
+}
 
 // --- the default sky ----------------------------------------------------------
 
@@ -91,6 +130,8 @@ NF_TEST(editor_ui_settings_defaults_are_cold_start_friendly) {
     NF_CHECK(st.show_fps);
     NF_CHECK(st.show_validation);
     NF_CHECK(!st.show_profiler);
+    NF_CHECK(!st.show_lighting && !st.show_environment && !st.show_camera_panel);
+    NF_CHECK(!st.show_render && !st.show_world && !st.show_input);
     // Snapping off; the day sky is the default preset (matches the cold-start
     // sky — see editor_default_sky_preset_matches_the_cold_start_sky).
     NF_CHECK(!st.snap_enabled);
@@ -166,4 +207,32 @@ NF_TEST(editor_settings_render_shows_the_scenes_real_shadow_values) {
 
     // And the section edits exactly the entity the lookup names.
     NF_CHECK(editor::scene_light_entity(scene.world()) == light);
+}
+
+NF_TEST(editor_file_dialog_filter_preserves_patterns) {
+    std::string filter;
+    editor::append_file_filter(filter, "Scenes", "*.nfscene");
+    editor::append_file_filter(filter, "All files", "*.*");
+    filter.push_back('\0');
+    const std::string expected("Scenes\0*.nfscene\0All files\0*.*\0\0", 32);
+    NF_CHECK(filter == expected);
+}
+
+NF_TEST(editor_add_object_catalog_search_and_uniqueness) {
+    using namespace editor;
+    NF_CHECK(kAddObjects.size() == 18);
+    for (size_t i = 0; i < kAddObjects.size(); ++i) {
+        NF_CHECK(add_object_matches(kAddObjects[i], "label", ""));
+        for (size_t j = i + 1; j < kAddObjects.size(); ++j)
+            NF_CHECK(kAddObjects[i].kind != kAddObjects[j].kind);
+    }
+    NF_CHECK(add_object_matches(kAddObjects[1], "مكعب", "CUBE"));
+    NF_CHECK(add_object_matches(kAddObjects[1], "مكعب", "مكعب"));
+    NF_CHECK(add_object_matches(kAddObjects[1], "مكعب", "  3D  CUBE "));
+    NF_CHECK(add_object_matches(kAddObjects[1], "مكعب", "مكعب 3d"));
+    NF_CHECK(add_object_matches(kAddObjects[1], "Cube", "مكعب 3d",
+                                ui::tr_for_language("cube", ui::Language::Arabic)));
+    NF_CHECK(add_object_matches(kAddObjects[1], "مكعب", "  \t "));
+    NF_CHECK(!add_object_matches(kAddObjects[1], "مكعب", "cube camera"));
+    NF_CHECK(!add_object_matches(kAddObjects[1], "مكعب", "camera"));
 }

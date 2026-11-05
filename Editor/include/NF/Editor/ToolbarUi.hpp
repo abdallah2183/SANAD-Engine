@@ -22,6 +22,16 @@
 
 namespace nf::editor {
 
+// Win32 expects label\0pattern\0 pairs and one additional terminating NUL.
+// Appending a C string containing an embedded NUL truncates the pattern.
+inline void append_file_filter(std::string& out, const std::string& label,
+                               const std::string& pattern) {
+    out += label;
+    out.push_back('\0');
+    out += pattern;
+    out.push_back('\0');
+}
+
 /// Session preferences. Not persisted yet: the editor writes no settings file
 /// (imgui.ini is suppressed for deterministic layout), so a restart starts from
 /// these defaults — which is also why they are chosen to be good defaults.
@@ -86,6 +96,11 @@ struct EditorUiSettings {
     // View > Reset layout: rebuild the built-in default dock arrangement,
     // discarding the persisted one. Panels.cpp consumes and clears this.
     bool reset_layout_requested = false;
+    bool request_save_as = false;
+    bool request_open_scene = false;
+    bool request_new_scene = false;
+    std::string request_scene_path;
+    bool request_add_object = false;
 
     // --- Dedicated editors (ScenePanels.cpp) --------------------------------
     // One panel per engine function, each bound to the live scene object the
@@ -94,16 +109,13 @@ struct EditorUiSettings {
     // used to open floating over the viewport and Begin() had no close
     // button wired, so X could not dismiss them.
     bool show_lighting = false;
-    bool show_environment = true;
+    bool show_environment = false;
     bool show_camera_panel = false;
-    bool show_render = true;
+    bool show_render = false;
     bool show_world = false; // diagnostics: opened from the Window menu
     /// The rebinding window. Off by default like the others; opened from the
     /// View menu.
     bool show_input = false;
-    bool show_talent_tree = true;
-    bool show_flow_field = true;
-    bool show_cable_panel = true;
 };
 
 EditorUiSettings& ui_settings();
@@ -196,6 +208,16 @@ inline ecs::Entity scene_light_entity(const ecs::World& world) {
 inline ecs::Entity scene_sky_entity(const ecs::World& world) {
     const std::vector<ecs::Entity> skies = world.query<runtime::SkyComponent>();
     return skies.empty() ? ecs::kInvalidEntity : skies.front();
+}
+
+// Prefer the camera actually used by the renderer. An inactive camera stays
+// editable as a fallback when the scene has no active one.
+inline ecs::Entity scene_camera_entity(const ecs::World& world) {
+    const auto cameras = world.query<runtime::CameraComponent>();
+    for (auto entity : cameras) {
+        if (world.get<runtime::CameraComponent>(entity)->is_active) return entity;
+    }
+    return cameras.empty() ? ecs::kInvalidEntity : cameras.front();
 }
 
 } // namespace nf::editor

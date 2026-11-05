@@ -44,6 +44,74 @@ namespace {
 // cascade range at the default camera distance.
 constexpr float kGroundSize = 60.0f;
 
+// Record an already configured entity as one undo step. The scene clone uses
+// the same component copier as prefabs, so redo restores the whole object,
+// including component defaults and physics, rather than just its name.
+class CreateConfiguredEntityCommand final : public ICommand {
+public:
+    CreateConfiguredEntityCommand(const ecs::World& world, ecs::Entity entity, ecs::Entity parent)
+        : m_snapshot(std::make_unique<scene::Scene>("Create snapshot")), m_parent(parent),
+          m_created(entity) {
+        if (const auto* name = world.get<scene::NameComponent>(entity)) m_name = name->name;
+        m_root = clone_subtree(world, entity, m_snapshot->world(), ecs::kInvalidEntity);
+    }
+    void apply(ecs::World& world) override {
+        if (m_first_apply) { m_first_apply = false; return; }
+        m_created = clone_subtree(m_snapshot->world(), m_root, world, m_parent);
+    }
+    void undo(ecs::World& world) override {
+        if (m_created.valid() && world.is_alive(m_created)) world.destroy_entity(m_created);
+        m_created = ecs::kInvalidEntity;
+    }
+    std::string label() const override { return "Create '" + m_name + "'"; }
+    ecs::Entity target() const override { return m_created; }
+    void remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) override {
+        if (m_parent == old_entity) m_parent = new_entity;
+        if (m_created == old_entity) m_created = new_entity;
+    }
+private:
+    std::unique_ptr<scene::Scene> m_snapshot;
+    ecs::Entity m_parent = ecs::kInvalidEntity;
+    ecs::Entity m_created = ecs::kInvalidEntity;
+    ecs::Entity m_root = ecs::kInvalidEntity;
+    std::string m_name;
+    bool m_first_apply = true;
+};
+
+// Native file pickers return physical paths; the scene loader and writer use
+// VFS paths. Prefer the most specific mount and reject files outside all mounts.
+bool scene_logical_path(const assets::VirtualFileSystem& vfs, const std::string& input,
+                        std::string& logical, std::string& err) {
+    const std::filesystem::path input_path(std::u8string(input.begin(), input.end()));
+    if (!input_path.is_absolute()) {
+        logical = input;
+        return true;
+    }
+    std::error_code ec;
+    const auto target = std::filesystem::weakly_canonical(input_path, ec);
+    if (ec) { err = "Cannot resolve scene path: " + ec.message(); return false; }
+    size_t best_length = 0;
+    for (const std::string& mount : vfs.mounts()) {
+        const auto root = vfs.resolve(mount);
+        if (!root.ok) continue;
+        const auto canonical_root = std::filesystem::weakly_canonical(root.value, ec);
+        if (ec) { ec.clear(); continue; }
+        const auto relative = target.lexically_relative(canonical_root);
+        if (relative.empty() || *relative.begin() == "..") continue;
+        const size_t length = canonical_root.native().size();
+        if (length > best_length) {
+            best_length = length;
+            const auto utf8 = relative.generic_u8string();
+            logical = mount + std::string(utf8.begin(), utf8.end());
+        }
+    }
+    if (best_length == 0) {
+        err = "Choose a scene inside the current project or another mounted folder";
+        return false;
+    }
+    return true;
+}
+
 void normalize_direction(float v[3]) {
     const float len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
     if (len > 1e-20f) {
@@ -249,6 +317,7 @@ bool EditorApp::require_editable(std::string& out_err) const {
 }
 
 void EditorApp::after_mutation(ecs::Entity touched) {
+    ++m_edit_revision;
     m_outliner_cache_valid = false; // rows may show new/renamed/reparented entities
     if (m_runtime != nullptr) {
         m_runtime->mark_scene_edited();
@@ -272,6 +341,17 @@ void EditorApp::after_mutation(ecs::Entity touched) {
         if (const ecs::World* w = world()) {
             if (w->is_alive(touched)) {
                 m_selection.set_single(touched);
+                // Newly created or edited children should be visible in the
+                // scene tree even when one of their ancestors was collapsed.
+                ecs::Entity ancestor = touched;
+                // The bound also protects the UI from malformed cyclic input.
+                for (size_t i = 0; i < 4096; ++i) {
+                    const auto* transform = w->get<scene::Transform>(ancestor);
+                    if (!transform || !transform->parent.valid() ||
+                        !w->is_alive(transform->parent)) break;
+                    ancestor = transform->parent;
+                    m_outliner.set_expanded(ancestor, true);
+                }
             }
         }
     }
@@ -441,6 +521,8 @@ bool EditorApp::open_scene(const std::string& logical_path, std::string& out_err
         out_err = "Stop play mode before opening a scene";
         return false;
     }
+    std::string resolved_path;
+    if (!scene_logical_path(m_vfs, logical_path, resolved_path, out_err)) return false;
     if (dirty()) {
         std::string rec_err;
         if (!write_recovery_copy(rec_err)) {
@@ -452,10 +534,10 @@ bool EditorApp::open_scene(const std::string& logical_path, std::string& out_err
         std::string dummy;
         viewport_abort_drag(dummy);
     }
-    if (!m_runtime->load_scene(logical_path, out_err)) {
+    if (!m_runtime->load_scene(resolved_path, out_err)) {
         return false;
     }
-    m_scene_path = logical_path;
+    m_scene_path = resolved_path;
     m_stack.clear();
     m_selection.clear();
     m_outliner = OutlinerState{};
@@ -474,19 +556,29 @@ bool EditorApp::save(std::string& out_err) {
 }
 
 bool EditorApp::save_as(const std::string& logical_path, std::string& out_err) {
+    if (m_play.playing()) {
+        out_err = "Stop play mode before saving the scene";
+        return false;
+    }
     if (m_runtime == nullptr) {
         out_err = "Runtime not attached";
         return false;
     }
-    if (!m_runtime->save_scene(logical_path, out_err)) {
+    std::string resolved_path;
+    if (!scene_logical_path(m_vfs, logical_path, resolved_path, out_err)) return false;
+    if (!m_runtime->save_scene(resolved_path, out_err)) {
         return false;
     }
-    m_scene_path = logical_path;
+    m_scene_path = resolved_path;
     m_dirty = false;
     return true;
 }
 
 bool EditorApp::save_copy(const std::string& logical_path, std::string& out_err) {
+    if (m_play.playing()) {
+        out_err = "Stop play mode before saving a scene copy";
+        return false;
+    }
     if (m_runtime == nullptr) {
         out_err = "Runtime not attached";
         return false;
@@ -526,6 +618,12 @@ bool EditorApp::recover_last_draft(std::string& out_err) {
     }
     if (!has_recovery_copy()) {
         out_err = "No recovery draft exists";
+        return false;
+    }
+    // The recovery slot is the thing being opened, so overwriting it with the
+    // current unsaved scene before switching would destroy the requested draft.
+    if (scene_dirty()) {
+        out_err = "Save the current scene before recovering a draft";
         return false;
     }
     {
@@ -1063,6 +1161,10 @@ bool EditorApp::create_primitive(PrimitiveKind kind, ecs::Entity parent, std::st
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     assets::AssetId id;
     if (!ensure_primitive_asset(kind, id, out_err)) {
         return false;
@@ -1114,9 +1216,12 @@ bool EditorApp::create_primitive(PrimitiveKind kind, ecs::Entity parent, std::st
         name += " " + std::to_string(same_kind + 1);
     }
 
-    auto cmd = std::make_unique<CreateMeshEntityCommand>(name, parent, mc, seed);
-    m_stack.push(std::move(cmd), *w);
-    const ecs::Entity created = m_stack.last_target();
+    const ecs::Entity created = w->create_entity();
+    seed.dirty = true;
+    w->add<scene::Transform>(created, seed);
+    w->add<scene::NameComponent>(created, scene::NameComponent{name});
+    w->add<runtime::MeshComponent>(created, mc);
+    if (parent.valid()) scene::set_parent(*w, created, parent);
 
     // The ground is the one primitive that must be solid or Play drops
     // everything through it. Physics components are leaf data (see
@@ -1135,6 +1240,7 @@ bool EditorApp::create_primitive(PrimitiveKind kind, ecs::Entity parent, std::st
         }
     }
 
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, created, parent), *w);
     m_manager.load_mesh(id);
     after_mutation(created);
     return true;
@@ -1147,6 +1253,10 @@ bool EditorApp::create_directional_light(ecs::Entity parent, std::string& out_er
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1167,6 +1277,7 @@ bool EditorApp::create_directional_light(ecs::Entity parent, std::string& out_er
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1178,6 +1289,10 @@ bool EditorApp::create_point_light(ecs::Entity parent, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1196,6 +1311,7 @@ bool EditorApp::create_point_light(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1207,6 +1323,10 @@ bool EditorApp::create_spot_light(ecs::Entity parent, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1227,6 +1347,7 @@ bool EditorApp::create_spot_light(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1238,6 +1359,10 @@ bool EditorApp::create_sprite(ecs::Entity parent, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1260,6 +1385,7 @@ bool EditorApp::create_sprite(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1271,6 +1397,10 @@ bool EditorApp::create_tilemap(ecs::Entity parent, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1292,6 +1422,7 @@ bool EditorApp::create_tilemap(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1303,6 +1434,10 @@ bool EditorApp::create_audio_emitter(ecs::Entity parent, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1318,6 +1453,7 @@ bool EditorApp::create_audio_emitter(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1329,6 +1465,10 @@ bool EditorApp::create_camera(ecs::Entity parent, std::string& out_err) {
     ecs::World* w = world();
     if (w == nullptr) {
         out_err = "No scene open";
+        return false;
+    }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
         return false;
     }
     ecs::Entity e = w->create_entity();
@@ -1350,6 +1490,7 @@ bool EditorApp::create_camera(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1363,6 +1504,10 @@ bool EditorApp::create_sky_entity(ecs::Entity parent, std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     ecs::Entity e = w->create_entity();
     w->add<scene::Transform>(e, scene::Transform{});
     w->add<scene::NameComponent>(e, scene::NameComponent{"Sky"});
@@ -1372,6 +1517,7 @@ bool EditorApp::create_sky_entity(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1385,6 +1531,10 @@ bool EditorApp::create_weather(ecs::Entity parent, std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     ecs::Entity e = w->create_entity();
     w->add<scene::Transform>(e, scene::Transform{});
     w->add<scene::NameComponent>(e, scene::NameComponent{"WeatherAtmosphere"});
@@ -1392,6 +1542,7 @@ bool EditorApp::create_weather(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1405,6 +1556,10 @@ bool EditorApp::create_cable(ecs::Entity parent, std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     ecs::Entity e = w->create_entity();
     w->add<scene::Transform>(e, scene::Transform{});
     w->add<scene::NameComponent>(e, scene::NameComponent{"Cable"});
@@ -1412,6 +1567,7 @@ bool EditorApp::create_cable(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1425,6 +1581,10 @@ bool EditorApp::create_rule_tile(ecs::Entity parent, std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     ecs::Entity e = w->create_entity();
     w->add<scene::Transform>(e, scene::Transform{});
     w->add<scene::NameComponent>(e, scene::NameComponent{"RuleTile"});
@@ -1433,6 +1593,7 @@ bool EditorApp::create_rule_tile(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1446,6 +1607,10 @@ bool EditorApp::create_flow_field(ecs::Entity parent, std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     ecs::Entity e = w->create_entity();
     w->add<scene::Transform>(e, scene::Transform{});
     w->add<scene::NameComponent>(e, scene::NameComponent{"FlowFieldNav"});
@@ -1453,6 +1618,7 @@ bool EditorApp::create_flow_field(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -1466,6 +1632,10 @@ bool EditorApp::create_talent_tree(ecs::Entity parent, std::string& out_err) {
         out_err = "No scene open";
         return false;
     }
+    if (parent.valid() && !w->is_alive(parent)) {
+        out_err = "Parent entity is not alive";
+        return false;
+    }
     ecs::Entity e = w->create_entity();
     w->add<scene::Transform>(e, scene::Transform{});
     w->add<scene::NameComponent>(e, scene::NameComponent{"TalentTree"});
@@ -1473,6 +1643,7 @@ bool EditorApp::create_talent_tree(ecs::Entity parent, std::string& out_err) {
     if (parent.valid() && w->is_alive(parent)) {
         scene::set_parent(*w, e, parent);
     }
+    m_stack.push(std::make_unique<CreateConfiguredEntityCommand>(*w, e, parent), *w);
     after_mutation(e);
     return true;
 }
@@ -4015,12 +4186,40 @@ bool EditorApp::delete_asset(const std::string& logical_path, bool recursive, st
         out_err = "Cannot inspect asset: " + is_dir.error;
         return false;
     }
-    // A scene that is currently OPEN would leave the editor editing a file that
-    // no longer exists. Refuse with an explanation rather than delete and
-    // leave the session pointing at nothing.
-    if (!is_dir.value && m_scene_path == logical_path) {
-        out_err = "Cannot delete the open scene — open another scene first";
-        return false;
+    // Different mounts, spelling and case can still name the same Windows file.
+    // Compare filesystem identities, including each ancestor when deleting a
+    // folder, so no alias can remove the scene currently being edited.
+    if (!m_scene_path.empty()) {
+        const auto scene_path = m_vfs.resolve(m_scene_path);
+        const auto target_path = m_vfs.resolve(logical_path);
+        if (!scene_path.ok || !target_path.ok) {
+            out_err = "Cannot verify whether the open scene is inside this asset";
+            return false;
+        }
+        std::error_code ec;
+        const bool scene_exists = std::filesystem::exists(scene_path.value, ec);
+        if (ec) {
+            out_err = "Cannot inspect the open scene: " + ec.message();
+            return false;
+        }
+        if (scene_exists) {
+            auto candidate = scene_path.value;
+            while (!candidate.empty()) {
+                const bool same = std::filesystem::equivalent(target_path.value, candidate, ec);
+                if (ec) {
+                    out_err = "Cannot compare the open scene path: " + ec.message();
+                    return false;
+                }
+                if (same) {
+                    out_err = "Cannot delete the open scene or its folder — open another scene first";
+                    return false;
+                }
+                if (!is_dir.value) break;
+                const auto next = candidate.parent_path();
+                if (next == candidate) break;
+                candidate = next;
+            }
+        }
     }
     // `recursive` is honoured rather than inferred: a caller that says
     // "this one file" must get the single-file path, so a future non-recursive
@@ -4606,8 +4805,10 @@ bool EditorApp::undo(std::string& out_err) {
         out_err = "Nothing to undo";
         return false;
     }
+    m_outliner_cache_valid = false;
     m_runtime->mark_scene_edited();
     m_dirty = true;
+    ++m_edit_revision;
     m_selection.prune(*w);
     return true;
 }
@@ -4626,8 +4827,10 @@ bool EditorApp::redo(std::string& out_err) {
         out_err = "Nothing to redo";
         return false;
     }
+    m_outliner_cache_valid = false;
     m_runtime->mark_scene_edited();
     m_dirty = true;
+    ++m_edit_revision;
     m_selection.prune(*w);
     return true;
 }
@@ -5983,13 +6186,24 @@ std::vector<OutlinerRow> EditorApp::outliner_rows() const {
         // Rebuild only when something changed: after_mutation() is the normal
         // invalidation path; the world pointer / alive-count guards also catch
         // scene swaps and play-mode churn that bypass commands.
-        const bool world_swapped = (w != m_outliner_cache_world);
+        const bool world_swapped = (w != m_outliner_cache_world ||
+                                    m_scene_serial != m_outliner_cache_scene_serial);
         const bool churned = (w->alive_entity_count() != m_outliner_cache_count);
-        if (!m_outliner_cache_valid || world_swapped || churned) {
-            m_outliner_cache = build_outliner_rows(*w, m_outliner);
+        const bool searching = !m_outliner.filter_text.empty();
+        const bool visibility_changed = searching != m_outliner_cache_searching ||
+            (!searching && m_outliner.collapsed != m_outliner_cache_collapsed);
+        if (!m_outliner_cache_valid || world_swapped || churned || visibility_changed) {
+            // Search all entities, including descendants under collapsed rows.
+            // Keep the user's collapse state unchanged for when search clears.
+            OutlinerState view = m_outliner;
+            if (searching) view.collapsed.clear();
+            m_outliner_cache = build_outliner_rows(*w, view);
             m_outliner_cache_valid = true;
             m_outliner_cache_world = w;
             m_outliner_cache_count = w->alive_entity_count();
+            m_outliner_cache_scene_serial = m_scene_serial;
+            m_outliner_cache_searching = searching;
+            m_outliner_cache_collapsed = m_outliner.collapsed;
         }
         // The search box filters every frame over the cached rows: typing must
         // not wait for a structural mutation to take effect.
@@ -5998,11 +6212,11 @@ std::vector<OutlinerRow> EditorApp::outliner_rows() const {
     return {};
 }
 
-std::vector<AssetEntry> EditorApp::browser_entries() {
+void EditorApp::refresh_browser_cache() {
     // Unity-style roots: 0 lists the engine Content, 1 the open project's
     // files. The project root with no project mounted is an empty listing
     // (list_project_assets), never a silent fallback to engine content.
-    if (m_browser_cache_dirty || m_browser_cache_age > 0.5) {
+    if (m_browser_cache_dirty || m_browser_cache_age > 0.5 || m_browser_cached_root != m_browser.browser_root) {
         const bool project_root = (m_browser.browser_root == 1);
         auto all = project_root ? list_project_assets(m_vfs)
                                 : list_content_assets(m_vfs, m_registry);
@@ -6034,10 +6248,26 @@ std::vector<AssetEntry> EditorApp::browser_entries() {
                 }
             }
         }
+        m_browser_folder_cache = list_asset_directories(m_vfs, project_root ? "project://" : "content://");
+        auto inferred = asset_folders(all);
+        m_browser_folder_cache.insert(m_browser_folder_cache.end(), inferred.begin(), inferred.end());
+        std::sort(m_browser_folder_cache.begin(), m_browser_folder_cache.end());
+        m_browser_folder_cache.erase(std::unique(m_browser_folder_cache.begin(), m_browser_folder_cache.end()),
+                                     m_browser_folder_cache.end());
+        m_browser_cached_root = m_browser.browser_root;
         m_browser_cache = std::move(all);
         m_browser_cache_age = 0.0;
         m_browser_cache_dirty = false;
     }
+}
+
+std::vector<std::string> EditorApp::browser_folders() {
+    refresh_browser_cache();
+    return m_browser_folder_cache;
+}
+
+std::vector<AssetEntry> EditorApp::browser_entries() {
+    refresh_browser_cache();
     return filter_assets(m_browser_cache, m_browser.filter_text, m_browser.filter_type);
 }
 

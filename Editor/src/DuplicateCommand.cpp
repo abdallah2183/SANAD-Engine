@@ -12,22 +12,6 @@
 namespace nf::editor {
 namespace {
 
-void collect_subtree(const ecs::World& world, ecs::Entity root, std::vector<ecs::Entity>& out) {
-    std::vector<ecs::Entity> stack{root};
-    std::unordered_set<uint32_t> seen;
-    while (!stack.empty()) {
-        const ecs::Entity e = stack.back();
-        stack.pop_back();
-        if (!e.valid() || !world.is_alive(e) || !seen.insert(e.id).second) {
-            continue;
-        }
-        out.push_back(e);
-        for (ecs::Entity child : scene::get_children(world, e)) {
-            stack.push_back(child);
-        }
-    }
-}
-
 bool has_selected_ancestor(const ecs::World& world, ecs::Entity e,
                            const std::unordered_set<uint32_t>& selected) {
     std::unordered_set<uint32_t> visited;
@@ -42,15 +26,16 @@ bool has_selected_ancestor(const ecs::World& world, ecs::Entity e,
 }
 
 ecs::Entity copy_subtree(const ecs::World& src, ecs::Entity from, ecs::World& dst,
-                         ecs::Entity parent) {
+                         ecs::Entity parent, std::vector<ecs::Entity>* created = nullptr) {
     ecs::Entity copy = dst.create_entity();
+    if (created) created->push_back(copy);
     copy_entity_components(src, from, dst, copy);
     if (auto* t = dst.get<scene::Transform>(copy)) {
         t->parent = parent;
         t->dirty = true;
     }
     for (ecs::Entity child : scene::get_children(src, from)) {
-        copy_subtree(src, child, dst, copy);
+        copy_subtree(src, child, dst, copy, created);
     }
     return copy;
 }
@@ -125,7 +110,7 @@ void DuplicateEntitiesCommand::apply(ecs::World& world) {
             parent = ecs::kInvalidEntity;
         }
         const ecs::Entity copy =
-            copy_subtree(m_snapshot->world(), root.snapshot, world, parent);
+            copy_subtree(m_snapshot->world(), root.snapshot, world, parent, &m_created_all);
         if (auto* t = world.get<scene::Transform>(copy)) {
             // A duplicate exactly on top of the original reads as "nothing
             // happened". One step right is enough to see it and to grab it.
@@ -136,7 +121,6 @@ void DuplicateEntitiesCommand::apply(ecs::World& world) {
             n->name = unique_copy_name(world, n->name);
         }
         m_created_roots.push_back(copy);
-        collect_subtree(world, copy, m_created_all);
     }
     scene::propagate_transforms(world);
 }
@@ -144,6 +128,7 @@ void DuplicateEntitiesCommand::apply(ecs::World& world) {
 void DuplicateEntitiesCommand::undo(ecs::World& world) {
     // Children were appended after their parents, so reverse order destroys a
     // child before its parent and never leaves a dangling parent link.
+    m_previous_created_all = m_created_all;
     for (auto it = m_created_all.rbegin(); it != m_created_all.rend(); ++it) {
         if (it->valid() && world.is_alive(*it)) {
             world.destroy_entity(*it);
@@ -152,6 +137,22 @@ void DuplicateEntitiesCommand::undo(ecs::World& world) {
     m_created_all.clear();
     m_created_roots.clear();
     scene::propagate_transforms(world);
+}
+
+void DuplicateEntitiesCommand::remap_entity(ecs::Entity old_entity, ecs::Entity new_entity) {
+    for (auto& root : m_roots) if (root.parent == old_entity) root.parent = new_entity;
+    for (auto& entity : m_created_roots) if (entity == old_entity) entity = new_entity;
+    for (auto& entity : m_created_all) if (entity == old_entity) entity = new_entity;
+}
+
+void DuplicateEntitiesCommand::collect_redo_remaps(
+    ecs::Entity, std::vector<std::pair<ecs::Entity, ecs::Entity>>& out) const {
+    const size_t count = std::min(m_previous_created_all.size(), m_created_all.size());
+    for (size_t i = 0; i < count; ++i) {
+        if (m_previous_created_all[i].valid() && m_created_all[i].valid() &&
+            m_previous_created_all[i] != m_created_all[i])
+            out.emplace_back(m_previous_created_all[i], m_created_all[i]);
+    }
 }
 
 } // namespace nf::editor

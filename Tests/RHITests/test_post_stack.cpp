@@ -1309,3 +1309,24 @@ NF_TEST(post_stack_color_lut_changes_the_rendered_image) {
     NF_CHECK(!renderer.has_color_lut());
     renderer.shutdown();
 }
+
+// Contrast around a positive pivot can push dark channels below zero. ACES
+// must never turn negative light into a bright coloured shadow.
+NF_TEST(post_stack_negative_hdr_stays_black_for_every_tonemap) {
+    for (auto mode : {TonemapMode::Exponential, TonemapMode::ACES,
+                      TonemapMode::Reinhard, TonemapMode::Linear}) {
+        const Vec3 mapped = tonemap(Vec3{-0.2f, -0.05f, 0.0f}, 1.0f, mode);
+        NF_CHECK_NEAR(mapped.x, 0.0f, 1e-6f);
+        NF_CHECK_NEAR(mapped.y, 0.0f, 1e-6f);
+        NF_CHECK_NEAR(mapped.z, 0.0f, 1e-6f);
+    }
+    PostFxParams p{};
+    p.grade.enabled = true;
+    p.grade.contrast = 1.5f;
+    p.grade.pivot = 1.0f;
+    const Vec3 black = apply_post_chain(Vec3{0.0f, 0.0f, 0.0f}, {}, {},
+                                       Vec2{0.5f, 0.5f}, 1.0f, TonemapMode::ACES, p);
+    NF_CHECK_NEAR(black.x, 0.0f, 1e-6f);
+    NF_CHECK_NEAR(black.y, 0.0f, 1e-6f);
+    NF_CHECK_NEAR(black.z, 0.0f, 1e-6f);
+}

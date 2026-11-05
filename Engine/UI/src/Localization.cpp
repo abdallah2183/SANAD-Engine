@@ -176,6 +176,10 @@ constexpr Entry kEntries[] = {
     {"local_space", "Local", "محلي"},
     {"move", "Move", "تحريك"},
     {"new_scene", "New Scene", "مشهد جديد"},
+    {"new_scene_unsaved", "Save changes before creating a new scene?", "هل تريد حفظ التغييرات قبل إنشاء مشهد جديد؟"},
+    {"open_scene_unsaved", "Save changes before opening another scene?", "هل تريد حفظ التغييرات قبل فتح مشهد آخر؟"},
+    {"new_scene_discard", "Discard changes", "تجاهل التغييرات"},
+    {"new_scene_materials", "Save modified materials in the Inspector before continuing.", "احفظ الخامات المعدلة في المفتش قبل المتابعة."},
     {"no_grid", "No grid", "بلا شبكة"},
     {"open_scene", "Open Scene...", "فتح مشهد..۔"},
     {"output_path", "Output file", "ملف الإخراج"},
@@ -542,7 +546,15 @@ constexpr Entry kEntries[] = {
     // stay English on purpose: they are technical diagnostics, not UI text.
     {"fps", "FPS", "إطار/ث"},
     {"create_empty", "+ Empty", "+ فارغ"},
+    {"copy_visible_logs", "Copy visible", "نسخ الظاهر"},
+    {"console_visible_fmt", "%zu / %zu messages | dropped: %zu", "%zu / %zu رسالة | المحذوفة: %zu"},
+    {"console_empty", "No messages yet.", "لا توجد رسائل بعد."},
+    {"console_no_matches", "No messages match these filters.", "لا توجد رسائل تطابق هذه المرشحات."},
     {"console_search_hint", "search text", "نص البحث"},
+    {"settings_file_absent", " (not created yet)", " (لم يُنشأ بعد)"},
+    {"bindings_conflicts_fmt", "Binding conflicts (%zu)", "تعارضات الأزرار (%zu)"},
+    {"bindings_search", "Search actions", "البحث في الإجراءات"},
+    {"bindings_mouse_area", "Click here to bind a mouse button", "انقر هنا لتعيين زر من الفأرة"},
     {"spatial_3d", "3D (spatial)", "ثلاثي الأبعاد (مكاني)"},
     {"anim_bones", "bones: %d", "العظام: %d"},
     {"anim_procedural", "procedural: %s (%s, %.2fs)", "إجرائي: %s (%s, %.2f ث)"},
@@ -817,6 +829,7 @@ constexpr Entry kEntries[] = {
     // returns the KEY ITSELF — the user saw the literal text "rename_failed"
     // in the console, in both languages.
     {"rename_failed", "Rename failed", "فشل إعادة التسمية"},
+    {"rename_leaf_invalid", "Enter a file or folder name without path separators or invalid characters.", "أدخل اسم ملف أو مجلد دون فواصل المسار أو الرموز غير المسموحة."},
     {"name_no_spaces", "Name cannot contain spaces.", "الاسم لا يمكن أن يحتوي مسافات۔"},
     {"deleted_fmt", "Deleted: %s", "تم الحذف: %s"},
     {"renamed_fmt", "Renamed: %s", "تمت إعادة التسمية: %s"},
@@ -863,6 +876,39 @@ constexpr Entry kEntries[] = {
     // Tab-sized labels. A dock tab shares a ~250px bar with three siblings, so
     // the definite article ("الإضاءة") costs ~10px each and four tabs stop
     // fitting — the Window menu keeps the full names.
+    {"game_running_hint", "Game running - Esc to stop", "اللعبة تعمل - اضغط زر الهروب للإيقاف"},
+    {"palette_title", "Add object", "إضافة كائن"},
+    {"palette_search", "Search objects", "ابحث عن كائن"},
+    {"palette_empty", "Empty object", "كائن فارغ"},
+    {"palette_basic", "Basic objects", "كائنات أساسية"},
+    {"palette_2d", "2D", "ثنائي الأبعاد"},
+    {"palette_light", "Camera and lighting", "الكاميرا والإضاءة"},
+    {"palette_world", "World and audio", "العالم والصوت"},
+    {"palette_advanced", "Advanced", "متقدم"},
+    {"palette_description", "Description", "الوصف"},
+    {"palette_no_match", "No matching objects.", "لا توجد كائنات مطابقة."},
+    {"palette_select", "Choose an object to see its description.", "اختر كائناً لعرض وصفه."},
+    {"palette_parent_root", "Add at scene root", "إضافة في جذر المشهد"},
+    {"palette_parent", "Parent", "الأصل"},
+    {"palette_desc_empty", "An empty object for grouping or adding components.", "كائن فارغ للتجميع أو لإضافة مكونات إليه."},
+    {"palette_desc_cube", "A cube mesh for building 3D scenes.", "مجسم مكعب لبناء مشهد ثلاثي الأبعاد."},
+    {"palette_desc_sphere", "A sphere mesh for 3D scenes.", "مجسم كروي للمشهد ثلاثي الأبعاد."},
+    {"palette_desc_quad", "A flat rectangular mesh.", "مجسم مستطيل مسطح."},
+    {"palette_desc_ground", "A ground plane with a collider.", "أرضية مع مكون تصادم."},
+    {"palette_desc_sprite", "A 2D image object.", "كائن لعرض صورة ثنائية الأبعاد."},
+    {"palette_desc_tilemap", "A grid for 2D tiles.", "شبكة لبلاطات ثنائية الأبعاد."},
+    {"palette_desc_camera", "A camera that defines a view of the scene.", "كاميرا تحدد منظور عرض المشهد."},
+    {"palette_desc_sun", "A directional light for a sun or moon.", "ضوء اتجاهي لتمثيل الشمس أو القمر."},
+    {"palette_desc_point", "A light radiating from one position.", "ضوء يشع من نقطة واحدة."},
+    {"palette_desc_spot", "A directional cone of light.", "ضوء ينتشر على شكل مخروط."},
+    {"palette_desc_audio", "An object that plays a sound.", "كائن لتشغيل صوت."},
+    {"palette_desc_sky", "The scene sky and background colours.", "سماء المشهد وألوان الخلفية."},
+    {"palette_desc_weather", "A scene object for weather settings.", "كائن لإعدادات الطقس في المشهد."},
+    {"palette_desc_cable", "An object with cable settings.", "كائن يحتوي إعدادات الحبل."},
+    {"palette_desc_rule", "An object with rule tile settings.", "كائن يحتوي إعدادات قواعد البلاطات."},
+    {"palette_desc_flow", "An object with flow field settings.", "كائن يحتوي إعدادات حقل الملاحة."},
+    {"palette_desc_talent", "An object with talent settings.", "كائن يحتوي إعدادات المهارات."},
+    {"inspector_select_hint", "Select an entity in the scene tree to edit its properties.", "اختر عنصراً من شجرة المشهد لتعديل خصائصه."},
     {"tab_lighting", "Lighting", "إضاءة"},
     {"tab_environment", "Environment", "بيئة"},
     {"tab_camera", "Camera", "كاميرا"},
@@ -1435,6 +1481,9 @@ constexpr Entry kEntries[] = {
     {"upgrade_rank", "Invest Point (+)", "ترقية (+)"},
     {"refund_rank", "Refund Point (-)", "استرداد (-)"},
     {"ragdoll_blend", "Ragdoll Blend & Get-Up", "مزج راجدول والنهوض"},
+    {"blend_duration", "Blend duration", "مدة المزج"},
+    {"volume_scale", "Volume scale", "مقياس مستوى الصوت"},
+    {"ragdoll_blend_hint", "0 = animation, 1 = ragdoll", "0 = حركة، 1 = فيزياء الجسم"},
     {"blend_weight", "Blend Weight", "وزن المزج"},
     {"pose_state", "Pose State", "حالة الوضعية"},
     {"pose_inactive", "Keyframed (0)", "حركي اعتيادي"},
@@ -1534,7 +1583,7 @@ Language current_language() {
     return g_language.load(std::memory_order_relaxed);
 }
 
-std::string tr(const char* key) {
+std::string tr_for_language(const char* key, Language lang) {
     if (key == nullptr) {
         return {};
     }
@@ -1545,7 +1594,7 @@ std::string tr(const char* key) {
         return key;
     }
     const Entry* e = it->second;
-    if (g_language.load(std::memory_order_relaxed) == Language::Arabic &&
+    if (lang == Language::Arabic &&
         e->ar != nullptr && e->ar[0] != '\0') {
         return e->ar;
     }
@@ -1555,6 +1604,10 @@ std::string tr(const char* key) {
     // Empty value in both languages: still never empty.
     log_missing_once(key);
     return key;
+}
+
+std::string tr(const char* key) {
+    return tr_for_language(key, current_language());
 }
 
 unsigned tr_key_count() {

@@ -726,6 +726,7 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_fog_scene.cpp
         EditorTests/test_recovery.cpp
         EditorTests/test_asset_filter.cpp
+        EditorTests/test_asset_rename_leaf.cpp
         EditorTests/test_drag_drop.cpp
         EditorTests/test_save_load.cpp
         EditorTests/test_playmode.cpp
@@ -749,6 +750,7 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_profiler_session.cpp
         EditorTests/test_project_launcher.cpp
         EditorTests/test_editor_finishing.cpp
+        EditorTests/test_internal_ui.cpp
         EditorTests/test_script_editor.cpp
         EditorTests/test_wiring_editor.cpp
         EditorTests/test_ide_open.cpp

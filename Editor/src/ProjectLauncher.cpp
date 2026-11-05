@@ -949,7 +949,7 @@ void accept_project(HWND hwnd, const std::string& path) {
         return;
     }
     std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
+    if (!std::filesystem::is_regular_file(launcher_path_from_utf8(path), ec)) {
         // Native STATIC control: logical text (the control shapes natively).
         set_status(hwnd, shell_tr("sh_st_missing") + "\n" + path);
         return;

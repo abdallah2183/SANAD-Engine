@@ -280,7 +280,9 @@ NF_TEST(editor_save_load_after_mods) {
     editor::ConsoleBuffer console;
     editor::EditorApp app(vfs, reg, manager, console);
     app.attach_runtime(&runtime);
-    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", err));
+    // Native pickers return an absolute path; the editor stores a VFS path.
+    NF_CHECK(app.open_scene((tmp / "Content" / "Scenes" / "Work.nfscene").string(), err));
+    NF_CHECK(app.scene_path() == "content://Scenes/Work.nfscene");
     NF_CHECK(!app.dirty());
     const uint64_t serial_after_open = app.scene_serial();
     NF_CHECK(serial_after_open > 0);
@@ -292,7 +294,25 @@ NF_TEST(editor_save_load_after_mods) {
     NF_CHECK(app.dirty());
     editor::TransformEdit te = editor::read_transform(*app.world(), *cube_e);
     te.px = 1.5f;
+    const auto revision_before_edit = app.edit_revision();
     NF_CHECK(app.set_transform(*cube_e, te, err));
+    NF_CHECK(app.edit_revision() > revision_before_edit);
+    const auto revision_before_undo = app.edit_revision();
+    NF_CHECK(app.undo(err));
+    NF_CHECK(app.edit_revision() > revision_before_undo);
+    const auto revision_before_redo = app.edit_revision();
+    NF_CHECK(app.redo(err));
+    NF_CHECK(app.edit_revision() > revision_before_redo);
+
+    // A failed Save As must not erase the live scene or mark it saved: the
+    // scene-switch confirmation keeps editing when the picker destination is
+    // outside the mounted project.
+    const auto invalid_save = tmp.parent_path() / "picker-outside-dirty.nfscene";
+    NF_CHECK(!app.save_as(invalid_save.string(), err));
+    NF_CHECK(app.scene_serial() == serial_after_open);
+    NF_CHECK(app.scene_path() == "content://Scenes/Work.nfscene");
+    NF_CHECK(app.scene_dirty());
+    NF_CHECK(editor::find_by_name(*runtime.scene(), "EditedCube").has_value());
 
     NF_CHECK(app.save_copy("cache://Edited.nfscene", err));
     auto reloaded = runtime::load_scene_from_vfs(vfs, "cache://Edited.nfscene");
@@ -306,10 +326,36 @@ NF_TEST(editor_save_load_after_mods) {
     // its frame-pacing window for ordinary authoring.
     NF_CHECK(app.scene_serial() == serial_after_open);
 
+    // Loading a recovery draft must not silently replace the current unsaved
+    // edit (nor overwrite the recovery file it is about to open).
+    NF_CHECK(app.write_recovery_copy(err));
+    const auto recovery_before = vfs.read_text("cache://EditorRecovery.nfscene");
+    NF_CHECK(recovery_before.ok);
+    NF_CHECK(!app.recover_last_draft(err));
+    NF_CHECK(app.scene_dirty());
+    NF_CHECK(app.scene_serial() == serial_after_open);
+    const auto recovery_after = vfs.read_text("cache://EditorRecovery.nfscene");
+    NF_CHECK(recovery_after.ok && recovery_after.value == recovery_before.value);
+
+    // A running game mutates the live world. Save must not persist those
+    // temporary transforms in either the real scene or a recovery copy.
+    NF_CHECK(app.play(err));
+    NF_CHECK(!app.save(err));
+    NF_CHECK(!app.save_copy("cache://Playing.nfscene", err));
+    NF_CHECK(app.stop(err));
+    NF_CHECK(app.scene_dirty());
+
     // New Scene is a real switch even though it starts from an untitled path;
     // this is the toolbar/menu path, not just Ctrl+N.
     NF_CHECK(app.new_scene(err));
     NF_CHECK(app.scene_serial() > serial_after_open);
+    const auto native_save = tmp / "Content" / "Scenes" / "PickerSave.nfscene";
+    NF_CHECK(app.save_as(native_save.string(), err));
+    NF_CHECK(app.scene_path() == "content://Scenes/PickerSave.nfscene");
+    NF_CHECK(std::filesystem::exists(native_save));
+    const auto outside = tmp.parent_path() / "picker-outside.nfscene";
+    NF_CHECK(!app.save_as(outside.string(), err));
+    NF_CHECK(app.scene_path() == "content://Scenes/PickerSave.nfscene");
 
     NF_CHECK(rhi::validation_error_count() == 0);
     device.wait_idle();
@@ -318,4 +364,4 @@ NF_TEST(editor_save_load_after_mods) {
     device.wait_idle();
     std::filesystem::remove_all(tmp);
     rhi::reset_validation_error_count();
-}
+}
