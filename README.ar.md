@@ -8,13 +8,13 @@
 
 C++23 · Vulkan · Windows x64 · Apache-2.0
 
-[![الإصدار](https://img.shields.io/badge/release-0.8.0-3478f6)](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0)
+[![الإصدار](https://img.shields.io/badge/release-0.9.0-3478f6)](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0)
 [![النظام](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-252b36)](Docs/Getting_Started_Ar.md#المتطلبات)
 [![الترخيص](https://img.shields.io/badge/license-Apache--2.0-252b36)](LICENSE)
 
-**[تنزيل 0.8.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0)** · **[ابدأ هنا](Docs/Getting_Started_Ar.md)** · **[التوثيق](Docs/README.md)** · **[English](README.md)**
+**[تنزيل 0.9.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0)** · **[ابدأ هنا](Docs/Getting_Started_Ar.md)** · **[التوثيق](Docs/README.md)** · **[English](README.md)**
 
-![محرر سَنَد 0.8.0 بالعربية يعرض المشهد التجريبي TreeWorld](Docs/images/shot_editor_ar.png)
+![محرر سَنَد بالعربية يعرض المشهد التجريبي TreeWorld](Docs/images/shot_editor_ar.png)
 
 <sub>لقطة فعلية من سَنَد 0.8.0 على Windows، والمشهد من مثال TreeWorld.</sub>
 
@@ -30,7 +30,7 @@ C++23 · Vulkan · Windows x64 · Apache-2.0
 
 | ما تريد إنجازه | الدليل |
 |:---|:---|
-| تجربة المحرك | [تنزيل النسخة المحمولة](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0) |
+| تجربة المحرك | [تنزيل النسخة المحمولة](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0) |
 | إنشاء أول مشروع | [البدء السريع](Docs/Getting_Started_Ar.md) · [الدرس العملي](Docs/Tutorial_Ar.md) |
 | تعلّم الواجهة | [دليل المحرر](Docs/Editor_Guide.md) |
 | بناء المحرك من المصدر | [البناء والاختبارات](Docs/Build_and_Test.md) |
@@ -39,7 +39,7 @@ C++23 · Vulkan · Windows x64 · Apache-2.0
 
 ## البدء السريع
 
-1. نزّل [`SANAD-0.8.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.8.0/SANAD-0.8.0-Windows-x64-Portable.zip).
+1. نزّل [`SANAD-0.9.0-Windows-x64-Portable.zip`](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.9.0/SANAD-0.9.0-Windows-x64-Portable.zip).
 2. فك الضغط وشغّل `SANADEditor.exe`.
 3. أنشئ مشروعًا من قالب **ThirdPerson**، ثم اضغط **تشغيل**.
 
@@ -51,7 +51,7 @@ nf.exe build --project MyGame\MyGame.nfproj
 MyGame\dist\NFPlayer.exe --project MyGame\dist\MyGame.nfproj
 ```
 
-**المتطلبات:** Windows 10 أو 11 بنواة x64، وتعريف رسومي يدعم Vulkan. الإصدار محمول بلا مثبّت، ومعه [بصمة SHA-256](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.8.0/SHA256SUMS.txt). الملفات التنفيذية تحمل شهادة تطوير ذاتية، وليست شهادة توقيع عامة موثوقة من Windows.
+**المتطلبات:** Windows 10 أو 11 بنواة x64، وتعريف رسومي يدعم Vulkan. الإصدار محمول بلا مثبّت، ومعه [بصمة SHA-256](https://github.com/abdallah2183/SANAD-Engine/releases/download/v0.9.0/SHA256SUMS.txt). الملفات التنفيذية تحمل شهادة تطوير ذاتية، وليست شهادة توقيع عامة موثوقة من Windows.
 
 ## ما الذي يتضمنه؟
 
@@ -65,14 +65,16 @@ MyGame\dist\NFPlayer.exe --project MyGame\dist\MyGame.nfproj
 
 التفاصيل في [المعمارية](Docs/Architecture.md) و[مرجع أنظمة المشهد](Docs/Reference/Scene_Systems.ar.md).
 
-## جديد 0.8.0
+## جديد 0.9.0
 
-- مزامنة لوحات المشهد بعد التراجع والإعادة وتبديل المشهد.
-- إصلاح المجلدات الفارغة والأسماء العربية وسجل التنقل وتبديل جذور الملفات.
-- نافذة مستقلة لإعادة تعيين الأزرار، مع الإلغاء والبحث في الإجراءات.
-- تحسين تمرير السجل وعدّاداته ونسخ الرسائل متعددة الأسطر والاستيراد والتصدير.
+- معاينة أندرويد تجريبية بصيغة APK، مع اللمس المتعدد والصوت وقالب منصات 2.5D.
+- تصدير ألعاب ويندوز إلى ملف EXE واحد، وتشغيل المحرر دون نافذة أوامر.
+- واجهة لعب مبرمجة بـLua (`nf.ui`): تخطيط مثبّت، حقول نص وأرقام، قوائم، تلميحات وتنقل بلوحة المفاتيح، مع معاينة حية في نافذة اللعب داخل المحرر.
+- إعدادات لكل مشروع (`nf.settings`)، وتنقل بين المشاهد من Lua، وقالب `UiStarter` جديد.
+- المحرر: منتقي مكوّنات ثنائي اللغة، مسودات Apply/Revert لمكوّنات 2D، بحث وفلاتر في Outliner والمفتش، وإيقاف مؤقت حقيقي.
+- إصلاحات Vulkan لأجهزة أندرويد وتحسينات للصوت والإدخال.
 
-[ملاحظات الإصدار](Docs/Releases/0.8.0.md) · [سجل الإصدارات](CHANGELOG.md) · [معرض الواجهة](Docs/Screenshots.md)
+[ملاحظات الإصدار](Docs/Releases/0.9.0.md) · [سجل الإصدارات](CHANGELOG.md) · [معرض الواجهة](Docs/Screenshots.md)
 
 ## البناء من المصدر
 
@@ -89,7 +91,7 @@ build\Release\bin\SANADEditor.exe
 
 ## التحقق من الإصدار
 
-نتائج **الإصدار 0.8.0** ببناء Release على Windows x64:
+آخر تحقق كامل مسجّل (للإصدار 0.8.0) ببناء Release على Windows x64:
 
 | الفحص | النتيجة المسجلة |
 |:---|:---|

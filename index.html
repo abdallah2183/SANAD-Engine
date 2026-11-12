@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>محرك سَنَد | SANAD Engine</title>
-    <meta name="description" content="محرك سَنَد (SANAD Engine) 0.8.0 — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
+    <meta name="description" content="محرك سَنَد (SANAD Engine) 0.9.0 — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
     <link rel="icon" type="image/png" href="Editor/resources/SANAD.png">
     <link rel="apple-touch-icon" href="Editor/resources/SANAD.png">
     <meta name="theme-color" content="#0b0d13">
@@ -616,18 +616,18 @@
             <img src="Editor/resources/SANAD.png" alt="SANAD Engine Logo">
         </div>
         <div class="hero-badge-container">
-            <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.8.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
+            <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.9.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
             <span class="author-badge" data-i18n="author_badge">المؤسس والقائم على العمل: عبدالله (Abdallah)</span>
         </div>
         <h1>
             <span data-i18n="hero_title">محرك سَنَد | SANAD Engine</span>
         </h1>
         <p class="hero-desc" data-i18n="hero_subtitle">
-            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.8.0 يحسّن شاشات المحرر ومتصفح الملفات والكاميرا والتحكم والسجل والاستيراد والتصدير.
+            محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.9.0 يضيف معاينة أندرويد تجريبية، وتصدير ألعاب ويندوز إلى EXE واحد، وواجهة لعب مبرمجة بـLua.
         </p>
         <div class="hero-cta-group">
-            <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_download">
-                تنزيل 0.8.0
+            <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0" class="github-btn" style="padding: 11px 26px; font-size: 1rem;" data-i18n="hero_cta_download">
+                تنزيل 0.9.0
             </a>
             <a href="#quickstart" class="btn-secondary" data-i18n="hero_cta_build">
                 البناء والتشغيل
@@ -706,8 +706,8 @@
     <section class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-num">0.8.0</div>
-                <div class="stat-label" data-i18n="stat_tests">أحدث إصدار عام — 26 حزمة اختبار</div>
+                <div class="stat-num">0.9.0</div>
+                <div class="stat-label" data-i18n="stat_tests">أحدث إصدار عام</div>
             </div>
             <div class="stat-card">
                 <div class="stat-num">0</div>
@@ -849,9 +849,9 @@
 
         <div class="roadmap-grid">
             <div class="roadmap-card done">
-                <span class="roadmap-status done">0.8.0</span>
+                <span class="roadmap-status done">0.9.0</span>
                 <h4>الإصدار الحالي</h4>
-                <ul><li>محرر أصلي عربي وإنجليزي على Windows x64</li><li>تحسين المشاهد والتراجع والملفات والتحكم والسجل</li><li><a href="https://github.com/abdallah2183/SANAD-Engine/blob/main/Docs/Releases/0.8.0.md">ملاحظات الإصدار</a></li></ul>
+                <ul><li>محرر أصلي عربي وإنجليزي على Windows x64</li><li>معاينة أندرويد تجريبية وتصدير EXE واحد وواجهة لعب بـLua</li><li><a href="https://github.com/abdallah2183/SANAD-Engine/blob/main/Docs/Releases/0.9.0.md">ملاحظات الإصدار</a></li></ul>
             </div>
             <div class="roadmap-card done">
                 <span class="roadmap-status done">Release verification</span>
@@ -870,7 +870,7 @@
     <section class="container" id="quickstart" style="margin-bottom: 5rem;">
         <div class="section-header">
             <h2 data-i18n="quick_title">البدء السريع: البناء والتشغيل</h2>
-            <p data-i18n="quick_desc">ابنِ 0.8.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة</p>
+            <p data-i18n="quick_desc">ابنِ 0.9.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة</p>
         </div>
 
         <div class="code-box">
@@ -878,7 +878,7 @@
             <div><span class="code-cmd">git clone</span> <span class="code-arg">https://github.com/abdallah2183/SANAD-Engine.git</span></div>
             <div><span class="code-cmd">cd</span> <span class="code-arg">SANAD-Engine</span></div>
             <br>
-            <div class="code-comment"># 2. بناء الإصدار 0.8.0 (Build Release)</div>
+            <div class="code-comment"># 2. بناء الإصدار 0.9.0 (Build Release)</div>
             <div><span class="code-cmd">build_nf.bat</span> <span class="code-arg">Release</span></div>
             <br>
             <div class="code-comment"># 3. تشغيل محرر سند (Run SANAD Editor)</div>
@@ -892,7 +892,7 @@
             <div><span class="code-cmd">.\build\Release\bin\nf.exe</span> <span class="code-arg">run --project Games\MyGame\MyGame.nfproj</span></div>
         </div>
         <p style="margin-top: 1rem; color: var(--text-secondary);">
-            تفضّل عدم البناء؟ <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0" style="color: var(--primary-orange);">نزّل حزمة 0.8.0 المحمولة</a>.
+            تفضّل عدم البناء؟ <a href="https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0" style="color: var(--primary-orange);">نزّل حزمة 0.9.0 المحمولة</a>.
         </p>
     </section>
 
@@ -1102,15 +1102,15 @@
                 nav_roadmap: "خارطة الطريق",
                 nav_quickstart: "البدء السريع",
                 btn_github: "مستودع GitHub",
-                hero_badge: "الإصدار 0.8.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
+                hero_badge: "الإصدار 0.9.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير",
                 author_badge: "المؤسس والقائم على العمل: عبدالله (Abdallah)",
                 hero_title: "محرك سَنَد | SANAD Engine",
-                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.8.0 يحسّن شاشات المحرر ومتصفح الملفات والكاميرا والتحكم والسجل والاستيراد والتصدير.",
-                hero_cta_download: "تنزيل 0.8.0",
+                hero_subtitle: "محرك ألعاب ثلاثي الأبعاد عالي الأداء، مبني بالكامل بأحدث معايير C++23 ومكتبة الرسوميات الحديثة Vulkan 1.2+ بمعمارية موجهة للبيانات (ECS) ونظم محاكاة فيزيائية وصوتية حتمية. الإصدار 0.9.0 يضيف معاينة أندرويد تجريبية، وتصدير ألعاب ويندوز إلى EXE واحد، وواجهة لعب مبرمجة بـLua.",
+                hero_cta_download: "تنزيل 0.9.0",
                 hero_cta_build: "البناء والتشغيل",
                 hero_cta_explore: "استعراض المميزات",
                 canvas_hint: "اسحب بالمؤشر لتدوير المجسم في مساحة العالم",
-                stat_tests: "أحدث إصدار عام — 26 حزمة اختبار",
+                stat_tests: "أحدث إصدار عام",
                 stat_val: "أخطاء تحقق في اختبار المحرر",
                 stat_cpp: "معيار C++ الحديث للأداء الأقصى",
                 stat_det: "Recorded passing tests for 0.8.0",
@@ -1137,7 +1137,7 @@
                 roadmap_title: "خارطة طريق التطوير",
                 roadmap_desc: "الإصدار الحالي، نتائج التحقق، واتجاه التطوير موثقة في المستودع",
                 quick_title: "البدء السريع: البناء والتشغيل",
-                quick_desc: "ابنِ 0.8.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة"
+                quick_desc: "ابنِ 0.9.0 على Windows باستخدام CMake وVisual Studio / Ninja — أو نزّل الحزمة المحمولة مباشرة"
             },
             en: {
                 nav_features: "Features",
@@ -1171,15 +1171,15 @@
                 nav_roadmap: "Roadmap",
                 nav_quickstart: "Quickstart",
                 btn_github: "GitHub Repository",
-                hero_badge: "SANAD 0.8.0 — Extensible Arabic 3D Game Engine",
+                hero_badge: "SANAD 0.9.0 — Extensible Arabic 3D Game Engine",
                 author_badge: "Founder & Project Lead: Abdallah",
                 hero_title: "SANAD Engine | محرك سند",
-                hero_subtitle: "High-performance 3D game engine built with modern C++23, a low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio. 0.8.0 improves editor panels, the file browser, camera controls, input rebinding, console and import/export.",
-                hero_cta_download: "Download 0.8.0",
+                hero_subtitle: "High-performance 3D game engine built with modern C++23, a low-overhead Vulkan RHI, cache-friendly ECS, deterministic physics, and 3D spatial audio. 0.9.0 adds an experimental Android preview, single-EXE Windows export and scripted Lua runtime UI.",
+                hero_cta_download: "Download 0.9.0",
                 hero_cta_build: "Build and Run",
                 hero_cta_explore: "Explore Features",
                 canvas_hint: "Click and drag to orbit the 3D entity in world space",
-                stat_tests: "Current Public Release — 26 Test Suites",
+                stat_tests: "Current Public Release",
                 stat_val: "Validation errors in editor acceptance",
                 stat_cpp: "Modern C++23 ISO Standard",
                 stat_det: "Recorded passing tests for 0.8.0",
@@ -1206,7 +1206,7 @@
                 roadmap_title: "Development Roadmap",
                 roadmap_desc: "The current release, recorded verification and development direction are documented in the repository.",
                 quick_title: "Quick Start: Build & Run",
-                quick_desc: "Build 0.8.0 on Windows with CMake and Visual Studio 2022 / Ninja — or download the portable package."
+                quick_desc: "Build 0.9.0 on Windows with CMake and Visual Studio 2022 / Ninja — or download the portable package."
             }
         };
 

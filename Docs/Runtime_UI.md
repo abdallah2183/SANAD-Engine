@@ -1,6 +1,6 @@
 # Scripted runtime UI
 
-This feature belongs to the current development build after 0.8.0. It renders a game's Lua UI in the standalone `NFPlayer` and — while **playing in the editor** — in the **Game View (Viewport panel)**, with the same widgets, shaping, fonts and interaction. The editor path does not need the editor to *author* UI; any project with `nf.ui` scripts previews here exactly as shipped.
+This feature ships in SANAD 0.9.0. It renders a game's Lua UI in the standalone `NFPlayer` and — while **playing in the editor** — in the **Game View (Viewport panel)**, with the same widgets, shaping, fonts and interaction. The editor path does not need the editor to *author* UI; any project with `nf.ui` scripts previews here exactly as shipped.
 
 [Documentation index](README.md) · [Runnable UI Lab](../Samples/RuntimeUiLab/README.md)
 

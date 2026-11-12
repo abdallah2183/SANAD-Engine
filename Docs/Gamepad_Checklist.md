@@ -1,6 +1,6 @@
 # Gamepad Manual Checklist (G1)
 
-[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+[Documentation](README.md) · [Release notes](Releases/0.9.0.md)
 
 Xbox-compatible XInput pad on Windows x64. Automated coverage lives in
 `Tests/InputTests` (edge/hold/release, XInput mask, sticks, disconnect);

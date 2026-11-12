@@ -1,8 +1,8 @@
 # Portable release / النسخة المحمولة
 
-[Documentation](README.md) · [Changelog](../CHANGELOG.md) · [0.8.0 release notes](Releases/0.8.0.md)
+[Documentation](README.md) · [Changelog](../CHANGELOG.md) · [0.9.0 release notes](Releases/0.9.0.md)
 
-The current public release is **SANAD 0.8.0**, for Windows 10/11 x64. Download the portable ZIP and checksum from [GitHub Releases](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0).
+The current public release is **SANAD 0.9.0**, for Windows 10/11 x64. Download the portable ZIP and checksum from [GitHub Releases](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0).
 
 ## Package contents
 
@@ -22,7 +22,7 @@ The current public release is **SANAD 0.8.0**, for Windows 10/11 x64. Download t
 
 Extract the complete archive and run `SANADEditor.exe`. Follow [Getting started](Getting_Started.md) or [البدء السريع](Getting_Started_Ar.md) to create a project. Keep shaders, templates and resources beside the executable.
 
-The ZIP is portable; 0.8.0 does not include an installer. A Vulkan-capable driver is required. There is no Linux/macOS binary in this release.
+The ZIP is portable; 0.9.0 does not include an installer. An experimental Android preview APK is described in [Android preview](Android_Preview_Ar.md). A Vulkan-capable driver is required. There is no Linux/macOS binary in this release.
 
 ## Signing and checksums
 

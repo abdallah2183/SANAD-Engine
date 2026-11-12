@@ -1,6 +1,6 @@
 # Documentation
 
-**SANAD Engine 0.8.0** · [Repository](../README.md) · [العربية](../README.ar.md) · [Release notes](Releases/0.8.0.md)
+**SANAD Engine 0.9.0** · [Repository](../README.md) · [العربية](../README.ar.md) · [Release notes](Releases/0.9.0.md)
 
 Choose the guide for your task. Current user documentation, technical references and historical records are kept in separate sections.
 
@@ -19,8 +19,8 @@ Choose the guide for your task. Current user documentation, technical references
 
 | Guide | Focus |
 |:---|:---|
-| [Android preview (development)](Android_Preview_Ar.md) | Build and test an experimental APK on Android |
-| [Runtime UI (development)](Runtime_UI.md) | Lua panels, labels, buttons, progress bars and sliders in the standalone player |
+| [Android preview (experimental)](Android_Preview_Ar.md) | Build and test an experimental APK on Android |
+| [Runtime UI](Runtime_UI.md) | Lua panels, labels, buttons, bars, sliders and text/number input in the player and the editor Game View |
 | [Lua scripting](Lua_Scripting_Ar.md) | Script lifecycle and the engine's gameplay API |
 | [AI agent workflow](AI_Game_Guide.md) | Executable native-project workflow for coding agents |
 | [Asset import](Asset_Import.md) | Mesh formats, textures, materials and import tools |

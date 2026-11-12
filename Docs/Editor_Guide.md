@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Getting started](Getting_Started.md) · [Screenshots](Screenshots.md)
 
-Applies to **0.8.0**. Screenshots show the TreeWorld example; the panel behavior is shared by other projects.
+Applies to **0.9.0**. Screenshots show the TreeWorld example; the panel behavior is shared by other projects.
 
 ## Workspace
 

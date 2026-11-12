@@ -1,6 +1,6 @@
 # Frame pacing telemetry
 
-[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+[Documentation](README.md) · [Release notes](Releases/0.9.0.md)
 
 `nf::rendering::FramePacing` is a rolling window over recent frames. It answers
 three questions that a single frame cannot:

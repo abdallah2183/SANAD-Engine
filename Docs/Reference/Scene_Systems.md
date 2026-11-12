@@ -2,7 +2,7 @@
 
 [Documentation](../README.md) · [العربية](Scene_Systems.ar.md)
 
-Scene-format and runtime notes retained from the development reference. For the released package and verification results, see [0.8.0](../Releases/0.8.0.md).
+Scene-format and runtime notes retained from the development reference. For the released package and verification results, see [0.9.0](../Releases/0.9.0.md).
 
 ## GPU profiling
 

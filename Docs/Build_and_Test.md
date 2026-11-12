@@ -1,6 +1,6 @@
 # Build and test
 
-[Documentation](README.md) · [Contributing](../CONTRIBUTING.md) · [0.8.0 verification](Releases/0.8.0.md#verification--التحقق)
+[Documentation](README.md) · [Contributing](../CONTRIBUTING.md) · [Release notes](Releases/0.9.0.md) · [Last recorded verification (0.8.0)](Releases/0.8.0.md#verification--التحقق)
 
 All commands below run from the repository root on **Windows x64** unless stated otherwise.
 

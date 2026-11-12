@@ -1,6 +1,6 @@
 # Blender → SANAD Character Pipeline (glTF-first)
 
-[Documentation](README.md) · [Release notes](Releases/0.8.0.md)
+[Documentation](README.md) · [Release notes](Releases/0.9.0.md)
 
 Blender export plus strict source validation for a skinned, animated character.
 The current engine can read the source data and sample it through the animation

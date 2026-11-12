@@ -2,7 +2,7 @@
 
 [التوثيق](README.md) · [English](Getting_Started.md)
 
-هذا الدليل للنسخة المحمولة **0.8.0** على Windows. للبناء من الشيفرة، راجع [دليل البناء والاختبارات](Build_and_Test.md).
+هذا الدليل للنسخة المحمولة **0.9.0** على Windows. للبناء من الشيفرة، راجع [دليل البناء والاختبارات](Build_and_Test.md).
 
 ## المتطلبات
 
@@ -12,7 +12,7 @@
 
 ## 1. تنزيل المحرك
 
-نزّل الحزمة المحمولة وملف `SHA256SUMS.txt` من [صفحة 0.8.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0)، ثم فك الضغط وشغّل `SANADEditor.exe`.
+نزّل الحزمة المحمولة وملف `SHA256SUMS.txt` من [صفحة 0.9.0](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0)، ثم فك الضغط وشغّل `SANADEditor.exe`.
 
 الحزمة تحمل توقيع تطوير ذاتيًا. إذا ظهرت رسالة عن الناشر أو سياسة Windows، راجع [الدعم](../SUPPORT.md#windows-blocks-a-downloaded-executable).
 

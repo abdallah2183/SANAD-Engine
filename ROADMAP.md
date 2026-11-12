@@ -4,7 +4,7 @@
 
 ## Released baseline
 
-**0.8.0** is the current public Windows x64 release. It includes the native editor/runtime/toolchain and the editor reliability improvements described in the [release notes](Docs/Releases/0.8.0.md).
+**0.9.0** is the current public Windows x64 release. It adds an experimental Android preview, single-EXE Windows export, scripted runtime UI and editor improvements, described in the [release notes](Docs/Releases/0.9.0.md).
 
 The source contains the milestone work through Phase 131. The detailed phase ledger is preserved as [development history](Docs/Archive/Development_History.md), rather than mixed into the current roadmap.
 
@@ -22,4 +22,4 @@ These are areas for discussion, not release dates or commitments. Propose scoped
 
 ## بالعربية
 
-الإصدار المنشور حاليًا هو **0.8.0 لويندوز x64**. التفاصيل التاريخية محفوظة في [أرشيف التطوير](Docs/Archive/Development_History.md). الأولويات أعلاه مسارات مقترحة للنقاش، وليست مواعيد إصدار أو وعود دعم لمنصات إضافية.
+الإصدار المنشور حاليًا هو **0.9.0 لويندوز x64**، مع معاينة أندرويد تجريبية. التفاصيل التاريخية محفوظة في [أرشيف التطوير](Docs/Archive/Development_History.md). الأولويات أعلاه مسارات مقترحة للنقاش، وليست مواعيد إصدار أو وعود دعم لمنصات إضافية.

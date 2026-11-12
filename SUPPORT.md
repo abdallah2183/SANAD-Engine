@@ -4,7 +4,7 @@
 
 ## Before opening an issue
 
-Try the current [0.8.0 portable release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0) or record the exact source commit you built. Describe the smallest project or sequence that reproduces the problem.
+Try the current [0.9.0 portable release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0) or record the exact source commit you built. Describe the smallest project or sequence that reproduces the problem.
 
 Include:
 

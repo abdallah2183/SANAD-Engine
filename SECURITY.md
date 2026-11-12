@@ -9,7 +9,7 @@ and the packaged player.
 | Target | Reporting scope |
 |:---|:---|
 | `main` | Current development tree |
-| 0.8.0 | Current public release |
+| 0.9.0 | Current public release |
 | Earlier releases | Include the affected version and whether the issue reproduces on the current release |
 
 Fixes land on `main` first. There is no long-term support branch or published support schedule.
@@ -54,7 +54,7 @@ Out of scope:
 
 ## Binary signing
 
-The 0.8.0 release is a **portable zip** signed with the self-signed
+The 0.9.0 release is a **portable zip** signed with the self-signed
 `SANAD Dev Build` certificate, not a publicly trusted code-signing certificate.
 Windows may show "Unknown publisher" or block a downloaded executable. Verify the
 SHA-256 from the release page and build from source if you need a binary you

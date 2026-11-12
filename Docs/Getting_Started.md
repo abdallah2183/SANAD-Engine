@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [العربية](Getting_Started_Ar.md)
 
-This guide uses the **0.8.0 Windows portable release**. Source-build instructions are in [Build and test](Build_and_Test.md).
+This guide uses the **0.9.0 Windows portable release**. Source-build instructions are in [Build and test](Build_and_Test.md).
 
 ## Requirements
 
@@ -14,7 +14,7 @@ The portable package needs no separate MSVC runtime installation. Building the e
 
 ## 1. Download and open
 
-Download the ZIP and `SHA256SUMS.txt` from [the 0.8.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.8.0). Extract the ZIP, then run `SANADEditor.exe`.
+Download the ZIP and `SHA256SUMS.txt` from [the 0.9.0 release](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0). Extract the ZIP, then run `SANADEditor.exe`.
 
 The executable uses a self-signed development certificate. See [Support](../SUPPORT.md#windows-blocks-a-downloaded-executable) if Windows reports a publisher or policy warning.
 

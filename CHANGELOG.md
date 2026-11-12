@@ -4,7 +4,11 @@
 
 Release notes are kept in one place under `Docs/Releases/`. Published artifacts and source tags remain attached to their original GitHub releases.
 
-## Unreleased
+## 0.9.0
+
+Android preview, single-EXE Windows export, scripted runtime UI, per-project settings, scene flow and editor improvements.
+
+[Release notes](Docs/Releases/0.9.0.md) · [Download](https://github.com/abdallah2183/SANAD-Engine/releases/tag/v0.9.0)
 
 - Add deferred Lua scene load/restart/quit commands, bounded typed session data, and three-scene UiStarter flow with editor Stop restoration.
 - Fix packaged project mounts resolved from relative or trailing-separator roots.
