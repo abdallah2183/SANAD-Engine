@@ -18,6 +18,7 @@
 #include <NF/Editor/Console.hpp>
 #include <NF/Editor/EditorApp.hpp>
 #include <NF/Editor/Inspector.hpp>
+#include <NF/Editor/ComponentCatalog.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
@@ -665,4 +666,84 @@ NF_TEST(editor_every_add_menu_component_attaches) {
     NF_CHECK(!world.query<runtime::SkyComponent>().empty());
 
     std::filesystem::remove_all(tmp);
+}
+
+NF_TEST(editor_component_catalog_attaches_every_entry_to_the_chosen_entity_and_undoes) {
+    const auto& fixture = require_gpu();
+    const auto tmp = wiring_temp_dir("nf_component_catalog");
+    VirtualFileSystem vfs;
+    vfs.mount("content://", tmp / "Content");
+    vfs.mount("cache://", tmp / "Cache");
+    write_probe_scene(vfs, "content://Scenes/Work.nfscene");
+    AssetRegistry registry;
+    AssetManager manager(vfs, registry);
+    runtime::Runtime runtime(vfs, registry, manager, *fixture.device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, registry, manager, console);
+    app.attach_runtime(&runtime);
+    std::string error;
+    NF_CHECK(app.open_scene("content://Scenes/Work.nfscene", error));
+    for (const auto& entry : editor::kComponents) {
+        NF_CHECK(app.create_entity(entry.label_key, ecs::kInvalidEntity, error));
+        const auto entity = app.stack().last_target();
+        const auto previous_steps = app.stack().undo_size();
+        const auto previous_revision = app.edit_revision();
+        NF_CHECK(app.add_component(entity, entry.kind, error));
+        if (!editor::has_component(*app.world(), entity, entry.kind))
+            std::printf("Catalog attachment missing: %s\n", entry.label_key);
+        NF_CHECK(editor::has_component(*app.world(), entity, entry.kind));
+        if (app.stack().undo_size() != previous_steps + 1)
+            std::printf("Catalog history mismatch: %s\n", entry.label_key);
+        NF_CHECK_EQ(app.stack().undo_size(), previous_steps + 1);
+        NF_CHECK(app.edit_revision() > previous_revision);
+        NF_CHECK(!app.add_component(entity, entry.kind, error)); // existing data cannot be overwritten
+        NF_CHECK_EQ(app.stack().undo_size(), previous_steps + 1);
+        NF_CHECK(app.undo(error));
+        NF_CHECK(!editor::has_component(*app.world(), entity, entry.kind));
+        NF_CHECK(app.redo(error));
+        NF_CHECK(editor::has_component(*app.world(), entity, entry.kind));
+    }
+    NF_CHECK(!app.add_component(ecs::kInvalidEntity, editor::ComponentKind::Sprite, error));
+}
+
+
+NF_TEST(editor_stop_restores_unsaved_authoring_scene_after_game_transitions) {
+    const auto& fixture = require_gpu();
+    VirtualFileSystem vfs;
+    const auto root = wiring_temp_dir("nf_editor_scene_flow_stop");
+    NF_CHECK(vfs.mount("content://", root).ok);
+    AssetRegistry registry;
+    AssetManager manager(vfs, registry);
+    runtime::Runtime runtime(vfs, registry, manager, *fixture.device, nullptr);
+    editor::ConsoleBuffer console;
+    editor::EditorApp app(vfs, registry, manager, console);
+    app.attach_runtime(&runtime);
+    write_probe_scene(vfs, "content://Scenes/Authoring.nfscene");
+    write_probe_scene(vfs, "content://Scenes/Other.nfscene");
+    std::string error;
+    NF_CHECK(app.open_scene("content://Scenes/Authoring.nfscene", error));
+    auto entities = runtime.edit_scene()->world().query<scene::Transform>();
+    runtime.edit_scene()->world().get<scene::Transform>(entities[0])->local_x = 17.0f;
+    runtime.mark_scene_edited();
+    NF_CHECK(app.play(error));
+    NF_CHECK(runtime.game_flow().set("score", 100.0, error));
+    NF_CHECK(runtime.game_flow().request_scene("content://Scenes/Other.nfscene", error));
+    runtime.update(1.0f/60.0f);
+    NF_CHECK(runtime.loaded_scene_path() == "content://Scenes/Other.nfscene");
+    NF_CHECK(app.stop(error));
+    NF_CHECK(runtime.loaded_scene_path() == "content://Scenes/Authoring.nfscene");
+    NF_CHECK(runtime.game_flow().current() == "content://Scenes/Authoring.nfscene");
+    NF_CHECK(runtime.game_flow().size() == 0);
+    NF_CHECK(!runtime.game_flow().pending());
+    entities = runtime.edit_scene()->world().query<scene::Transform>();
+    NF_CHECK_EQ(runtime.edit_scene()->world().get<scene::Transform>(entities[0])->local_x, 17.0f);
+    // The unsaved pose was restored in memory; the source file stays untouched.
+    const auto on_disk = runtime::load_scene_from_vfs(vfs, "content://Scenes/Authoring.nfscene");
+    NF_CHECK(on_disk.success);
+    const auto disk_entities = on_disk.scene->world().query<scene::Transform>();
+    NF_CHECK_EQ(on_disk.scene->world().get<scene::Transform>(disk_entities[0])->local_x, 0.0f);
+    NF_CHECK(app.play(error));
+    NF_CHECK(runtime.game_flow().size() == 0);
+    NF_CHECK(app.stop(error));
+    std::filesystem::remove_all(root);
 }

@@ -15,7 +15,10 @@
 // no XInput slot anywhere in the test.
 
 #include <NF/Test/TestFramework.hpp>
+#include <NF/Platform/InputSystem.hpp>
 #include <NF/Runtime/InputBindings.hpp>
+#include <NF/Runtime/KeyboardInput.hpp>
+#include <NF/Runtime/TouchInput.hpp>
 
 #include <cmath>
 #include <set>
@@ -23,6 +26,32 @@
 
 using namespace nf;
 using namespace nf::runtime;
+
+NF_TEST(touch_input_multitouch_slide_cancel_and_gameplay_actions) {
+    TouchInputSource touch;
+    NF_CHECK(touch.add_control({"move_x", 0.0f, 0.7f, 0.2f, 0.3f, -1.0f}));
+    NF_CHECK(touch.add_control({"move_x", 0.2f, 0.7f, 0.2f, 0.3f, 1.0f}));
+    NF_CHECK(touch.add_control({"jump", 0.7f, 0.7f, 0.3f, 0.3f, 1.0f}));
+    NF_CHECK(!touch.add_control({"invalid", 0.9f, 0.9f, 0.5f, 0.5f, 1.0f}));
+    NF_CHECK(touch.touch_down(11, 0.1f, 0.8f));
+    NF_CHECK(touch.touch_down(12, 0.8f, 0.8f));
+    KeyboardInputSource input;
+    input.set_bindings(InputBindings{});
+    input.set_touch_source(&touch);
+    NF_CHECK_NEAR(input.action_axis("move_x"), -1.0f, 1e-6f);
+    NF_CHECK(input.action_pressed("jump"));
+    NF_CHECK(touch.touch_move(11, 0.3f, 0.8f));
+    NF_CHECK_NEAR(input.action_axis("move_x"), 1.0f, 1e-6f);
+    NF_CHECK(!touch.touch_move(999, 0.1f, 0.8f));
+    touch.touch_up(12);
+    NF_CHECK(!input.action_pressed("jump"));
+    input.set_ui_text_capture(true);
+    NF_CHECK_NEAR(input.action_axis("move_x"), 0.0f, 1e-6f);
+    input.set_ui_text_capture(false);
+    touch.cancel_all();
+    NF_CHECK_NEAR(input.action_axis("move_x"), 0.0f, 1e-6f);
+    NF_CHECK(!input.action_pressed("jump"));
+}
 
 namespace {
 
@@ -451,4 +480,39 @@ NF_TEST(a_new_rebind_that_steals_a_key_is_reported) {
     NF_CHECK(has_conflict(find_binding_conflicts(b), "attack", "block", 0x02));
     b.set("block", {{BindingSource::PadButton, 5, 1.0f}});
     NF_CHECK(!has_conflict(find_binding_conflicts(b), "attack", "block", 0x02));
+}
+
+NF_TEST(synthetic_gamepad_blocked_while_text_editing) {
+    // No pad needed: inject a sample through InputSystem and read it back
+    // through KeyboardInputSource (the shipped player's routing).
+    auto& sys = nf::InputSystem::instance();
+    sys.begin_frame();
+    sys.end_frame();
+    sys.begin_frame();
+    nf::GamepadSample press{};
+    press.connected = true;
+    press.buttons = nf::xinput_buttons::A;
+    press.left_x = 32767;
+    press.right_trigger = 255;
+    sys.apply_gamepad_sample(press);
+    KeyboardInputSource src;
+    src.set_bindings(InputBindings::parse("jump = pad:A\nthrottle = axis:RT\nmove_x = axis:LeftX\n", nullptr));
+    src.begin_frame();
+    // Without capture: pad drives actions.
+    NF_CHECK(src.action_pressed("jump"));
+    NF_CHECK(src.action_axis("throttle") > 0.5f);
+    NF_CHECK(src.action_axis("move_x") > 0.5f);
+    // With text capture: every pad action is blocked.
+    src.set_ui_text_capture(true);
+    NF_CHECK(!src.action_pressed("jump"));
+    NF_CHECK(src.action_axis("throttle") == 0.0f);
+    NF_CHECK(src.action_axis("move_x") == 0.0f);
+    // Release capture: pad works again.
+    src.set_ui_text_capture(false);
+    NF_CHECK(src.action_pressed("jump"));
+    // Clean singleton.
+    sys.end_frame();
+    sys.begin_frame();
+    sys.apply_gamepad_sample(nf::GamepadSample{});
+    sys.end_frame();
 }

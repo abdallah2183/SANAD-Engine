@@ -1,6 +1,7 @@
 # Build outputs
 build/
 dist/
+dist-windows/
 out/
 bin/
 lib/

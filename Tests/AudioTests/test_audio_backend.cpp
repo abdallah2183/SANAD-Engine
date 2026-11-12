@@ -9,6 +9,7 @@
 
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Audio/AudioEngine.hpp>
+#include <NF/Audio/AudioRingBuffer.hpp>
 #ifdef _WIN32
 #include <NF/Audio/WasapiAudioDevice.hpp>
 #endif
@@ -20,7 +21,6 @@
 
 using namespace nf;
 
-#ifdef _WIN32
 using namespace nf::audio;
 
 NF_TEST(audio_ring_round_trips_interleaved) {
@@ -158,6 +158,7 @@ NF_TEST(audio_resample_rejects_degenerate_input) {
     NF_CHECK_EQ(resample_linear(v, v, 2, 44100, v, v, 0, 48000, pos), 0u);
 }
 
+#ifdef _WIN32
 NF_TEST(wasapi_init_is_safe_without_hardware) {
     // Either outcome is a pass: an endpoint gives a live device, no endpoint
     // gives a clean false (never a crash, a hang, or a half-open device).

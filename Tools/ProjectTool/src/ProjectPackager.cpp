@@ -5,6 +5,7 @@
 #include <NF/Assets/VirtualFileSystem.hpp>
 
 #include "PathUtils.hpp"
+#include "WindowsGameExport.hpp"
 
 #include <algorithm>
 #include <array>
@@ -186,12 +187,12 @@ bool stage_shipping_notes(const std::filesystem::path& dir,
         "    Release builds to players.\n"
         "\n"
         "Signing\n"
-        "  This package is NOT code-signed. Windows SmartScreen may show\n"
-        "  'Windows protected your PC' on first run: 'More info' -> 'Run\n"
-        "  anyway'. Before distributing widely, sign the executables with your\n"
-        "  own certificate:\n"
+        "  Sign the final executable with a publicly trusted code-signing\n"
+        "  certificate before distribution. Windows SmartScreen can still\n"
+        "  warn about new downloads while reputation builds.\n"
         "\n"
-        "    signtool sign /fd SHA256 /tr <timestamp-url> NFPlayer.exe\n"
+        "    signtool sign /sha1 <thumbprint> /fd SHA256 /tr <timestamp-url> /td SHA256 NFPlayer.exe\n"
+        "    signtool verify /pa /all /tw NFPlayer.exe\n"
         "\n"
         "  The engine ships no store signing certificates.\n"
         "\n"
@@ -465,11 +466,25 @@ bool zip_directory(const std::filesystem::path& dir,
     return true;
 }
 
+std::filesystem::path packaging_shader_directory(const std::filesystem::path& tool_dir,
+                                                 const std::filesystem::path& build_shaders) {
+    const auto installed = tool_dir / "Shaders" / "Basic3D";
+    std::error_code ec;
+    return !tool_dir.empty() && std::filesystem::is_regular_file(installed / "depth_vert.spv", ec)
+        ? installed
+        : build_shaders;
+}
+
 bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_error) {
     out = BuildReport{};
+    out_error.clear();
 
     if (opts.project_file.empty()) {
         out_error = "no project file given";
+        return false;
+    }
+    if (opts.single_executable && (opts.shipping || opts.player_exe.empty())) {
+        out_error = "Windows EXE export requires the export player and cannot be combined with --shipping";
         return false;
     }
 
@@ -478,7 +493,9 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
         return false;
     }
     const auto root = desc->root();
-    const auto out_dir = opts.output_dir.empty() ? (root / "dist") : opts.output_dir;
+    const auto out_dir = opts.output_dir.empty()
+        ? root / (opts.single_executable ? "dist-windows" : "dist")
+        : opts.output_dir;
 
     // Validate every path that packaging will write before it cooks or removes
     // anything.  A typo such as `--out .` must fail closed instead of deleting
@@ -522,6 +539,8 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
                     "'; choose a separate output directory";
         return false;
     }
+    auto packaged_desc = *desc;
+    packaged_desc.set_root(root_abs);
     for (const auto& mount : desc->mounts()) {
         // The project:// mount is the root itself; it was checked above. Other
         // mounts are source trees that must not contain the output directory.
@@ -532,7 +551,16 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
                         path_ec.message();
             return false;
         }
-        if (path_component_equal(mount_abs, root_abs)) continue;
+        const bool at_root = path_component_equal(mount_abs, root_abs);
+        if (opts.single_executable) {
+            if (!path_is_within(mount_abs, root_abs) || (at_root && mount.logical != "project://")) {
+                out_error = "Windows EXE export requires game mounts inside the project: '" +
+                            mount.logical + "'";
+                return false;
+            }
+            packaged_desc.add_mount(mount.logical, mount_abs);
+        }
+        if (at_root) continue;
         if (reject_overlap(mount_abs, "project mount '" + mount.logical + "'")) return false;
     }
     if (!opts.shader_dir.empty() && reject_overlap(opts.shader_dir, "shader source")) {
@@ -548,6 +576,19 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
         }
         if (reject_overlap(player_abs.parent_path(), "player executable directory")) {
             return false;
+        }
+        if (opts.single_executable && !std::filesystem::is_regular_file(player_abs, path_ec)) {
+            out_error = "Windows export player not found at '" + player_abs.string() + "'";
+            return false;
+        }
+    }
+    if (opts.single_executable) {
+        const auto saves = packaged_desc.mount_path("saves://");
+        for (const auto& mount : packaged_desc.mounts()) {
+            if (mount.logical != "saves://" && path_is_within(mount.physical, saves)) {
+                out_error = "Cannot export game assets from the saves directory: '" + mount.logical + "'";
+                return false;
+            }
         }
     }
 
@@ -589,7 +630,9 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
     // Copied into the project so the package carries them. Without this the
     // runtime falls back to searching build/DebugNinja/..., which does not exist
     // outside the engine tree.
-    const auto project_shaders = root / "Shaders" / "Basic3D";
+    const auto project_shaders = opts.single_executable
+        ? packaged_desc.mount_path("shaders://") / "Basic3D"
+        : root / "Shaders" / "Basic3D";
     size_t spv_staged = 0;
     if (!opts.shader_dir.empty()) {
         if (std::filesystem::exists(opts.shader_dir, ec)) {
@@ -631,6 +674,10 @@ bool build_project(const BuildOptions& opts, BuildReport& out, std::string& out_
                         "shader directory at one that holds compiled SPIR-V)";
         }
         return false;
+    }
+
+    if (opts.single_executable) {
+        return write_windows_game(opts, packaged_desc, out_abs, out, out_error);
     }
 
     // --- assemble the package ----------------------------------------------

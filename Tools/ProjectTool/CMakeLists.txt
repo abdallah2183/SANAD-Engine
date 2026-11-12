@@ -9,6 +9,8 @@ add_library(NFProjectTool STATIC
     src/ProjectScaffold.cpp
     src/ProjectPackager.cpp
     src/WindowsProcess.cpp
+    src/WindowsGameExport.cpp
+    src/AndroidPreviewExport.cpp
 )
 
 target_include_directories(NFProjectTool
@@ -16,6 +18,9 @@ target_include_directories(NFProjectTool
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(NFProjectTool PUBLIC NFCore NFAssets)
+if(WIN32)
+    target_link_libraries(NFProjectTool PRIVATE ole32)
+endif()
 
 nf_target_set_warnings(NFProjectTool)
 

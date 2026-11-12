@@ -24,6 +24,10 @@
 #include <string_view>
 #include <vector>
 
+#if defined(_WIN32)
+#include <NF/Project/EmbeddedGameResources.hpp>
+#endif
+
 using namespace nf;
 using namespace nf::project;
 
@@ -38,6 +42,9 @@ using namespace nf::project;
 #endif
 #ifndef NF_TEMPLATE_PLATFORMER2D_DIR
 #define NF_TEMPLATE_PLATFORMER2D_DIR ""
+#endif
+#ifndef NF_TEMPLATE_UISTARTER_DIR
+#define NF_TEMPLATE_UISTARTER_DIR ""
 #endif
 #ifndef NF_BASIC3D_SHADER_DIR
 #define NF_BASIC3D_SHADER_DIR ""
@@ -118,11 +125,12 @@ struct TemplateSpec {
     const char* directory;
 };
 
-const std::array<TemplateSpec, 4> kTemplateSpecs{{
+const std::array<TemplateSpec, 5> kTemplateSpecs{{
     {"Default", NF_TEMPLATE_DIR},
     {"ThirdPerson", NF_TEMPLATE_THIRDPERSON_DIR},
     {"FPSStarter", NF_TEMPLATE_FPSSTARTER_DIR},
     {"Platformer2D", NF_TEMPLATE_PLATFORMER2D_DIR},
+    {"UiStarter", NF_TEMPLATE_UISTARTER_DIR},
 }};
 
 std::filesystem::path templates_root() {
@@ -364,6 +372,65 @@ NF_TEST(nf_run_launches_player_and_forwards_validation_flags) {
             "nf run did not build the package before launching the player");
     require(std::filesystem::exists(scratch.path() / "dist" / "NFPlayer.exe"),
             "nf run package is missing NFPlayer.exe");
+#endif
+}
+
+NF_TEST(nf_export_creates_one_relocatable_windows_game) {
+#if !defined(_WIN32)
+    NF_SKIP("Windows executable export requires Windows");
+#else
+    if (std::string(NF_CLI_EXE).empty() || std::string(NF_BASIC3D_SHADER_DIR).empty()) {
+        NF_SKIP("nf or shaders not built");
+    }
+
+    namespace fs = std::filesystem;
+    TempDir scratch("nf_single_exe_export");
+    const auto project = scratch.path() / "Source";
+    ScaffoldOptions options;
+    options.root = project;
+    options.name = "ExportGame";
+    options.template_dir = NF_TEMPLATE_DIR;
+    std::string error;
+    require(scaffold_project(options, error), "export fixture scaffold failed: " + error);
+    fs::create_directories(project / "Saves");
+    std::ofstream(project / "Saves" / "private.txt") << "local player data";
+
+    const int export_status = run_windows_process_and_wait(
+        NF_CLI_EXE, project, {"export", "--project", "ExportGame.nfproj"}, error);
+    require(error.empty(), "could not start nf export: " + error);
+    NF_CHECK_EQ(export_status, 0);
+
+    const auto output = project / "dist-windows";
+    const auto game = output / "ExportGame.exe";
+    NF_CHECK(fs::is_regular_file(game));
+    NF_CHECK_EQ(std::distance(fs::directory_iterator(output), fs::directory_iterator{}), 1);
+
+    const auto relocated = scratch.path() / "Relocated Game";
+    fs::create_directory(relocated);
+    const auto moved = relocated / "Renamed.exe";
+    fs::copy_file(game, moved);
+    const HMODULE image = LoadLibraryExW(moved.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE);
+    require(image != nullptr, "could not inspect the exported Windows executable");
+    const bool has_icon = FindResourceW(image, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(14)) != nullptr;
+    FreeLibrary(image);
+    NF_CHECK(has_icon);
+
+    const auto user_data = scratch.path() / "LocalAppData";
+    wchar_t previous[32768]{};
+    const DWORD previous_size = GetEnvironmentVariableW(L"LOCALAPPDATA", previous, 32768);
+    require(previous_size < 32768, "could not read the current LOCALAPPDATA");
+    require(SetEnvironmentVariableW(L"LOCALAPPDATA", user_data.c_str()) != FALSE,
+            "could not isolate the game's local data");
+    const int game_status = run_windows_process_and_wait(moved, relocated, {"--validate"}, error);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", previous_size ? previous : nullptr);
+    require(error.empty(), "could not start the relocated export: " + error);
+    NF_CHECK_EQ(game_status, 0);
+    NF_CHECK_EQ(std::distance(fs::directory_iterator(relocated), fs::directory_iterator{}), 1);
+    const auto games = user_data / "SANAD" / "Games";
+    NF_CHECK(fs::is_directory(games));
+    for (const auto& entry : fs::recursive_directory_iterator(games)) {
+        NF_CHECK(entry.path().filename() != "private.txt");
+    }
 #endif
 }
 

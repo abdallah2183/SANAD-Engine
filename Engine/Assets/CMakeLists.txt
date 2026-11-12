@@ -16,6 +16,7 @@ set(NFASSETS_SOURCES
     src/MeshExport.cpp
     src/CgltfImpl.cpp
     src/PackageArchive.cpp
+    src/SettingsStore.cpp
 )
 
 nf_engine_library(NFAssets
@@ -26,6 +27,10 @@ nf_engine_library(NFAssets
 target_link_libraries(NFAssets PUBLIC cgltf)
 
 # The vendored cgltf implementation is third-party code: warning-lenient TU.
-set_source_files_properties(src/CgltfImpl.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-;/wd4244")
+if(MSVC)
+    set_source_files_properties(src/CgltfImpl.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-;/wd4244")
+else()
+    set_source_files_properties(src/CgltfImpl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 target_include_directories(NFAssets PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

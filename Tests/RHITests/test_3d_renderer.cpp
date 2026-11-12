@@ -1398,7 +1398,7 @@ NF_TEST(pbr_material) {
     NF_CHECK_NEAR(p2->roughness, 1.0f, 1e-6f);
 
     // The params UBO actually holds the packed block
-    float packed[16];
+    float packed[20];
     p1->pack(packed);
     auto* mapped = static_cast<const float*>(renderer.materials().get(h1)->params_ubo->map());
     NF_CHECK(mapped);
@@ -3166,54 +3166,206 @@ bool render_map_scene(rhi::IGraphicsDevice& dev, u32 W, u32 H, const MapScene& s
 
 NF_TEST(pbr_normal_map_tilts_the_surface_toward_the_light) {
     // A tangent-space normal tilted toward a side light must catch direct
-    // light the geometric normal barely sees. Side light, matte gray cube:
-    // the flat face gets NoL ~ 0.14, the tilted one ~0.53 — and the tilt
-    // direction (toward +X, where the light is) is what the brighter frame
-    // proves, not just "a map changed pixels".
-    //
-    // The light sits HIGH (+Y): the face's mirror reflection samples the
-    // horizon, far from the sun disk, so the IBL specular cannot outshine the
-    // direct term the way it does when the sun sits behind the camera.
+    // light the geometric normal barely sees. The camera (make_camera) sits at
+    // +Z and views the cube's +Z face. On that face create_cube assigns u=0 to
+    // the x=+hs corners and u=1 to the x=-hs corners (StaticMesh.cpp:261), so
+    // +u — the tangent T recovered from the UV Jacobian — points toward world
+    // -X. The light direction {-1,0,0} travels toward -X, i.e. it comes FROM
+    // +X. A normal map's red channel tilts along +T = -X, so the map that tilts
+    // the surface TOWARD the +X light is the one with nx < 0 (red < 128). This
+    // expectation is derived from the cube's UV layout, not pinned empirically:
+    // the determinant-based frame returns T=+X on glTF V-down quads and T=-X
+    // here, and both are correct for their respective UVs.
     const GpuFixture& f = require_gpu();
     auto& dev = *f.device;
     bool ok = false;
     MapTexture flat = solid_map(dev, 128, 128, 255, ok);
     NF_CHECK(ok);
-    MapTexture tilted = solid_map(dev, 204, 128, 230, ok); // ~(0.6, 0, 0.8)
+    MapTexture toward_light = solid_map(dev, 51, 128, 230, ok);  // nx~-0.6 -> +X
     NF_CHECK(ok);
-    MapTexture tilted_away = solid_map(dev, 51, 128, 230, ok); // ~(-0.6, 0, 0.8)
+    MapTexture away_from_light = solid_map(dev, 204, 128, 230, ok); // nx~+0.6 -> -X
     NF_CHECK(ok);
 
     MapScene spec;
     set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
     spec.material.roughness = 0.9f;
-    // Horizontal light from +X: the geometric face (NoL = 0) sees ambient
-    // only, while a +X tilt catches the full beam — the widest possible
-    // margin, with no sun-glint geometry to confuse it (the mirror
-    // reflection points at the horizon, far from the sun disk).
+    // Horizontal light from +X: the geometric +Z face (NoL = 0) sees ambient
+    // only, while a +X tilt catches the full beam — the widest possible margin,
+    // with no sun-glint geometry to confuse it (the mirror reflection points at
+    // the horizon, far from the sun disk).
     spec.light.direction = Vec3{-1.0f, 0.0f, 0.0f};
     spec.light.color = Vec3{1, 1, 1};
     spec.light.intensity = 4.0f;
 
-    std::vector<Pixel> flat_img, tilted_img, away_img;
+    std::vector<Pixel> flat_img, toward_img, away_img;
     MapScene flat_spec = spec;
     flat_spec.normal = &flat;
     NF_CHECK(render_map_scene(dev, 64, 64, flat_spec, flat_img));
-    MapScene tilted_spec = spec;
-    tilted_spec.normal = &tilted;
-    NF_CHECK(render_map_scene(dev, 64, 64, tilted_spec, tilted_img));
+    MapScene toward_spec = spec;
+    toward_spec.normal = &toward_light;
+    NF_CHECK(render_map_scene(dev, 64, 64, toward_spec, toward_img));
     MapScene away_spec = spec;
-    away_spec.normal = &tilted_away;
+    away_spec.normal = &away_from_light;
     NF_CHECK(render_map_scene(dev, 64, 64, away_spec, away_img));
     NF_CHECK_EQ(rhi::validation_error_count(), 0u);
 
     const u64 flat_c = pixel_sum_center(flat_img, 64, 64, 16);
-    const u64 tilted_c = pixel_sum_center(tilted_img, 64, 64, 16);
+    const u64 toward_c = pixel_sum_center(toward_img, 64, 64, 16);
     const u64 away_c = pixel_sum_center(away_img, 64, 64, 16);
-    NF_LOG_WARN(nf::LogCategory::Core, "normal map response: flat={} tilted={} away={}",
-                flat_c, tilted_c, away_c);
-    NF_CHECK(count_different_pixels(flat_img, tilted_img) > 200);
-    NF_CHECK(tilted_c > flat_c + flat_c * 2 / 5); // toward the light, not just elsewhere
+    NF_LOG_WARN(nf::LogCategory::Core, "normal map response: flat={} toward={} away={}",
+                flat_c, toward_c, away_c);
+    NF_CHECK(count_different_pixels(flat_img, toward_img) > 200);
+    NF_CHECK(toward_c > flat_c + flat_c * 2 / 5); // toward the light, not just elsewhere
+    NF_CHECK(toward_c > away_c);                  // the tilt direction is what matters
+}
+
+NF_TEST(pbr_material_ubo_carries_normal_scale) {
+    // The shader's MaterialParams block is FIVE vec4s: normalParams.x, at float
+    // offset 16, is the glTF normalTexture.scale. If the host block stayed 16
+    // floats the fragment shader would read past the bound descriptor range —
+    // undefined behaviour that in practice zeroes the scale and flattens every
+    // normal map in the engine. Size and offset are both asserted, because the
+    // value alone would still read "correctly" from a too-small buffer on a
+    // driver that zero-fills.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+
+    Renderer3D renderer;
+    NF_CHECK(renderer.init(dev, basic3d_shader_dir(), 32, 32));
+
+    PBRMaterialParams params{};
+    params.normal_scale = 2.5f;
+    MaterialHandle h = renderer.materials().create_instance(
+        *renderer.gbuffer_material(), params, "scale");
+    MaterialEntry* entry = renderer.materials().get(h);
+    NF_CHECK(entry && entry->params_ubo);
+    if (!entry || !entry->params_ubo) {
+        renderer.shutdown();
+        return;
+    }
+    NF_CHECK_EQ(entry->params_ubo->size(), 20 * sizeof(float));
+
+    float packed[20];
+    params.pack(packed);
+    NF_CHECK_NEAR(packed[16], 2.5f, 1e-6f); // normalParams.x
+    NF_CHECK_NEAR(packed[15], 0.0f, 1e-6f); // mapFlags.w is not displaced
+
+    auto* mapped = static_cast<const float*>(entry->params_ubo->map());
+    NF_CHECK(mapped);
+    if (mapped) {
+        NF_CHECK_NEAR(mapped[16], 2.5f, 1e-6f);
+        entry->params_ubo->unmap();
+    }
+    renderer.shutdown();
+}
+
+NF_TEST(pbr_material_ubo_carries_occlusion_strength) {
+    // normalParams.y, at float offset 17, is the glTF occlusionTexture.strength.
+    // It rides the spare tail of the 5th vec4 so the block stays 20 floats; the
+    // shader blends occlusion R toward 1 by this value. Default 1 must keep every
+    // pre-existing material's occlusion behaviour bit-for-bit.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    if (basic3d_shader_dir().empty()) NF_SKIP("required test asset missing");
+
+    Renderer3D renderer;
+    NF_CHECK(renderer.init(dev, basic3d_shader_dir(), 32, 32));
+
+    PBRMaterialParams params{};
+    NF_CHECK_NEAR(params.occlusion_strength, 1.0f, 1e-6f); // glTF default
+    params.occlusion_strength = 0.5f;
+    MaterialHandle h = renderer.materials().create_instance(
+        *renderer.gbuffer_material(), params, "occstrength");
+    MaterialEntry* entry = renderer.materials().get(h);
+    NF_CHECK(entry && entry->params_ubo);
+    if (!entry || !entry->params_ubo) {
+        renderer.shutdown();
+        return;
+    }
+    NF_CHECK_EQ(entry->params_ubo->size(), 20 * sizeof(float));
+
+    float packed[20];
+    params.pack(packed);
+    NF_CHECK_NEAR(packed[17], 0.5f, 1e-6f); // normalParams.y
+    NF_CHECK_NEAR(packed[16], 1.0f, 1e-6f); // normalParams.x is not displaced
+
+    auto* mapped = static_cast<const float*>(entry->params_ubo->map());
+    NF_CHECK(mapped);
+    if (mapped) {
+        NF_CHECK_NEAR(mapped[17], 0.5f, 1e-6f);
+        entry->params_ubo->unmap();
+    }
+    renderer.shutdown();
+}
+
+NF_TEST(pbr_normal_scale_zero_collapses_to_the_geometric_normal) {
+    // glTF normalTexture.scale = 0 must remove the map's influence EXACTLY,
+    // leaving the surface lit by its geometric normal alone. Scaling XY by zero
+    // and renormalising gives the tangent-space normal (0,0,1), so the TBN
+    // contribution cancels bit for bit rather than merely going darker.
+    // Without the renormalise, a zeroed XY would leave a sub-unit vector and
+    // the surface would dim instead of flattening.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture tilted = solid_map(dev, 204, 128, 230, ok); // ~(0.6, 0, 0.8)
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
+    spec.material.roughness = 0.9f;
+    spec.light.direction = Vec3{-1.0f, 0.0f, 0.0f};
+    spec.light.color = Vec3{1, 1, 1};
+    spec.light.intensity = 4.0f;
+
+    std::vector<Pixel> bare, zeroed;
+    NF_CHECK(render_map_scene(dev, 64, 64, spec, bare));
+    MapScene zero_spec = spec;
+    zero_spec.normal = &tilted;
+    zero_spec.material.normal_scale = 0.0f;
+    NF_CHECK(render_map_scene(dev, 64, 64, zero_spec, zeroed));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+    NF_CHECK_EQ(count_different_pixels(bare, zeroed), 0u);
+}
+
+NF_TEST(pbr_normal_scale_strengthens_the_tilt_monotonically) {
+    // A larger scale tilts the perturbed normal further toward the light, so
+    // the lit response must rise monotonically with it. This is what separates
+    // "scale is honoured" from "scale is ignored": with the value dropped on
+    // the floor — the defect this pins — all three frames come out identical.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture tilted = solid_map(dev, 204, 128, 230, ok); // ~(0.6, 0, 0.8)
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
+    spec.material.roughness = 0.9f;
+    spec.light.direction = Vec3{-1.0f, 0.0f, 0.0f};
+    spec.light.color = Vec3{1, 1, 1};
+    spec.light.intensity = 4.0f;
+    spec.normal = &tilted;
+
+    std::vector<Pixel> weak_img, mid_img, strong_img;
+    MapScene weak = spec;
+    weak.material.normal_scale = 0.5f;
+    NF_CHECK(render_map_scene(dev, 64, 64, weak, weak_img));
+    MapScene mid = spec; // default 1.0
+    NF_CHECK(render_map_scene(dev, 64, 64, mid, mid_img));
+    MapScene strong = spec;
+    strong.material.normal_scale = 2.0f;
+    NF_CHECK(render_map_scene(dev, 64, 64, strong, strong_img));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    const u64 weak_c = pixel_sum_center(weak_img, 64, 64, 16);
+    const u64 mid_c = pixel_sum_center(mid_img, 64, 64, 16);
+    const u64 strong_c = pixel_sum_center(strong_img, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "normal scale response: 0.5={} 1.0={} 2.0={}",
+                weak_c, mid_c, strong_c);
+    NF_CHECK(weak_c < mid_c);
+    NF_CHECK(mid_c < strong_c);
 }
 
 NF_TEST(pbr_white_maps_match_the_scalar_material) {
@@ -3392,6 +3544,48 @@ NF_TEST(pbr_occlusion_map_matches_scalar_ao) {
     // Darker — with headroom, because the tonemap compresses bright deltas:
     // the exactness above is the strict proof, this is the direction.
     NF_CHECK(shut_c * 6 < open_c * 5);
+}
+
+NF_TEST(pbr_occlusion_strength_blends_monotonically) {
+    // glTF occlusionTexture.strength: occ = mix(1, R, strength). strength 0 must
+    // reproduce the unoccluded frame EXACTLY, 1 the full-map frame, and 0.5 land
+    // between. With the value dropped on import — the defect this pins — all
+    // three frames come out identical at full strength.
+    const GpuFixture& f = require_gpu();
+    auto& dev = *f.device;
+    bool ok = false;
+    MapTexture shut = solid_map(dev, 64, 64, 64, ok); // R = 0.25
+    NF_CHECK(ok);
+
+    MapScene spec;
+    set_rgb(spec.material, 0.8f, 0.8f, 0.8f);
+    spec.material.roughness = 0.9f;
+    spec.light_on = false; // ambient only: ao scales the whole frame
+    spec.occlusion = &shut;
+
+    std::vector<Pixel> s0_img, s05_img, s1_img, open_img;
+    MapScene s0 = spec;
+    s0.material.occlusion_strength = 0.0f;
+    NF_CHECK(render_map_scene(dev, 64, 64, s0, s0_img));
+    MapScene s05 = spec;
+    s05.material.occlusion_strength = 0.5f;
+    NF_CHECK(render_map_scene(dev, 64, 64, s05, s05_img));
+    MapScene s1 = spec; // default 1.0
+    NF_CHECK(render_map_scene(dev, 64, 64, s1, s1_img));
+    MapScene open = spec;
+    open.occlusion = nullptr;
+    NF_CHECK(render_map_scene(dev, 64, 64, open, open_img));
+    NF_CHECK_EQ(rhi::validation_error_count(), 0u);
+
+    // strength 0 disables the map: bit-identical to having no map at all.
+    NF_CHECK_EQ(count_different_pixels(s0_img, open_img), 0u);
+    const u64 s0_c = pixel_sum_center(s0_img, 64, 64, 16);
+    const u64 s05_c = pixel_sum_center(s05_img, 64, 64, 16);
+    const u64 s1_c = pixel_sum_center(s1_img, 64, 64, 16);
+    NF_LOG_WARN(nf::LogCategory::Core, "occlusion strength response: 0={} 0.5={} 1={}",
+                s0_c, s05_c, s1_c);
+    NF_CHECK(s0_c > s05_c);
+    NF_CHECK(s05_c > s1_c);
 }
 
 NF_TEST(pbr_emissive_map_matches_scalar_emission) {

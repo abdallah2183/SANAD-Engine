@@ -235,6 +235,7 @@ add_executable(RuntimeTests
     # declares a terrain gets a navigation mesh that follows it.
     RuntimeTests/test_terrain.cpp
     RuntimeTests/test_input_bindings.cpp
+    RuntimeTests/test_platformer_controller.cpp
     RuntimeTests/test_character.cpp
     RuntimeTests/test_runtime_anim_audio.cpp
     RuntimeTests/test_runtime.cpp
@@ -326,6 +327,7 @@ target_link_libraries(RuntimeTests PRIVATE NFCore NFRuntime NFAssets NFScene NFE
 # The character the engine ships, so the character tests exercise the real
 # asset rather than a fixture that could drift away from it.
 target_compile_definitions(RuntimeTests PRIVATE
+    "NF_PLATFORMER_TEMPLATE_CONTENT=\"${CMAKE_SOURCE_DIR}/Templates/Platformer2D/Content\""
     "NF_CHARACTER_PATH=\"${CMAKE_SOURCE_DIR}/Games/TreeWorld/Content/Characters/Explorer.gltf\""
     # Phase 46's shipped sample: parsed and validated from source so a broken
     # example cannot sit in Content/ without a test noticing.
@@ -444,6 +446,9 @@ add_executable(ScriptTests
     ScriptTests/test_scripting.cpp
     ScriptTests/test_csharp.cpp
     ScriptTests/test_ui_scripting.cpp
+    ScriptTests/test_canvas_scripting.cpp
+    ScriptTests/test_canvas_text_settings.cpp
+    ScriptTests/test_scene_flow.cpp
 )
 target_include_directories(ScriptTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ScriptTests PRIVATE NFCore NFEcs NFScene NFScripting NFUI)
@@ -464,7 +469,10 @@ add_executable(UITests
     UITests/test_arabic.cpp
     UITests/test_localization.cpp
     UITests/test_gameui.cpp
+    UITests/test_script_canvas.cpp
     UITests/test_font_packaging.cpp
+    UITests/test_text_layout.cpp
+    UITests/test_text_number_input.cpp
 )
 target_include_directories(UITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(UITests PRIVATE NFCore NFUI)
@@ -632,6 +640,7 @@ nf_target_set_warnings(VFXTests)
 add_executable(SaveTests
     TestFramework.cpp
     SaveTests/test_save.cpp
+    SaveTests/test_settings_store.cpp
 )
 target_include_directories(SaveTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(SaveTests PRIVATE NFCore NFGameplay NFRuntime NFAssets NFScene NFEcs NFRHI NFRendering NFPhysics NFAnimation NFAudio NFJobs)
@@ -656,6 +665,7 @@ add_executable(ToolTests
     ToolTests/test_project_packager.cpp
     ToolTests/test_shipping.cpp
     ToolTests/test_build_tool.cpp
+    ToolTests/test_android_preview.cpp
     ToolTests/test_model_importer_cli.cpp
     ToolTests/test_blender_preset.cpp
     ToolTests/test_script_assets.cpp
@@ -680,6 +690,7 @@ target_compile_definitions(ToolTests PRIVATE
     "NF_TEMPLATE_THIRDPERSON_DIR=\"${CMAKE_SOURCE_DIR}/Templates/ThirdPerson\""
     "NF_TEMPLATE_FPSSTARTER_DIR=\"${CMAKE_SOURCE_DIR}/Templates/FPSStarter\""
     "NF_TEMPLATE_PLATFORMER2D_DIR=\"${CMAKE_SOURCE_DIR}/Templates/Platformer2D\""
+    "NF_TEMPLATE_UISTARTER_DIR=\"${CMAKE_SOURCE_DIR}/Templates/UiStarter\""
 )
 nf_target_set_warnings(ToolTests)
 if(NF_BUILD_TOOLS)
@@ -753,6 +764,7 @@ if(NF_BUILD_EDITOR)
         EditorTests/test_internal_ui.cpp
         EditorTests/test_script_editor.cpp
         EditorTests/test_wiring_editor.cpp
+        EditorTests/test_gameview.cpp
         EditorTests/test_ide_open.cpp
         EditorTests/test_transform_gizmo.cpp
         # Phase 28: navigation authoring (attach / validated edit / detach +

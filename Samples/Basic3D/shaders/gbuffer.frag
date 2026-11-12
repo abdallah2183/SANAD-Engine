@@ -27,6 +27,10 @@ layout(set = 0, binding = 0) uniform MaterialParams {
     vec4 surface;     // metallic, roughness, ao, emissionStrength
     vec4 misc;        // emission.rgb, useBaseColorTex
     vec4 mapFlags;    // useNormalTex, useMRoughTex, useOcclusionTex, useEmissiveTex
+    // 5th vec4: normalParams.x = glTF normalTexture.scale (default 1),
+    // normalParams.y = glTF occlusionTexture.strength (default 1).
+    // Kept LAST so decal.frag's 16-float prefix declaration stays valid.
+    vec4 normalParams;
 } matParams;
 
 layout(set = 0, binding = 1) uniform sampler2D albedoTex;
@@ -63,8 +67,16 @@ void main() {
     // evaluated here so the gbuffer stores the FINAL surface — the lighting
     // pass never knows whether a value was authored or sampled.
     apply_pbr_maps(normalTex, mroughTex, occlusionTex, emissiveTex,
-                   matParams.mapFlags, in_world_pos, in_uv,
+                   matParams.mapFlags, matParams.normalParams.x,
+                   matParams.normalParams.y, in_world_pos, in_uv,
                    n, base, metallic, roughness, ao, emission);
+    // glTF doubleSided draws bind a CullMode::None pipeline, so their rear
+    // face rasterises too. Build the TBN FIRST from the authored geometric
+    // normal, then negate the whole perturbed normal: seen from behind, the
+    // same physical surface has the opposite outward normal. Flipping N
+    // before the TBN would leave T pointing the wrong way for the rear face.
+    // Single-sided draws cull back faces, so this branch is never taken there.
+    if (!gl_FrontFacing) n = -n;
 
     // Terrain layer splat. A surface the mesh has classified carries
     // `uv1 = (slot, blend)`: the layer it is in, and how far it has moved

@@ -21,13 +21,16 @@ set(NFSCRIPTING_SOURCES
     src/EntityBindings.cpp
     src/ScriptSystem.cpp
     src/UiBindings.cpp
+    src/CanvasBindings.cpp
+    src/SettingsBindings.cpp
+    src/SceneFlow.cpp
     src/CSharpMarshal.cpp
     src/CSharpHost.cpp
 )
 
 nf_engine_library(NFScripting
     SOURCES ${NFSCRIPTING_SOURCES}
-    DEPENDS NFCore NFEcs NFScene NFUI
+    DEPENDS NFCore NFEcs NFScene NFUI NFAssets
 )
 
 target_link_libraries(NFScripting PRIVATE lua)

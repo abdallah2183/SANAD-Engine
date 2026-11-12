@@ -1,10 +1,13 @@
 #include <NF/Runtime/Application.hpp>
+#include <NF/Rendering/GameUiOverlay.hpp>
 #include <NF/Runtime/Runtime.hpp>
 #include <NF/Runtime/BuiltinModules.hpp>
 #include <NF/Runtime/KeyboardInput.hpp>
+#include <NF/Assets/SettingsStore.hpp>
 #include <NF/Runtime/RunConfigResolver.hpp>
 #include <NF/Runtime/InputLog.hpp>
 #include <NF/Platform/Platform.hpp>
+#include <NF/Platform/InputSystem.hpp>
 #include <NF/Platform/Window.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Time.hpp>
@@ -45,6 +48,62 @@ namespace {
 // frame or leaves a backlog the mixer can never drain.
 constexpr float kMaxFrameDelta = 0.25f;
 
+ui::UiPointer ui_pointer(Window& window) {
+    ui::UiPointer pointer;
+#ifdef _WIN32
+    const auto hwnd = static_cast<HWND>(window.native_handle());
+    POINT point{};
+    if (hwnd && GetCursorPos(&point) && ScreenToClient(hwnd, &point) && window.width() && window.height()) {
+        pointer.x = static_cast<float>(point.x) / window.width();
+        pointer.y = static_cast<float>(point.y) / window.height();
+        pointer.focused = GetForegroundWindow() == hwnd;
+        pointer.down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    }
+#endif
+    return pointer;
+}
+
+ui::UiKeys ui_keys(Window& window) {
+    ui::UiKeys keys;
+#ifdef _WIN32
+    auto pressed = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+    const auto hwnd = static_cast<HWND>(window.native_handle());
+    keys.focused = (hwnd != nullptr && GetForegroundWindow() == hwnd);
+    keys.tab = pressed(VK_TAB);
+    keys.shift = pressed(VK_SHIFT);
+    keys.enter = pressed(VK_RETURN);
+    keys.space = pressed(VK_SPACE);
+    keys.left = pressed(VK_LEFT);
+    keys.right = pressed(VK_RIGHT);
+    keys.up = pressed(VK_UP);
+    keys.down = pressed(VK_DOWN);
+    keys.backspace = pressed(VK_BACK);
+    keys.delete_key = pressed(VK_DELETE);
+    keys.home = pressed(VK_HOME);
+    keys.end = pressed(VK_END);
+    keys.escape = pressed(VK_ESCAPE);
+    keys.text = nf::InputSystem::instance().take_text_events();
+    // Windows mouse wheel is not pollable via GetAsyncKeyState; the platform
+    // input's scroll_delta is the edge source (see KeyboardInput::begin_frame).
+    // Keep 0 here; Application layers the platform delta on top per frame.
+    keys.wheel = 0;
+#else
+    (void)window;
+#endif
+    return keys;
+}
+
+bool window_is_minimized(Window& window) {
+    if (window.width() == 0 || window.height() == 0) return true;
+#ifdef _WIN32
+    if (auto* hwnd = static_cast<HWND>(window.native_handle())) {
+        if (::IsIconic(hwnd)) return true;
+    }
+#endif
+    return false;
+}
+
+
 // How many frames a headless run renders when nobody said how many. A
 // headless run has no window to close, so "until the window closes" never
 // arrives and the loop would spin forever.
@@ -57,6 +116,7 @@ Application::Application(const ApplicationConfig& config) : m_config(config) {}
 Application::~Application() = default;
 
 int Application::run() {
+    int exit_code = 0;
     Logger::instance().add_sink(Logger::make_console_sink());
     Logger::instance().set_min_level(LogLevel::Info);
 
@@ -266,6 +326,9 @@ int Application::run() {
         // is Runtime's business (rendering::MeshLibrary).
         assets::AssetManager asset_manager(vfs, registry);
         Runtime runtime(vfs, registry, asset_manager, *device, swapchain.get());
+        rendering::GameUiOverlay game_ui_overlay;
+        runtime.set_settings_project(run_cfg.project_name);
+        size_t ui_widgets_peak = 0;
 
         // Opt-in developer profiling. Applying it before load_scene matters:
         // the renderer is created lazily by the first scene, and the request is
@@ -396,7 +459,9 @@ int Application::run() {
         if (!m_config.headless && swapchain) {
             render_finished.reserve(swapchain->image_count());
             for (uint32_t i = 0; i < swapchain->image_count(); ++i) {
-                render_finished.push_back(device->create_semaphore());
+                auto semaphore = device->create_semaphore();
+                if (!semaphore) return false;
+                render_finished.push_back(std::move(semaphore));
             }
         }
         if (!m_config.headless) {
@@ -418,36 +483,73 @@ int Application::run() {
             }
         }
 
-        auto recreate_swapchain = [&]() -> bool {
+        enum class RecreateResult { Ok, DeferredMinimized, Failed };
+        auto recreate_swapchain = [&]() -> RecreateResult {
             if (m_config.headless) {
-                return false;
+                return RecreateResult::Failed;
+            }
+            // A minimized window has no surface extent. Check BEFORE destroying
+            // the old swapchain and BEFORE wait_idle: destroying the only
+            // swapchain and then failing to create a new one leaves the loop
+            // without a surface to recover from. WM_SIZE may not have run yet
+            // (m_width still holds the old size while the driver already sees
+            // a zero extent), so IsIconic is the reliable check here.
+            if (window_is_minimized(window)) {
+                NF_LOG_INFO(LogCategory::RHI, "Swapchain recreation deferred while window is minimized");
+                return RecreateResult::DeferredMinimized;
             }
             device->wait_idle();
             rhi::SwapchainDesc sc_desc{};
             sc_desc.width = window.width();
             sc_desc.height = window.height();
             if (sc_desc.width == 0 || sc_desc.height == 0) {
-                return false;
+                NF_LOG_INFO(LogCategory::RHI, "Swapchain recreation deferred (zero extent)");
+                return RecreateResult::DeferredMinimized;
             }
             sc_desc.format = rhi::Format::B8G8R8A8_UNorm;
             sc_desc.present = m_config.vsync ? rhi::PresentMode::FIFO : rhi::PresentMode::Immediate;
             sc_desc.image_count = 2;
+            // Win32 permits one live swapchain per native window unless the
+            // old handle is passed to Vulkan. Release its framebuffers first.
+            const bool had_ui = game_ui_overlay.valid();
+            if (had_ui) game_ui_overlay.detach_swapchain();
+            runtime.on_swapchain_resized(nullptr);
+            swapchain.reset();
             auto fresh = device->create_swapchain(sc_desc);
             if (!fresh) {
+                // The window may have minimized between the check above and
+                // vkCreateSwapchainKHR (driver extent already zero). The old
+                // swapchain is gone; report deferred so the loop parks in the
+                // minimized wait and retries after the restore (the !swapchain
+                // branch below handles the null swapchain).
+                if (window_is_minimized(window)) {
+                    NF_LOG_WARN(LogCategory::RHI, "Swapchain creation deferred after minimize race");
+                    return RecreateResult::DeferredMinimized;
+                }
                 NF_LOG_ERROR(LogCategory::RHI, "Swapchain recreation failed ({}x{})", sc_desc.width,
                              sc_desc.height);
-                return false;
+                return RecreateResult::Failed;
             }
             swapchain = std::move(fresh);
+            if (had_ui && !game_ui_overlay.attach_swapchain(*swapchain)) {
+                NF_LOG_ERROR(LogCategory::RHI, "Runtime UI: attach failed after swapchain recreation");
+                game_ui_overlay.detach_swapchain();
+                return RecreateResult::Failed;
+            }
             runtime.on_swapchain_resized(swapchain.get());
             render_finished.clear();
             render_finished.reserve(swapchain->image_count());
             for (uint32_t i = 0; i < swapchain->image_count(); ++i) {
-                render_finished.push_back(device->create_semaphore());
+                auto semaphore = device->create_semaphore();
+                if (!semaphore) {
+                    NF_LOG_ERROR(LogCategory::RHI, "Failed to create render-finished semaphore");
+                    return RecreateResult::Failed;
+                }
+                render_finished.push_back(std::move(semaphore));
             }
             NF_LOG_INFO(LogCategory::RHI, "Swapchain recreated ({}x{})", swapchain->width(),
                         swapchain->height());
-            return true;
+            return RecreateResult::Ok;
         };
 
         Clock clock;
@@ -464,14 +566,63 @@ int Application::run() {
                 if (window.should_close()) {
                     break;
                 }
+                // A minimized window has no drawable surface. Keep pumping
+                // messages, cancel UI capture, and discard the suspended delta.
+                if (window_is_minimized(window)) {
+                    runtime.set_ui_pointer({});
+                    runtime.set_ui_keys({});
+                    runtime.game_ui().begin_frame({});
+                    keyboard_input.set_ui_pointer_capture(false);
+                    keyboard_input.set_ui_keyboard_capture(false);
+                    keyboard_input.set_ui_text_capture(false);
+                    clock.reset();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                    continue;
+                }
                 // Resize: recreate swapchain + renderer resolution targets.
                 if (swapchain &&
                     (window.width() != swapchain->width() || window.height() != swapchain->height())) {
                     NF_LOG_INFO(LogCategory::RHI, "Resize detected: window {}x{} vs swapchain {}x{}",
                                 window.width(), window.height(), swapchain->width(), swapchain->height());
-                    if (!recreate_swapchain()) {
+                    const auto res = recreate_swapchain();
+                    if (res == RecreateResult::Failed) {
                         NF_LOG_ERROR(LogCategory::RHI, "Failed to handle resize; exiting");
+                        exit_code = 1;
                         break;
+                    }
+                    if (res == RecreateResult::DeferredMinimized) {
+                        runtime.set_ui_pointer({});
+                        runtime.set_ui_keys({});
+                        runtime.game_ui().begin_frame({});
+                        keyboard_input.set_ui_pointer_capture(false);
+                        keyboard_input.set_ui_keyboard_capture(false);
+                    keyboard_input.set_ui_text_capture(false);
+                        clock.reset();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                        continue;
+                    }
+                }
+                // A previous minimize race destroyed the old swapchain (see
+                // recreate_swapchain). While minimized the block above parks
+                // the loop; on restore we land here with a null swapchain and
+                // must recreate before touching the render branch.
+                if (!swapchain) {
+                    const auto res = recreate_swapchain();
+                    if (res == RecreateResult::Failed) {
+                        NF_LOG_ERROR(LogCategory::RHI, "Failed to recreate swapchain after restore; exiting");
+                        exit_code = 1;
+                        break;
+                    }
+                    if (res == RecreateResult::DeferredMinimized) {
+                        runtime.set_ui_pointer({});
+                        runtime.set_ui_keys({});
+                        runtime.game_ui().begin_frame({});
+                        keyboard_input.set_ui_pointer_capture(false);
+                        keyboard_input.set_ui_keyboard_capture(false);
+                    keyboard_input.set_ui_text_capture(false);
+                        clock.reset();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                        continue;
                     }
                 }
             }
@@ -495,7 +646,25 @@ int Application::run() {
                 runtime.set_frame_window(frame_pacing.stats());
             }
 
+            if (!m_config.headless) {
+                const auto pointer = ui_pointer(window);
+                auto keys = ui_keys(window);
+                keys.wheel = nf::InputSystem::instance().scroll_delta();
+                if (swapchain) runtime.set_viewport(static_cast<float>(swapchain->width()), static_cast<float>(swapchain->height()));
+                keyboard_input.set_ui_pointer_capture(runtime.game_ui().wants_pointer(pointer));
+                keyboard_input.set_ui_keyboard_capture(runtime.game_ui().keyboard_focused());
+                keyboard_input.set_ui_text_capture(runtime.game_ui().is_text_editing());
+                runtime.set_ui_pointer(pointer);
+                runtime.set_ui_keys(keys);
+            }
+            const bool was_transitioning = runtime.game_flow().pending();
             runtime.update(dt);
+            if (was_transitioning) clock.reset(); // loading time is not next frame's simulation dt
+            if (runtime.game_flow().quit_requested()) {
+                NF_LOG_INFO(LogCategory::Core, "Game requested quit");
+                break;
+            }
+            ui_widgets_peak = std::max(ui_widgets_peak, runtime.game_ui().size());
 
             // Track how far every animated entity's driven transform has moved
             // from where it started. Recorded every frame so any motion at any
@@ -530,18 +699,50 @@ int Application::run() {
             if (!m_config.headless && swapchain) {
                 const uint32_t slot = frame_count % kFramesInFlight;
                 frame_fence[slot]->wait();
-                frame_fence[slot]->reset();
-
                 const uint32_t image_index = swapchain->acquire_next_image(*image_available[slot]);
                 if (image_index == 0xFFFFFFFF) {
+                    // The drive can report out-of-date while the window is
+                    // minimized (a 1 s acquire timeout also lands here). Do NOT
+                    // destroy the swapchain until the window is restorable:
+                    // vkCreateSwapchainKHR would fail with a zero extent.
+                    if (window_is_minimized(window)) {
+                        NF_LOG_INFO(LogCategory::RHI, "Acquire failed while minimized; deferring recreation");
+                        runtime.set_ui_pointer({});
+                        runtime.set_ui_keys({});
+                        runtime.game_ui().begin_frame({});
+                        keyboard_input.set_ui_pointer_capture(false);
+                        keyboard_input.set_ui_keyboard_capture(false);
+                    keyboard_input.set_ui_text_capture(false);
+                        clock.reset();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                        continue;
+                    }
                     NF_LOG_WARN(LogCategory::RHI, "Swapchain out of date; recreating");
-                    if (!recreate_swapchain()) {
+                    const auto res = recreate_swapchain();
+                    if (res == RecreateResult::Failed) {
+                        exit_code = 1;
                         break;
                     }
+                    // DeferredMinimized: parks in the minimized wait on the
+                    // next iteration (or re-enters below on the null check).
+                    if (res == RecreateResult::DeferredMinimized) {
+                        runtime.set_ui_pointer({});
+                        runtime.set_ui_keys({});
+                        runtime.game_ui().begin_frame({});
+                        keyboard_input.set_ui_pointer_capture(false);
+                        keyboard_input.set_ui_keyboard_capture(false);
+                    keyboard_input.set_ui_text_capture(false);
+                        clock.reset();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                    }
+                    // The fence was NOT reset: it stays signaled so the next
+                    // wait returns immediately instead of hanging a frame that
+                    // never submitted.
                     continue;
                 }
                 if (image_index >= swapchain->image_count()) {
                     NF_LOG_ERROR(LogCategory::RHI, "Invalid swapchain image index {}", image_index);
+                    exit_code = 1;
                     break;
                 }
 
@@ -550,6 +751,28 @@ int Application::run() {
                 cmd[slot]->reset();
                 cmd[slot]->begin();
                 runtime.render(image_index, *cmd[slot], slot);
+                if (runtime.game_ui().size() || game_ui_overlay.valid()) {
+                    if (!game_ui_overlay.valid()) {
+                        if (!game_ui_overlay.init(*device, window.native_handle(), runtime.shader_directory() / "UI") ||
+                            !game_ui_overlay.attach_swapchain(*swapchain)) {
+                            NF_LOG_ERROR(LogCategory::Core, "Runtime UI: initialization failed");
+                            exit_code = 1;
+                            break;
+                        }
+                        window.set_message_hook(rendering::GameUiOverlay::handle_win32_message);
+                        runtime.game_ui().set_text_measurer(game_ui_overlay.make_measurer());
+                    }
+                    game_ui_overlay.begin_frame(dt);
+                    game_ui_overlay.draw(runtime.game_ui().snapshot(static_cast<float>(swapchain->width()),
+                                                                   static_cast<float>(swapchain->height())),
+                                         static_cast<float>(swapchain->width()), static_cast<float>(swapchain->height()));
+                    game_ui_overlay.end_frame();
+                    if (!game_ui_overlay.render(*cmd[slot], *swapchain->get_texture(image_index), image_index, slot,
+                                                swapchain->width(), swapchain->height())) {
+                        exit_code = 1;
+                        break;
+                    }
+                }
                 cmd[slot]->end();
 
                 rhi::SubmitInfo submit_info{};
@@ -561,6 +784,7 @@ int Application::run() {
                 submit_info.wait_stages = std::span<const rhi::PipelineStage>(wait_stages);
                 submit_info.signal_semaphores = std::span<const rhi::Semaphore* const>(signal_sems);
                 submit_info.signal_fence = frame_fence[slot].get();
+                frame_fence[slot]->reset();
                 device->submit(*cmd[slot], submit_info);
                 swapchain->present(image_index, std::span<const rhi::Semaphore* const>(signal_sems));
             } else {
@@ -661,9 +885,9 @@ int Application::run() {
             // A scene that loaded but drew no geometry is a failure, not a
             // quiet success. Without this the sample reported a clean exit for a
             // run that rendered an empty frame.
-            if (scene_ok && !resolved_scene.empty() && runtime.mesh_count() == 0) {
+            if (scene_ok && !resolved_scene.empty() && runtime.mesh_count() == 0 && ui_widgets_peak == 0) {
                 NF_LOG_ERROR(LogCategory::Core,
-                             "Scene '{}' loaded but drew no geometry (draws={}) — the asset cache is "
+                             "Scene '{}' loaded but drew no geometry or scripted UI (draws={}) — the asset cache is "
                              "probably not cooked. Run NFAssetCooker on Content/ (see README).",
                              resolved_scene, stats.draw_calls);
                 geometry_missing = true;
@@ -721,6 +945,9 @@ int Application::run() {
         // Per-frame objects (cmd/semaphores) are still alive here; they die at
         // scope end. Runtime/AssetManager GPU resources are freed now.
         device->wait_idle();
+        if (ui_widgets_peak) NF_LOG_INFO(LogCategory::Core, "Runtime UI: {} script widgets (peak {})", runtime.game_ui().size(), ui_widgets_peak);
+        window.set_message_hook({});
+        game_ui_overlay.shutdown();
         runtime.shutdown();
         asset_manager.clear();
         device->wait_idle();
@@ -815,7 +1042,7 @@ int Application::run() {
         return 1;
     }
     NF_LOG_INFO(LogCategory::Core, "=== SANAD Runtime exited cleanly ===");
-    return 0;
+    return exit_code;
 }
 
 } // namespace nf::runtime

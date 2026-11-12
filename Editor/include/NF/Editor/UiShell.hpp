@@ -19,7 +19,13 @@
 #include <string>
 #include <vector>
 
+struct ImDrawList;
+struct ImVec2;
+
 namespace nf::editor {
+
+/// Draw the embedded SANAD logo using the editor's UI texture.
+void ui_draw_engine_logo(ImDrawList* draw_list, const ImVec2& position, float size);
 
 struct UiInitResult {
     bool context_ok = false;
@@ -127,6 +133,7 @@ struct UiIntents {
     std::string new_project_dir;
     std::string new_project_name;
     bool build_project = false;
+    bool build_android_preview = false;
 };
 
 /// One row of the real per-pass GPU breakdown.

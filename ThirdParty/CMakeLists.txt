@@ -14,9 +14,11 @@ add_library(imgui STATIC
     imgui/imgui_draw.cpp
     imgui/imgui_tables.cpp
     imgui/imgui_widgets.cpp
-    imgui/backends/imgui_impl_win32.cpp
     imgui/backends/imgui_impl_vulkan.cpp
 )
+if(WIN32)
+    target_sources(imgui PRIVATE imgui/backends/imgui_impl_win32.cpp)
+endif()
 target_include_directories(imgui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui
 )

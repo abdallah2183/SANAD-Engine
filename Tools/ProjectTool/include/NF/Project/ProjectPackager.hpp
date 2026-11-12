@@ -9,11 +9,12 @@ namespace nf::project {
 
 struct BuildOptions {
     std::filesystem::path project_file; // the .nfproj to build
-    std::filesystem::path player_exe;   // copied into the package when non-empty
+    std::filesystem::path player_exe;   // NFGameExport.exe for a single executable
     std::filesystem::path shader_dir;   // compiled SPIR-V, copied to <project>/Shaders/Basic3D
-    std::filesystem::path output_dir;   // empty means <project>/dist
+    std::filesystem::path output_dir;   // defaults to dist/ or dist-windows/
     bool shipping = false;              // stage the shipping extras + emit the zip
     std::string version;                // stamped into VERSION.txt ("nf <engine version>")
+    bool single_executable = false;     // embed data in the Windows player
 };
 
 struct BuildReport {
@@ -24,13 +25,17 @@ struct BuildReport {
     std::filesystem::path output_dir;
     std::filesystem::path packaged_project; // the .nfproj inside the package
     std::filesystem::path zip_path;         // the .zip archive (shipping builds)
+    std::filesystem::path game_exe;         // the exported Windows executable
 };
+
+// Installed engines ship the compiled shaders beside the tools.
+std::filesystem::path packaging_shader_directory(const std::filesystem::path& tool_dir,
+                                                 const std::filesystem::path& build_shaders);
 
 // Cooks the project, stages its shaders, and writes a self-contained package.
 //
-// The package is a plain directory — deliberately not an archive. A container
-// format would add something to maintain and debug for no user-visible benefit
-// at this stage, and "it shipped and it runs" is provable either way.
+// A single-executable build embeds the project and assets into the Windows
+// export player. The default is a loose package for development:
 //
 //   dist/
 //     <Name>.nfproj      mounts are relative, so the package is relocatable

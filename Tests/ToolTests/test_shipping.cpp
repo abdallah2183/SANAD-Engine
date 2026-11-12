@@ -285,9 +285,10 @@ NF_TEST(shipping_package_stages_a_version_stamp_and_the_notes) {
     NF_CHECK(contains(readme, "Crashes/"));
     NF_CHECK(contains(readme, "UNINSTALL.txt"));
 
-    // REDIST: the honest note about an unsigned build, and what the OS supplies.
+    // REDIST: publisher signing instructions and what the OS supplies.
     const std::string redist = read_text(sb.dist() / "REDIST.txt");
-    NF_CHECK(contains(redist, "NOT code-signed"));
+    NF_CHECK(contains(redist, "publicly trusted"));
+    NF_CHECK(contains(redist, "signtool verify /pa /all /tw"));
     NF_CHECK(contains(redist, "signtool"));
     NF_CHECK(contains(redist, "Vulkan"));
     NF_CHECK(contains(redist, "No Visual C++ redistributable is needed"));

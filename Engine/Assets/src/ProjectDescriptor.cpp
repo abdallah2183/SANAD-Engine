@@ -58,7 +58,19 @@ std::optional<ProjectDescriptor> ProjectDescriptor::parse(std::string_view text,
                                                           const std::filesystem::path& base_dir,
                                                           std::string& out_error) {
     ProjectDescriptor desc;
-    desc.m_root = base_dir.lexically_normal();
+    // Compare paths in one absolute coordinate space. With a relative base
+    // such as '.', its leading dot is not a component of './Content' after
+    // normalization, which previously rejected valid packaged projects.
+    std::error_code path_error;
+    desc.m_root = std::filesystem::absolute(base_dir.empty() ? std::filesystem::path(".") : base_dir,
+                                            path_error).lexically_normal();
+    if (path_error) {
+        out_error = "failed to resolve project root: " + path_error.message();
+        return std::nullopt;
+    }
+    if (desc.m_root.has_relative_path() && desc.m_root.filename().empty()) {
+        desc.m_root = desc.m_root.parent_path();
+    }
 
     bool saw_version = false;
     uint32_t version = 0;

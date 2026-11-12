@@ -393,7 +393,13 @@ bool VulkanDevice::create_instance() {
     app_info.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
     app_info.pEngineName = "SANAD";
     app_info.engineVersion = VK_MAKE_VERSION(0, 1, 0);
+#ifdef __ANDROID__
+    // The current renderer uses Vulkan 1.0 entry points. Older Android
+    // drivers cannot create an instance advertised as 1.2.
+    app_info.apiVersion = VK_API_VERSION_1_0;
+#else
     app_info.apiVersion = VK_API_VERSION_1_2;
+#endif
 
     // --- Discover what the installed loader actually supports -------------
     u32 layer_count = 0;
@@ -427,6 +433,8 @@ bool VulkanDevice::create_instance() {
         VK_KHR_SURFACE_EXTENSION_NAME,
 #ifdef _WIN32
         VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+#elif defined(__ANDROID__)
+        VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
 #endif
     };
 
@@ -548,6 +556,17 @@ bool VulkanDevice::create_surface(void* hwnd) {
     }
 
     NF_LOG_DEBUG(LogCategory::RHI, "Vulkan Win32 surface created");
+    return true;
+#elif defined(__ANDROID__)
+    if (!hwnd) {
+        NF_LOG_ERROR(LogCategory::RHI, "create_surface called with a null Android window");
+        return false;
+    }
+    VkAndroidSurfaceCreateInfoKHR create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+    create_info.window = static_cast<ANativeWindow*>(hwnd);
+    if (!NF_VK_CHECK(vkCreateAndroidSurfaceKHR(m_ctx.instance, &create_info, nullptr, &m_ctx.surface))) return false;
+    NF_LOG_DEBUG(LogCategory::RHI, "Vulkan Android surface created");
     return true;
 #else
     (void)hwnd;
@@ -705,7 +724,9 @@ bool VulkanDevice::create_logical_device() {
     vkGetPhysicalDeviceFeatures(m_ctx.physical_device, &supported_features);
 
     VkPhysicalDeviceFeatures features{};
-    features.fillModeNonSolid = VK_TRUE; // wireframe rendering in the editor
+    // Wireframe is optional on mobile GPUs. Requesting an unsupported feature
+    // makes vkCreateDevice fail even when a game only needs filled triangles.
+    features.fillModeNonSolid = supported_features.fillModeNonSolid;
     // Per-attachment blending for the decal pass (Phase 36). The feature is
     // optional in core Vulkan, so only ask for it when the device reports it;
     // Renderer3D leaves the decal stage disabled when it is absent.

@@ -1,6 +1,9 @@
 // NF/Scripting/ScriptSystem.cpp — per-entity sandboxed script ticking.
 
 #include <NF/Scripting/ScriptEngine.hpp>
+#include <NF/Scripting/CanvasBindings.hpp>
+#include <NF/Scripting/SettingsBindings.hpp>
+#include <NF/Scripting/SceneFlow.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/Profiler.hpp>
 #include <NF/ECS/ECS.hpp>
@@ -29,6 +32,9 @@ struct ScriptSystem::Impl {
     LuaVM vm;
     u64 instruction_limit = 0;
     ScriptInput input;
+    ui::ScriptCanvas* canvas = nullptr;
+    assets::SettingsStore* settings = nullptr;
+    SceneFlow* game_flow = nullptr;
     bool has_input = false;
     // The cache is keyed by the SOURCE TEXT, not by a hash of it. A 64-bit
     // hash collision would hand one script's _ENV to another script, so
@@ -137,16 +143,25 @@ void ScriptSystem::set_input_source(const ScriptInput& input) {
     m_impl->has_input = true;
 }
 
+void ScriptSystem::set_game_flow(SceneFlow* flow) { m_impl->game_flow = flow; }
+
+void ScriptSystem::set_ui_canvas(ui::ScriptCanvas* canvas) { m_impl->canvas = canvas; }
+void ScriptSystem::set_settings_store(assets::SettingsStore* store) { m_impl->settings = store; }
+
 void ScriptSystem::update(ecs::World& world, float dt) {
     NF_PROFILE_SCOPE("ScriptSystem::update");
     Impl& impl = *m_impl;
     install_ecs_bindings(impl.vm, world);
     install_input_bindings(impl.vm, impl.has_input ? &impl.input : nullptr);
+    install_canvas_bindings(impl.vm, impl.canvas);
+    install_settings_bindings(impl.vm, impl.settings);
+    install_game_flow_bindings(impl.vm, impl.game_flow);
     impl.vm.set_instruction_limit(impl.instruction_limit);
     lua_State* L = impl.vm.state();
     if (!L) return;
 
     for (ecs::Entity e : world.query<ScriptComponent>()) {
+        if (impl.canvas) impl.canvas->set_scope(e.id, e.generation);
         const ScriptComponent* comp = world.get<ScriptComponent>(e);
         if (!comp || !comp->enabled || comp->source.empty()) continue;
         if (impl.envs.size() > kMaxCachedEnvs) impl.clear();

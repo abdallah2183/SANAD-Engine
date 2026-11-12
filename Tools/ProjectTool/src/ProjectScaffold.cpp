@@ -318,7 +318,7 @@ bool scaffold_project(const ScaffoldOptions& opts, std::string& out_error) {
 
     // Generated output must not be committed. Without this the first `nf build`
     // drops a Cache/, a dist/ and a Shaders/ into the user's repository.
-    if (!detail::write_text(root / ".gitignore", "Cache/\ndist/\nShaders/\n*.nfproj.tmp\n",
+    if (!detail::write_text(root / ".gitignore", "Cache/\ndist/\ndist-windows/\nShaders/\n*.nfproj.tmp\n",
                             out_error)) {
         return false;
     }

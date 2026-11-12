@@ -37,6 +37,11 @@
         #define VK_USE_PLATFORM_WIN32_KHR
     #endif
 #endif
+#ifdef __ANDROID__
+    #ifndef VK_USE_PLATFORM_ANDROID_KHR
+        #define VK_USE_PLATFORM_ANDROID_KHR
+    #endif
+#endif
 
 #include <vulkan/vulkan.h>
 
@@ -81,6 +86,8 @@ namespace nf::rhi {
 // ---------------------------------------------------------------------------
 #if defined(_WIN32)
     #define NF_VK_SURFACE_FUNCS(X) X(vkCreateWin32SurfaceKHR)
+#elif defined(__ANDROID__)
+    #define NF_VK_SURFACE_FUNCS(X) X(vkCreateAndroidSurfaceKHR)
 #elif defined(__linux__)
     #define NF_VK_SURFACE_FUNCS(X) X(vkCreateXcbSurfaceKHR)
 #else

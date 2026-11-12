@@ -44,8 +44,21 @@ public:
     bool stop(std::string& out_err);
     const scene::Scene* snapshot() const { return m_snapshot.get(); }
 
+    // --- Pause ----------------------------------------------------------------
+    // Pause means "frozen for inspection": the shell feeds `dt = 0`, so no
+    // simulation steps and no script runs. The Game View keeps rendering its
+    // last `ScriptCanvas` snapshot (not rebuilt), and the shell cancels live
+    // interaction on entry, so a click or keypress during pause cannot queue
+    // a hidden mutation that would surface on resume. Stop clears pause with
+    // the snapshot.
+    bool paused() const { return m_playing && m_paused; }
+    void set_paused(bool paused_flag) {
+        if (m_playing) m_paused = paused_flag;
+    }
+
 private:
     bool m_playing = false;
+    bool m_paused = false;
     std::unique_ptr<scene::Scene> m_snapshot;
 };
 

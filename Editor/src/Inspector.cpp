@@ -135,7 +135,8 @@ LightEdit read_light(const ecs::World& world, ecs::Entity e, bool& out_has) {
 }
 
 std::unique_ptr<ICommand> make_transform_command(ecs::World& world, ecs::Entity e,
-                                                 const TransformEdit& edit, std::string& out_err) {
+                                                 const TransformEdit& edit, std::string& out_err,
+                                                 const TransformEdit* before_preview) {
     if (!e.valid() || !world.is_alive(e)) {
         out_err = "Entity is not alive";
         return nullptr;
@@ -166,7 +167,14 @@ std::unique_ptr<ICommand> make_transform_command(ecs::World& world, ecs::Entity 
     after.scale_x = edit.sx;
     after.scale_y = edit.sy;
     after.scale_z = edit.sz;
-    return std::make_unique<SetTransformCommand>(e, *t, after);
+    scene::Transform before = *t;
+    if (before_preview) {
+        // Preserve current hierarchy links; undo only the previewed local pose.
+        before.local_x = before_preview->px; before.local_y = before_preview->py; before.local_z = before_preview->pz;
+        before.rot_x = before_preview->rx; before.rot_y = before_preview->ry; before.rot_z = before_preview->rz;
+        before.scale_x = before_preview->sx; before.scale_y = before_preview->sy; before.scale_z = before_preview->sz;
+    }
+    return std::make_unique<SetTransformCommand>(e, before, after);
 }
 
 std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,

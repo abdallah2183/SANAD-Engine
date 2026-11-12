@@ -7,12 +7,15 @@
 
 #include <NF/Editor/UiShell.hpp>
 #include <NF/Editor/UiTheme.hpp>
+#include <NF/Editor/PreviewPixels.hpp>
 
 #include <NF/Core/Logger.hpp>
+#include <NF/Rendering/ImageDecode.hpp>
 
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
 
+#include <cstring>
 #include <filesystem>
 #include <string>
 
@@ -39,6 +42,53 @@ namespace {
 // than the Latin text next to it on the same line, which reads as a broken
 // baseline rather than as a localisation.
 constexpr float kUiFontSize = 16.0f;
+int g_logo_rect = ImFontAtlasRectId_Invalid;
+
+void load_engine_logo(ImFontAtlas& atlas) {
+    g_logo_rect = ImFontAtlasRectId_Invalid;
+#ifdef _WIN32
+    const HMODULE module = ::GetModuleHandleW(nullptr);
+    const HRSRC resource = ::FindResourceW(module, L"SANAD_LOGO", MAKEINTRESOURCEW(10));
+    const HGLOBAL loaded = resource ? ::LoadResource(module, resource) : nullptr;
+    const auto* bytes = loaded ? static_cast<const uint8_t*>(::LockResource(loaded)) : nullptr;
+    const DWORD size = resource ? ::SizeofResource(module, resource) : 0;
+    std::string error;
+    const auto image = rendering::decode_image_memory(bytes, size, error);
+    const auto small = downsample_rgba(image.rgba.data(), image.width, image.height, 128);
+    if (!small.valid()) {
+        NF_LOG_ERROR(LogCategory::Editor, "Could not load the embedded SANAD logo: {}", error);
+        return;
+    }
+
+    atlas.TexPixelsUseColors = true;
+    g_logo_rect = atlas.AddCustomRect(small.width, small.height);
+    if (g_logo_rect == ImFontAtlasRectId_Invalid) {
+        NF_LOG_ERROR(LogCategory::Editor, "Could not add the SANAD logo to the UI texture");
+        return;
+    }
+
+    unsigned char* pixels = nullptr;
+    int width = 0;
+    int height = 0;
+    atlas.GetTexDataAsRGBA32(&pixels, &width, &height);
+    ImFontAtlasRect rect{};
+    if (!pixels || !atlas.GetCustomRect(g_logo_rect, &rect) ||
+        rect.x + small.width > width || rect.y + small.height > height) {
+        g_logo_rect = ImFontAtlasRectId_Invalid;
+        NF_LOG_ERROR(LogCategory::Editor, "Could not prepare the SANAD logo UI texture");
+        return;
+    }
+    const size_t row_bytes = static_cast<size_t>(small.width) * 4;
+    for (int y = 0; y < small.height; ++y) {
+        const size_t destination = (static_cast<size_t>(rect.y + y) * static_cast<size_t>(width) +
+                                    static_cast<size_t>(rect.x)) * 4;
+        std::memcpy(pixels + destination, small.rgba.data() + static_cast<size_t>(y) * row_bytes,
+                    row_bytes);
+    }
+#else
+    (void)atlas;
+#endif
+}
 
 // Latin + Arabic blocks + presentation forms (the shaper emits FE70-FEFF).
 // General Punctuation rides along: mixed EN/AR lines the editor draws (console
@@ -362,6 +412,16 @@ void apply_forge_theme() {
 
 } // namespace
 
+void ui_draw_engine_logo(ImDrawList* draw_list, const ImVec2& position, float size) {
+    if (!draw_list || size <= 0.0f || g_logo_rect == ImFontAtlasRectId_Invalid) return;
+    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+    ImFontAtlasRect rect{};
+    if (!atlas->GetCustomRect(g_logo_rect, &rect)) return;
+    draw_list->AddImageRounded(atlas->TexRef, position,
+                               ImVec2(position.x + size, position.y + size),
+                               rect.uv0, rect.uv1, IM_COL32_WHITE, size * 0.14f);
+}
+
 // The banner flag. OUTSIDE the anonymous namespace on purpose: main.cpp sets it
 // and Panels.cpp reads it, so it needs external linkage. Declared in UiShell.hpp.
 bool g_arabic_font_missing = false;
@@ -426,6 +486,7 @@ UiInitResult ui_init(void* hwnd, bool persist_layout) {
     // path, waited). Building here as well satisfies NewFrame()'s TexIsBuilt
     // check even if a frame is recorded before the renderer binds the font.
     io.Fonts->Build();
+    load_engine_logo(*io.Fonts);
 
     // Modern forge-dark theme: flat, calm, one accent. Rounded frames keep
     // the dense editor readable; slightly larger padding stops toolbar and
@@ -463,6 +524,7 @@ void ui_end_frame() {
 
 void ui_shutdown() {
     if (ImGui::GetCurrentContext() != nullptr) {
+        g_logo_rect = ImFontAtlasRectId_Invalid;
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
     }

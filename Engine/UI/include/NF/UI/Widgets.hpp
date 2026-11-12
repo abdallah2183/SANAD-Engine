@@ -22,6 +22,7 @@
 
 #include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace nf::ui {
@@ -56,6 +57,13 @@ struct DlText {
     float size = 24.0f;
     UiColor color;
     TextAlign align = TextAlign::Left;
+    // Wrap context for scripted UI. x/y are the box top-left edge in pixels
+    // (not the old single-line anchor) when wrap_width > 0. The draw backend
+    // wraps logical UTF-8 inside wrap_width, aligns each visual line per
+    // `align`, and shapes Arabic once per line. Legacy single-line callers
+    // leave wrap_width == 0 and keep the old anchor semantics.
+    float wrap_width = 0.0f;
+    float box_height = 0.0f;
 };
 
 struct DlRect {
@@ -77,6 +85,16 @@ struct DisplayList {
     std::vector<DlLine> lines;
     std::vector<DlText> texts;
 };
+
+// --- logical text helpers (shared by canvas layout and the ImGui backend) ---
+
+/// Splits logical UTF-8 on '\n' only. Hard lines are preserved; empty lines
+/// survive. No shaping here.
+std::vector<std::string> split_hard_lines(std::string_view text);
+/// Splits one hard line into space-separated words (logical order preserved).
+/// Consecutive spaces collapse to a single separator; the helper never splits
+/// inside a word, so Arabic ligatures are never cut mid-word.
+std::vector<std::string> split_words(std::string_view line);
 
 // --- widgets (retained; games mutate fields directly or via the GameUI layer)
 

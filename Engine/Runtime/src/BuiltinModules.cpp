@@ -9,6 +9,7 @@
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 #include <NF/Runtime/OrbitCameraModule.hpp>
 #include <NF/Runtime/PlayerControllerModule.hpp>
+#include <NF/Runtime/PlatformerControllerModule.hpp>
 
 #include <memory>
 #include <utility>
@@ -22,6 +23,9 @@ void register_builtin_modules() {
     // whichever runs first wins, and the registry ignores the duplicate.
     registry.register_module("PlayerController", []() -> std::unique_ptr<GameplayModule> {
         return std::make_unique<PlayerControllerModule>();
+    });
+    registry.register_module("PlatformerController", []() -> std::unique_ptr<GameplayModule> {
+        return std::make_unique<PlatformerControllerModule>();
     });
     registry.register_module("OrbitCamera", []() -> std::unique_ptr<GameplayModule> {
         return std::make_unique<OrbitCameraModule>();

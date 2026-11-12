@@ -445,35 +445,6 @@ void draw_icon(ImDrawList* dl, ImVec2 c, float s, Icon icon, ImU32 col) {
     }
 }
 
-/// Draws the SANAD brand emblem (dark rounded badge + stylized geometric S
-/// wings and golden/accent core ribbon, matching the app icon and logo).
-void draw_brand_badge(ImDrawList* dl, ImVec2 p, float size) {
-    const ImVec2 b(p.x + size, p.y + size);
-    const float r = size * 0.22f;
-    dl->AddRectFilled(p, b, IM_COL32(24, 28, 36, 255), r);
-    dl->AddRect(p, b, ImGui::GetColorU32(theme::alpha(theme::accent(), 0.65f)), r, 0, 1.2f);
-
-    const ImVec2 c(p.x + size * 0.5f, p.y + size * 0.5f);
-    const float u = size * 0.34f;
-    const float stroke = std::max(1.8f, size * 0.11f);
-    const ImU32 wing_col = IM_COL32(200, 210, 226, 255);
-    const ImU32 gold_col = IM_COL32(245, 172, 48, 255);
-
-    // Upper wing (slate silver)
-    dl->AddLine(ImVec2(c.x - u * 0.85f, c.y - u * 0.10f),
-                ImVec2(c.x - u * 0.35f, c.y - u * 0.65f), wing_col, stroke);
-    dl->AddLine(ImVec2(c.x - u * 0.35f, c.y - u * 0.65f),
-                ImVec2(c.x + u * 0.85f, c.y - u * 0.85f), wing_col, stroke);
-    // Center S-ribbon (warm gold)
-    dl->AddLine(ImVec2(c.x + u * 0.75f, c.y - u * 0.40f),
-                ImVec2(c.x - u * 0.75f, c.y + u * 0.40f), gold_col, stroke * 1.1f);
-    // Lower wing (slate silver)
-    dl->AddLine(ImVec2(c.x - u * 0.85f, c.y + u * 0.85f),
-                ImVec2(c.x + u * 0.35f, c.y + u * 0.65f), wing_col, stroke);
-    dl->AddLine(ImVec2(c.x + u * 0.35f, c.y + u * 0.65f),
-                ImVec2(c.x + u * 0.85f, c.y + u * 0.10f), wing_col, stroke);
-}
-
 /// An icon button. `id` keeps widget identity stable while the label changes
 /// with the language; the tooltip carries the translated, shaped name.
 bool icon_button(const char* id, Icon icon, const std::string& tooltip, bool active,
@@ -610,7 +581,7 @@ bool play_button(EditorApp& app, float btn_sz = 28.0f) {
                 push_error_console(app, "Stop failed", err);
             }
         } else {
-            if (!app.launch_game(err)) {
+            if (!app.play(err)) {
                 push_error_console(app, "Play failed", err);
             }
         }
@@ -858,20 +829,33 @@ void game_menu_contents(EditorApp& app) {
     if (!app.playing()) {
         if (ImGui::MenuItem(AV("play").c_str())) {
             std::string err;
-            // Play = the real game in its own window (NFGamePlayer spawned
-            // beside the editor). The in-viewport play session remains an
-            // engine API for tests and automation, not a menu entry: a
-            // viewport that "plays" while the editor keeps rendering it reads
-            // as nothing happening — the exact complaint this replaces.
-            if (!app.launch_game(err)) {
+            // Play = the in-Game-View session (nf.ui preview + game
+            // simulation, same offscreen target as edit mode). The external
+            // window launch stays available as "Launch Game" below.
+            if (!app.play(err)) {
                 push_error_console(app, "Play failed", err);
             }
         }
-    } else if (ImGui::MenuItem(AV("stop").c_str())) {
+        if (ImGui::MenuItem(AV("launch_game").c_str())) {
+            std::string err;
+            if (!app.launch_game(err)) {
+                push_error_console(app, "Launch failed", err);
+            }
+        }
+    } else {
+        if (ImGui::MenuItem(app.paused() ? (AV("resume") + " (P)").c_str() : (AV("pause") + " (P)").c_str())) {
+            const bool now = !app.paused();
+            app.set_paused(now);
+            if (now && app.runtime() != nullptr) {
+                app.runtime()->game_ui().cancel_interaction();
+            }
+        }
+        if (ImGui::MenuItem(AV("stop").c_str())) {
         std::string err;
         if (!app.stop(err)) {
             push_error_console(app, "Stop failed", err);
         }
+    }
     }
     ImGui::Separator();
     static char slot[64] = "slot1";
@@ -1261,6 +1245,24 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
         }
 
         if (ImGui::BeginMenu(AV("game").c_str())) {
+            const bool can_export = app.has_project() && !app.playing() && !app.dirty();
+            if (ImGui::MenuItem(AV("export_windows_game").c_str(), nullptr, false, can_export)) {
+                intents.build_project = true;
+            }
+            if (app.has_project() && app.dirty() &&
+                ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%s", AV("save_before_export").c_str());
+            }
+            const char* android_label = st.android_preview_building ? "android_preview_building" : "export_android_preview";
+            if (ImGui::MenuItem(AV(android_label).c_str(), nullptr, false,
+                                can_export && !st.android_preview_building)) {
+                intents.build_android_preview = true;
+            }
+            if (app.has_project() && app.dirty() &&
+                ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%s", AV("save_before_export").c_str());
+            }
+            ImGui::Separator();
             game_menu_contents(app);
             ImGui::EndMenu();
         }
@@ -1409,7 +1411,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 ImGui::SetTooltip("%s", AV("about").c_str());
             }
             const float badge_y = cur.y + (btn_sz - badge_sz) * 0.5f;
-            draw_brand_badge(dl, ImVec2(cur.x + 6.0f, badge_y), badge_sz);
+            ui_draw_engine_logo(dl, ImVec2(cur.x + 6.0f, badge_y), badge_sz);
             const float text_y = cur.y + (btn_sz - text_sz.y) * 0.5f;
             dl->AddText(ImVec2(cur.x + badge_sz + 12.0f, text_y),
                         ImGui::GetColorU32(theme::text_primary()), name.c_str());
@@ -1519,6 +1521,10 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
             ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin((AV("settings") + "###NFSettings").c_str(), &st.show_settings)) {
+            ImGui::TextWrapped("%s", AV("settings_hint").c_str());
+            if (ImGui::BeginTabBar("##settings_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+                if (ImGui::BeginTabItem((AV("viewport") + "###settings_viewport").c_str())) {
+                    ImGui::BeginChild("##body_viewport", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 8));
             if (settings_section("viewport", true)) {
                 ImGui::Checkbox(AV("grid_step").c_str(), &st.show_grid);
                 ImGui::SetNextItemWidth(150.0f);
@@ -1536,7 +1542,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 ImGui::Checkbox(AV("profiler").c_str(), &st.show_profiler);
             }
 
-            if (settings_section("snap")) {
+            if (settings_section("snap", true)) {
                 if (ImGui::Checkbox(AV("snap").c_str(), &st.snap_enabled)) {
                     sync_snap_from_settings(app, st);
                 }
@@ -1558,7 +1564,12 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section("sky_preset")) {
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem((AV("rendering") + "###settings_rendering").c_str())) {
+                    ImGui::BeginChild("##body_rendering", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 8));
+            if (settings_section("sky_preset", true)) {
                 // The labels must OUTLIVE the Combo call. AV() returns a
                 // std::string by value, so taking .c_str() of the temporary left
                 // all three pointers dangling at the end of that same statement
@@ -1576,7 +1587,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section("rendering")) {
+            if (settings_section("rendering", true)) {
                 // Exposure is the ONE renderer setting the editor may write, and
                 // it goes through the runtime's narrow setter (Runtime::set_exposure)
                 // rather than a mutable renderer() — see that function. It applies
@@ -1628,7 +1639,12 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section("language")) {
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem((AV("settings_preferences") + "###settings_preferences").c_str())) {
+                    ImGui::BeginChild("##body_preferences", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 8));
+            if (settings_section("language", true)) {
                 // Same flip as the Settings menu item: the label names the
                 // language NOT active, because that is what the click does. The
                 // language's own name is deliberate Latin where it is "English"
@@ -1647,7 +1663,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section("autosave")) {
+            if (settings_section("autosave", true)) {
                 // The same session value the Game menu edits (autosave_interval()),
                 // so flipping it in either place is visible in both.
                 bool autosave = app.autosave_enabled();
@@ -1663,7 +1679,7 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
-            if (settings_section("theme_accent")) {
+            if (settings_section("theme_accent", true)) {
                 float col[3] = {st.accent_r, st.accent_g, st.accent_b};
                 if (ImGui::ColorEdit3(AV("theme_accent").c_str(), col)) {
                     st.accent_r = col[0];
@@ -1673,6 +1689,11 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
                 }
             }
 
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
             ImGui::Separator();
             if (ImGui::Button(AV("close").c_str(), ImVec2(120.0f, 0.0f))) {
                 st.show_settings = false;
@@ -1919,9 +1940,9 @@ void toolbar_ui(EditorApp& app, const UiFrameStats& stats, UiIntents& intents) {
 #ifndef NF_ENGINE_VERSION
 #define NF_ENGINE_VERSION "0.6.0"
 #endif
-            const float badge_sz = 44.0f;
+            const float badge_sz = 64.0f;
             const ImVec2 cur = ImGui::GetCursorScreenPos();
-            draw_brand_badge(ImGui::GetWindowDrawList(), cur, badge_sz);
+            ui_draw_engine_logo(ImGui::GetWindowDrawList(), cur, badge_sz);
             ImGui::Dummy(ImVec2(badge_sz, badge_sz));
             ImGui::SameLine(0.0f, 12.0f);
             ImGui::BeginGroup();

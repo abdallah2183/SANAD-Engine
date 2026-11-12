@@ -5,6 +5,9 @@
 #include <NF/Test/TestFramework.hpp>
 #include <NF/Editor/Commands.hpp>
 #include <NF/Editor/Inspector.hpp>
+#include <NF/Editor/Inspector2D.hpp>
+#include <NF/Test/TestPaths.hpp>
+#include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Scene.hpp>
 #include <NF/Scene/Transform.hpp>
@@ -961,4 +964,102 @@ NF_TEST(editor_inspector_authors_a_faction_and_refuses_whitespace) {
     err.clear();
     NF_CHECK(editor::make_faction_command(scene.world(), e, faction, err) == nullptr);
     NF_CHECK(!err.empty());
+}
+
+NF_TEST(editor_inspector_2d_commands_capture_attach_edit_and_undo) {
+    scene::Scene scene("2D drafts");
+    auto& world = scene.world();
+    const auto entity = world.create_entity();
+    editor::CommandStack stack;
+    std::string error;
+    runtime::SpriteComponent sprite;
+    sprite.texture = "content://Textures/شخصية.png";
+    sprite.width = 2;
+    stack.push(editor::make_sprite_command(world, entity, sprite, error), world);
+    NF_CHECK(world.has<runtime::SpriteComponent>(entity));
+    sprite.width = 4;
+    stack.push(editor::make_sprite_command(world, entity, sprite, error), world);
+    NF_CHECK_NEAR(world.get<runtime::SpriteComponent>(entity)->width, 4, .001f);
+    NF_CHECK(stack.undo(world));
+    NF_CHECK_NEAR(world.get<runtime::SpriteComponent>(entity)->width, 2, .001f);
+    NF_CHECK(world.get<runtime::SpriteComponent>(entity)->texture == "content://Textures/شخصية.png");
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.has<runtime::SpriteComponent>(entity));
+    NF_CHECK(stack.redo(world));
+    NF_CHECK(world.has<runtime::SpriteComponent>(entity));
+    stack.push(editor::make_tilemap_command(world, entity, runtime::TilemapComponent{}, error), world);
+    stack.push(editor::make_body_2d_command(world, entity, runtime::RigidBody2DComponent{}, error), world);
+    stack.push(editor::make_collider_2d_command(world, entity, runtime::Collider2DComponent{}, error), world);
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.has<runtime::Collider2DComponent>(entity));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.has<runtime::RigidBody2DComponent>(entity));
+    NF_CHECK(stack.undo(world));
+    NF_CHECK(!world.has<runtime::TilemapComponent>(entity));
+}
+
+NF_TEST(editor_inspector_2d_invalid_edits_leave_the_world_untouched) {
+    scene::Scene scene("Invalid 2D");
+    const auto entity = scene.world().create_entity();
+    std::string error;
+    runtime::SpriteComponent sprite;
+    sprite.width = std::numeric_limits<float>::quiet_NaN();
+    NF_CHECK(!editor::make_sprite_command(scene.world(), entity, sprite, error));
+    runtime::TilemapComponent tilemap;
+    tilemap.columns = 0;
+    NF_CHECK(!editor::make_tilemap_command(scene.world(), entity, tilemap, error));
+    runtime::RigidBody2DComponent body;
+    body.body_type = 3;
+    NF_CHECK(!editor::make_body_2d_command(scene.world(), entity, body, error));
+    body.body_type = 0; body.mass = 0;
+    NF_CHECK(!editor::make_body_2d_command(scene.world(), entity, body, error));
+    runtime::Collider2DComponent collider;
+    collider.restitution = 2;
+    NF_CHECK(!editor::make_collider_2d_command(scene.world(), entity, collider, error));
+    NF_CHECK(!scene.world().has<runtime::SpriteComponent>(entity));
+    NF_CHECK(!scene.world().has<runtime::TilemapComponent>(entity));
+    NF_CHECK(!scene.world().has<runtime::RigidBody2DComponent>(entity));
+    NF_CHECK(!scene.world().has<runtime::Collider2DComponent>(entity));
+}
+
+NF_TEST(editor_inspector_2d_applied_values_survive_scene_save_and_reload) {
+    scene::Scene scene("2D save");
+    auto& world = scene.world();
+    const auto entity = world.create_entity();
+    world.add<scene::Transform>(entity, scene::Transform{});
+    world.add<scene::NameComponent>(entity, scene::NameComponent{"Sprite"});
+    editor::CommandStack stack;
+    std::string error;
+    runtime::SpriteComponent sprite;
+    sprite.texture = "content://Textures/شخصية.png";
+    sprite.width = 2.75f;
+    sprite.flip_x = true;
+    runtime::TilemapComponent tilemap;
+    tilemap.columns = 23;
+    runtime::RigidBody2DComponent body;
+    body.mass = 3.5f;
+    runtime::Collider2DComponent collider;
+    collider.shape = runtime::Collider2DComponent::Circle;
+    collider.radius = .9f;
+    stack.push(editor::make_sprite_command(world, entity, sprite, error), world);
+    stack.push(editor::make_tilemap_command(world, entity, tilemap, error), world);
+    stack.push(editor::make_body_2d_command(world, entity, body, error), world);
+    stack.push(editor::make_collider_2d_command(world, entity, collider, error), world);
+    const auto root = nf::test::temp_root() / "nf_2d_editor_save";
+    std::filesystem::create_directories(root);
+    assets::VirtualFileSystem vfs;
+    vfs.mount("content://", root);
+    NF_CHECK(runtime::save_scene_to_vfs(vfs, "content://Work.nfscene", scene, error));
+    auto loaded = runtime::load_scene_from_vfs(vfs, "content://Work.nfscene");
+    NF_CHECK(loaded.success && loaded.scene);
+    const auto entities = loaded.scene->world().query<runtime::SpriteComponent>();
+    NF_CHECK_EQ(entities.size(), 1u);
+    const auto saved_entity = entities[0];
+    auto& saved = loaded.scene->world();
+    NF_CHECK(saved.get<runtime::SpriteComponent>(saved_entity)->texture == sprite.texture);
+    NF_CHECK_NEAR(saved.get<runtime::SpriteComponent>(saved_entity)->width, 2.75f, .001f);
+    NF_CHECK(saved.get<runtime::SpriteComponent>(saved_entity)->flip_x);
+    NF_CHECK_EQ(saved.get<runtime::TilemapComponent>(saved_entity)->columns, 23u);
+    NF_CHECK_NEAR(saved.get<runtime::RigidBody2DComponent>(saved_entity)->mass, 3.5f, .001f);
+    NF_CHECK_NEAR(saved.get<runtime::Collider2DComponent>(saved_entity)->radius, .9f, .001f);
 }

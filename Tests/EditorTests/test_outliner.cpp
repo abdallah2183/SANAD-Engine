@@ -11,6 +11,7 @@
 #include <NF/Editor/EditorApp.hpp>
 #include <NF/Editor/Commands.hpp>
 #include <NF/Editor/Outliner.hpp>
+#include <NF/Audio/Components.hpp>
 #include <NF/Editor/Selection.hpp>
 #include <NF/Scene/NameComponent.hpp>
 #include <NF/Scene/Scene.hpp>
@@ -42,7 +43,8 @@ NF_TEST(editor_outliner_cache_tracks_collapse_search_and_scene_switch) {
     vfs.mount("cache://", tmp / "Cache");
     scene::Scene first("First");
     const auto root = make_named(first, "Root");
-    make_named(first, "Hidden Child", root);
+    const auto hidden = make_named(first, "Hidden Child", root);
+    first.world().add<runtime::CameraComponent>(hidden, runtime::CameraComponent{});
     scene::Scene second("Second");
     const auto other = make_named(second, "Other Root");
     make_named(second, "Other Child", other);
@@ -67,6 +69,33 @@ NF_TEST(editor_outliner_cache_tracks_collapse_search_and_scene_switch) {
     NF_CHECK(rows[0].label == "Hidden Child");
     app.outliner().filter_text.clear();
     NF_CHECK_EQ(app.outliner_rows().size(), 1u);
+    app.outliner().category = editor::OutlinerCategory::Camera;
+    rows = app.outliner_rows();
+    NF_CHECK_EQ(rows.size(), 1u);
+    NF_CHECK(rows[0].label == "Hidden Child" && rows[0].depth == 0 && !rows[0].has_children);
+    app.outliner().filter_text = "missing";
+    NF_CHECK(app.outliner_rows().empty());
+    app.outliner().filter_text.clear();
+    app.outliner().category = editor::OutlinerCategory::All;
+    NF_CHECK_EQ(app.outliner_rows().size(), 1u); // collapse state survived both filters
+    const auto before = editor::read_transform(*app.world(), live_root);
+    auto edit = before;
+    const auto old_revision = app.edit_revision();
+    edit.px = 10;
+    NF_CHECK(app.preview_transform(live_root, edit, err));
+    edit.px = 20;
+    NF_CHECK(app.preview_transform(live_root, edit, err));
+    NF_CHECK_NEAR(app.world()->get<scene::Transform>(live_root)->world_x, 20, .001f);
+    NF_CHECK_EQ(app.stack().undo_size(), 0u);
+    NF_CHECK_EQ(app.edit_revision(), old_revision);
+    NF_CHECK(app.commit_transform(live_root, before, err));
+    NF_CHECK_EQ(app.stack().undo_size(), 1u);
+    NF_CHECK(app.edit_revision() > old_revision);
+    NF_CHECK(app.undo(err));
+    NF_CHECK_NEAR(editor::read_transform(*app.world(), live_root).px, before.px, .001f);
+    NF_CHECK(app.redo(err));
+    NF_CHECK_NEAR(editor::read_transform(*app.world(), live_root).px, 20, .001f);
+
     app.outliner().set_expanded(live_root, true);
     NF_CHECK_EQ(app.outliner_rows().size(), 2u);
     NF_CHECK(app.open_scene("content://second.nfscene", err));
@@ -197,4 +226,30 @@ NF_TEST(editor_outliner_filter_matches_case_insensitively) {
 
     NF_CHECK_EQ(editor::filter_outliner_rows(rows, "GROUND").size(), 1u);
     NF_CHECK(editor::filter_outliner_rows(rows, "no_such_name").empty());
+}
+
+NF_TEST(editor_outliner_categories_include_secondary_components) {
+    scene::Scene scene("Categories");
+    const auto entity = make_named(scene, "Camera mesh");
+    scene.world().add<runtime::CameraComponent>(entity, runtime::CameraComponent{});
+    scene.world().add<runtime::MeshComponent>(entity, runtime::MeshComponent{});
+    scene.world().add<runtime::WeatherComponent>(entity, runtime::WeatherComponent{});
+    const auto rows = editor::build_outliner_rows(scene.world(), {});
+    NF_CHECK(rows[0].kind == editor::OutlinerKind::Camera);
+    NF_CHECK_EQ(editor::filter_outliner_rows(rows, "", editor::OutlinerCategory::Mesh).size(), 1u);
+    NF_CHECK_EQ(editor::filter_outliner_rows(rows, "", editor::OutlinerCategory::Weather).size(), 1u);
+    NF_CHECK_EQ(editor::filter_outliner_rows(rows, "", editor::OutlinerCategory::Camera).size(), 1u);
+    NF_CHECK(editor::filter_outliner_rows(rows, "", editor::OutlinerCategory::Light).empty());
+    NF_CHECK(editor::filter_outliner_rows(rows, "missing", editor::OutlinerCategory::Mesh).empty());
+}
+
+NF_TEST(editor_outliner_audio_category_does_not_add_a_surface_audio_badge) {
+    scene::Scene scene("Audio badges");
+    const auto entity = make_named(scene, "StartChime");
+    scene.world().add<audio::AudioComponent>(entity, audio::AudioComponent{});
+    scene.world().add<runtime::PointLightComponent>(entity, runtime::PointLightComponent{});
+    const auto rows = editor::build_outliner_rows(scene.world(), {});
+    NF_CHECK(rows[0].kind == editor::OutlinerKind::Light);
+    NF_CHECK_EQ(rows[0].feature_mask & 0xff, 0); // ordinary audio is not SurfaceAudio
+    NF_CHECK_EQ(editor::filter_outliner_rows(rows, "", editor::OutlinerCategory::Audio).size(), 1u);
 }

@@ -31,6 +31,9 @@ layout(set = 0, binding = 7) uniform MaterialParams {
     vec4 surface;     // metallic, roughness, ao, emissionStrength
     vec4 misc;        // emission.rgb, useBaseColorTex
     vec4 mapFlags;    // useNormalTex, useMRoughTex, useOcclusionTex, useEmissiveTex
+    // 5th vec4: normalParams.x = glTF normalTexture.scale (default 1),
+    // normalParams.y = glTF occlusionTexture.strength (default 1).
+    vec4 normalParams;
 } matParams;
 
 layout(set = 0, binding = 8) uniform sampler2D albedoTex;
@@ -72,8 +75,13 @@ void main() {
     // Same map evaluation as the gbuffer path (see gbuffer.frag): the pane
     // and the wall behind it must agree about what the surface is.
     apply_pbr_maps(normalTex, mroughTex, occlusionTex, emissiveTex,
-                   matParams.mapFlags, in_world_pos, in_uv,
+                   matParams.mapFlags, matParams.normalParams.x,
+                   matParams.normalParams.y, in_world_pos, in_uv,
                    N, albedo, metallic, roughness, ao, emissive);
+    // Matches gbuffer.frag: build the TBN from the authored normal, then
+    // negate the whole perturbed normal for a doubleSided rear face.
+    // Single-sided draws never see a back face.
+    if (!gl_FrontFacing) N = -N;
 
     vec3 V = normalize(frame.camPos_ambient.xyz - in_world_pos);
     vec3 Lo = direct_lighting(in_world_pos, N, V, albedo, metallic, roughness);

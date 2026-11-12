@@ -187,7 +187,8 @@ runtime::PostProcessComponent read_post_process(const ecs::World& world, ecs::En
 
 // All factories return nullptr + err on invalid entity or invalid values.
 std::unique_ptr<ICommand> make_transform_command(ecs::World& world, ecs::Entity e,
-                                                 const TransformEdit& edit, std::string& out_err);
+                                                 const TransformEdit& edit, std::string& out_err,
+                                                  const TransformEdit* before_preview = nullptr);
 std::unique_ptr<ICommand> make_camera_command(ecs::World& world, ecs::Entity e,
                                               const CameraEdit& edit, std::string& out_err);
 std::unique_ptr<ICommand> make_light_command(ecs::World& world, ecs::Entity e,

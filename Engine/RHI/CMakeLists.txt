@@ -38,6 +38,10 @@ if(NF_USE_VULKAN)
         PUBLIC  NF_VULKAN_ENABLED=1
         PRIVATE VK_NO_PROTOTYPES
     )
+    if(ANDROID)
+        # Some implementation headers include vulkan.h before VulkanLoader.hpp.
+        target_compile_definitions(NFRHI PRIVATE VK_USE_PLATFORM_ANDROID_KHR)
+    endif()
 
     # --- Locate the Vulkan SDK ------------------------------------------
     # Priority: explicit cache variable, then VULKAN_SDK env var, then the

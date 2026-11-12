@@ -495,6 +495,9 @@ void ImportQueue::run_cpu_stages(const std::string& src_absolute, const std::str
                     asset.params.emission[c] = material.emissive[c];
                 }
                 asset.params.emission_strength = material.emissive_strength;
+                asset.double_sided = material.double_sided;
+                asset.params.normal_scale = material.normal_scale;
+                asset.params.occlusion_strength = material.occlusion_strength;
                 if (material.albedo_image >= 0 &&
                     static_cast<usize>(material.albedo_image) < image_paths.size()) {
                     asset.albedo = image_paths[static_cast<usize>(material.albedo_image)];

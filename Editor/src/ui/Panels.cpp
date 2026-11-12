@@ -5,8 +5,12 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <NF/Editor/UiShell.hpp>
 #include <NF/Editor/ConsolePanel.hpp>
+#include <NF/Editor/ComponentPicker.hpp>
 #include <NF/Editor/UiEditCache.hpp>
+#include <NF/Editor/UiPanelControls.hpp>
+#include <NF/Editor/OutlinerRowUi.hpp>
 #include <NF/Editor/AddObjectCatalog.hpp>
+#include <NF/Editor/AddObjectIcon.hpp>
 #include <NF/Editor/ToolbarUi.hpp>
 #include <NF/Editor/ProjectLauncher.hpp> // start_here choice persisted with the shell settings
 
@@ -33,6 +37,7 @@
 #include <NF/Gameplay/GameplayModuleRegistry.hpp>
 #include <NF/UI/ArabicShaper.hpp>
 #include <NF/UI/Localization.hpp>
+#include <NF/Rendering/UiDisplayDraw.hpp>
 #include <NF/Editor/UiText.hpp> // AV()/AVF()/rt_* — the single display-string path
 #include <NF/Editor/UiTheme.hpp> // semantic colours (danger/success/accent)
 #include <NF/Editor/ScenePanels.hpp> // the dedicated per-function editors
@@ -49,6 +54,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <type_traits>
 #include <vector>
 
 namespace nf::editor {
@@ -61,6 +67,13 @@ struct InspectorCache {
     ecs::Entity entity;
     bool valid = false;
     char name[129]{};
+    runtime::SpriteComponent sprite_draft;
+    runtime::TilemapComponent tilemap_draft;
+    runtime::RigidBody2DComponent body_2d_draft;
+    runtime::Collider2DComponent collider_2d_draft;
+    bool transform_live = false;
+    uint64_t transform_revision = 0;
+    TransformEdit transform_before;
     float pos[3]{};
     float rot[3]{};
     float scl[3]{};
@@ -970,10 +983,6 @@ void draw_orientation_gizmo(ImDrawList* dl, const ImVec2& max, const rendering::
 // Only the SPECIAL kinds are tinted; a mesh is the common case and stays the
 // theme's text colour, so the hierarchy does not turn into a colour chart.
 // Unified theme: all hierarchy rows use clean, unified text color.
-ImVec4 outliner_kind_color(OutlinerKind kind) {
-    (void)kind;
-    return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-}
 
 // Tiny vector glyph per entity kind, drawn with ImDrawList right after the
 // tree node (never a font glyph: the UI font has no icon codepoints, typed
@@ -1279,79 +1288,7 @@ void outliner_audio_icon(ImDrawList* dl, ImVec2 c, float s) {
 bool draw_vec3_control(const char* label, float values[3], float reset_val = 0.0f,
                        float speed = 0.05f, float min_val = 0.0f, float max_val = 0.0f,
                        const char* format = "%.2f") {
-    bool changed = false;
-    ImGui::PushID(label);
-
-    const float avail_w = ImGui::GetContentRegionAvail().x;
-    const float label_w = 75.0f;
-    const float item_w = std::max(40.0f, (avail_w - label_w - 60.0f) / 3.0f);
-
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(label_w);
-
-    const float line_h = ImGui::GetFrameHeight();
-    const ImVec2 btn_sz(line_h * 0.9f, line_h);
-
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.0f, 2.0f));
-
-    // Unified dark slate buttons with subtle axis letter color
-    const ImU32 v3_btn_bg = IM_COL32(30, 41, 59, 240);
-    const ImU32 v3_btn_hov = IM_COL32(51, 65, 85, 255);
-    const ImU32 v3_btn_act = IM_COL32(37, 99, 235, 255);
-
-    // X Component
-    ImGui::PushStyleColor(ImGuiCol_Button, v3_btn_bg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v3_btn_hov);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, v3_btn_act);
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(248, 113, 113, 230));
-    if (ImGui::Button("X##btn", btn_sz)) {
-        values[0] = reset_val;
-        changed = true;
-    }
-    ImGui::PopStyleColor(4);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(item_w);
-    if (ImGui::DragFloat("##X", &values[0], speed, min_val, max_val, format)) {
-        changed = true;
-    }
-    ImGui::SameLine();
-
-    // Y Component
-    ImGui::PushStyleColor(ImGuiCol_Button, v3_btn_bg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v3_btn_hov);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, v3_btn_act);
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(52, 211, 153, 230));
-    if (ImGui::Button("Y##btn", btn_sz)) {
-        values[1] = reset_val;
-        changed = true;
-    }
-    ImGui::PopStyleColor(4);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(item_w);
-    if (ImGui::DragFloat("##Y", &values[1], speed, min_val, max_val, format)) {
-        changed = true;
-    }
-    ImGui::SameLine();
-
-    // Z Component
-    ImGui::PushStyleColor(ImGuiCol_Button, v3_btn_bg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, v3_btn_hov);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, v3_btn_act);
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(96, 165, 250, 230));
-    if (ImGui::Button("Z##btn", btn_sz)) {
-        values[2] = reset_val;
-        changed = true;
-    }
-    ImGui::PopStyleColor(4);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(item_w);
-    if (ImGui::DragFloat("##Z", &values[2], speed, min_val, max_val, format)) {
-        changed = true;
-    }
-
-    ImGui::PopStyleVar();
-    ImGui::PopID();
-    return changed;
+    return uiw::vector3_control(label, values, reset_val, speed, min_val, max_val, format).changed;
 }
 
 // --- Reflection-driven widgets ---------------------------------------------
@@ -1524,7 +1461,7 @@ void draw_start_here(EditorApp& app) {
             }
         }
         if (ImGui::Button((AV("start_here_step3") + "##nf_sh_3").c_str(), wide)) {
-            if (!app.launch_game(err)) {
+            if (!app.play(err)) {
                 push_error(app.console(), "Play failed", err);
             }
         }
@@ -1543,6 +1480,38 @@ void draw_start_here(EditorApp& app) {
     }
 }
 
+namespace {
+
+void object_description(const char* key) {
+    if (!rt_active()) {
+        ImGui::TextWrapped("%s", AV(key).c_str());
+        return;
+    }
+    // Wrap logical Arabic before shaping each line. Wrapping an already
+    // reversed visual string puts the last words on the first line.
+    const std::string text = ui::tr(key);
+    const float width = ImGui::GetContentRegionAvail().x;
+    std::string line;
+    size_t start = 0;
+    while (start < text.size()) {
+        const size_t end = text.find(' ', start);
+        const std::string word = text.substr(start, end == std::string::npos ? end : end - start);
+        const std::string candidate = line.empty() ? word : line + " " + word;
+        const std::string visual = ui::shape_arabic(candidate);
+        if (!line.empty() && ImGui::CalcTextSize(visual.c_str()).x > width) {
+            rt_text_str(ui::shape_arabic(line));
+            line = word;
+        } else {
+            line = candidate;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    if (!line.empty()) rt_text_str(ui::shape_arabic(line));
+}
+
+} // namespace
+
 // Searchable object picker: all actions call the same undoable editor commands
 // used by the menus. Labels are translated for display; search uses logical text.
 void draw_add_object_dialog(EditorApp& app) {
@@ -1560,11 +1529,31 @@ void draw_add_object_dialog(EditorApp& app) {
             ImGui::OpenPopup("###add_object_dialog");
         }
     }
-    ImGui::SetNextWindowSize(ImVec2(590.0f, 530.0f), ImGuiCond_Appearing);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float max_width = std::max(1.0f, viewport->WorkSize.x - 24.0f);
+    const float max_height = std::max(1.0f, viewport->WorkSize.y - 24.0f);
+    ImGui::SetNextWindowSize(ImVec2(std::min(850.0f, max_width), std::min(610.0f, max_height)), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(480.0f, max_width), std::min(340.0f, max_height)),
+                                       ImVec2(max_width, max_height));
     const auto title = AV("palette_title") + "###add_object_dialog";
+    ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    // If the editor window shrinks while the picker is open, keep the whole
+    // resized popup on screen without overriding deliberate user moves.
+    if (const ImGuiWindow* window = ImGui::FindWindowByName(title.c_str()); window && window->WasActive) {
+        const float width = std::min(window->SizeFull.x, max_width);
+        const float height = std::min(window->SizeFull.y, max_height);
+        const float left = viewport->WorkPos.x + 12.0f;
+        const float top = viewport->WorkPos.y + 12.0f;
+        const float right = std::max(left, viewport->WorkPos.x + viewport->WorkSize.x - width - 12.0f);
+        const float bottom = std::max(top, viewport->WorkPos.y + viewport->WorkSize.y - height - 12.0f);
+        const ImVec2 pos(std::clamp(window->Pos.x, left, right), std::clamp(window->Pos.y, top, bottom));
+        if (pos.x != window->Pos.x || pos.y != window->Pos.y) ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+    }
     bool open = true;
     // OpenPopup uses the stable ID, independent of the translated title.
     // BeginPopupModal hashes the suffix after ###.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 9.0f);
     if (ImGui::BeginPopupModal(title.c_str(), &open, ImGuiWindowFlags_NoCollapse)) {
         if (parent.valid()) {
             ImGui::Text("%s: %s", AV("palette_parent").c_str(), entity_label_ptr(app, parent));
@@ -1572,10 +1561,14 @@ void draw_add_object_dialog(EditorApp& app) {
         } else {
             ImGui::TextDisabled("%s", AV("palette_parent_root").c_str());
         }
+        ImGui::Spacing();
         ImGui::SetNextItemWidth(-1.0f);
         if (focus_search) { ImGui::SetKeyboardFocusHere(); focus_search = false; }
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 7.0f));
         if (ImGui::InputTextWithHint("##object_search", AV("palette_search").c_str(), query, sizeof(query)))
             selected = -1;
+        const bool search_focused = ImGui::IsItemActive() || ImGui::IsItemFocused();
+        ImGui::PopStyleVar();
         // Keep a usable selection after filtering and let the search field act
         // as a keyboard-driven picker, without requiring a mouse click.
         const auto matches_entry = [&](const AddObjectEntry& entry) {
@@ -1589,8 +1582,8 @@ void draw_add_object_dialog(EditorApp& app) {
         }
         if (selected < 0 && !matches.empty()) selected = matches.front();
         bool keyboard_moved = false;
-        if (!matches.empty() && (ImGui::IsKeyPressed(ImGuiKey_DownArrow) ||
-                                 ImGui::IsKeyPressed(ImGuiKey_UpArrow))) {
+        if (search_focused && !matches.empty() && (ImGui::IsKeyPressed(ImGuiKey_DownArrow) ||
+                                                    ImGui::IsKeyPressed(ImGuiKey_UpArrow))) {
             auto it = std::find(matches.begin(), matches.end(), selected);
             int index = it == matches.end() ? 0 : static_cast<int>(it - matches.begin());
             index += ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
@@ -1598,37 +1591,73 @@ void draw_add_object_dialog(EditorApp& app) {
             selected = matches[static_cast<size_t>(index)];
             keyboard_moved = true;
         }
-        bool create_requested = selected >= 0 && ImGui::IsKeyPressed(ImGuiKey_Enter);
-        ImGui::BeginChild("##object_list", ImVec2(0.0f, 285.0f), true);
+        bool create_requested = search_focused && selected >= 0 && ImGui::IsKeyPressed(ImGuiKey_Enter);
         const char* groups[] = {"palette_basic", "palette_2d", "palette_light", "palette_world", "palette_advanced"};
-        bool any = false;
-        for (int group = 0; group < 5; ++group) {
-            bool group_has_match = false;
-            for (const auto& entry : kAddObjects) {
-                if (static_cast<int>(entry.group) == group && matches_entry(entry)) group_has_match = true;
-            }
-            if (!group_has_match) continue;
-            any = true;
-            ImGui::TextDisabled("%s", AV(groups[group]).c_str());
-            for (size_t i = 0; i < kAddObjects.size(); ++i) {
-                const auto& entry = kAddObjects[i];
-                if (static_cast<int>(entry.group) != group || !matches_entry(entry)) continue;
-                ImGui::PushID(static_cast<int>(i));
-                if (ImGui::Selectable(AV(entry.label_key).c_str(), selected == static_cast<int>(i),
-                                      ImGuiSelectableFlags_AllowDoubleClick)) {
-                    selected = static_cast<int>(i);
-                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) create_requested = true;
-                }
-                if (keyboard_moved && selected == static_cast<int>(i)) ImGui::SetScrollHereY();
-                ImGui::PopID();
-            }
+        ImGui::Spacing();
+        const float available_width = ImGui::GetContentRegionAvail().x;
+        const bool show_preview = available_width >= 610.0f;
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
+        const float preview_width = show_preview ? std::clamp(available_width * 0.27f, 180.0f, 220.0f) : 0.0f;
+        const float list_width = show_preview ? available_width - preview_width - gap : available_width;
+        const float footer_height = show_preview ? 44.0f : 94.0f;
+        const float panel_height = std::max(90.0f, ImGui::GetContentRegionAvail().y - footer_height - (error.empty() ? 0.0f : 24.0f));
+        auto preview = [&] {
+            ImGui::BeginChild("##object_preview", ImVec2(preview_width, panel_height), true);
+            rt_disabled_key("palette_preview");
             ImGui::Spacing();
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            const float h = std::min(160.0f, std::max(95.0f, panel_height * 0.38f));
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), IM_COL32(26, 35, 47, 255), 8.0f);
+            if (selected >= 0) {
+                const ImVec2 center(pos.x + w * 0.5f, pos.y + h * 0.5f);
+                draw->AddCircleFilled(center, std::min(w, h) * 0.39f, IM_COL32(40, 54, 71, 200), 48);
+                draw_add_object_icon(*draw, kAddObjects[static_cast<size_t>(selected)].kind, center,
+                                     std::min(w, h) * 0.76f);
+            }
+            ImGui::Dummy(ImVec2(w, h));
+            ImGui::Spacing();
+            if (selected >= 0) rt_text_key(kAddObjects[static_cast<size_t>(selected)].label_key);
+            ImGui::Separator();
+            rt_disabled_key("palette_description");
+            object_description(selected >= 0 ? kAddObjects[static_cast<size_t>(selected)].description_key : "palette_select");
+            ImGui::EndChild();
+        };
+        auto catalog = [&] {
+            ImGui::BeginChild("##object_list", ImVec2(list_width, panel_height), true);
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float card_gap = 9.0f;
+            const int columns = std::clamp(static_cast<int>((width + card_gap) / 155.0f), 1, 4);
+            const float card_width = std::max(1.0f, (width - (columns - 1) * card_gap) / columns);
+            for (int group = 0; group < 5; ++group) {
+                std::vector<int> group_matches;
+                for (int index : matches)
+                    if (static_cast<int>(kAddObjects[static_cast<size_t>(index)].group) == group) group_matches.push_back(index);
+                if (group_matches.empty()) continue;
+                rt_disabled_key(groups[group]);
+                ImGui::Spacing();
+                const float row_start = ImGui::GetCursorPosX();
+                for (size_t n = 0; n < group_matches.size(); ++n) {
+                    const int col = static_cast<int>(n % static_cast<size_t>(columns));
+                    if (col != 0) ImGui::SameLine(0.0f, card_gap);
+                    if (rt_active()) ImGui::SetCursorPosX(row_start + width - card_width - col * (card_width + card_gap));
+                    const int index = group_matches[n];
+                    draw_add_object_card(kAddObjects[static_cast<size_t>(index)], index, card_width, selected,
+                                         create_requested, search_focused, keyboard_moved);
+                }
+                ImGui::Spacing();
+                ImGui::Spacing();
+            }
+            if (matches.empty()) rt_disabled_key("palette_no_match");
+            ImGui::EndChild();
+        };
+        if (show_preview && rt_active()) { preview(); ImGui::SameLine(); catalog(); }
+        else { catalog(); if (show_preview) { ImGui::SameLine(); preview(); } }
+        if (!show_preview) {
+            rt_disabled_key("palette_description");
+            object_description(selected >= 0 ? kAddObjects[static_cast<size_t>(selected)].description_key : "palette_select");
         }
-        if (!any) ImGui::TextDisabled("%s", AV("palette_no_match").c_str());
-        ImGui::EndChild();
-        ImGui::TextDisabled("%s", AV("palette_description").c_str());
-        ImGui::TextWrapped("%s", selected >= 0 ? AV(kAddObjects[static_cast<size_t>(selected)].description_key).c_str()
-                                                : AV("palette_select").c_str());
         if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
         ImGui::BeginDisabled(selected < 0 || app.playing());
         if (ImGui::Button(AV("create").c_str(), ImVec2(120, 0))) create_requested = true;
@@ -1665,6 +1694,7 @@ void draw_add_object_dialog(EditorApp& app) {
             ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(2);
 }
 
 UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
@@ -1754,337 +1784,194 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
 
     // --- Left: Scene Outliner --------------------------------------------------
     if (ImGui::Begin((AV("outliner") + "###Outliner").c_str())) {
-        // One searchable entry point for scene objects. The selected entity is
-        // captured when the dialog opens, so a delayed click cannot reparent it.
         ImGui::BeginDisabled(app.playing());
-        if (ImGui::Button(AV("outliner_add_entity").c_str())) {
-            ui_settings().request_add_object = true;
+        if (ImGui::Button(AV("outliner_add_entity").c_str())) ui_settings().request_add_object = true;
+        uiw::next_action(AV("create_empty"));
+        if (ImGui::Button(AV("create_empty").c_str())) {
+            std::string error;
+            if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(st.entity_count),
+                                   ecs::kInvalidEntity, error))
+                push_error(app.console(), "Create entity failed", error);
         }
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 41, 59, 230));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(51, 65, 85, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(37, 99, 235, 255));
-        const bool btn_create_empty = ImGui::Button(AV("create_empty").c_str());
-        ImGui::PopStyleColor(3);
-        if (btn_create_empty) {
-            std::string err;
-            const int n = static_cast<int>(app.status().entity_count);
-            // A3b: this string is STORED as the entity's name, so it must be the
-            // logical form (ui::tr), not the shaped display form (AV) — the name
-            // is shaped again by entity_label_ptr() on the way to the widget.
-            // Storing shaped text would double-shape it and corrupt the name.
-            if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n),
-                                   ecs::kInvalidEntity, err)) {
-                push_error(app.console(), "Create entity failed", err);
+        uiw::next_action(AV("outliner_actions"));
+        if (ImGui::Button((AV("outliner_actions") + "###outliner_actions").c_str()))
+            ImGui::OpenPopup("##outliner_actions_menu");
+        if (ImGui::BeginPopup("##outliner_actions_menu")) {
+            ImGui::BeginDisabled(app.playing() || !app.selection().has_selection());
+            if (ImGui::MenuItem(AV("duplicate").c_str(), "Ctrl+D")) {
+                std::string error;
+                if (!app.duplicate_selection(error)) push_error(app.console(), "Duplicate failed", error);
             }
-        }
-        ImGui::SameLine();
-        const bool has_sel = app.selection().has_selection();
-        if (!has_sel) {
-            ImGui::BeginDisabled();
-        }
-        // A4: immediate, undoable delete. This used to only arm a pending delete
-        // and wait for an inline Confirm button below the toolbar — easy to miss
-        // entirely, so it read as "Delete does nothing". delete_entity captures a
-        // DeleteEntityCommand, so the whole thing is one undo step and Ctrl+Z
-        // restores it; that is the safety net instead of a confirm step.
-        if (ImGui::Button(AV("delete").c_str())) {
-            std::string err;
-            if (!app.delete_entity(app.selection().primary(), err)) {
-                push_error(app.console(), "Delete failed", err);
+            if (ImGui::MenuItem(AV("delete").c_str(), "Del")) {
+                std::string error;
+                if (!app.delete_entity(app.selection().primary(), error)) push_error(app.console(), "Delete failed", error);
             }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button(AV("duplicate").c_str())) {
-            std::string err;
-            if (!app.duplicate_selection(err)) {
-                push_error(app.console(), "Duplicate failed", err);
+            if (ImGui::MenuItem(AV("save_prefab").c_str())) {
+                const auto selected = app.selection().primary();
+                std::string error;
+                const std::string path = std::string("content://Prefabs/") + entity_label(*app.world(), selected) + ".nfscene";
+                if (!app.create_prefab(selected, path, error)) push_error(app.console(), "Save as prefab failed", error);
             }
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("%s", "Ctrl+D");
-        }
-        if (!has_sel) {
             ImGui::EndDisabled();
-        }
-        ImGui::SameLine();
-        if (!has_sel) {
-            ImGui::BeginDisabled();
-        }
-        // Short label + tooltip carrying the full name. "Save as prefab" is
-        // ~120px at this font, so at the outliner's share of a 1280px window it
-        // rendered as "Save as pr" — a clipped button reads as a broken panel,
-        // and the full wording is one hover away (and unchanged in the row's
-        // context menu, which has the width for it).
-        if (ImGui::Button(AV("prefab").c_str())) {
-            const ecs::Entity sel = app.selection().primary();
-            std::string err;
-            const std::string prefab_path =
-                std::string("content://Prefabs/") + entity_label_ptr(app, sel) + ".nfscene";
-            if (!app.create_prefab(sel, prefab_path, err)) {
-                push_error(app.console(), "Save as prefab failed", err);
+            ImGui::Separator();
+            ImGui::BeginDisabled(app.outliner().filtering());
+            if (ImGui::MenuItem(AV("expand_all").c_str())) app.outliner().collapsed.clear();
+            if (ImGui::MenuItem(AV("collapse_all").c_str())) {
+                if (const auto* world = app.world()) {
+                    const auto all_rows = build_outliner_rows(*world, OutlinerState{});
+                    for (const auto& row : all_rows)
+                        if (row.has_children) app.outliner().set_expanded(row.entity, false);
+                }
             }
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("%s", AV("save_prefab").c_str());
-        }
-        if (!has_sel) {
             ImGui::EndDisabled();
+            ImGui::EndPopup();
         }
-        // Live search: filters the cached rows every frame (see
-        // EditorApp::outliner_rows), so a match under a collapsed parent is
-        // still one glance away.
-        char outliner_filter[128]{};
-        std::strncpy(outliner_filter, app.outliner().filter_text.c_str(), sizeof(outliner_filter) - 1);
-        // The hint lives INSIDE the field. As a trailing label it ate ~60px of a
-        // narrow panel to repeat what an empty box already implies, and in the
-        // Arabic UI it was the only string in the row that had to be shifted.
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::InputTextWithHint("##outliner_filter", AV("filter").c_str(), outliner_filter,
-                                     sizeof(outliner_filter))) {
-            app.outliner().filter_text = outliner_filter;
-        }
-
-        // A single category picker stays usable even in a narrow scene panel.
-        // The old row of ten pills extended beyond the panel and hid filters.
-        static int s_outliner_cat = 0;
-        const std::array<std::string, 10> categories = {
+        uiw::search_field("outliner_search", AV("filter"), app.outliner().filter_text);
+        const std::array<std::string, 12> categories = {
             AV("filter_all"), "3D", "2D", AV("filter_light"), AV("filter_audio"),
             AV("filter_physics"), AV("filter_weather"), AV("filter_cable"),
-            AV("filter_nav"), AV("filter_talents")};
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::BeginCombo("##outliner_category", categories[static_cast<size_t>(s_outliner_cat)].c_str())) {
+            AV("filter_nav"), AV("filter_talents"), AV("camera"), AV("grid_inventory")};
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##outliner_category", categories[static_cast<size_t>(app.outliner().category)].c_str())) {
             for (size_t i = 0; i < categories.size(); ++i) {
-                if (ImGui::Selectable(categories[i].c_str(), s_outliner_cat == static_cast<int>(i)))
-                    s_outliner_cat = static_cast<int>(i);
-                if (s_outliner_cat == static_cast<int>(i)) ImGui::SetItemDefaultFocus();
+                const auto category = static_cast<OutlinerCategory>(i);
+                if (ImGui::Selectable(categories[i].c_str(), app.outliner().category == category))
+                    app.outliner().category = category;
+                if (app.outliner().category == category) ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }
-        // Live census: total entities plus selection size, so an empty-looking
-        // tree still answers "is the scene really empty".
-        {
-            const size_t total = app.status().entity_count;
-            const size_t n_sel = app.selection().all().size();
-            if (n_sel > 0) {
-                ImGui::TextDisabled(
-                    "%s  |  %s", AVF("stats_entities", total).c_str(),
-                    AVF("selected_count", n_sel).c_str());
-            } else {
-                ImGui::TextDisabled("%s", AVF("stats_entities", total).c_str());
-            }
-        }
         std::vector<OutlinerRow> rows = app.outliner_rows();
-        if (s_outliner_cat != 0) {
-            std::vector<OutlinerRow> filtered;
-            for (const OutlinerRow& r : rows) {
-                bool keep = false;
-                if (s_outliner_cat == 1) keep = (r.kind == OutlinerKind::Mesh);
-                else if (s_outliner_cat == 2) keep = (r.kind == OutlinerKind::Sprite2D || r.kind == OutlinerKind::Tilemap || r.kind == OutlinerKind::RuleTile);
-                else if (s_outliner_cat == 3) keep = (r.kind == OutlinerKind::Light || r.kind == OutlinerKind::Sky);
-                else if (s_outliner_cat == 4) keep = (r.kind == OutlinerKind::Audio || (r.feature_mask & (1 << 7)));
-                else if (s_outliner_cat == 5) keep = (r.kind == OutlinerKind::Physics || r.kind == OutlinerKind::Cable || r.kind == OutlinerKind::Ragdoll);
-                else if (s_outliner_cat == 6) keep = (r.kind == OutlinerKind::Weather || (r.feature_mask & (1 << 0)));
-                else if (s_outliner_cat == 7) keep = (r.kind == OutlinerKind::Cable || (r.feature_mask & (1 << 1)));
-                else if (s_outliner_cat == 8) keep = (r.kind == OutlinerKind::FlowField || (r.feature_mask & (1 << 3)));
-                else if (s_outliner_cat == 9) keep = (r.kind == OutlinerKind::TalentTree || (r.feature_mask & (1 << 4)));
-                if (keep) {
-                    OutlinerRow flat = r;
-                    flat.depth = 0;
-                    filtered.push_back(flat);
-                }
-            }
-            rows = std::move(filtered);
-        }
+        ImGui::TextDisabled("%s", AVF("outliner_visible_count", rows.size(), st.entity_count).c_str());
+        if (app.selection().has_selection())
+            ImGui::TextDisabled("%s", AVF("selected_count", app.selection().all().size()).c_str());
+        ImGui::Separator();
+        ImGui::BeginChild("##outliner_tree", ImVec2(0, 0));
         if (rows.empty()) {
-            ImGui::Spacing();
-            ImGui::TextWrapped("%s", AV("empty_scene_hint").c_str());
+            const char* empty_key = st.entity_count == 0 ? "empty_scene_hint" : "outliner_no_matches";
+            ImGui::TextWrapped("%s", AV(empty_key).c_str());
+            if (app.outliner().filtering() && ImGui::Button(AV("reset_filters").c_str())) {
+                app.outliner().filter_text.clear();
+                app.outliner().category = OutlinerCategory::All;
+            }
         }
         // Clipped: a 600-row village must not pay 600 shaped tree nodes per
         // frame. Open state is keyed by stable entity id (###e<id>), never by
         // row index, so clipping never collapses the tree.
         //
-        // Icon gutter: every row reserves space for its kind glyph by prefixing
-        // plain spaces (measured once, display-only — the ###e<id> suffix keeps
-        // widget identity). The glyph is painted into that gutter after the
-        // node, so selection, drag & drop and the context menu are untouched.
+        // Row layout reserves an icon gutter and draws labels independently of
+        // widget IDs, so user-authored hashes and long names remain readable.
         const float ol_icon_sz = 13.0f;
-        const float ol_space_w = ImGui::CalcTextSize(" ").x;
-        int ol_pad_n = (ol_space_w > 0.0f)
-                           ? static_cast<int>(std::ceil((ol_icon_sz + 10.0f) / ol_space_w))
-                           : 5;
-        if (ol_pad_n < 4) {
-            ol_pad_n = 4;
-        }
-        const std::string ol_pad(static_cast<size_t>(ol_pad_n), ' ');
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(rows.size()));
         while (clipper.Step()) {
             for (int clip_i = clipper.DisplayStart; clip_i < clipper.DisplayEnd; ++clip_i) {
                 const OutlinerRow& row = rows[static_cast<size_t>(clip_i)];
-                ImGui::PushID(static_cast<int>(row.entity.id));
-            const bool selected = app.selection().contains(row.entity);
-            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-            if (selected) {
-                flags |= ImGuiTreeNodeFlags_Selected;
-            }
-            if (!row.has_children) {
-                flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-            }
-            if (!app.outliner().is_expanded(row.entity) && row.has_children) {
-                ImGui::SetNextItemOpen(false, ImGuiCond_Always);
-            }
-            // Display text is shaped (an Arabic entity name must read
-            // right-to-left); the ID suffix stays the numeric entity, so
-            // renaming an entity or switching language never collapses the
-            // tree — the label text is not part of the widget identity.
-            // The leading spaces are the icon gutter (see above).
-            const std::string row_text =
-                ol_pad + ui::shape_arabic(row.is_prefab ? ("[Prefab] " + row.label) : row.label);
-            const std::string row_id = "###e" + std::to_string(row.entity.id);
-            const ImVec4 kind_col = outliner_kind_color(row.kind);
-            const bool tinted = (kind_col.w > 0.0f);
-            if (tinted) {
-                ImGui::PushStyleColor(ImGuiCol_Text, kind_col);
-            }
-            const bool open = ImGui::TreeNodeEx((row_text + row_id).c_str(), flags);
-            if (tinted) {
-                ImGui::PopStyleColor();
-            }
-            // Paint the kind glyph into the gutter: label starts at the tree
-            // node's label spacing, the gutter is the reserved prefix.
-            {
-                const ImVec2 rmin = ImGui::GetItemRectMin();
-                const ImVec2 rmax = ImGui::GetItemRectMax();
-                const float label_x = rmin.x + ImGui::GetTreeNodeToLabelSpacing();
-                const float ix = label_x + 2.0f;
-                const float iy = (rmin.y + rmax.y - ol_icon_sz) * 0.5f;
-                const ImVec2 ic(ix + ol_icon_sz * 0.5f, iy + ol_icon_sz * 0.5f);
-                if (row.kind == OutlinerKind::Mesh && outliner_is_ground_label(row.label)) {
-                    outliner_plane_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
-                } else if (outliner_is_audio_label(row.label)) {
-                    outliner_audio_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
-                } else {
-                    outliner_kind_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz,
-                                       row.kind);
-                }
-
-                // Feature badge chips on the right side of the row (Unified theme)
-                if (row.feature_mask != 0) {
-                    ImDrawList* dl = ImGui::GetWindowDrawList();
-                    float bx = rmax.x - 6.0f;
-                    const float by = (rmin.y + rmax.y) * 0.5f;
-                    auto draw_chip = [&](const char* tag) {
-                        const std::string shaped = ui::shape_arabic(tag);
-                        const ImVec2 tsz = ImGui::CalcTextSize(shaped.c_str());
-                        const float cw = tsz.x + 8.0f;
-                        const float ch = 14.0f;
-                        bx -= cw;
-                        dl->AddRectFilled(ImVec2(bx, by - ch * 0.5f), ImVec2(bx + cw, by + ch * 0.5f), IM_COL32(23, 37, 84, 210), 3.0f);
-                        dl->AddRect(ImVec2(bx, by - ch * 0.5f), ImVec2(bx + cw, by + ch * 0.5f), IM_COL32(59, 130, 246, 140), 3.0f);
-                        dl->AddText(ImVec2(bx + 4.0f, by - tsz.y * 0.5f), IM_COL32(191, 219, 254, 255), shaped.c_str());
-                        bx -= 4.0f;
-                    };
-                    if (row.feature_mask & (1 << 0)) draw_chip(AV("filter_weather").c_str());
-                    if (row.feature_mask & (1 << 1)) draw_chip(AV("filter_cable").c_str());
-                    if (row.feature_mask & (1 << 2)) draw_chip(AV("rule_tile").c_str());
-                    if (row.feature_mask & (1 << 3)) draw_chip(AV("filter_nav").c_str());
-                    if (row.feature_mask & (1 << 4)) draw_chip(AV("filter_talents").c_str());
-                    if (row.feature_mask & (1 << 5)) draw_chip(AV("inventory").c_str());
-                    if (row.feature_mask & (1 << 6)) draw_chip(AV("ragdoll").c_str());
-                    if (row.feature_mask & (1 << 7)) draw_chip(AV("surface_audio").c_str());
-                }
-            }
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                const ImGuiIO& io = ImGui::GetIO();
-                // Ctrl OR Shift toggles (Shift matches the viewport gesture).
-                if (io.KeyCtrl || io.KeyShift) {
-                    if (selected) {
-                        app.selection().remove(row.entity);
+                const bool selected = app.selection().contains(row.entity);
+                uiw::OutlinerRowUi row_ui(row, app.outliner(), selected);
+                // Paint the kind glyph into the gutter: label starts at the tree
+                // node's label spacing, the gutter is the reserved prefix.
+                {
+                    const ImVec2 rmin = ImGui::GetItemRectMin();
+                    const ImVec2 rmax = ImGui::GetItemRectMax();
+                    const float label_x = rmin.x + ImGui::GetTreeNodeToLabelSpacing();
+                    const float ix = label_x + 2.0f;
+                    const float iy = (rmin.y + rmax.y - ol_icon_sz) * 0.5f;
+                    const ImVec2 ic(ix + ol_icon_sz * 0.5f, iy + ol_icon_sz * 0.5f);
+                    if (row.kind == OutlinerKind::Mesh && outliner_is_ground_label(row.label)) {
+                        outliner_plane_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
+                    } else if (outliner_is_audio_label(row.label)) {
+                        outliner_audio_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz);
                     } else {
-                        app.selection().add(row.entity);
-                    }
-                } else {
-                    app.selection().set_single(row.entity);
-                }
-            }
-            // Drag to reparent; drop target accepts entity payloads.
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-                ImGui::SetDragDropPayload("NF_ENTITY", &row.entity, sizeof(ecs::Entity));
-                ImGui::TextUnformatted(ui::shape_arabic(row.label).c_str());
-                ImGui::EndDragDropSource();
-            }
-            if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("NF_ENTITY")) {
-                    ecs::Entity child;
-                    std::memcpy(&child, pl->Data, sizeof(ecs::Entity));
-                    std::string err;
-                    if (!app.reparent(child, row.entity, err)) {
-                        push_error(app.console(), "Reparent failed", err);
+                        outliner_kind_icon(ImGui::GetWindowDrawList(), ic, ol_icon_sz,
+                                           row.kind);
                     }
                 }
-                ImGui::EndDragDropTarget();
-            }
-            // Right-click menu: the same Delete / Save-as-prefab the toolbar
-            // buttons offer, where the pointer already is. Delete is undoable
-            // (Ctrl+Z restores), matching the button's safety contract.
-            if (ImGui::BeginPopupContextItem("##rowctx")) {
-                if (ImGui::MenuItem(AV("frame_selection").c_str(), "F")) {
-                    app.selection().set_single(row.entity);
-                    intents.nav_frame = 1;
-                }
-                if (ImGui::MenuItem(AV("create_child").c_str())) {
-                    std::string err;
-                    const int n = static_cast<int>(app.status().entity_count);
-                    if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n), row.entity, err)) {
-                        push_error(app.console(), "Create child failed", err);
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                    const ImGuiIO& io = ImGui::GetIO();
+                    // Ctrl OR Shift toggles (Shift matches the viewport gesture).
+                    if (io.KeyCtrl || io.KeyShift) {
+                        if (selected) {
+                            app.selection().remove(row.entity);
+                        } else {
+                            app.selection().add(row.entity);
+                        }
+                    } else {
+                        app.selection().set_single(row.entity);
                     }
                 }
-                ImGui::Separator();
-                if (ImGui::MenuItem((AV("duplicate") + "   Ctrl+D").c_str())) {
-                    std::string err;
-                    if (!app.duplicate_selection(err)) {
-                        push_error(app.console(), "Duplicate failed", err);
-                    }
+                // Drag to reparent; drop target accepts entity payloads.
+                if (!app.playing() && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+                    ImGui::SetDragDropPayload("NF_ENTITY", &row.entity, sizeof(ecs::Entity));
+                    ImGui::TextUnformatted(ui::shape_arabic(row.label).c_str());
+                    ImGui::EndDragDropSource();
                 }
-                if (ImGui::MenuItem(AV("save_prefab").c_str())) {
-                    std::string err;
-                    const std::string prefab_path =
-                        std::string("content://Prefabs/") + row.label + ".nfscene";
-                    if (!app.create_prefab(row.entity, prefab_path, err)) {
-                        push_error(app.console(), "Save as prefab failed", err);
+                if (!app.playing() && ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("NF_ENTITY")) {
+                        ecs::Entity child;
+                        std::memcpy(&child, pl->Data, sizeof(ecs::Entity));
+                        std::string err;
+                        if (!app.reparent(child, row.entity, err)) {
+                            push_error(app.console(), "Reparent failed", err);
+                        }
                     }
+                    ImGui::EndDragDropTarget();
                 }
-                ImGui::Separator();
-                if (ImGui::MenuItem(AV("delete").c_str())) {
-                    std::string err;
-                    if (!app.delete_entity(row.entity, err)) {
-                        push_error(app.console(), "Delete failed", err);
+                // Right-click menu: the same Delete / Save-as-prefab the toolbar
+                // buttons offer, where the pointer already is. Delete is undoable
+                // (Ctrl+Z restores), matching the button's safety contract.
+                if (ImGui::BeginPopupContextItem("##rowctx")) {
+                    if (!app.selection().contains(row.entity)) app.selection().set_single(row.entity);
+                    if (ImGui::MenuItem(AV("frame_selection").c_str(), "F")) {
+                        app.selection().set_single(row.entity);
+                        intents.nav_frame = 1;
                     }
+                    ImGui::BeginDisabled(app.playing());
+                    if (ImGui::MenuItem(AV("create_child").c_str())) {
+                        std::string err;
+                        const int n = static_cast<int>(app.status().entity_count);
+                        if (!app.create_entity(ui::tr("entity_prefix") + " " + std::to_string(n), row.entity, err)) {
+                            push_error(app.console(), "Create child failed", err);
+                        }
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem((AV("duplicate") + "   Ctrl+D").c_str())) {
+                        std::string err;
+                        if (!app.duplicate_selection(err)) {
+                            push_error(app.console(), "Duplicate failed", err);
+                        }
+                    }
+                    if (ImGui::MenuItem(AV("save_prefab").c_str())) {
+                        std::string err;
+                        const std::string prefab_path =
+                            std::string("content://Prefabs/") + row.label + ".nfscene";
+                        if (!app.create_prefab(row.entity, prefab_path, err)) {
+                            push_error(app.console(), "Save as prefab failed", err);
+                        }
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem(AV("delete").c_str())) {
+                        std::string err;
+                        if (!app.delete_entity(row.entity, err)) {
+                            push_error(app.console(), "Delete failed", err);
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::EndPopup();
                 }
-                ImGui::EndPopup();
-            }
-            if (open && row.has_children) {
-                ImGui::TreePop();
-            }
-            ImGui::PopID();
+            row_ui.tooltip(row.feature_mask);
             }
         }
         clipper.End();
-        // Drop on empty outliner space = unparent to root.
-        if (ImGui::BeginDragDropTarget()) {
-            if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("NF_ENTITY")) {
-                ecs::Entity child;
-                std::memcpy(&child, pl->Data, sizeof(ecs::Entity));
-                std::string err;
-                if (!app.reparent(child, ecs::kInvalidEntity, err)) {
-                    push_error(app.console(), "Reparent failed", err);
-                }
-            }
-            ImGui::EndDragDropTarget();
+        ecs::Entity dropped_root;
+        if (!app.playing() && uiw::outliner_root_drop_target(dropped_root)) {
+            std::string error;
+            if (!app.reparent(dropped_root, ecs::kInvalidEntity, error))
+                push_error(app.console(), "Reparent failed", error);
         }
         if (ImGui::BeginPopupContextWindow("##outliner_empty_ctx", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            ImGui::BeginDisabled(app.playing());
             if (ImGui::MenuItem(AV("create_empty").c_str())) {
                 std::string err;
                 const int n = static_cast<int>(app.status().entity_count);
@@ -2163,8 +2050,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 std::string err;
                 app.create_talent_tree(ecs::kInvalidEntity, err);
             }
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
+        ImGui::EndChild();
     }
     ImGui::End();
 
@@ -2173,7 +2062,9 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     draw_add_object_dialog(app);
 
     // --- Center: Viewport ------------------------------------------------------
-    if (ImGui::Begin((AV("viewport") + "###Viewport").c_str())) {
+    const bool viewport_open = ImGui::Begin((AV("viewport") + "###Viewport").c_str());
+    if (!viewport_open) { app.game_view().open = false; app.game_view().hovered = false; }
+    if (viewport_open) {
         // Game view banner: while playing the viewport IS the game — same
         // offscreen target, but driven by the game camera and game input, not
         // by editor navigation/gizmos. The banner + Stop button is the way
@@ -2190,6 +2081,18 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             ImGui::PopStyleColor(3);
+            ImGui::SameLine();
+            {
+                const bool is_paused = app.paused();
+                if (ImGui::Button(is_paused ? (AV("resume") + " (P)").c_str() : (AV("pause") + " (P)").c_str())) {
+                    app.set_paused(!is_paused);
+                    // Pause freezes the sim and cancels live UI interaction
+                    // (no hidden commit); Resume re-enables fresh input.
+                    if (app.runtime() != nullptr) {
+                        app.runtime()->game_ui().cancel_interaction();
+                    }
+                }
+            }
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
                                AV("game_running_hint").c_str());
@@ -2305,6 +2208,63 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
         const ImVec2 vp_img_min = ImGui::GetItemRectMin();
         const ImVec2 vp_img_max = ImGui::GetItemRectMax();
         const bool vp_img_hovered = ImGui::IsItemHovered();
+        // Publish Game View geometry for next frame's host input routing (the
+        // shell reads it BEFORE Runtime::update, so input lags one frame like
+        // the ScriptCanvas capture — invisible on resize). Open tracks the
+        // panel itself: a closed/collapsed View owns no pointer.
+        {
+            auto& gv = app.game_view();
+            gv.min_x = vp_img_min.x;
+            gv.min_y = vp_img_min.y;
+            gv.size_x = img_size.x;
+            gv.size_y = img_size.y;
+            gv.open = true;
+            gv.hovered = vp_img_hovered;
+        }
+        // Game View: the nf.ui preview over the game image, clipped to the
+        // content rect (aspect-fit letterbox; normally the whole image since
+        // the offscreen target follows the displayed size). Snapshot is taken
+        // at the GAME size (viewport target), drawn at the content origin with
+        // the shared measurer/draw path, so NFPlayer and the editor agree.
+        if (app.playing() && app.runtime() != nullptr) {
+            const uint32_t gw = app.viewport().width;
+            const uint32_t gh = app.viewport().height;
+            const auto content = game_content_fit(vp_img_min.x, vp_img_min.y, img_size.x, img_size.y, gw, gh);
+            if (content.valid() && gw > 0 && gh > 0) {
+                const ui::DisplayList dl = app.runtime()->game_ui().snapshot(
+                    static_cast<float>(gw), static_cast<float>(gh));
+                if (!dl.rects.empty() || !dl.texts.empty() || !dl.lines.empty()) {
+                    ImDrawList* fg = ImGui::GetWindowDrawList();
+                    if (fg != nullptr) {
+                        fg->PushClipRect(ImVec2(content.x, content.y),
+                                         ImVec2(content.x + content.w, content.y + content.h),
+                                         true);
+                        // Measurer from the editor font: same advances the draw uses.
+                        ui::TextMeasurer measurer;
+                        {
+                            ImFont* f = ImGui::GetFont();
+                            if (f != nullptr) {
+                                measurer = [f](const std::string& visual, float fs) -> float {
+                                    const float sz = (fs > 0.0f) ? fs : ImGui::GetFontSize();
+                                    ImVec2 m = f->CalcTextSizeA(sz, FLT_MAX, 0.0f, visual.c_str(),
+                                                                visual.c_str() + visual.size());
+                                    return m.x;
+                                };
+                            }
+                        }
+                        rendering::draw_display_list(fg, dl, ImVec2(content.x, content.y),
+                                          (ImFont*)ImGui::GetFont(), ImGui::GetFontSize(), measurer);
+                        // Paused banner text (top-left inside the game image).
+                        if (app.paused()) {
+                            ImGui::SetCursorScreenPos(ImVec2(content.x + 10.0f, content.y + 10.0f));
+                            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "%s",
+                                               AV("game_paused_hint").c_str());
+                        }
+                        fg->PopClipRect();
+                    }
+                }
+            }
+        }
 
         // Ground grid over the image (drawn, not composited): world grid lines
         // projected through the camera the frame was rendered with, so the grid
@@ -2531,7 +2491,25 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
     ImGui::End();
 
     // --- Right: Inspector ------------------------------------------------------
+    // Flush an interrupted drag before changing selection; never replay it into a new scene
+    // or over a newer undo/command revision.
+    {
+        auto& cache = inspector_cache();
+        if (cache.transform_live && (!app.selection().has_selection() ||
+            cache.entity != app.selection().primary() || !cache.key.same_scene(app.world(), app.scene_serial()) ||
+            cache.transform_revision != app.edit_revision())) {
+            if (cache.key.same_scene(app.world(), app.scene_serial()) &&
+                cache.transform_revision == app.edit_revision()) {
+                std::string error;
+                if (!app.commit_transform(cache.entity, cache.transform_before, error))
+                    push_error(app.console(), "Transform edit failed", error);
+            }
+            cache.transform_live = false;
+        }
+    }
     if (ImGui::Begin((AV("inspector") + "###Inspector").c_str())) {
+        static uiw::InspectorSections inspector_sections;
+        inspector_sections.begin_frame();
         ImGui::PushItemWidth(-135.0f);
         ecs::World* w = app.world();
         const ecs::Entity sel = app.selection().primary();
@@ -2560,6 +2538,10 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 const std::string nm = entity_label_ptr(app, sel);
                 std::strncpy(ic.name, nm.c_str(), sizeof(ic.name) - 1);
                 ic.name[sizeof(ic.name) - 1] = '\0';
+                if (const auto* component = w->get<runtime::SpriteComponent>(sel)) ic.sprite_draft = *component;
+                if (const auto* component = w->get<runtime::TilemapComponent>(sel)) ic.tilemap_draft = *component;
+                if (const auto* component = w->get<runtime::RigidBody2DComponent>(sel)) ic.body_2d_draft = *component;
+                if (const auto* component = w->get<runtime::Collider2DComponent>(sel)) ic.collider_2d_draft = *component;
                 const TransformEdit t = read_transform(*w, sel);
                 ic.pos[0] = t.px;
                 ic.pos[1] = t.py;
@@ -3178,126 +3160,42 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // hunting for "where do I add X" should have one place to look.
             // Each item forwards to the same validated EditorApp method the
             // section uses; missing-component items only.
+            ImGui::TextWrapped("%s", ui::shape_arabic(entity_label(*w, sel)).c_str());
+            uiw::search_field("inspector_search", AV("search_components"), inspector_sections.query);
+            ImGui::BeginDisabled(!inspector_sections.query.empty());
+            if (ImGui::Button(AV("expand_all").c_str())) inspector_sections.bulk_open = 1;
+            uiw::next_action(AV("collapse_all"));
+            if (ImGui::Button(AV("collapse_all").c_str())) inspector_sections.bulk_open = 0;
+            ImGui::EndDisabled();
+            ImGui::Separator();
+            static ComponentPicker component_picker;
+            ImGui::BeginDisabled(app.playing());
             if (ImGui::Button((AV("add_component") + "###AddComponent").c_str())) {
+                component_picker.begin(w, sel, app.scene_serial());
                 ImGui::OpenPopup("##add_component_menu");
             }
-            if (ImGui::BeginPopup("##add_component_menu")) {
-                std::string add_err;
-                bool added = false;
-                if (!w->has<runtime::CameraComponent>(sel) &&
-                    ImGui::MenuItem(AV("camera").c_str())) {
-                    added = app.set_camera(sel, CameraEdit{}, add_err);
-                } else if (!w->has<runtime::DirectionalLight>(sel) &&
-                           ImGui::MenuItem(AV("directional_light").c_str())) {
-                    added = app.set_light(sel, LightEdit{}, add_err);
-                } else if (!ic.sky_has && ImGui::MenuItem(AV("sky").c_str())) {
-                    added = app.apply_sky_edit(SkyEdit{}, add_err);
-                } else if (!ic.pp_has && ImGui::MenuItem(AV("post_process").c_str())) {
-                    added = app.set_post_process(sel, runtime::PostProcessComponent{}, add_err);
-                } else if (!w->has<runtime::DecalComponent>(sel) &&
-                           ImGui::MenuItem(AV("decal").c_str())) {
-                    added = app.set_decal(sel, DecalEdit{}, add_err);
-                } else if (!ic.rz_has && ImGui::MenuItem(AV("reverb_zone").c_str())) {
-                    // Music and ambience are deliberately NOT in this menu: both
-                    // need a buffer path, and a component naming no file is
-                    // refused by the setter (and warned about by the loader).
-                    // Their sections carry the path field and the add button.
-                    added = app.set_reverb_zone(sel, audio::ReverbZoneComponent{}, add_err);
-                } else if (!w->has<runtime::SpriteComponent>(sel) &&
-                           ImGui::MenuItem(AV("sprite_2d").c_str())) {
-                    w->add<runtime::SpriteComponent>(sel, runtime::SpriteComponent{});
-                    added = true;
-                } else if (!w->has<runtime::TilemapComponent>(sel) &&
-                           ImGui::MenuItem(AV("tilemap_2d").c_str())) {
-                    w->add<runtime::TilemapComponent>(sel, runtime::TilemapComponent{});
-                    added = true;
-                } else if (!w->has<runtime::RigidBody2DComponent>(sel) &&
-                           ImGui::MenuItem(AV("rigidbody_2d").c_str())) {
-                    w->add<runtime::RigidBody2DComponent>(sel, runtime::RigidBody2DComponent{});
-                    added = true;
-                } else if (!w->has<runtime::Collider2DComponent>(sel) &&
-                           ImGui::MenuItem(AV("collider_2d").c_str())) {
-                    w->add<runtime::Collider2DComponent>(sel, runtime::Collider2DComponent{});
-                    added = true;
-                } else if (!w->has<physics::RigidBodyComponent>(sel) &&
-                           ImGui::MenuItem(AV("rigid_body").c_str())) {
-                    added = app.set_rigid_body(sel, physics::RigidBodyComponent{}, add_err);
-                } else if (!w->has<physics::ColliderComponent>(sel) &&
-                           ImGui::MenuItem(AV("collider").c_str())) {
-                    added = app.set_collider(sel, physics::ColliderComponent{}, add_err);
-                } else if (!w->has<runtime::DestructibleComponent>(sel) &&
-                           ImGui::MenuItem(AV("destructible").c_str())) {
-                    added = app.set_destructible(sel, runtime::DestructibleComponent{}, add_err);
-                } else if (!w->has<vfx::ParticleComponent>(sel) &&
-                           ImGui::MenuItem(AV("particles").c_str())) {
-                    added = app.attach_particles(sel, add_err);
-                } else if (!w->has<physics::ClothComponent>(sel) &&
-                           ImGui::MenuItem(AV("cloth").c_str())) {
-                    added = app.attach_cloth(sel, add_err);
-                } else if (!w->has<physics::CharacterComponent>(sel) &&
-                           ImGui::MenuItem(AV("character").c_str())) {
-                    added = app.attach_character(sel, add_err);
-                } else if (!w->has<runtime::NavMeshComponent>(sel) &&
-                           ImGui::MenuItem(AV("navmesh").c_str())) {
-                    added = app.attach_navmesh(sel, add_err);
-                } else if (!w->has<runtime::NavAgentComponent>(sel) &&
-                           ImGui::MenuItem(AV("nav_agent").c_str())) {
-                    added = app.attach_nav_agent(sel, add_err);
-                } else if (!w->has<runtime::NavRouteComponent>(sel) &&
-                           ImGui::MenuItem(AV("nav_route").c_str())) {
-                    added = app.attach_nav_route(sel, add_err);
-                } else if (!w->has<runtime::TerrainComponent>(sel) &&
-                           ImGui::MenuItem(AV("terrain").c_str())) {
-                    added = app.attach_terrain(sel, add_err);
-                } else if (!w->has<runtime::SquadComponent>(sel) &&
-                           ImGui::MenuItem(AV("squad").c_str())) {
-                    added = app.attach_squad(sel, add_err);
-                } else if (!w->has<runtime::JammerComponent>(sel) &&
-                           ImGui::MenuItem(AV("jammer").c_str())) {
-                    added = app.attach_jammer(sel, add_err);
-                } else if (!w->has<physics::VehicleComponent>(sel) &&
-                           ImGui::MenuItem(AV("vehicle").c_str())) {
-                    added = app.attach_vehicle(sel, add_err);
-                } else if (!w->has<runtime::CableComponent>(sel) &&
-                           ImGui::MenuItem(AV("cable_physics").c_str())) {
-                    added = app.attach_cable(sel, add_err);
-                } else if (!w->has<runtime::WeatherComponent>(sel) &&
-                           ImGui::MenuItem(AV("weather_system").c_str())) {
-                    added = app.attach_weather(sel, add_err);
-                } else if (!w->has<runtime::RuleTileComponent>(sel) &&
-                           ImGui::MenuItem(AV("rule_tile").c_str())) {
-                    added = app.attach_rule_tile(sel, add_err);
-                } else if (!w->has<runtime::FlowFieldComponent>(sel) &&
-                           ImGui::MenuItem(AV("flow_field").c_str())) {
-                    added = app.attach_flow_field(sel, add_err);
-                } else if (!w->has<runtime::TalentComponent>(sel) &&
-                           ImGui::MenuItem(AV("talent_tree").c_str())) {
-                    added = app.attach_talent_tree(sel, add_err);
-                } else if (!w->has<runtime::RagdollComponent>(sel) &&
-                           ImGui::MenuItem(AV("ragdoll_blend").c_str())) {
-                    added = app.attach_ragdoll(sel, add_err);
-                } else if (!w->has<runtime::InventoryComponent>(sel) &&
-                           ImGui::MenuItem(AV("grid_inventory").c_str())) {
-                    added = app.attach_inventory(sel, add_err);
-                } else if (!w->has<runtime::SurfaceAudioComponent>(sel) &&
-                           ImGui::MenuItem(AV("surface_audio").c_str())) {
-                    added = app.attach_surface_audio(sel, add_err);
+            ImGui::EndDisabled();
+            if (const auto chosen = component_picker_popup(component_picker, w, sel, app.scene_serial())) {
+                std::string error;
+                if (app.add_component(sel, *chosen, error)) {
+                    ic.error.clear(); ic.valid = false;
+                    inspector_sections.query.clear();
+                } else {
+                    ic.error = error;
+                    push_error(app.console(), "Add component failed", error);
                 }
-                if (added) {
-                    ic.error.clear();
-                    ic.valid = false;
-                } else if (!add_err.empty()) {
-                    ic.error = add_err;
-                    push_error(app.console(), "Add component failed", add_err);
-                }
-                ImGui::EndPopup();
             }
 
-            if (ImGui::CollapsingHeader((AV("name") + "###Name").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SetNextItemWidth(-86.0f);
-                ImGui::InputText("##name", ic.name, sizeof(ic.name));
+            ImGui::BeginChild("##inspector_components", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 8));
+            if (uiw::InspectorSection component_section{inspector_sections, "name", "Name", ImGuiTreeNodeFlags_DefaultOpen, true}) {
+                const float apply_width = ImGui::CalcTextSize(AV("apply").c_str()).x +
+                                          ImGui::GetStyle().FramePadding.x * 2;
+                ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x - apply_width -
+                                                       ImGui::GetStyle().ItemSpacing.x));
+                const bool rename_enter = ImGui::InputText("##name", ic.name, sizeof(ic.name),
+                                                           ImGuiInputTextFlags_EnterReturnsTrue);
                 ImGui::SameLine();
-                if (ImGui::Button((AV("apply") + "##name").c_str())) {
+                if (ImGui::Button((AV("apply") + "##name").c_str()) || rename_enter) {
                     std::string err;
                     if (!app.rename_entity(sel, ic.name, err)) {
                         ic.error = err;
@@ -3307,11 +3205,17 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
             }
-            if (w->has<scene::Transform>(sel) && ImGui::CollapsingHeader((AV("transform") + "###Transform").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                bool t_changed = false;
-                t_changed |= draw_vec3_control(AV("position").c_str(), ic.pos, 0.0f, 0.05f);
-                t_changed |= draw_vec3_control(AV("rotation").c_str(), ic.rot, 0.0f, 0.5f);
-                t_changed |= draw_vec3_control(AV("scale").c_str(), ic.scl, 1.0f, 0.02f, 0.01f, 1000.0f);
+            if (uiw::InspectorSection component_section{inspector_sections, "transform", "Transform", ImGuiTreeNodeFlags_DefaultOpen, w->has<scene::Transform>(sel)}) {
+                bool t_changed = false, t_finished = false;
+                const auto edit_axis = [&](const char* key, float values[3], float reset, float speed,
+                                           float minimum = 0, float maximum = 0) {
+                    const auto result = uiw::vector3_control(AV(key).c_str(), values, reset, speed, minimum, maximum);
+                    t_changed |= result.changed;
+                    t_finished |= result.finished;
+                };
+                edit_axis("position", ic.pos, 0, .05f);
+                edit_axis("rotation", ic.rot, 0, .5f);
+                edit_axis("scale", ic.scl, 1, .02f, .01f, 1000);
 
                 // Quick Transform Actions: Copy, Paste, Reset
                 ImGui::Spacing();
@@ -3329,37 +3233,36 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     s_tr_clip.scl[0] = ic.scl[0]; s_tr_clip.scl[1] = ic.scl[1]; s_tr_clip.scl[2] = ic.scl[2];
                     s_tr_clip.valid = true;
                 }
-                ImGui::SameLine();
+                uiw::next_action(AV("paste_transform"));
                 ImGui::BeginDisabled(!s_tr_clip.valid);
                 if (ImGui::Button((AV("paste_transform") + "###btn_paste_tr").c_str())) {
                     ic.pos[0] = s_tr_clip.pos[0]; ic.pos[1] = s_tr_clip.pos[1]; ic.pos[2] = s_tr_clip.pos[2];
                     ic.rot[0] = s_tr_clip.rot[0]; ic.rot[1] = s_tr_clip.rot[1]; ic.rot[2] = s_tr_clip.rot[2];
                     ic.scl[0] = s_tr_clip.scl[0]; ic.scl[1] = s_tr_clip.scl[1]; ic.scl[2] = s_tr_clip.scl[2];
-                    t_changed = true;
+                    t_changed = t_finished = true;
                 }
                 ImGui::EndDisabled();
-                ImGui::SameLine();
+                uiw::next_action(AV("reset_transform"));
                 if (ImGui::Button((AV("reset_transform") + "###btn_reset_tr").c_str())) {
                     ic.pos[0] = 0.0f; ic.pos[1] = 0.0f; ic.pos[2] = 0.0f;
                     ic.rot[0] = 0.0f; ic.rot[1] = 0.0f; ic.rot[2] = 0.0f;
                     ic.scl[0] = 1.0f; ic.scl[1] = 1.0f; ic.scl[2] = 1.0f;
-                    t_changed = true;
+                    t_changed = t_finished = true;
                 }
                 ImGui::PopStyleVar();
 
-                auto* cur_tr = w->get<scene::Transform>(sel);
-                if (cur_tr != nullptr && t_changed) {
-                    cur_tr->local_x = ic.pos[0];
-                    cur_tr->local_y = ic.pos[1];
-                    cur_tr->local_z = ic.pos[2];
-                    cur_tr->rot_x = ic.rot[0];
-                    cur_tr->rot_y = ic.rot[1];
-                    cur_tr->rot_z = ic.rot[2];
-                    cur_tr->scale_x = ic.scl[0];
-                    cur_tr->scale_y = ic.scl[1];
-                    cur_tr->scale_z = ic.scl[2];
-                    cur_tr->dirty = true;
-                    scene::propagate_transforms(*w);
+                if (t_changed) {
+                    if (!ic.transform_live) {
+                        ic.transform_before = read_transform(*w, sel);
+                        ic.transform_revision = app.edit_revision();
+                    }
+                    TransformEdit edit;
+                    edit.px = ic.pos[0]; edit.py = ic.pos[1]; edit.pz = ic.pos[2];
+                    edit.rx = ic.rot[0]; edit.ry = ic.rot[1]; edit.rz = ic.rot[2];
+                    edit.sx = ic.scl[0]; edit.sy = ic.scl[1]; edit.sz = ic.scl[2];
+                    std::string error;
+                    if (app.preview_transform(sel, edit, error)) ic.transform_live = true;
+                    else ic.error = error;
                 }
 
                 if (const auto* t = w->get<scene::Transform>(sel)) {
@@ -3374,29 +3277,19 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                                                       : ui::tr("inspector_root"))));
                 }
                 const bool apply_btn = ImGui::Button((AV("apply") + "##transform").c_str());
-                const bool drag_finished = ImGui::IsItemDeactivatedAfterEdit();
-                if (apply_btn || drag_finished) {
-                    TransformEdit e;
-                    e.px = ic.pos[0];
-                    e.py = ic.pos[1];
-                    e.pz = ic.pos[2];
-                    e.rx = ic.rot[0];
-                    e.ry = ic.rot[1];
-                    e.rz = ic.rot[2];
-                    e.sx = ic.scl[0];
-                    e.sy = ic.scl[1];
-                    e.sz = ic.scl[2];
+                if (ic.transform_live && (apply_btn || t_finished || !ImGui::IsAnyItemActive())) {
                     std::string err;
-                    if (!app.set_transform(sel, e, err)) {
+                    if (!app.commit_transform(sel, ic.transform_before, err)) {
                         ic.error = err;
                         push_error(app.console(), "Transform edit failed", err);
                     } else {
+                        ic.transform_live = false;
                         ic.error.clear();
                     }
                 }
             }
             if (const auto* m = w->get<runtime::MeshComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("mesh") + "###Mesh").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (uiw::InspectorSection component_section{inspector_sections, "mesh", "Mesh", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                     ImGui::InputText(AV("asset_id").c_str(), ic.mesh_id, sizeof(ic.mesh_id));
                     // Shared material assignment (combo over known .nfmat paths).
                     std::vector<std::string> mat_list = app.known_materials();
@@ -3469,8 +3362,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             // Shared PBR material of the selected mesh (scalar params, v0.1).
-            if (w->has<runtime::MeshComponent>(sel) &&
-                ImGui::CollapsingHeader((AV("material") + "###Material").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "material", "Material", ImGuiTreeNodeFlags_DefaultOpen, w->has<runtime::MeshComponent>(sel) }) {
                 ImGui::TextWrapped("%s", ic.mat_path);
                 if (app.runtime() != nullptr && app.runtime()->material_dirty(ic.mat_path)) {
                     ImGui::SameLine();
@@ -3612,7 +3504,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             if (const auto* pl = w->get<scene::PrefabLinkComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("prefab") + "###Prefab").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (uiw::InspectorSection component_section{inspector_sections, "prefab", "Prefab", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                     ImGui::TextWrapped("%s", pl->prefab_path.c_str());
                     if (ImGui::Button(AV("apply_to_prefab").c_str())) {
                         std::string err;
@@ -3637,7 +3529,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             bool has_cam = w->has<runtime::CameraComponent>(sel);
-            if (has_cam && ImGui::CollapsingHeader((AV("camera") + "###Camera").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "camera", "Camera", ImGuiTreeNodeFlags_DefaultOpen, has_cam}) {
                 ImGui::Checkbox(AV("active").c_str(), &ic.cam_active);
                 ImGui::DragFloat(AV("fov").c_str(), &ic.cam[0], 0.5f, 1.0f, 179.0f);
                 ImGui::DragFloat(AV("near").c_str(), &ic.cam[1], 0.01f, 0.001f, 100.0f);
@@ -3663,20 +3555,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // absent = one button that adds a default rifle. The button goes
             // through the same validated command, so "add" and "edit" cannot
             // disagree about what a valid weapon is.
-            if (!ic.weapon_has) {
-                if (ImGui::Button((AV("add_weapon") + "##addweapon").c_str())) {
-                    std::string err;
-                    if (!app.set_weapon(sel, runtime::WeaponProfile{}, err)) {
-                        ic.error = err;
-                        push_error(app.console(), "Weapon add failed", err);
-                    } else {
-                        ic.valid = false; // re-read the cache from the new component
-                    }
-                }
-            }
-            if (ic.weapon_has &&
-                ImGui::CollapsingHeader((AV("weapon") + "###Weapon").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+
+            if (uiw::InspectorSection component_section{inspector_sections, "weapon", "Weapon", ImGuiTreeNodeFlags_DefaultOpen, ic.weapon_has }) {
                 const std::string semi = AV("fire_semi");
                 const std::string auto_fire = AV("fire_auto");
                 const std::string burst = AV("fire_burst");
@@ -3788,20 +3668,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             // --- Hit points (Phase 44) ---------------------------------
-            if (!ic.health_has) {
-                if (ImGui::Button((AV("add_health") + "##addhealth").c_str())) {
-                    std::string err;
-                    if (!app.set_health(sel, runtime::HealthComponent{}, err)) {
-                        ic.error = err;
-                        push_error(app.console(), "Health add failed", err);
-                    } else {
-                        ic.valid = false;
-                    }
-                }
-            }
-            if (ic.health_has &&
-                ImGui::CollapsingHeader((AV("health") + "###Health").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+
+            if (uiw::InspectorSection component_section{inspector_sections, "health", "Health", ImGuiTreeNodeFlags_DefaultOpen, ic.health_has }) {
                 ImGui::DragFloat(AV("max_health").c_str(), &ic.health.max_health, 1.0f, 0.001f,
                                  1000000.0f);
                 ImGui::DragFloat(AV("health_now").c_str(), &ic.health.health, 1.0f, 0.0f,
@@ -3856,20 +3724,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // can configure one without typing a scene line. The target is a
             // name field rather than an entity picker because the scene format
             // stores names, and a name survives save/load.
-            if (!ic.agent_has) {
-                if (ImGui::Button((AV("add_combat_agent") + "##addagent").c_str())) {
-                    std::string err;
-                    if (!app.set_combat_agent(sel, runtime::CombatAgentComponent{}, err)) {
-                        ic.error = err;
-                        push_error(app.console(), "Combat agent add failed", err);
-                    } else {
-                        ic.valid = false;
-                    }
-                }
-            }
-            if (ic.agent_has &&
-                ImGui::CollapsingHeader((AV("combat_agent") + "###CombatAgent").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+
+            if (uiw::InspectorSection component_section{inspector_sections, "combat_agent", "CombatAgent", ImGuiTreeNodeFlags_DefaultOpen, ic.agent_has }) {
                 ImGui::Checkbox((AV("auto_target") + "##agent").c_str(),
                                 &ic.agent_auto_target);
                 ImGui::Checkbox((AV("retaliate") + "##agent").c_str(),
@@ -3919,20 +3775,8 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
             // A team is a short token, not an entity reference. Empty means
             // neutral, and the loader writes no line for it, so adding the
             // component is harmless until the author names a side.
-            if (!ic.faction_has) {
-                if (ImGui::Button((AV("add_faction") + "##addfaction").c_str())) {
-                    std::string err;
-                    if (!app.set_faction(sel, runtime::FactionComponent{}, err)) {
-                        ic.error = err;
-                        push_error(app.console(), "Faction add failed", err);
-                    } else {
-                        ic.valid = false;
-                    }
-                }
-            }
-            if (ic.faction_has &&
-                ImGui::CollapsingHeader((AV("faction") + "###Faction").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+
+            if (uiw::InspectorSection component_section{inspector_sections, "faction", "Faction", ImGuiTreeNodeFlags_DefaultOpen, ic.faction_has }) {
                 ImGui::InputText(AV("team").c_str(), ic.faction_team,
                                  sizeof(ic.faction_team));
                 ImGui::Checkbox((AV("friendly_fire") + "##faction").c_str(),
@@ -3953,8 +3797,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                     }
                 }
             }
-            if (w->has<runtime::DirectionalLight>(sel) &&
-                ImGui::CollapsingHeader((AV("directional_light") + "###DirectionalLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "directional_light", "DirectionalLight", ImGuiTreeNodeFlags_DefaultOpen, w->has<runtime::DirectionalLight>(sel) }) {
                 ImGui::DragFloat3(AV("direction").c_str(), ic.light_dir, 0.02f);
                 ImGui::ColorEdit3(AV("color").c_str(), ic.light_color);
                 {
@@ -4029,7 +3872,7 @@ UiIntents ui_frame(EditorApp& app, const UiFrameStats& stats) {
                 }
             }
             // --- Day/night cycle (design doc §64) ---
-if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
+if (uiw::InspectorSection component_section{inspector_sections, "time_of_day", "TimeOfDay", 0, true}) {
     if (!ic.tod_has) {
         ImGui::TextDisabled("%s", AV("no_day_night").c_str());
         if (ImGui::Button((AV("add_day_night") + "##addtod").c_str())) {
@@ -4067,7 +3910,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
 }
 
 // --- Sky / environment (Phase 13) ---
-            if (ImGui::CollapsingHeader((AV("sky") + "###Sky").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "sky", "Sky", ImGuiTreeNodeFlags_DefaultOpen, ic.sky_has}) {
                 if (!ic.sky_has) {
                     ImGui::TextDisabled("%s", AV("no_sky_settings").c_str());
                     if (ImGui::Button((AV("add_sky_settings") + "##addsky").c_str())) {
@@ -4116,7 +3959,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
             // --- Post-processing (design §206) ---
-            if (ImGui::CollapsingHeader((AV("post_process") + "###PostProcess").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "post_process", "PostProcess", 0, ic.pp_has}) {
                 if (!ic.pp_has) {
                     ImGui::TextDisabled("%s", AV("no_post_process").c_str());
                     if (ImGui::Button((AV("add_post_process") + "##addpp").c_str())) {
@@ -4390,95 +4233,88 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     }
                 }
             }
-            // --- 2D Sprite / Billboard (Phase 73) ---
-            if (auto* sp = w->get<runtime::SpriteComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("sprite_2d") + "###Sprite2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                    static char tex_buf[256];
-                    std::strncpy(tex_buf, sp->texture.c_str(), sizeof(tex_buf) - 1);
-                    tex_buf[sizeof(tex_buf) - 1] = '\0';
-                    if (ImGui::InputText(AV("texture").c_str(), tex_buf, sizeof(tex_buf))) {
-                        sp->texture = tex_buf;
-                    }
-                    ImGui::DragFloat2(AV("size").c_str(), &sp->width, 0.05f, 0.01f, 1000.0f);
-                    float col[4] = {sp->color_r, sp->color_g, sp->color_b, sp->color_a};
-                    if (ImGui::ColorEdit4(AV("color").c_str(), col)) {
-                        sp->color_r = col[0]; sp->color_g = col[1]; sp->color_b = col[2]; sp->color_a = col[3];
-                    }
-                    ImGui::Checkbox(AV("flip_x").c_str(), &sp->flip_x);
-                    ImGui::SameLine();
-                    ImGui::Checkbox(AV("flip_y").c_str(), &sp->flip_y);
-                    ImGui::DragInt(AV("z_order").c_str(), &sp->z_order, 1, -1000, 1000);
-                    ImGui::Checkbox(AV("billboard").c_str(), &sp->billboard);
-                    ImGui::SameLine();
-                    ImGui::Checkbox(AV("enabled").c_str(), &sp->enabled);
+            const auto draft_actions = [&](const char* id, auto& draft, auto setter) {
+                ImGui::PushID(id);
+                if (ImGui::Button(AV("apply").c_str())) {
+                    std::string error;
+                    if ((app.*setter)(sel, draft, error)) { ic.error.clear(); ic.valid = false; }
+                    else { ic.error = error; push_error(app.console(), "Component edit failed", error); }
                 }
-            }
-            // --- 2D Tilemap (Phase 74) ---
-            if (auto* tm = w->get<runtime::TilemapComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("tilemap_2d") + "###Tilemap2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                    static char tm_buf[256];
-                    std::strncpy(tm_buf, tm->tileset_texture.c_str(), sizeof(tm_buf) - 1);
-                    tm_buf[sizeof(tm_buf) - 1] = '\0';
-                    if (ImGui::InputText(AV("texture").c_str(), tm_buf, sizeof(tm_buf))) {
-                        tm->tileset_texture = tm_buf;
-                    }
-                    ImGui::DragFloat(AV("tile_size").c_str(), &tm->tile_size, 1.0f, 1.0f, 512.0f);
-                    int cols = static_cast<int>(tm->columns);
-                    int rws = static_cast<int>(tm->rows);
-                    if (ImGui::DragInt(AV("columns").c_str(), &cols, 1, 1, 1024)) {
-                        if (cols > 0) tm->columns = static_cast<uint32_t>(cols);
-                    }
-                    if (ImGui::DragInt(AV("rows").c_str(), &rws, 1, 1, 1024)) {
-                        if (rws > 0) tm->rows = static_cast<uint32_t>(rws);
-                    }
-                    ImGui::DragInt(AV("z_order").c_str(), &tm->z_order, 1, -1000, 1000);
-                    ImGui::Checkbox(AV("generate_collider").c_str(), &tm->generate_collider);
-                    ImGui::SameLine();
-                    ImGui::Checkbox(AV("enabled").c_str(), &tm->enabled);
+                uiw::next_action(AV("revert_changes"));
+                if (ImGui::Button(AV("revert_changes").c_str())) {
+                    using Component = std::decay_t<decltype(draft)>;
+                    if (const auto* current = w->get<Component>(sel)) draft = *current;
                 }
-            }
-            // --- 2D RigidBody (Phase 74) ---
-            if (auto* rb2 = w->get<runtime::RigidBody2DComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("rigidbody_2d") + "###RigidBody2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                    const char* body_types[] = {"Dynamic", "Static", "Kinematic"};
-                    int cur_type = rb2->body_type;
-                    if (cur_type < 0 || cur_type > 2) cur_type = 0;
-                    if (ImGui::Combo(AV("type").c_str(), &cur_type, body_types, 3)) {
-                        rb2->body_type = cur_type;
-                    }
-                    if (cur_type == 0) {
-                        ImGui::DragFloat(AV("mass").c_str(), &rb2->mass, 0.1f, 0.01f, 10000.0f);
-                    }
-                    ImGui::DragFloat(AV("linear_damping").c_str(), &rb2->linear_damping, 0.01f, 0.0f, 100.0f);
-                    ImGui::DragFloat(AV("angular_damping").c_str(), &rb2->angular_damping, 0.01f, 0.0f, 100.0f);
-                    ImGui::Checkbox(AV("fixed_rotation").c_str(), &rb2->fixed_rotation);
-                    ImGui::SameLine();
-                    ImGui::Checkbox(AV("enabled").c_str(), &rb2->enabled);
+                ImGui::PopID();
+            };
+            ImGui::BeginDisabled(app.playing());
+            if (uiw::InspectorSection component_section{inspector_sections, "sprite_2d", "Sprite2D", ImGuiTreeNodeFlags_DefaultOpen, w->has<runtime::SpriteComponent>(sel)}) {
+                auto& draft = ic.sprite_draft;
+                ImGui::TextDisabled("%s", AV("texture").c_str());
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                input_text("##sprite_texture", draft.texture);
+                float size[] = {draft.width, draft.height};
+                if (ImGui::DragFloat2(AV("size").c_str(), size, .05f, .01f, 1000)) {
+                    draft.width = size[0]; draft.height = size[1];
                 }
-            }
-            // --- 2D Collider (Phase 74) ---
-            if (auto* col2 = w->get<runtime::Collider2DComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("collider_2d") + "###Collider2D").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                    const char* shapes[] = {"Box", "Circle"};
-                    int cur_shape = col2->shape;
-                    if (cur_shape < 0 || cur_shape > 1) cur_shape = 0;
-                    if (ImGui::Combo(AV("shape").c_str(), &cur_shape, shapes, 2)) {
-                        col2->shape = cur_shape;
-                    }
-                    if (cur_shape == 0) {
-                        ImGui::DragFloat2(AV("size").c_str(), &col2->size_x, 0.05f, 0.01f, 1000.0f);
-                    } else {
-                        ImGui::DragFloat(AV("radius").c_str(), &col2->radius, 0.05f, 0.01f, 500.0f);
-                    }
-                    ImGui::DragFloat(AV("friction").c_str(), &col2->friction, 0.01f, 0.0f, 1.0f);
-                    ImGui::DragFloat(AV("restitution").c_str(), &col2->restitution, 0.01f, 0.0f, 1.0f);
-                    ImGui::Checkbox(AV("is_sensor").c_str(), &col2->is_sensor);
-                    ImGui::SameLine();
-                    ImGui::Checkbox(AV("enabled").c_str(), &col2->enabled);
+                float color[] = {draft.color_r, draft.color_g, draft.color_b, draft.color_a};
+                if (ImGui::ColorEdit4(AV("color").c_str(), color)) {
+                    draft.color_r = color[0]; draft.color_g = color[1]; draft.color_b = color[2]; draft.color_a = color[3];
                 }
+                ImGui::Checkbox(AV("flip_x").c_str(), &draft.flip_x);
+                uiw::next_action(AV("flip_y"));
+                ImGui::Checkbox(AV("flip_y").c_str(), &draft.flip_y);
+                ImGui::DragInt(AV("z_order").c_str(), &draft.z_order, 1, -1000, 1000);
+                ImGui::Checkbox(AV("billboard").c_str(), &draft.billboard);
+                ImGui::Checkbox(AV("enabled").c_str(), &draft.enabled);
+                draft_actions("sprite_actions", draft, &EditorApp::set_sprite);
             }
+            if (uiw::InspectorSection component_section{inspector_sections, "tilemap_2d", "Tilemap2D", ImGuiTreeNodeFlags_DefaultOpen, w->has<runtime::TilemapComponent>(sel)}) {
+                auto& draft = ic.tilemap_draft;
+                ImGui::TextDisabled("%s", AV("texture").c_str());
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                input_text("##tilemap_texture", draft.tileset_texture);
+                ImGui::DragFloat(AV("tile_size").c_str(), &draft.tile_size, 1, 1, 512);
+                int columns = static_cast<int>(draft.columns), rows = static_cast<int>(draft.rows);
+                if (ImGui::DragInt(AV("columns").c_str(), &columns, 1, 1, 1024)) draft.columns = static_cast<uint32_t>(columns);
+                if (ImGui::DragInt(AV("rows").c_str(), &rows, 1, 1, 1024)) draft.rows = static_cast<uint32_t>(rows);
+                ImGui::DragInt(AV("z_order").c_str(), &draft.z_order, 1, -1000, 1000);
+                ImGui::Checkbox(AV("generate_collider").c_str(), &draft.generate_collider);
+                ImGui::Checkbox(AV("enabled").c_str(), &draft.enabled);
+                draft_actions("tilemap_actions", draft, &EditorApp::set_tilemap);
+            }
+            if (uiw::InspectorSection component_section{inspector_sections, "rigidbody_2d", "RigidBody2D", ImGuiTreeNodeFlags_DefaultOpen, w->has<runtime::RigidBody2DComponent>(sel)}) {
+                auto& draft = ic.body_2d_draft;
+                const std::string labels[] = {AV("body_dynamic"), AV("body_static"), AV("body_kinematic")};
+                const char* types[] = {labels[0].c_str(), labels[1].c_str(), labels[2].c_str()};
+                ImGui::Combo(AV("type").c_str(), &draft.body_type, types, 3);
+                if (draft.body_type == 0) ImGui::DragFloat(AV("mass").c_str(), &draft.mass, .1f, .01f, 10000);
+                ImGui::DragFloat(AV("linear_damping").c_str(), &draft.linear_damping, .01f, 0, 100);
+                ImGui::DragFloat(AV("angular_damping").c_str(), &draft.angular_damping, .01f, 0, 100);
+                ImGui::Checkbox(AV("fixed_rotation").c_str(), &draft.fixed_rotation);
+                ImGui::Checkbox(AV("enabled").c_str(), &draft.enabled);
+                draft_actions("body2d_actions", draft, &EditorApp::set_body_2d);
+            }
+            if (uiw::InspectorSection component_section{inspector_sections, "collider_2d", "Collider2D", ImGuiTreeNodeFlags_DefaultOpen, w->has<runtime::Collider2DComponent>(sel)}) {
+                auto& draft = ic.collider_2d_draft;
+                const std::string labels[] = {AV("collider_box"), AV("collider_circle")};
+                const char* shapes[] = {labels[0].c_str(), labels[1].c_str()};
+                ImGui::Combo(AV("shape").c_str(), &draft.shape, shapes, 2);
+                if (draft.shape == 0) {
+                    float size[] = {draft.size_x, draft.size_y};
+                    if (ImGui::DragFloat2(AV("size").c_str(), size, .05f, .01f, 1000)) {
+                        draft.size_x = size[0]; draft.size_y = size[1];
+                    }
+                } else ImGui::DragFloat(AV("radius").c_str(), &draft.radius, .05f, .01f, 500);
+                ImGui::DragFloat(AV("friction").c_str(), &draft.friction, .01f, 0, 10);
+                ImGui::DragFloat(AV("restitution").c_str(), &draft.restitution, .01f, 0, 1);
+                ImGui::Checkbox(AV("is_sensor").c_str(), &draft.is_sensor);
+                ImGui::Checkbox(AV("enabled").c_str(), &draft.enabled);
+                draft_actions("collider2d_actions", draft, &EditorApp::set_collider_2d);
+            }
+            ImGui::EndDisabled();
             if (auto* pl = w->get<runtime::PointLightComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("point_light") + "###PointLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (uiw::InspectorSection component_section{inspector_sections, "point_light", "PointLight", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                     float col[3] = {pl->color_r, pl->color_g, pl->color_b};
                     if (ImGui::ColorEdit3(AV("color").c_str(), col)) {
                         pl->color_r = col[0]; pl->color_g = col[1]; pl->color_b = col[2];
@@ -4524,7 +4360,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
             if (auto* sl = w->get<runtime::SpotLightComponent>(sel)) {
-                if (ImGui::CollapsingHeader((AV("spot_light") + "###SpotLight").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (uiw::InspectorSection component_section{inspector_sections, "spot_light", "SpotLight", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                     float col[3] = {sl->color_r, sl->color_g, sl->color_b};
                     if (ImGui::ColorEdit3(AV("color").c_str(), col)) {
                         sl->color_r = col[0]; sl->color_g = col[1]; sl->color_b = col[2];
@@ -4583,7 +4419,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // +/-Z box onto whatever the GBuffer already drew. Placement and
             // facing therefore stay in the Transform section above; this panel
             // owns the projection extent and the blend trim.
-            if (ImGui::CollapsingHeader((AV("decal") + "###Decal").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "decal", "Decal", 0, ic.decal_has}) {
                 if (!ic.decal_has) {
                     ImGui::TextDisabled("%s", AV("no_decal").c_str());
                     if (ImGui::Button((AV("add_decal") + "##adddecal").c_str())) {
@@ -4631,7 +4467,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // absent until the author asks for it, which is what keeps its line
             // out of the saved file — the same contract the Sky and
             // PostProcess sections above follow.
-            if (ImGui::CollapsingHeader((AV("reverb_zone") + "###ReverbZone").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "reverb_zone", "ReverbZone", 0, ic.rz_has}) {
                 if (!ic.rz_has) {
                     ImGui::TextDisabled("%s", AV("no_reverb_zone").c_str());
                     if (ImGui::Button((AV("add_reverb_zone") + "##addrz").c_str())) {
@@ -4674,7 +4510,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             }
             // Music and ambience need a buffer path, so their empty state offers
             // the path field rather than an add button that could only fail.
-            if (ImGui::CollapsingHeader((AV("music") + "###Music").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "music", "Music", 0, true}) {
                 if (!ic.mus_has) {
                     ImGui::TextDisabled("%s", AV("no_music").c_str());
                     ImGui::SetNextItemWidth(280.0f);
@@ -4720,7 +4556,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     }
                 }
             }
-            if (ImGui::CollapsingHeader((AV("ambience") + "###Ambience").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "ambience", "Ambience", 0, true}) {
                 if (!ic.amb_has) {
                     ImGui::TextDisabled("%s", AV("no_ambience").c_str());
                     ImGui::SetNextItemWidth(280.0f);
@@ -4765,7 +4601,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // --- Physics: RigidBody ---
             // Always visible: the setter is add-or-replace, so Attach authors
             // the component with defaults instead of merely editing it.
-            if (ImGui::CollapsingHeader((AV("rigid_body") + "###RigidBody").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "rigid_body", "RigidBody", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!w->has<physics::RigidBodyComponent>(sel)) {
                     ImGui::TextDisabled("%s", AV("no_rigid_body").c_str());
                     if (ImGui::Button((AV("attach") + "##rigidbody").c_str())) {
@@ -4817,7 +4653,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             }
             // --- Physics: Collider ---
             // Always visible, same add-or-replace contract as the body above.
-            if (ImGui::CollapsingHeader((AV("collider") + "###Collider").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "collider", "Collider", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!w->has<physics::ColliderComponent>(sel)) {
                     ImGui::TextDisabled("%s", AV("no_collider").c_str());
                     if (ImGui::Button((AV("attach") + "##collider").c_str())) {
@@ -4872,8 +4708,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // --- Destruction (Phase 19 authoring, Phase 25 panel) ---
             // Always visible like Sky: Attach authors a default spec, Apply
             // forwards the cached fields through the validated setter.
-            if (ImGui::CollapsingHeader((AV("destructible") + "###Destructible").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "destructible", "Destructible", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!w->has<runtime::DestructibleComponent>(sel)) {
                     ImGui::TextDisabled("%s", AV("no_destructible").c_str());
                     if (ImGui::Button((AV("attach") + "##destructible").c_str())) {
@@ -4931,7 +4766,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // default spec, Apply forwards the cached fields through the
             // validated setter, Detach removes the component (and with it the
             // `Feedback:` line the saver writes).
-            if (ImGui::CollapsingHeader((AV("feedback") + "###Feedback").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "feedback", "Feedback", 0, true}) {
                 if (!ic.fb_has) {
                     ImGui::TextDisabled("%s", AV("no_feedback").c_str());
                     if (ImGui::Button((AV("add_feedback") + "##feedback").c_str())) {
@@ -5053,7 +4888,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // Feedback: Attach authors a default sensor, Apply forwards the
             // cached fields through the validated setter, Detach removes the
             // component (and with it the `Perception:` line the saver writes).
-            if (ImGui::CollapsingHeader((AV("perception") + "###Perception").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "perception", "Perception", 0, true}) {
                 if (!ic.perc_has) {
                     ImGui::TextDisabled("%s", AV("no_perception").c_str());
                     if (ImGui::Button((AV("add_perception") + "##perception").c_str())) {
@@ -5147,7 +4982,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // same-token members inside range. Always visible like Perception:
             // Attach authors a default token and range, Apply validates through
             // the loader's own rules, Detach removes the `Squad:` line.
-            if (ImGui::CollapsingHeader((AV("squad") + "###Squad").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "squad", "Squad", 0, ic.squad_has}) {
                 if (!ic.squad_has) {
                     ImGui::TextDisabled("%s", AV("no_squad").c_str());
                     if (ImGui::Button((AV("add_squad") + "##squad").c_str())) {
@@ -5217,7 +5052,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // visible like Squad: Attach authors the default 12 m field,
             // Apply validates through the loader's own bounds, Detach removes
             // the `Jammer:` line.
-            if (ImGui::CollapsingHeader((AV("jammer") + "###Jammer").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "jammer", "Jammer", 0, true}) {
                 if (!ic.jammer_has) {
                     ImGui::TextDisabled("%s", AV("no_jammer").c_str());
                     if (ImGui::Button((AV("add_jammer") + "##jammer").c_str())) {
@@ -5273,7 +5108,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // The considerations an NPC weighs. Always visible like Destruction,
             // Feedback and Perception: Attach authors a default brain, Apply
             // forwards the list through the validated setter, Detach removes it.
-            if (ImGui::CollapsingHeader((AV("brain") + "###Brain").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "brain", "Brain", 0, true}) {
                 if (!ic.brain_has) {
                     ImGui::TextDisabled("%s", AV("no_brain").c_str());
                     if (ImGui::Button((AV("add_brain") + "##brain").c_str())) {
@@ -5397,7 +5232,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // --- State machine (Phase 62) ---
             // States and guarded edges: the machine's shape is the list of edges,
             // so they are edited in order and the order is what breaks a tie.
-            if (ImGui::CollapsingHeader((AV("states") + "###States").c_str())) {
+            if (uiw::InspectorSection component_section{inspector_sections, "states", "States", 0, true}) {
                 if (!ic.sm_has) {
                     ImGui::TextDisabled("%s", AV("no_states").c_str());
                     if (ImGui::Button((AV("add_states") + "##sm").c_str())) {
@@ -5566,8 +5401,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
             // --- Animation ---
-            if (w->has<animation::AnimationComponent>(sel) &&
-                ImGui::CollapsingHeader((AV("animation") + "###Animation").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "animation", "Animation", ImGuiTreeNodeFlags_DefaultOpen, w->has<animation::AnimationComponent>(sel) }) {
                 if (const auto* anim = w->get<animation::AnimationComponent>(sel)) {
                     // Readouts, not controls: single-line shaped strings that
                     // right-align in RTL (rt_*) and keep Latin/digit runs
@@ -5632,7 +5466,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // --- Audio ---
             // Always visible: the buffer row below is add-or-replace, so an
             // entity with no audio yet authors one by naming a file.
-            if (ImGui::CollapsingHeader((AV("audio") + "###Audio").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "audio", "Audio", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (const auto* aud = w->get<audio::AudioComponent>(sel)) {
                     rt_disabled_str(AVF("audio_buffer",
                                         aud->buffer_name.empty()
@@ -5723,8 +5557,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // --- Particles (Phase 25) ---
             // Always visible: Attach authors defaults, Apply forwards the
             // cached config through the validated setter.
-            if (ImGui::CollapsingHeader((AV("particles") + "###Particles").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "particles", "Particles", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.part_has) {
                     ImGui::TextDisabled("%s", AV("no_particles").c_str());
                     if (ImGui::Button((AV("attach") + "##particles").c_str())) {
@@ -5799,8 +5632,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
             // --- Cloth (Phase 25) ---
-            if (ImGui::CollapsingHeader((AV("cloth") + "###Cloth").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "cloth", "Cloth", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.cloth_has) {
                     ImGui::TextDisabled("%s", AV("no_cloth").c_str());
                     if (ImGui::Button((AV("attach") + "##cloth").c_str())) {
@@ -5861,8 +5693,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
             // --- Character (Phase 25) ---
-            if (ImGui::CollapsingHeader((AV("character") + "###Character").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "character", "Character", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.char_has) {
                     ImGui::TextDisabled("%s", AV("no_character").c_str());
                     if (ImGui::Button((AV("attach") + "##character").c_str())) {
@@ -5948,8 +5779,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // the mesh itself is baked by the Runtime when the scene is
             // adopted, which is why there is no "rebuild" button — saving and
             // re-opening (or pressing Play) is the rebuild.
-            if (ImGui::CollapsingHeader((AV("navmesh") + "###NavMesh").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "navmesh", "NavMesh", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.navm_has) {
                     ImGui::TextDisabled("%s", AV("no_navmesh").c_str());
                     if (ImGui::Button((AV("attach") + "##navmesh").c_str())) {
@@ -6031,8 +5861,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // is why the button says "apply" and not "save": nothing is
             // persisted until the scene is saved, and what changes immediately
             // is what the viewport shows.
-            if (ImGui::CollapsingHeader((AV("terrain") + "###Terrain").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "terrain", "Terrain", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.terr_has) {
                     ImGui::TextDisabled("%s", AV("no_terrain").c_str());
                     if (ImGui::Button((AV("attach") + "##terrain").c_str())) {
@@ -6098,8 +5927,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // Config plus the authored goal only. The live path is runtime
             // state: no widget shows it because none should edit it, and the
             // goal is the one field an author needs to move the walker.
-            if (ImGui::CollapsingHeader((AV("nav_agent") + "###NavAgent").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "nav_agent", "NavAgent", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.nava_has) {
                     ImGui::TextDisabled("%s", AV("no_nav_agent").c_str());
                     if (ImGui::Button((AV("attach") + "##nav_agent").c_str())) {
@@ -6153,8 +5981,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // is live state and only shown, never edited. Apply forwards the
             // list through the validated setter, so a point that is not a
             // finite triple never reaches the file.
-            if (ImGui::CollapsingHeader((AV("nav_route") + "###NavRoute").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "nav_route", "NavRoute", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.navr_has) {
                     ImGui::TextDisabled("%s", AV("no_nav_route").c_str());
                     if (ImGui::Button((AV("attach") + "##nav_route").c_str())) {
@@ -6343,8 +6170,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // the car); the four inputs apply live-only through
             // set_vehicle_input, like the character's wish_dir/jump — driving
             // from the inspector never touches the file.
-            if (ImGui::CollapsingHeader((AV("vehicle") + "###Vehicle").c_str(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "vehicle", "Vehicle", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 if (!ic.veh_has) {
                     ImGui::TextDisabled("%s", AV("no_vehicle").c_str());
                     if (ImGui::Button((AV("attach") + "##vehicle").c_str())) {
@@ -6473,7 +6299,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // component's map. During a session the module owns its state and the
             // component is the saved snapshot, so editing the map would show the
             // user a value the module would immediately overwrite.
-            if (ImGui::CollapsingHeader((AV("gameplay") + "###Gameplay").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "gameplay", "Gameplay", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 const std::vector<std::string> candidates = gameplay_module_candidates();
                 if (candidates.empty()) {
                     ImGui::TextDisabled("%s", AV("no_gameplay_modules").c_str());
@@ -6553,7 +6379,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             // created from a minimal update(dt) template — an empty path or a
             // missing file is rejected here rather than stored as a component
             // that looks scripted but never ticks.
-            if (ImGui::CollapsingHeader((AV("script") + "###Script").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "script", "Script", ImGuiTreeNodeFlags_DefaultOpen, true}) {
                 const bool has_script = w->has<scripting::ScriptComponent>(sel);
                 ImGui::InputText(AV("script_path").c_str(), ic.script_path, sizeof(ic.script_path));
                 ImGui::Checkbox((AV("enabled") + "##script_enabled").c_str(), &ic.script_enabled);
@@ -6646,7 +6472,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
             }
             ImGui::Spacing();
             // --- Phases 115-122 Engine Feature Inspectors ---
-            if (ic.cable_has && ImGui::CollapsingHeader((AV("cable_physics") + "###CablePhysics").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "cable_physics", "CablePhysics", ImGuiTreeNodeFlags_DefaultOpen, ic.cable_has}) {
                 ImGui::Checkbox((AV("enabled") + "##cable_en").c_str(), &ic.cable_enabled);
                 ImGui::DragFloat((AV("total_length") + "##cable_len").c_str(), &ic.cable_length, 0.1f, 0.5f, 500.0f, "%.2f m");
                 ImGui::SliderInt((AV("particle_count") + "##cable_pts").c_str(), &ic.cable_particles, 2, 128);
@@ -6700,7 +6526,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.weather_has && ImGui::CollapsingHeader((AV("weather_system") + "###WeatherSystem").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "weather_system", "WeatherSystem", ImGuiTreeNodeFlags_DefaultOpen, ic.weather_has}) {
                 ImGui::Checkbox((AV("enabled") + "##w_en").c_str(), &ic.weather_enabled);
                 const char* w_types[7] = {
                     "weather_clear", "weather_cloudy", "weather_overcast",
@@ -6770,7 +6596,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.rule_tile_has && ImGui::CollapsingHeader((AV("rule_tile") + "###RuleTile").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "rule_tile", "RuleTile", ImGuiTreeNodeFlags_DefaultOpen, ic.rule_tile_has}) {
                 ImGui::Checkbox((AV("enabled") + "##rt_en").c_str(), &ic.rt_enabled);
                 ImGui::DragInt((AV("tile_size") + "##rt_def").c_str(), &ic.rt_default_id, 1.0f, 0, 1024);
                 const char* rt_modes[3] = {"rule_preset_16", "rule_preset_47", "rule_preset_custom"};
@@ -6814,7 +6640,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.flow_has && ImGui::CollapsingHeader((AV("flow_field") + "###FlowField").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "flow_field", "FlowField", ImGuiTreeNodeFlags_DefaultOpen, ic.flow_has}) {
                 ImGui::Checkbox((AV("enabled") + "##ff_en").c_str(), &ic.ff_enabled);
                 ImGui::SliderInt((AV("grid_width") + "##ff_w").c_str(), &ic.ff_width, 8, 256);
                 ImGui::SliderInt((AV("grid_height") + "##ff_h").c_str(), &ic.ff_height, 8, 256);
@@ -6853,7 +6679,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.talent_has && ImGui::CollapsingHeader((AV("talent_tree") + "###TalentTree").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "talent_tree", "TalentTree", ImGuiTreeNodeFlags_DefaultOpen, ic.talent_has}) {
                 ImGui::Checkbox((AV("enabled") + "##tt_en").c_str(), &ic.talent_enabled);
                 ImGui::InputText(AV("tree_id").c_str(), ic.tt_id, sizeof(ic.tt_id));
                 ImGui::InputText(AV("tree_name").c_str(), ic.tt_name, sizeof(ic.tt_name));
@@ -6886,7 +6712,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.ragdoll_has && ImGui::CollapsingHeader((AV("ragdoll_blend") + "###RagdollBlend").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "ragdoll_blend", "RagdollBlend", ImGuiTreeNodeFlags_DefaultOpen, ic.ragdoll_has}) {
                 ImGui::Checkbox((AV("enabled") + "##rd_en").c_str(), &ic.ragdoll_enabled);
                 ImGui::SliderFloat((AV("blend_weight") + "##rd_wt").c_str(), &ic.rd_weight, 0.0f, 1.0f, "%.2f");
                 ImGui::TextDisabled("%s", AV("ragdoll_blend_hint").c_str());
@@ -6931,7 +6757,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.inv_has && ImGui::CollapsingHeader((AV("grid_inventory") + "###GridInventory").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "grid_inventory", "GridInventory", ImGuiTreeNodeFlags_DefaultOpen, ic.inv_has}) {
                 ImGui::Checkbox((AV("enabled") + "##inv_en").c_str(), &ic.inv_enabled);
                 ImGui::SliderInt((AV("inv_columns") + "##inv_c").c_str(), &ic.inv_cols, 1, 32);
                 ImGui::SliderInt((AV("inv_rows") + "##inv_r").c_str(), &ic.inv_rows, 1, 32);
@@ -6974,7 +6800,7 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
-            if (ic.sa_has && ImGui::CollapsingHeader((AV("surface_audio") + "###SurfaceAudio").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (uiw::InspectorSection component_section{inspector_sections, "surface_audio", "SurfaceAudio", ImGuiTreeNodeFlags_DefaultOpen, ic.sa_has}) {
                 ImGui::Checkbox((AV("enabled") + "##sa_en").c_str(), &ic.sa_enabled);
                 const char* sa_mats[7] = {
                     "mat_concrete", "mat_dirt", "mat_metal", "mat_wood",
@@ -7020,6 +6846,13 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                 }
             }
 
+            if (inspector_sections.matches == 0) {
+                ImGui::TextWrapped("%s", AV("components_no_matches").c_str());
+                if (ImGui::Button(AV("clear_search").c_str())) inspector_sections.query.clear();
+            }
+            ImGui::EndChild();
+            ImGui::Separator();
+            ImGui::BeginDisabled(!app.stack().can_undo());
             if (ImGui::Button(AV("undo").c_str()) && app.stack().can_undo()) {
                 std::string err;
                 if (!app.undo(err)) {
@@ -7028,7 +6861,9 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     ic.valid = false;
                 }
             }
-            ImGui::SameLine();
+            ImGui::EndDisabled();
+            uiw::next_action(AV("redo"));
+            ImGui::BeginDisabled(!app.stack().can_redo());
             if (ImGui::Button(AV("redo").c_str()) && app.stack().can_redo()) {
                 std::string err;
                 if (!app.redo(err)) {
@@ -7037,10 +6872,23 @@ if (ImGui::CollapsingHeader((AV("time_of_day") + "###TimeOfDay").c_str())) {
                     ic.valid = false;
                 }
             }
+            ImGui::EndDisabled();
         }
         ImGui::PopItemWidth();
     }
     ImGui::End();
+
+    {
+        auto& cache = inspector_cache();
+        if (cache.transform_live && !ImGui::IsAnyItemActive() &&
+            cache.key.same_scene(app.world(), app.scene_serial()) &&
+            cache.transform_revision == app.edit_revision()) {
+            std::string error;
+            if (!app.commit_transform(cache.entity, cache.transform_before, error))
+                push_error(app.console(), "Transform edit failed", error);
+            cache.transform_live = false;
+        }
+    }
 
     // --- Dedicated editors (ScenePanels.cpp) -----------------------------------
     // One window per engine function, each bound to the live scene object the

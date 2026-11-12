@@ -765,6 +765,28 @@ bool EditorApp::set_transform(ecs::Entity e, const TransformEdit& edit, std::str
     return true;
 }
 
+bool EditorApp::preview_transform(ecs::Entity e, const TransformEdit& edit, std::string& out_err) {
+    if (!require_editable(out_err) || !world()) return false;
+    auto cmd = make_transform_command(*world(), e, edit, out_err);
+    if (!cmd) return false;
+    cmd->apply(*world());
+    scene::propagate_transforms(*world());
+    m_dirty = true;
+    if (m_runtime) m_runtime->mark_scene_edited();
+    if (m_runtime) m_runtime->rebase_animation(e);
+    return true;
+}
+
+bool EditorApp::commit_transform(ecs::Entity e, const TransformEdit& before, std::string& out_err) {
+    if (!require_editable(out_err) || !world()) return false;
+    auto cmd = make_transform_command(*world(), e, read_transform(*world(), e), out_err, &before);
+    if (!cmd) return false;
+    m_stack.push(std::move(cmd), *world());
+    after_mutation(e);
+    if (m_runtime) m_runtime->rebase_animation(e);
+    return true;
+}
+
 bool EditorApp::reparent(ecs::Entity e, ecs::Entity new_parent, std::string& out_err) {
     if (!require_editable(out_err)) {
         return false;
@@ -4570,7 +4592,7 @@ bool EditorApp::set_material_albedo(const std::string& material_path, const std:
     }
     // Pre-upload: rejects missing/undecodable textures BEFORE any command, so
     // the undo stack never fills with no-ops.
-    if (!texture_path.empty() && !m_runtime->ensure_texture(texture_path, out_err)) {
+    if (!texture_path.empty() && !m_runtime->ensure_texture(texture_path, true, out_err)) {
         return false;
     }
     ecs::World* w = world();
@@ -5293,9 +5315,18 @@ bool EditorApp::play(std::string& out_err) {    if (m_runtime == nullptr || m_ru
     // The player's taste, pushed on entry: a saved settings file takes effect
     // on the next play session even if the panel was never opened this run.
     m_runtime->set_player_settings(m_player_settings);
+    // Fresh UI and script environments for this session: no text, focus or
+    // Lua globals may survive from the previous Play (repeated Play/Stop must
+    // not stack callbacks). Settings on disk are untouched — saving stays
+    // explicit (a Lua nf.settings.save), never a preview side effect.
+    m_runtime->game_ui().reset();
+    m_runtime->clear_script_cache();
     if (!m_play.play(*m_runtime->edit_scene(), out_err)) {
         return false;
     }
+    m_play_scene_path = m_runtime->loaded_scene_path();
+    m_play_scene_version = m_runtime->scene_version();
+    m_runtime->reset_game_session();
     // A trace exported from now on is "this play session", not "everything
     // since the editor started", which is what the Profiler panel's export
     // button promises.
@@ -5315,7 +5346,12 @@ bool EditorApp::stop(std::string& out_err) {
     // world differ only in values, never in membership; restore is exact.
     if (m_play.snapshot() != nullptr && m_runtime != nullptr &&
         m_runtime->edit_scene() != nullptr) {
-        restore_scene(*m_runtime->edit_scene(), *m_play.snapshot());
+        if (m_runtime->loaded_scene_path() != m_play_scene_path ||
+            m_runtime->scene_version() != m_play_scene_version) {
+            m_runtime->adopt_scene(clone_scene(*m_play.snapshot()), m_play_scene_path);
+        } else {
+            restore_scene(*m_runtime->edit_scene(), *m_play.snapshot());
+        }
         m_runtime->rebuild_physics_from_scene();
         // Cars back to their pre-play tune and placement: the restore above
         // scrubs the play session's live inputs and JoltVehicle views, and
@@ -5328,6 +5364,15 @@ bool EditorApp::stop(std::string& out_err) {
             std::string dummy;
             viewport_abort_drag(dummy);
         }
+    }
+    if (m_runtime != nullptr) {
+        // Stop drops the play session's UI and Lua environments with it;
+        // the restored edit world must not show stale game widgets.
+        m_runtime->game_ui().reset();
+        m_runtime->clear_script_cache();
+        m_runtime->reset_game_session();
+        m_runtime->set_paused(false);
+        m_runtime->set_playing(false);
     }
     return m_play.stop(out_err);
 }
@@ -6189,7 +6234,7 @@ std::vector<OutlinerRow> EditorApp::outliner_rows() const {
         const bool world_swapped = (w != m_outliner_cache_world ||
                                     m_scene_serial != m_outliner_cache_scene_serial);
         const bool churned = (w->alive_entity_count() != m_outliner_cache_count);
-        const bool searching = !m_outliner.filter_text.empty();
+        const bool searching = m_outliner.filtering();
         const bool visibility_changed = searching != m_outliner_cache_searching ||
             (!searching && m_outliner.collapsed != m_outliner_cache_collapsed);
         if (!m_outliner_cache_valid || world_swapped || churned || visibility_changed) {
@@ -6207,7 +6252,7 @@ std::vector<OutlinerRow> EditorApp::outliner_rows() const {
         }
         // The search box filters every frame over the cached rows: typing must
         // not wait for a structural mutation to take effect.
-        return filter_outliner_rows(m_outliner_cache, m_outliner.filter_text);
+        return filter_outliner_rows(m_outliner_cache, m_outliner.filter_text, m_outliner.category);
     }
     return {};
 }

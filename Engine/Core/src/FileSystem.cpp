@@ -194,10 +194,10 @@ std::filesystem::path executable_directory() {
         return std::filesystem::path(buffer).parent_path();
     }
 #elif defined(__linux__)
-    std::error_code ec;
-    const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (!ec) {
-        return self.parent_path();
+    {
+        std::error_code ec;
+        const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+        if (!ec) return self.parent_path();
     }
 #endif
     std::error_code ec;

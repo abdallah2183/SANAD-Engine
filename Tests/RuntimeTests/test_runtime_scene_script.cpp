@@ -298,3 +298,215 @@ NF_TEST(script_cache_is_cleared_on_scene_adopt) {
         }
     }
 }
+
+NF_TEST(runtime_pause_freezes_counter_timer_and_entities_without_dt) {
+    HeadlessRuntime env;
+    if (!env.ok()) { NF_SKIP("no Vulkan device"); return; }
+    // Counter increments without reading dt; timer accumulates dt.
+    write_script(env.vfs, "content://Scripts/counter.lua",
+                 "local count = 0\n"
+                 "local timer = 0\n"
+                 "function update(dt)\n"
+                 "  count = count + 1\n"
+                 "  timer = timer + dt\n"
+                 "  local id, gen = nf.self()\n"
+                 "  local x, y, z = nf.entity_pos(id, gen)\n"
+                 "  nf.set_entity_pos(id, gen, x + count * 0.0 + 1.0, y, z)\n"
+                 "  print('tick ' .. count .. ' ' .. timer)\n"
+                 "end\n");
+    auto s = std::make_unique<Scene>("PauseCounter");
+    ecs::Entity e = s->world().create_entity();
+    s->world().add<Transform>(e, Transform{});
+    scripting::ScriptComponent comp;
+    comp.path = "content://Scripts/counter.lua";
+    s->world().add<scripting::ScriptComponent>(e, std::move(comp));
+    env.runtime->adopt_scene(std::move(s), "content://Scenes/PauseCounter.nfscene");
+    for (int i = 0; i < 5; ++i) env.runtime->update(kDt);
+    NF_CHECK_EQ(env.runtime->script_updates(), static_cast<size_t>(5));
+    const auto start_updates = env.runtime->script_updates();
+    // Pause freezes even with a real dt — dt alone is not the guard.
+    env.runtime->set_paused(true);
+    NF_CHECK(env.runtime->paused());
+    for (int i = 0; i < 10; ++i) env.runtime->update(kDt);
+    NF_CHECK_EQ(env.runtime->script_updates(), start_updates);
+    const auto* live1 = env.runtime->scene();
+    const auto* tr1 = live1->world().get<Transform>(live1->world().all_entities().front());
+    const float x_paused = tr1 ? tr1->local_x : -1.0f;
+    NF_CHECK_NEAR(x_paused, 5.0f, 1e-4f);
+    // Resume without jump: one normal frame advances exactly one tick.
+    env.runtime->set_paused(false);
+    env.runtime->update(1.0f / 60.0f);
+    NF_CHECK_EQ(env.runtime->script_updates(), start_updates + 1);
+    const auto* live2 = env.runtime->scene();
+    const auto* tr2 = live2->world().get<Transform>(live2->world().all_entities().front());
+    NF_CHECK(tr2 != nullptr);
+    if (tr2) NF_CHECK_NEAR(tr2->local_x, 6.0f, 1e-4f);
+    // Play/Stop replay: clear cache does not accumulate.
+    for (int i = 0; i < 3; ++i) {
+        auto s2 = std::make_unique<Scene>("PauseCounter2");
+        ecs::Entity e2 = s2->world().create_entity();
+        s2->world().add<Transform>(e2, Transform{});
+        scripting::ScriptComponent c2;
+        c2.path = "content://Scripts/counter.lua";
+        s2->world().add<scripting::ScriptComponent>(e2, std::move(c2));
+        env.runtime->adopt_scene(std::move(s2), "content://Scenes/PauseCounter2.nfscene");
+        NF_CHECK_EQ(env.runtime->script_count(), static_cast<size_t>(1));
+        env.runtime->set_paused(true);
+        env.runtime->update(kDt);
+        NF_CHECK(env.runtime->paused());
+        env.runtime->set_paused(false);
+        env.runtime->update(kDt);
+    }
+    NF_CHECK_EQ(env.runtime->script_count(), static_cast<size_t>(1));
+}
+
+NF_TEST(runtime_script_canvas_reaches_scene_scripts_and_resets_on_scene_change) {
+    HeadlessRuntime env;
+    if (!env.ok()) { NF_SKIP("Vulkan is unavailable"); }
+    write_script(env.vfs, "content://ui.lua", R"LUA(
+        function update(dt)
+            nf.ui.label("title", "Runtime UI", .1,.05,.4,.1)
+            if nf.ui.button("go", "Go", .1,.2,.3,.1) then
+                nf.set_entity_pos(self_id, self_gen, 7,0,0)
+            end
+        end
+    )LUA");
+    scene::Scene scene("UI scene");
+    const auto entity = scene.world().create_entity();
+    scene.world().add<scene::Transform>(entity, scene::Transform{});
+    scripting::ScriptComponent component;
+    component.path = "content://ui.lua";
+    scene.world().add<scripting::ScriptComponent>(entity, component);
+    std::string error;
+    NF_CHECK(save_scene_to_vfs(env.vfs, "content://UI.nfscene", scene, error));
+    NF_CHECK(env.runtime->load_scene("content://UI.nfscene", error));
+    env.runtime->update(kDt);
+    NF_CHECK_EQ(env.runtime->game_ui().size(),2u);
+    env.runtime->set_ui_pointer({.2f,.25f,true,true});
+    env.runtime->update(kDt);
+    env.runtime->set_ui_pointer({.2f,.25f,false,true});
+    env.runtime->update(kDt);
+    const auto entities = env.runtime->edit_scene()->world().query<scripting::ScriptComponent>();
+    NF_CHECK_EQ(entities.size(),1u);
+    NF_CHECK_NEAR(env.runtime->edit_scene()->world().get<scene::Transform>(entities[0])->local_x,7,.001f);
+    env.runtime->set_ui_pointer({.2f,.25f,true,true});
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->load_scene("content://UI.nfscene", error));
+    NF_CHECK_EQ(env.runtime->game_ui().size(),0u);
+    env.runtime->set_ui_pointer({.2f,.25f,false,true});
+    env.runtime->update(kDt);
+    const auto reloaded = env.runtime->edit_scene()->world().query<scripting::ScriptComponent>();
+    NF_CHECK_NEAR(env.runtime->edit_scene()->world().get<scene::Transform>(reloaded[0])->local_x,0,.001f);
+}
+
+
+namespace {
+void write_flow_scene(HeadlessRuntime& env, const std::string& path, const std::string& name,
+                      const std::string& source) {
+    const auto script = "content://Scripts/" + name + ".lua";
+    write_script(env.vfs, script, source);
+    Scene scene(name);
+    const auto entity = scene.world().create_entity();
+    scene.world().add<Transform>(entity, Transform{});
+    scripting::ScriptComponent comp;
+    comp.path = script;
+    scene.world().add<scripting::ScriptComponent>(entity, comp);
+    std::string error;
+    NF_CHECK(save_scene_to_vfs(env.vfs, path, scene, error));
+}
+float first_flow_x(Runtime& runtime) {
+    const auto& world = runtime.scene()->world();
+    const auto entities = world.query<Transform>();
+    return world.get<Transform>(entities[0])->local_x;
+}
+}
+
+NF_TEST(runtime_scene_transition_is_deferred_and_callback_finishes) {
+    HeadlessRuntime env;
+    if (!env.ok()) NF_SKIP("no Vulkan device");
+    const std::string a = "content://Scenes/A.nfscene", b = "content://Scenes/B.nfscene";
+    write_flow_scene(env, a, "A", R"lua(
+        function update(dt)
+            assert(nf.scene.load('content://Scenes/B.nfscene'))
+            assert(not nf.scene.load('content://Scenes/A.nfscene'))
+            assert(nf.scene.current() == 'content://Scenes/A.nfscene')
+            nf.set_entity_pos(self_id, self_gen, 9, 0, 0)
+            assert(nf.session.set('finished_callback', true))
+        end
+    )lua");
+    write_flow_scene(env, b, "B", R"lua(
+        function update(dt)
+            assert(nf.session.get('finished_callback') == true)
+            nf.set_entity_pos(self_id, self_gen, 23, 0, 0)
+            nf.ui.label('new', 'NEW SCENE', .1,.1,.4,.1)
+        end
+    )lua");
+    std::string error;
+    NF_CHECK(env.runtime->load_scene(a, error));
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->loaded_scene_path() == a);
+    NF_CHECK_EQ(first_flow_x(*env.runtime), 9.0f);
+    NF_CHECK(env.runtime->game_flow().pending());
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->loaded_scene_path() == b);
+    NF_CHECK_EQ(first_flow_x(*env.runtime), 23.0f);
+    NF_CHECK(env.runtime->game_flow().status() == "ready");
+    NF_CHECK_EQ(env.runtime->game_ui().size(), size_t(1));
+}
+
+NF_TEST(runtime_failed_scene_transition_keeps_world_and_allows_retry) {
+    HeadlessRuntime env;
+    if (!env.ok()) NF_SKIP("no Vulkan device");
+    const std::string a = "content://Scenes/A.nfscene";
+    write_flow_scene(env, a, "A", R"lua(
+        local count = 0
+        function update(dt)
+            count = count + 1
+            nf.set_entity_pos(self_id, self_gen, count, 0, 0)
+        end
+    )lua");
+    std::string error;
+    NF_CHECK(env.runtime->load_scene(a, error));
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->game_flow().request_scene("content://Scenes/Missing.nfscene", error));
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->loaded_scene_path() == a);
+    NF_CHECK_EQ(first_flow_x(*env.runtime), 2.0f);
+    NF_CHECK(env.runtime->game_flow().status() == "failed");
+    NF_CHECK(!env.runtime->game_flow().error().empty());
+    NF_CHECK(env.vfs.write_text("content://Scenes/Bad.nfscene", "not a scene").ok);
+    NF_CHECK(env.runtime->game_flow().request_scene("content://Scenes/Bad.nfscene", error));
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->loaded_scene_path() == a);
+    NF_CHECK_EQ(first_flow_x(*env.runtime), 3.0f);
+    NF_CHECK(env.runtime->game_flow().status() == "failed");
+    NF_CHECK(env.runtime->game_flow().request_restart(error));
+    env.runtime->update(kDt);
+    NF_CHECK_EQ(first_flow_x(*env.runtime), 1.0f);
+    NF_CHECK(env.runtime->game_flow().status() == "ready");
+}
+
+NF_TEST(runtime_scene_requests_wait_during_pause_and_session_reset_cancels) {
+    HeadlessRuntime env;
+    if (!env.ok()) NF_SKIP("no Vulkan device");
+    const std::string a = "content://Scenes/A.nfscene", b = "content://Scenes/B.nfscene";
+    write_flow_scene(env, a, "A", "function update(dt) end");
+    write_flow_scene(env, b, "B", "function update(dt) end");
+    std::string error;
+    NF_CHECK(env.runtime->load_scene(a, error));
+    NF_CHECK(env.runtime->game_flow().request_scene(b, error));
+    env.runtime->set_paused(true);
+    env.runtime->update(1.0f);
+    NF_CHECK(env.runtime->loaded_scene_path() == a);
+    NF_CHECK(env.runtime->game_flow().pending());
+    env.runtime->set_paused(false);
+    env.runtime->update(0.0f);
+    NF_CHECK(env.runtime->loaded_scene_path() == a);
+    env.runtime->reset_game_session();
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->loaded_scene_path() == a);
+    NF_CHECK(!env.runtime->game_flow().pending());
+    NF_CHECK(env.runtime->game_flow().request_scene(b, error));
+    env.runtime->update(kDt);
+    NF_CHECK(env.runtime->loaded_scene_path() == b);
+}

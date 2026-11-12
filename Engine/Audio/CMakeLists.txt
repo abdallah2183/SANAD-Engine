@@ -16,6 +16,7 @@
 set(NFAUDIO_SOURCES
     src/AudioDSP.cpp
     src/AudioEngine.cpp
+    src/AudioRingBuffer.cpp
     src/AudioDecoder.cpp
     src/AudioScene.cpp
     src/Buses.cpp
@@ -35,6 +36,8 @@ set(NFAUDIO_SOURCES
 
 if(WIN32)
     list(APPEND NFAUDIO_SOURCES src/Windows/WasapiAudioDevice.cpp)
+elseif(ANDROID)
+    list(APPEND NFAUDIO_SOURCES src/Android/AAudioDevice.cpp)
 endif()
 
 nf_engine_library(NFAudio
@@ -46,9 +49,13 @@ nf_engine_library(NFAudio
 # at /W1 but not under the engine's /W4 /WX policy, so this one TU opts out.
 # (Same rule as ThirdParty/imgui and ThirdParty/lua, applied per-file because
 # the implementation must live inside NFAudio.)
-set_source_files_properties(src/MiniAudioImpl.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
-# stb_vorbis is conversion-heavy by design (C4242); silence it for this TU.
-set_source_files_properties(src/OggVorbisImpl.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-;/wd4242")
+if(MSVC)
+    set_source_files_properties(src/MiniAudioImpl.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
+    # stb_vorbis is conversion-heavy by design (C4242); silence it for this TU.
+    set_source_files_properties(src/OggVorbisImpl.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-;/wd4242")
+else()
+    set_source_files_properties(src/MiniAudioImpl.cpp src/OggVorbisImpl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 target_link_libraries(NFAudio PUBLIC miniaudio)
 
@@ -59,4 +66,6 @@ target_include_directories(NFAudio PRIVATE ${CMAKE_SOURCE_DIR}/ThirdParty/stb)
 if(WIN32)
     # COM + multimedia device APIs for the WASAPI backend.
     target_link_libraries(NFAudio PUBLIC ole32)
+elseif(ANDROID)
+    target_link_libraries(NFAudio PUBLIC aaudio)
 endif()

@@ -12,8 +12,8 @@ namespace nf::project {
 /// The only project templates `nf new` may select. Names are case-sensitive;
 /// keeping this as an allow-list makes path traversal and accidental fallback
 /// impossible by construction.
-inline constexpr std::array<std::string_view, 4> kProjectTemplateNames{
-    "Default", "ThirdPerson", "FPSStarter", "Platformer2D"};
+inline constexpr std::array<std::string_view, 5> kProjectTemplateNames{
+    "Default", "ThirdPerson", "FPSStarter", "Platformer2D", "UiStarter"};
 
 /// Picks the templates root to resolve `template_name` from.
 ///

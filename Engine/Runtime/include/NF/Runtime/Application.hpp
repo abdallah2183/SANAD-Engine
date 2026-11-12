@@ -2,6 +2,7 @@
 
 #include <NF/Core/Types.hpp>
 
+#include <filesystem>
 #include <string>
 
 namespace nf::runtime {
@@ -69,6 +70,9 @@ struct ApplicationConfig {
     /// missing or empty log is not silently a successful no-op run; a CI job
     /// that means to prove gameplay drives the entity turns it on.
     bool input_replay_strict = false;
+
+    // Exported games share saves and settings across builds of the same game.
+    std::filesystem::path saves_directory;
 };
 
 class Application {

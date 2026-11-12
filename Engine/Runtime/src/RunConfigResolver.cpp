@@ -108,6 +108,9 @@ bool resolve_run_config(const ApplicationConfig& config,
             out_error = "project '" + config.project_path + "': " + out_error;
             return false;
         }
+        if (!config.saves_directory.empty()) {
+            project->add_mount("saves://", config.saves_directory);
+        }
         if (!project->apply_mounts(vfs, out_error)) {
             out_error = "project '" + project->name() + "': " + out_error;
             return false;

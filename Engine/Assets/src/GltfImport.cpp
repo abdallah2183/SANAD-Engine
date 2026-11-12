@@ -409,6 +409,26 @@ bool convert_mesh(const cgltf_data* data, const cgltf_mesh& mesh, usize mesh_ind
         }
     }
     if (mesh.name) out.logical_path = std::string(logical_path) + "#" + mesh.name;
+
+    // glTF 2.0 defines the front face as COUNTER-clockwise (§3.7.2). SANAD's
+    // rasterizer uses FrontFace::CW to pair the Vulkan Y-flip in
+    // Mat4::perspective (Renderer3D.cpp, StaticMesh::create_quad), so a glTF
+    // triangle fed straight through is classified as back-facing: the camera
+    // sees the INSIDE of the mesh, whose normals point away from every light,
+    // and the material renders black. Convert the convention at the one place
+    // that knows the source format, by swapping the last two indices of every
+    // triangle. Vertex positions, normals, UVs and tangents are untouched;
+    // smooth normals were already computed above from the source winding.
+    //
+    // This is why an unflipped glTF quad disappears entirely (single-sided
+    // synthetic fixtures) while a flipped one renders lit. It is a FORMAT
+    // conversion, not a mesh edit: any glTF/GLB goes through the same rule.
+    if (out.indices.size() % 3 == 0) {
+        for (usize i = 0; i < out.indices.size(); i += 3) {
+            std::swap(out.indices[i + 1], out.indices[i + 2]);
+        }
+    }
+
     recompute_mesh_bounds(out);
     return true;
 }
@@ -534,14 +554,49 @@ GltfImportResult convert_parsed(cgltf_data* data, const std::string& logical_pat
         // legally carry a normal map without has_pbr_metallic_roughness, so
         // these resolve outside the if above.
         carry_map(m.normal_texture.texture, info.normal_image);
+        // glTF `normalTexture.scale`, read outside the has_pbr_metallic_roughness
+        // block for the same reason as the map itself: normalTexture is
+        // material-level. Only meaningful alongside the texture — cgltf sets the
+        // 1.0 default inside cgltf_parse_json_texture_view, which it never calls
+        // when the key is absent, so an unconditional read would carry 0 and
+        // flatten any normal map assigned to this material later.
+        if (info.normal_image >= 0) {
+            info.normal_scale = m.normal_texture.scale;
+        }
         carry_map(m.occlusion_texture.texture, info.occlusion_image);
+        // glTF `occlusionTexture.strength` (cgltf stores it in .scale). Same
+        // guard as normalTexture.scale: cgltf only defaults .scale to 1 inside
+        // cgltf_parse_json_texture_view, so read it only when the map exists.
+        if (info.occlusion_image >= 0) {
+            info.occlusion_strength = m.occlusion_texture.scale;
+        }
         carry_map(m.emissive_texture.texture, info.emissive_image);
+        bool emissive_declared = false;
         for (int c = 0; c < 3; ++c) {
             info.emissive[c] = m.emissive_factor[c];
+            // glTF clamps emissiveFactor to [0,1]; any non-zero channel means
+            // the source actually declared emission.
+            if (m.emissive_factor[c] > 0.0f) emissive_declared = true;
         }
         if (m.has_emissive_strength) {
             info.emissive_strength = m.emissive_strength.emissive_strength;
         }
+        // glTF 2.0 emission is `emissiveFactor * emissiveTexture`, scaled by
+        // KHR_materials_emissive_strength. The factor defaults to [0,0,0], so a
+        // material without it emits nothing *whatever* its textures and its
+        // strength say. The strength must therefore be resolved here, against
+        // the factor: MaterialLibrary::pack() reads "colour 0,0,0 with a
+        // non-zero strength" as "no colour given" and substitutes the base
+        // colour, so leaving the payload's default of 1 in place would make
+        // every non-emissive glTF material glow with its albedo. Genuine
+        // emitters keep the spec default of 1 when the extension is absent.
+        if (!emissive_declared) {
+            info.emissive_strength = 0.0f;
+        }
+        // glTF `doubleSided` (default false). Carry it so the renderer can
+        // disable back-face culling for planes/leaves instead of showing their
+        // dark interior. It is a material property, not a geometry edit.
+        info.double_sided = m.double_sided != 0;
 
         // Everything else the material declares, named so the loss is visible
         // instead of implied. PBR maps are carried above (not dropped); what

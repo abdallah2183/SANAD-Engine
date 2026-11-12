@@ -73,6 +73,8 @@ void print_help() {
               << "                                   package; --shipping adds the\n"
               << "                                   version stamp, redist/uninstall\n"
               << "                                   notes, and a distributable zip\n"
+              << "  nf export [--project <file>] [--out <dir>]\n"
+              << "                                   export one Windows EXE into dist-windows/\n"
               << "  nf run   [--project <file>] [--frames N] [--headless] [--validation]\n"
               << "                                   [--replay <log>] [--input-log <out>] [--replay-strict]\n"
               << "                                   build, then launch the player\n"
@@ -376,7 +378,7 @@ BuildOptions make_build_options(const std::filesystem::path& project_file,
         // Non-Windows or a non-standard layout: try the bare name.
         opts.player_exe = exe_dir / "NFPlayer";
     }
-    opts.shader_dir = std::string(NF_BASIC3D_SHADER_DIR);
+    opts.shader_dir = packaging_shader_directory(exe_dir, NF_BASIC3D_SHADER_DIR);
     return opts;
 }
 
@@ -384,6 +386,11 @@ void print_build_report(const BuildReport& report) {
     std::cout << "Cook report: cooked " << report.cook.cooked << ", skipped " << report.cook.skipped
               << ", failed " << report.cook.failed << ", pruned " << report.cook.pruned
               << ", total " << report.cook.total() << "\n";
+    if (!report.game_exe.empty()) {
+        std::cout << "Embedded " << report.files_packaged << " file(s)\n"
+                  << "Windows EXE: " << report.game_exe.string() << "\n";
+        return;
+    }
     std::cout << "Packaged " << report.files_packaged << " file(s) (" << report.manifest_entries
               << " manifest entries), " << report.shaders_copied << " shader(s)\n";
     std::cout << "Output: " << report.output_dir.string() << "\n";
@@ -403,6 +410,10 @@ int run_build(const char* label,
               const char* argv0) {
     BuildOptions opts = make_build_options(project_file, out_dir, argv0);
     opts.shipping = shipping;
+    if (std::string_view(label) == "export") {
+        opts.single_executable = true;
+        opts.player_exe = executable_dir(argv0) / "NFGameExport.exe";
+    }
     // A shipping package is a distributable, so it carries the tool version in
     // its VERSION.txt stamp; build_project refuses a shipping build without one.
     if (shipping) opts.version = kVersion;
@@ -646,6 +657,7 @@ int main(int argc, char** argv) {
     // `--shipping` is accepted by both, so it is never silently ignored.
     if (command == "build") return run_build("build", project_file, out_dir, shipping, argv[0]);
     if (command == "package") return run_build("package", project_file, out_dir, shipping, argv[0]);
+    if (command == "export") return run_build("export", project_file, out_dir, shipping, argv[0]);
     if (command == "run") return cmd_run(project_file, out_dir, passthrough, argv[0]);
 
     std::cerr << "nf: unknown command '" << command << "'\n";

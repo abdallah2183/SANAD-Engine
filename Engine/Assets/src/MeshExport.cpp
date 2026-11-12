@@ -524,7 +524,17 @@ std::vector<u8> build_gltf_bin(const MeshAsset& mesh) {
         std::memcpy(bin.data(), mesh.vertices.data(), vertex_bytes);
     }
     if (index_bytes > 0) {
-        std::memcpy(bin.data() + vertex_bytes, mesh.indices.data(), index_bytes);
+        auto* dst = reinterpret_cast<u32*>(bin.data() + vertex_bytes);
+        std::memcpy(dst, mesh.indices.data(), index_bytes);
+        // SANAD's front faces are CW (FrontFace::CW paired with the Vulkan
+        // Y-flip); glTF 2.0 requires CCW. GltfImport converts CCW -> CW on
+        // read, so the writer must convert CW -> CCW here. Without this, a
+        // mesh exported from the engine would be inside-out in Blender and a
+        // .glb round trip would return with reversed winding. Swap only whole
+        // triangles; a truncated tail is left exactly as authored.
+        for (usize i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            std::swap(dst[i + 1], dst[i + 2]);
+        }
     }
     return bin;
 }

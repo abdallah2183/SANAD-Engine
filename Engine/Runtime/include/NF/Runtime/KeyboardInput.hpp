@@ -47,6 +47,10 @@ public:
     void set_bindings(InputBindings bindings);
     [[nodiscard]] const InputBindings& bindings() const { return m_bindings; }
 
+    /// Optional non-owning touch source. The host owns it and clears it when
+    /// the mobile window loses focus; desktop bindings remain available.
+    void set_touch_source(const gameplay::IInputSource* source) { m_touch_source = source; }
+
     /// Refreshes the pointer and the pad once per frame. Called by the
     /// runtime before anything reads input, so every reader in a frame sees
     /// the same delta.
@@ -55,6 +59,16 @@ public:
     [[nodiscard]] bool look_delta(float& dx, float& dy) const override;
     [[nodiscard]] float wheel_delta() const override;
     void set_pointer_capture(bool captured) override;
+    void set_ui_pointer_capture(bool captured);
+    bool ui_pointer_captured() const { return m_ui_capture; }
+    /// When the UI has keyboard focus, Tab/Enter/Space/arrows are consumed by
+    /// the UI and must not drive gameplay movement.
+    void set_ui_keyboard_capture(bool captured);
+    bool ui_keyboard_captured() const { return m_ui_kb_capture; }
+    /// While a text field is editing, ALL keyboard keys (including WASD) are
+    /// blocked from gameplay: typed letters must not walk the player.
+    void set_ui_text_capture(bool captured);
+    bool ui_text_captured() const { return m_ui_text_capture; }
 
     /// The deadzoned pad axis at `index`, in the platform's GamepadAxis
     /// order. Public because the device callbacks the binding evaluator calls
@@ -68,9 +82,13 @@ private:
     void* m_window = nullptr;
 
     InputBindings m_bindings = InputBindings::defaults();
+    const gameplay::IInputSource* m_touch_source = nullptr;
 
     /// True while the cursor is hidden and clipped to the window.
     bool m_captured = false;
+    bool m_ui_capture = false;
+    bool m_ui_kb_capture = false;
+    bool m_ui_text_capture = false;
     /// Set when the player asked for the pointer back (Esc). While it is set,
     /// the runtime's per-frame "capture, please" is ignored, so a game cannot
     /// take the pointer away again the instant it is given back.

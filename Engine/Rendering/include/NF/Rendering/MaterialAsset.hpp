@@ -5,7 +5,7 @@
 // A material asset is a NAMED set of PBR parameters shared by every entity
 // assigned to it (MeshComponent::material holds the logical path, e.g.
 // "content://Materials/Default"). Editing parameters rewrites the instance's
-// 48-byte UBO only — never a pipeline, never the PipelineCache (the contract
+// 80-byte UBO only — never a pipeline, never the PipelineCache (the contract
 // MaterialLibrary documents and its tests enforce).
 //
 // The format is line-based and tolerant: unknown lines are ignored, missing
@@ -30,6 +30,9 @@ struct MaterialAsset {
     std::string mrough;
     std::string occlusion;
     std::string emissive;
+    /// glTF `doubleSided`: render and light both faces of the surface.
+    /// Default false keeps engine-authored single-sided meshes unchanged.
+    bool double_sided = false;
     // Sampler mip filtering for the albedo ("none", "nearest", "linear").
     // Anything else loads as linear; unknown keys are ignored as usual.
     rhi::MipMapMode mip_mode = rhi::MipMapMode::Linear;

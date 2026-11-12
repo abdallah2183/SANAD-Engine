@@ -26,6 +26,9 @@ param(
     # executable it has no reputation for, and a certificate the machine
     # trusts satisfies the policy.
     [switch]$Sign,
+    [string]$ReleaseCertThumbprint = '',
+    [uri]$TimestampUrl,
+    [string]$SignTool = '',
     # The build directory the binaries come from, relative to the repository
     # root. CI builds into build/ci (a Debug tree) while a release build lives
     # in build/release, and hard-coding one of them made the other impossible
@@ -37,6 +40,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ReleaseCertThumbprint -and ($Sign -or -not $TimestampUrl)) {
+    throw 'Public release signing needs -ReleaseCertThumbprint and -TimestampUrl. Use -Sign for local builds only.'
+}
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)  # packaging/windows -> repo root
 if (-not (Test-Path (Join-Path $repo 'CMakeLists.txt'))) {
     # Fallback when invoked from the repo root with a relative path.
@@ -70,7 +76,7 @@ if (-not $stage.StartsWith($stageRoot, [StringComparison]::OrdinalIgnoreCase)) {
 }
 
 # --- Build (unless skipped) ---------------------------------------------------
-$needBins = @('SANADEditor.exe', 'NFGamePlayer.exe')
+$needBins = @('SANADEditor.exe', 'NFGamePlayer.exe', 'NFGameExport.exe')
 $missing = @($needBins | Where-Object { -not (Test-Path (Join-Path $build "bin\$_")) })
 if ($missing.Count -gt 0 -and -not $SkipBuild) {
     Write-Host "Release binaries missing ($($missing -join ', ')) - building Release now (this takes a while)..."
@@ -130,6 +136,10 @@ foreach ($d in @('EditorImGui', 'Basic3D')) {
     $dst = Join-Path $stage "Shaders\$d"
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     Get-ChildItem $src -Filter *.spv | ForEach-Object { Copy-Item $_.FullName $dst; $script:shaderCount++ }
+    $gameUi = Join-Path $src 'UI'
+    if ($d -eq 'Basic3D' -and (Test-Path -LiteralPath $gameUi -PathType Container)) {
+        Copy-Item -LiteralPath $gameUi -Destination $dst -Recurse
+    }
 }
 Write-Host ("  Shaders/                {0,8} .spv  (EditorImGui + Basic3D)" -f $shaderCount)
 if ($shaderCount -eq 0) { throw 'No shaders staged - build the release first.' }
@@ -162,7 +172,7 @@ if ($GameNames.Count -gt 0) {
         Copy-Item -LiteralPath $sample -Destination (Join-Path $stage 'Games') -Recurse -Force
     }
     Get-ChildItem (Join-Path $stage 'Games') -Recurse -Directory |
-        Where-Object { $_.Name -in @('Cache', 'dist') } |
+        Where-Object { $_.Name -in @('Cache', 'dist', 'dist-windows') } |
         ForEach-Object {
             $generatedPath = [System.IO.Path]::GetFullPath($_.FullName)
             if (-not $generatedPath.StartsWith($stage + '\', [StringComparison]::OrdinalIgnoreCase)) {
@@ -226,6 +236,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stage 'Editor\resources') 
 Copy-Item -LiteralPath (Join-Path $repo 'Editor\resources\SANAD.png') -Destination (Join-Path $stage 'Editor\resources') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'Resources\Branding') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'Resources\Branding\sanad_logo.jpg') -Destination (Join-Path $stage 'Resources\Branding') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'Resources\Branding\sanad_mark.png') -Destination (Join-Path $stage 'Resources\Branding') -Force
 $readme = @"
 SANAD Engine $version (Windows x64) - portable release
 ================================================
@@ -250,9 +261,12 @@ YOUR FIRST GAME IN FIVE MINUTES
        Save / Discard / Cancel, and always leaves cache://EditorRecovery.nfscene.
 
 MAKE A STANDALONE BUILD
+    In the editor, save the project and choose Game > Export Windows EXE.
+    Share the named EXE from your project's dist-windows folder.
+    From the command line:
     nf new MyGame --template ThirdPerson
-    nf build --project MyGame\MyGame.nfproj
-    MyGame\dist\NFPlayer.exe
+    nf export --project MyGame\MyGame.nfproj
+    MyGame\dist-windows\MyGame.exe
     (nf.exe, NFAssetCooker.exe and NFModelImporter.exe ship beside the editor.)
 
 TEMPLATES
@@ -279,7 +293,7 @@ WHERE THE VERSION NUMBER COMES FROM
     One place: project(VERSION) and NF_VERSION_SUFFIX in CMakeLists.txt.
 
 REPORTING A PROBLEM
-    Include the console output (the editor logs every Vulkan/asset error) and
+    Include the output from the editor's Console panel and
     the exact step that failed.
 "@
 $readme | Set-Content -Path (Join-Path $stage 'README.txt') -Encoding UTF8
@@ -294,7 +308,11 @@ Write-Host '  README.txt + SANAD.png'
 #
 # Best effort: a machine with no code-signing certificate still gets a
 # package, unsigned, exactly as before. The warning says which.
-if ($Sign) {
+$signRelease = Join-Path $repo 'Scripts\sign_release.ps1'
+if ($ReleaseCertThumbprint) {
+    $files = @(Get-ChildItem -LiteralPath $stage -Filter '*.exe' -File | Select-Object -ExpandProperty FullName)
+    & $signRelease -Path $files -CertThumbprint $ReleaseCertThumbprint -TimestampUrl $TimestampUrl -SignTool $SignTool
+} elseif ($Sign) {
     $signScript = Join-Path $repo 'Scripts\sign_build.ps1'
     if (Test-Path $signScript) {
         & powershell -ExecutionPolicy Bypass -File $signScript -BinDir $stage
@@ -303,7 +321,7 @@ if ($Sign) {
         }
     }
 } else {
-    Write-Host '  (not signed - pass -Sign to sign the staged binaries)'
+    Write-Host '  (unsigned build - pass -ReleaseCertThumbprint and -TimestampUrl for public distribution)'
 }
 
 $total = (Get-ChildItem $stage -Recurse -File | Measure-Object -Property Length -Sum)
@@ -344,6 +362,9 @@ if (-not $SkipInstaller) {
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
     $setupPath = Join-Path $dist $setupName
     if (-not (Test-Path $setupPath)) { throw "Installer was not produced: $setupPath" }
+    if ($ReleaseCertThumbprint) {
+        & $signRelease -Path $setupPath -CertThumbprint $ReleaseCertThumbprint -TimestampUrl $TimestampUrl -SignTool $SignTool
+    }
     Write-Host ("installer: {0} ({1:N1} MB)" -f $setupPath, ((Get-Item $setupPath).Length / 1MB))
 }
 

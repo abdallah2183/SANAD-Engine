@@ -769,9 +769,8 @@ struct LauncherState {
     // startup by walking up from the module path. Order: game, vehicle,
     // editor_en, editor_ar. Empty entries = missing file (gradient fallback).
     Thumb thumbs[4];
-    // The brand mark (Editor/resources/SANAD.png, or SANAD.png beside the exe
-    // in a package). Drawn in the sidebar header; null = text-only header.
-    Thumb logo;
+    // The executable's shared SANAD icon, also used by the window title bar.
+    HICON logo = nullptr;
     ULONG_PTR gdiplus_token = 0;
 };
 
@@ -1529,52 +1528,17 @@ HBITMAP load_thumb(const std::wstring& path, int& out_w, int& out_h) {
     return hbmp;
 }
 
-/// Locate the brand mark. A package ships it beside the exe (SANAD.png, the
-/// dist layout) or under Resources/; a source-tree run finds the committed
-/// Editor/resources/SANAD.png by walking up. Empty when absent.
-std::wstring find_logo_image() {
-    wchar_t mod[MAX_PATH * 2] = {};
-    const DWORD n = ::GetModuleFileNameW(nullptr, mod, MAX_PATH * 2);
-    if (n == 0 || n >= MAX_PATH * 2) {
-        return {};
-    }
-    std::filesystem::path dir = std::filesystem::path(mod).parent_path();
-    for (int i = 0; i < 8; ++i) {
-        std::error_code ec;
-        for (const std::filesystem::path& cand :
-             {dir / "SANAD.png", dir / "Resources" / "SANAD.png",
-              dir / "Editor" / "resources" / "SANAD.png"}) {
-            if (std::filesystem::exists(cand, ec)) {
-                return cand.wstring();
-            }
-        }
-        if (!dir.has_parent_path() || dir.parent_path() == dir) {
-            break;
-        }
-        dir = dir.parent_path();
-    }
-    return {};
-}
-
-/// Draws the brand mark into a rounded square. Unlike paint_thumb this keeps
-/// the whole image (no crop, no title-bar skip) and filters with HALFTONE, so
-/// a 256 px logo shrunk to ~36 px stays smooth instead of aliased.
-void paint_logo(HDC dc, const Thumb& th, int x, int y, int s, int radius) {
-    if (th.bmp == nullptr || th.w <= 0 || th.h <= 0 || s <= 0) {
+/// Draw the executable's application icon in the sidebar.
+void paint_logo(HDC dc, HICON logo, int x, int y, int s, int radius) {
+    if (logo == nullptr || s <= 0) {
         return;
     }
-    HDC mem = ::CreateCompatibleDC(dc);
-    HGDIOBJ old = ::SelectObject(mem, th.bmp);
     const int saved = ::SaveDC(dc);
     HRGN rgn = ::CreateRoundRectRgn(x, y, x + s + 1, y + s + 1, radius, radius);
     ::SelectClipRgn(dc, rgn);
-    ::SetStretchBltMode(dc, HALFTONE);
-    ::SetBrushOrgEx(dc, 0, 0, nullptr);
-    ::StretchBlt(dc, x, y, s, s, mem, 0, 0, th.w, th.h, SRCCOPY);
+    ::DrawIconEx(dc, x, y, logo, s, s, 0, nullptr, DI_NORMAL);
     ::RestoreDC(dc, saved);
     ::DeleteObject(rgn);
-    ::SelectObject(mem, old);
-    ::DeleteDC(mem);
     frame_round(dc, {x, y, x + s, y + s}, theme::border, radius);
 }
 
@@ -1849,15 +1813,9 @@ void paint_sidebar(HDC dc, LauncherState* st, int W, int H) {
     ::SelectObject(dc, op);
     ::DeleteObject(sep);
 
-    // Brand: the real logo + Arabic wordmark + tagline. The mark used to be a
-    // "\u2699" gear glyph drawn at a fixed LEFT offset in the Amiri face: Amiri
-    // has no such glyph (it fell back at wrong metrics and clipped), and in the
-    // RTL layout it stayed on the left while the wordmark moved right, so the
-    // header read as a broken symbol detached from the name. Now the mark is
-    // the brand PNG, docked on the bar's outer side with the text beside it
-    // (mirrored for RTL like every other row). No PNG -> text-only header.
+    // The mark and wordmark follow the sidebar's RTL/LTR layout.
     const int logo_s = S(st, 40);
-    const bool has_logo = st->logo.bmp != nullptr;
+    const bool has_logo = st->logo != nullptr;
     const int logo_x = g_shell_rtl ? (sx + sw - S(st, 16) - logo_s) : (sx + S(st, 16));
     if (has_logo) {
         paint_logo(dc, st->logo, logo_x, S(st, 14), logo_s, S(st, 10));
@@ -4019,6 +3977,8 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
 
     LauncherState state;
     state.recent = &recent_projects;
+    state.logo = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                                128, 128, LR_SHARED));
     // First run has no projects to list. Landing on the empty Projects grid
     // made "where do I start?" a real question; go straight to the New Project
     // page (template gallery + name + location) when there is nothing to open.
@@ -4173,8 +4133,6 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
             const std::wstring p = shell::find_doc_image(files[i]);
             state.thumbs[i].bmp = shell::load_thumb(p, state.thumbs[i].w, state.thumbs[i].h);
         }
-        state.logo.bmp =
-            shell::load_thumb(shell::find_logo_image(), state.logo.w, state.logo.h);
         // The window was shown (and painted once) before GDI+ came up; repaint
         // so the first visible frame already carries the logo and thumbnails.
         ::InvalidateRect(hwnd, nullptr, FALSE);
@@ -4336,10 +4294,6 @@ LauncherResult run_project_launcher(std::vector<std::string>& recent_projects) {
             ::DeleteObject(state.thumbs[i].bmp);
             state.thumbs[i].bmp = nullptr;
         }
-    }
-    if (state.logo.bmp != nullptr) {
-        ::DeleteObject(state.logo.bmp);
-        state.logo.bmp = nullptr;
     }
     if (state.gdiplus_token != 0) {
         Gdiplus::GdiplusShutdown(state.gdiplus_token);

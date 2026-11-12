@@ -10,6 +10,11 @@ namespace nf {
 PlatformType get_platform_type() { return PlatformType::Windows; }
 std::string_view platform_name() { return "Windows"; }
 
+#elif defined(__ANDROID__)
+
+PlatformType get_platform_type() { return PlatformType::Android; }
+std::string_view platform_name() { return "Android"; }
+
 #elif defined(__linux__)
 
 PlatformType get_platform_type() { return PlatformType::Linux; }

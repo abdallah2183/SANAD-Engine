@@ -432,6 +432,7 @@ bool PlaySession::play(const scene::Scene& edit, std::string& out_err) {
     }
     m_snapshot = clone_scene(edit);
     m_playing = true;
+    m_paused = false;
     return true;
 }
 
@@ -442,6 +443,7 @@ bool PlaySession::stop(std::string& out_err) {
     }
     m_snapshot.reset();
     m_playing = false;
+    m_paused = false;
     return true;
 }
 

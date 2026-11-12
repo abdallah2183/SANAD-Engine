@@ -130,6 +130,69 @@ NF_TEST(material_asset_roundtrip) {
     NF_CHECK(rendering::MaterialAsset::load_from_text(
         "# SANAD Material v1\nname: U\nmip: bogus\n", u, err));
     NF_CHECK(u.mip_mode == rhi::MipMapMode::Linear);
+
+    // glTF doubleSided: the key survives a save/load, and silence (every
+    // engine-authored .nfmat written before this key existed) stays single-sided.
+    rendering::MaterialAsset ds;
+    ds.double_sided = true;
+    rendering::MaterialAsset ds2;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(ds.save_to_text(), ds2, err));
+    NF_CHECK(ds2.double_sided);
+    NF_CHECK(ds.save_to_text().find("double_sided: 1") != std::string::npos);
+    rendering::MaterialAsset ss;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(
+        "# SANAD Material v1\nname: S\nemission_strength: 0\n", ss, err));
+    NF_CHECK(!ss.double_sided);
+
+    // glTF normalTexture.scale: round-trips when it differs from the default and
+    // stays SILENT at 1, so re-saving an existing .nfmat is byte-identical and
+    // every material written before this key existed loads unchanged.
+    rendering::MaterialAsset ns;
+    ns.normal = "content://Textures/Stone_n";
+    ns.params.normal_scale = 2.0f;
+    rendering::MaterialAsset ns2;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(ns.save_to_text(), ns2, err));
+    NF_CHECK_NEAR(ns2.params.normal_scale, 2.0f, 1e-6f);
+    NF_CHECK(ns.save_to_text().find("normal_scale: 2") != std::string::npos);
+
+    rendering::MaterialAsset ns_default;
+    NF_CHECK(ns_default.save_to_text().find("normal_scale") == std::string::npos);
+    rendering::MaterialAsset ns_sparse;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(
+        "# SANAD Material v1\nname: Sparse\n", ns_sparse, err));
+    NF_CHECK_NEAR(ns_sparse.params.normal_scale, 1.0f, 1e-6f);
+
+    // Zero is a value, not an absence: it must survive the round-trip, or a
+    // deliberately flattened map comes back at full strength.
+    rendering::MaterialAsset ns_zero;
+    ns_zero.params.normal_scale = 0.0f;
+    rendering::MaterialAsset ns_zero2;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(ns_zero.save_to_text(), ns_zero2, err));
+    NF_CHECK_NEAR(ns_zero2.params.normal_scale, 0.0f, 1e-6f);
+
+    // glTF occlusionTexture.strength: same contract as normal_scale — round-trips
+    // when it differs from 1, stays silent at 1, and zero survives (a disabled AO
+    // band must not come back at full strength).
+    rendering::MaterialAsset os;
+    os.occlusion = "content://Textures/Stone_ORM";
+    os.params.occlusion_strength = 0.5f;
+    rendering::MaterialAsset os2;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(os.save_to_text(), os2, err));
+    NF_CHECK_NEAR(os2.params.occlusion_strength, 0.5f, 1e-6f);
+    NF_CHECK(os.save_to_text().find("occlusion_strength: 0.5") != std::string::npos);
+
+    rendering::MaterialAsset os_default;
+    NF_CHECK(os_default.save_to_text().find("occlusion_strength") == std::string::npos);
+    rendering::MaterialAsset os_sparse;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(
+        "# SANAD Material v1\nname: Sparse\n", os_sparse, err));
+    NF_CHECK_NEAR(os_sparse.params.occlusion_strength, 1.0f, 1e-6f);
+
+    rendering::MaterialAsset os_zero;
+    os_zero.params.occlusion_strength = 0.0f;
+    rendering::MaterialAsset os_zero2;
+    NF_CHECK(rendering::MaterialAsset::load_from_text(os_zero.save_to_text(), os_zero2, err));
+    NF_CHECK_NEAR(os_zero2.params.occlusion_strength, 0.0f, 1e-6f);
 }
 
 NF_TEST(material_assignment_undo) {

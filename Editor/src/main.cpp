@@ -9,6 +9,8 @@
 #include <NF/Editor/AssetBrowser.hpp>
 #include <NF/Editor/Console.hpp>
 #include <NF/Editor/EditorApp.hpp>
+#include <NF/Editor/ImportQueue.hpp>
+#include <NF/Editor/InputOwnership.hpp>
 #include <NF/Editor/ProfilerSession.hpp>
 #include <NF/Editor/ProjectLauncher.hpp>
 #include <NF/Editor/TexturePreviewCache.hpp>
@@ -20,8 +22,10 @@
 #include <NF/Assets/AssetManager.hpp>
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/ProjectDescriptor.hpp>
+#include <NF/Project/AndroidPreviewExport.hpp>
 #include <NF/Project/ProjectPackager.hpp>
 #include <NF/Project/ProjectScaffold.hpp>
+#include <NF/Project/WindowsProcess.hpp>
 #include <NF/Core/Logger.hpp>
 #include <NF/Core/FileSystem.hpp>
 #include <NF/Core/Math.hpp>
@@ -58,6 +62,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <optional>
 #include <span>
 #include <string>
@@ -73,6 +78,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 namespace {
@@ -162,6 +168,11 @@ struct EditorConfig {
     // been launched. With a project, the mounts come from its descriptor.
     std::string project_path;
     std::string mcp_bridge; // explicitly enabled local bridge directory
+    // --import: run the editor's own import pipeline headlessly and exit.
+    // Empty = normal interactive/scripted launch. See run_headless_import().
+    std::string import_path;
+    std::string import_dest = "content://Meshes";
+    bool import_overwrite = false;
     // --screenshot: where to write the last composited frame. Empty = off.
     std::string screenshot_path;
     // --resize-test: drive the window through a size cycle while the run is
@@ -297,6 +308,16 @@ EditorConfig parse_args(int argc, char** argv) {
             c.open_about = true;
         } else if (arg == "--open-import") {
             c.open_import = true;
+        } else if (arg == "--import" && i + 1 < argc) {
+            c.import_path = argv[++i];
+        } else if (!value_of("--import=").empty()) {
+            c.import_path = value_of("--import=");
+        } else if (arg == "--import-dest" && i + 1 < argc) {
+            c.import_dest = argv[++i];
+        } else if (!value_of("--import-dest=").empty()) {
+            c.import_dest = value_of("--import-dest=");
+        } else if (arg == "--import-overwrite") {
+            c.import_overwrite = true;
         } else if (arg == "--open-export") {
             c.open_export = true;
         } else if (arg == "--open-start-here") {
@@ -319,7 +340,13 @@ EditorConfig parse_args(int argc, char** argv) {
                         "                      harness (deterministic captures)\n"
                         "  --no-ibl          Light with the scalar ambient (pre-IBL look)\n"
                         "  --no-ssao         Skip ambient occlusion (pre-SSAO look)\n"
-                        "  --open-panel <name>  Open input, camera, lighting, environment, render or world\n"
+                        "  --import <model>    Import a model through the editor's own pipeline\n"
+                        "                      (geometry, textures and .nfmat), persist the asset\n"
+                        "                      registry, and exit. No window, no dialog.\n"
+                        "  --import-dest <dir> Destination directory for --import (default\n"
+                        "                      content://Meshes)\n"
+                        "  --import-overwrite  Allow --import to replace existing files\n"
+                        "  --open-panel <name>  Open input, camera, lighting, environment, render, world or objects\n"
                         "  --no-start-here   Start without the first-run guide (captures)");
             std::exit(0);
         }
@@ -415,14 +442,14 @@ public:
     void set_bindings(const nf::runtime::InputBindings* bindings) { m_bindings = bindings; }
 
     [[nodiscard]] bool action_pressed(std::string_view action) const override {
-        if (m_bindings == nullptr) {
-            return false;
+        if (m_bindings == nullptr || m_ui_text_capture) {
+            return false; // typing in the Game View: WASD must not move the player
         }
         return nf::runtime::binding_pressed(*m_bindings, action, device_state());
     }
 
     [[nodiscard]] float action_axis(std::string_view action) const override {
-        if (m_bindings == nullptr) {
+        if (m_bindings == nullptr || m_ui_text_capture) {
             return 0.0f;
         }
         return nf::runtime::binding_axis(*m_bindings, action, device_state());
@@ -460,6 +487,11 @@ public:
     }
 
     const nf::runtime::InputBindings* m_bindings = nullptr;
+    /// Set when a Game View text/number field is editing: all keyboard
+    /// actions (including WASD) return false/0 so typed letters never drive
+    /// gameplay, mirroring the shipped player's KeyboardInputSource.
+    void set_ui_text_capture(bool captured) { m_ui_text_capture = captured; }
+    bool m_ui_text_capture = false;
 
     // --- aiming, in the editor -------------------------------------------
     //
@@ -473,6 +505,11 @@ public:
     // around apply_viewport_navigation), so the same drag cannot orbit the
     // authoring camera at the same time.
     [[nodiscard]] bool look_delta(float& dx, float& dy) const override {
+        if (m_ui_text_capture) {
+            dx = 0.0f;
+            dy = 0.0f;
+            return false;
+        }
         const ImGuiIO& io = ImGui::GetIO();
         if (!io.MouseDown[1]) {
             dx = 0.0f;
@@ -725,9 +762,81 @@ std::optional<nf::ecs::Entity> find_first_mesh(nf::ecs::World* world) {
     return meshes.front();
 }
 
+bool export_windows_game(const std::filesystem::path& project, nf::project::BuildReport& report,
+                         std::string& error) {
+    nf::project::BuildOptions options;
+    options.project_file = project;
+    const auto tool_dir = nf::project::executable_directory();
+    options.shader_dir = nf::project::packaging_shader_directory(tool_dir, NF_BASIC3D_SHADER_DIR);
+    options.player_exe = tool_dir / "NFGameExport.exe";
+    options.single_executable = true;
+    return nf::project::build_project(options, report, error);
+}
+
+
+/// `--import`: run the editor's OWN import pipeline — ImportQueue submit/stage/
+/// commit, the exact code the Import dialog drives — with no window and no
+/// dialog, then exit.
+///
+/// Why a flag instead of a second importer: the material-carrying import is the
+/// one that writes `.nfmat` files plus the textures beside the `.nfmesh`, and
+/// today it lives only behind the dialog. NFModelImporter is deliberately not
+/// used here: `.nfmesh` carries geometry and nothing else, so a CLI cook is
+/// precisely the import this flag must be able to tell apart from a real one.
+///
+/// The asset registry is persisted because a headless run has no later save
+/// point and a scene addresses meshes by AssetId. This is the same call the
+/// primitive path makes (EditorApp::ensure_ground/ensure_cube).
+int run_headless_import(nf::assets::VirtualFileSystem& vfs, nf::assets::AssetRegistry& registry,
+                        const EditorConfig& cfg) {
+    nf::editor::ImportQueue queue;
+    std::string err;
+    const std::size_t id =
+        queue.submit(cfg.import_path, cfg.import_dest, cfg.import_overwrite, err);
+    if (id == 0) {
+        NF_LOG_ERROR(nf::LogCategory::Editor, "--import rejected '{}': {}", cfg.import_path, err);
+        return 2;
+    }
+    // Fully synchronous: process_next() stages and commits on this thread, so a
+    // return from here means the files are written.
+    queue.process_all(vfs, registry);
+
+    const nf::editor::ImportJob* job = nullptr;
+    for (const auto& candidate : queue.jobs()) {
+        if (candidate.id == id) {
+            job = &candidate;
+        }
+    }
+    if (job == nullptr || job->state != nf::editor::ImportJob::State::Done) {
+        NF_LOG_ERROR(nf::LogCategory::Editor, "--import failed: {}",
+                     job != nullptr ? job->error : std::string("job disappeared"));
+        return 3;
+    }
+    std::size_t material_count = 0;
+    for (const auto& written : job->written) {
+        NF_LOG_INFO(nf::LogCategory::Editor, "  wrote {}: {}", nf::assets::to_string(written.type),
+                    written.logical_path);
+        if (written.type == nf::assets::AssetType::Material) {
+            ++material_count;
+        }
+    }
+    NF_LOG_INFO(nf::LogCategory::Editor, "--import done: {} file(s), {} material(s) -> {}",
+                job->written.size(), material_count, job->dst_dir);
+
+    std::string reg_err;
+    if (!registry.save(vfs, "content://AssetRegistry.nfreg", reg_err)) {
+        NF_LOG_ERROR(nf::LogCategory::Editor, "AssetRegistry save failed: {}", reg_err);
+        return 4;
+    }
+    NF_LOG_INFO(nf::LogCategory::Editor, "AssetRegistry: {} entries saved",
+                registry.size());
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    nf::project::attach_parent_console();
     const EditorConfig cfg = parse_args(argc, argv);
 
     nf::Logger::instance().add_sink(nf::Logger::make_console_sink());
@@ -842,6 +951,17 @@ int main(int argc, char** argv) {
             }
         }
         NF_LOG_INFO(nf::LogCategory::Editor, "AssetRegistry: {} entries", registry.size());
+    }
+
+    // --import: the whole run is that one import (see run_headless_import).
+    // Placed before the window and the Vulkan device on purpose — an import is
+    // a file operation, and a machine without a display should still be able
+    // to run it.
+    if (!cfg.import_path.empty()) {
+        const int code = run_headless_import(vfs, registry, cfg);
+        nf::JobSystem::instance().shutdown();
+        nf::platform_shutdown();
+        return code;
     }
 
     // Startup proof that the shipped gameplay modules are really in this
@@ -962,6 +1082,7 @@ int main(int argc, char** argv) {
             else if (cfg.open_panel == "environment") settings.show_environment = true;
             else if (cfg.open_panel == "render") settings.show_render = true;
             else if (cfg.open_panel == "world") settings.show_world = true;
+            else if (cfg.open_panel == "objects") settings.request_add_object = true;
             else {
                 NF_LOG_ERROR(nf::LogCategory::Editor, "Unknown panel '{}'", cfg.open_panel);
                 return 1;
@@ -1274,8 +1395,34 @@ int main(int argc, char** argv) {
 #endif
 
         std::string last_title;
+#ifdef _WIN32
+        std::future<nf::project::AndroidPreviewResult> android_preview;
+#endif
         while (true) {
             poll_mcp_bridge(app, cfg.mcp_bridge);
+#ifdef _WIN32
+            if (android_preview.valid() &&
+                android_preview.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                nf::project::AndroidPreviewResult result;
+                try {
+                    result = android_preview.get();
+                } catch (...) {
+                    result.error = L"The Android preview task could not finish.";
+                }
+                nf::editor::ui_settings().android_preview_building = false;
+                if (result.error.empty()) {
+                    NF_LOG_INFO(nf::LogCategory::Editor, "Android preview APK created");
+                    ShellExecuteW(nullptr, L"open", result.apk.parent_path().c_str(), nullptr,
+                                  nullptr, SW_SHOWNORMAL);
+                } else {
+                    NF_LOG_ERROR(nf::LogCategory::Editor, "Android preview build failed");
+                    std::wstring message = L"تعذر إنشاء نسخة أندرويد التجريبية.\n" + result.error;
+                    if (!result.log.empty()) message += L"\n\nBuild log:\n" + result.log.wstring();
+                    MessageBoxW(static_cast<HWND>(window.native_handle()), message.c_str(),
+                                L"SANAD Engine - Android Preview", MB_OK | MB_ICONERROR);
+                }
+            }
+#endif
             if (!cfg.headless) {
                 window.poll_events();
                 if (window.should_close()) {
@@ -1438,8 +1585,23 @@ int main(int argc, char** argv) {
                 }
             }
 
-            const float dt = static_cast<float>(clock.elapsed_seconds());
+            float dt = static_cast<float>(clock.elapsed_seconds());
             clock.reset();
+            // Resume discards pause time: even though the clock resets every
+            // frame (so `dt` is already one frame), clamp a hitch on the
+            // first live frame after Pause so scripts never see a jump.
+            {
+                static bool was_paused = false;
+                const bool is_paused = app.paused();
+                if (was_paused && !is_paused) {
+                    clock.reset();
+                    dt = 1.0f / 60.0f;
+                }
+                was_paused = is_paused;
+                if (is_paused) {
+                    dt = 0.0f; // frozen: no simulation dt is produced
+                }
+            }
             // A play/edit switch or a scene switch is a different workload.
             // Drop the old window instead of letting authored-idle frames
             // describe gameplay (or the reverse) for the next two seconds. The
@@ -1487,12 +1649,33 @@ int main(int argc, char** argv) {
             }
 
             // Interactive shortcuts (windowed interactive runs).
+            // Single owner (InputOwnership.hpp): Editor, Game, or GameField.
             // While playing, the game owns the keyboard (arrows/WASD/Space go
             // to gameplay through EditorPlayInput). Editor shortcuts that
             // would fight the game — gizmo modes, delete — stay disabled; Esc
             // stops play so the user can always get back to editing.
+            // Game View nf.ui ownership: while the game UI has keyboard focus
+            // (or a text/number field is editing) inside the Game View, editor
+            // shortcuts must stay off — the game owns Tab/Enter/arrows/WASD.
+            // Esc then means "cancel the edit" (ScriptCanvas), not Stop; the
+            // banner Stop button remains the explicit way out of Play.
+            nf::editor::InputOwnerState owner_state{};
+            owner_state.headless = cfg.headless;
+            owner_state.automation = automation;
+            owner_state.playing = app.playing();
+            owner_state.paused = app.paused();
+            owner_state.game_view_open = app.game_view().open;
+            owner_state.game_keyboard_focused = runtime.game_ui().keyboard_focused();
+            owner_state.game_text_editing = runtime.game_ui().is_text_editing();
+            owner_state.editor_foreground = cfg.headless ? false :
+                (::GetForegroundWindow() == static_cast<HWND>(window.native_handle()));
+            owner_state.editor_want_text_input = !cfg.headless && ImGui::GetIO().WantTextInput;
+            owner_state.editor_popup_open = !cfg.headless &&
+                ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+            const nf::editor::InputOwner input_owner = nf::editor::input_owner(owner_state);
+            const bool game_ui_owns_keys = nf::editor::owner_consumes_editor_shortcuts(input_owner);
             const bool ui_owns_shortcuts = !cfg.headless && !automation &&
-                (ImGui::GetIO().WantTextInput ||
+                (ImGui::GetIO().WantTextInput || game_ui_owns_keys ||
                  ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel));
             if (ui_owns_shortcuts) {
                 // Keep edge state current while the UI consumes keys, so a key
@@ -1517,8 +1700,18 @@ int main(int argc, char** argv) {
                         if (!app.stop(e)) {
                             NF_LOG_WARN(nf::LogCategory::Editor, "Stop: {}", e);
                         }
-                    } else if (!app.launch_game(e)) {
+                    } else if (!app.play(e)) {
                         NF_LOG_WARN(nf::LogCategory::Editor, "Play: {}", e);
+                    }
+                }
+                // P toggles Pause while playing (frozen for inspection);
+                // Esc below stops. Both are blocked while the game UI owns
+                // the keys, so P/Esc inside a field never double as toggles.
+                if (app.playing() && key_edge('P') && !key_down(VK_CONTROL)) {
+                    const bool now_paused = !app.paused();
+                    app.set_paused(now_paused);
+                    if (now_paused) {
+                        runtime.game_ui().cancel_interaction();
                     }
                 }
                 if (app.playing()) {
@@ -1641,14 +1834,116 @@ int main(int argc, char** argv) {
             // The table is EditorApp's, so the rebinding panel and play mode
             // cannot disagree about what a key does.
             s_play_input.set_bindings(&app.input_bindings());
+            const bool was_transitioning = runtime.game_flow().pending();
             if (app.playing()) {
                 runtime.set_input_source(&s_play_input);
                 runtime.set_playing(true);
-                runtime.update(dt);
+                // --- Game View input routing (nf.ui) ---------------------------
+                // Geometry lags one frame (the panel published it last frame),
+                // mirroring the ScriptCanvas capture contract. Pointer only
+                // focuses inside the letterbox content rect (bars own nothing);
+                // wheel/text only when eligible. Paused means inspection: no
+                // UI input is queued, so nothing can mutate the game hidden.
+                const bool gv_open = cfg.headless ? false : app.game_view().open;
+                const auto gv_content = nf::editor::game_content_fit(
+                    app.game_view().min_x, app.game_view().min_y,
+                    app.game_view().size_x, app.game_view().size_y,
+                    app.viewport().width, app.viewport().height);
+                {
+                    nf::ui::UiPointer ptr;
+                    nf::ui::UiKeys keys;
+                    const bool eligible = gv_open && !app.paused() && gv_content.valid();
+                    const bool fg = cfg.headless ? false :
+                        (::GetForegroundWindow() == static_cast<HWND>(window.native_handle()));
+                    ptr.focused = eligible && fg;
+                    keys.focused = ptr.focused;
+                    if (eligible && fg) {
+                        const ImVec2 mp = ImGui::GetIO().MousePos;
+                        float nx = 0.0f, ny = 0.0f;
+                        if (nf::editor::game_screen_to_normal(mp.x, mp.y, gv_content, nx, ny)) {
+                            ptr.x = nx;
+                            ptr.y = ny;
+                            ptr.down = ImGui::GetIO().MouseDown[0];
+                        } else {
+                            ptr.x = -1.0f;
+                            ptr.y = -1.0f;
+                            ptr.down = false;
+                            ptr.focused = false;
+                            keys.focused = false;
+                        }
+#ifdef _WIN32
+                        auto pressed = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+                        keys.tab = pressed(VK_TAB);
+                        keys.shift = pressed(VK_SHIFT);
+                        keys.enter = pressed(VK_RETURN);
+                        keys.space = pressed(VK_SPACE);
+                        keys.left = pressed(VK_LEFT);
+                        keys.right = pressed(VK_RIGHT);
+                        keys.up = pressed(VK_UP);
+                        keys.down = pressed(VK_DOWN);
+                        keys.backspace = pressed(VK_BACK);
+                        keys.delete_key = pressed(VK_DELETE);
+                        keys.home = pressed(VK_HOME);
+                        keys.end = pressed(VK_END);
+                        keys.escape = pressed(VK_ESCAPE);
+                        keys.wheel = ImGui::GetIO().MouseWheel;
+                        keys.text = nf::InputSystem::instance().take_text_events();
+#endif
+                    } else {
+                        // Ineligible (edit mode, paused, closed, or mouse in a
+                        // letterbox bar): withhold input and drain char events
+                        // so they cannot burst into the game on resume.
+                        nf::InputSystem::instance().take_text_events();
+                    }
+                    runtime.set_ui_pointer(ptr);
+                    runtime.set_ui_keys(keys);
+                    runtime.set_viewport(static_cast<float>(app.viewport().width),
+                                         static_cast<float>(app.viewport().height));
+                    // While the game UI owns the keys, EditorPlayInput must not
+                    // also move the player (WASD is then text, e.g. inside
+                    // text_input) — mirroring NFPlayer's KeyboardInputSource.
+                    const bool text_editing = runtime.game_ui().is_text_editing() && ptr.focused;
+                    s_play_input.set_ui_text_capture(text_editing);
+                    // Measurer from the editor font, re-armed each frame so the
+                    // next snapshot's tooltips/carets use draw advances.
+                    // Headless has no ImGui context: keep the fallback.
+                    if (!cfg.headless) {
+                        ImFont* f = ImGui::GetFont();
+                        if (f != nullptr) {
+                            runtime.game_ui().set_text_measurer(
+                                [f](const std::string& visual, float fs) -> float {
+                                    const float sz = (fs > 0.0f) ? fs : ImGui::GetFontSize();
+                                    ImVec2 m = f->CalcTextSizeA(sz, FLT_MAX, 0.0f, visual.c_str(),
+                                                                visual.c_str() + visual.size());
+                                    return m.x;
+                                });
+                        }
+                    }
+                }
+                runtime.set_paused(app.paused());
+                if (app.paused()) {
+                    // Frozen for inspection: Runtime::set_paused already
+                    // blocks every simulation step (dt-independent); the
+                    // last snapshot keeps rendering, and no new UI
+                    // mutation can queue. See PlaySession::paused().
+                    runtime.update(dt);
+                } else {
+                    runtime.update(dt);
+                }
             } else {
                 runtime.set_input_source(nullptr);
                 runtime.set_playing(false);
+                runtime.set_paused(false);
+                s_play_input.set_ui_text_capture(false);
                 runtime.update(0.0f);
+            }
+
+            if (was_transitioning) clock.reset(); // discard synchronous scene loading time
+            if (app.playing() && runtime.game_flow().quit_requested()) {
+                std::string quit_error;
+                if (!app.stop(quit_error)) {
+                    NF_LOG_ERROR(nf::LogCategory::Editor, "Game quit failed: {}", quit_error);
+                }
             }
 
             // Viewport: offscreen Runtime render (never swapchain-direct).
@@ -1832,6 +2127,20 @@ int main(int argc, char** argv) {
             bool have_ui_intents = false;
             if (!cfg.headless) {
                 ImGui::GetIO().DeltaTime = (dt > 0.0f) ? dt : (1.0f / 60.0f);
+                // Suspend ImGui Nav (Tab/arrows/Space) for this frame when the
+                // game or its field owns the keys, so one Tab moves the game
+                // focus once without a second editor move. Restored right
+                // after ui_frame, so editor navigation returns the next frame.
+                const bool suppress_nav = nf::editor::owner_suppresses_imgui_nav(input_owner);
+                ImGuiIO& imgui_io = ImGui::GetIO();
+                const ImGuiConfigFlags saved_nav_flags = imgui_io.ConfigFlags;
+                if (suppress_nav) {
+                    imgui_io.ConfigFlags &=
+                        static_cast<ImGuiConfigFlags>(~(ImGuiConfigFlags_NavEnableKeyboard |
+                                                       ImGuiConfigFlags_NavEnableGamepad));
+                    imgui_io.NavActive = false;
+                    ImGui::ClearActiveID();
+                }
                 ui_renderer.set_viewport_texture(
                     (vp_res.view != nullptr) ? vp_res.view.get() : nullptr,
                     (vp_res.sampler != nullptr) ? vp_res.sampler.get() : nullptr);
@@ -1864,6 +2173,7 @@ int main(int argc, char** argv) {
                 ui_in = nf::editor::ui_frame(app, fst);
                 have_ui_intents = true;
                 nf::editor::ui_end_frame();
+                imgui_io.ConfigFlags = saved_nav_flags;
                 ui_draw = ImGui::GetDrawData();
                 // A duplicate widget ID is a real defect that ImGui only reports
                 // by painting a red popup over the UI — easy to miss in a
@@ -2148,31 +2458,44 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (ui_in.build_project) {
-                    if (!app.has_project()) {
-                        NF_LOG_WARN(nf::LogCategory::Editor,
-                                    "Build requested with no project open (started in the engine tree)");
-                    } else {
-                        nf::project::BuildOptions bo;
-                        bo.project_file = app.project_path();
-                        bo.shader_dir = NF_BASIC3D_SHADER_DIR;
-                        // The player sits beside the editor in the build output.
-                        const auto exe_dir = std::filesystem::absolute(argv[0]).parent_path();
-                        bo.player_exe = exe_dir / "NFPlayer.exe";
-                        if (!std::filesystem::exists(bo.player_exe)) {
-                            bo.player_exe = exe_dir / "NFPlayer";
-                        }
+                    if (app.has_project() && !app.playing() && !app.dirty()) {
                         nf::project::BuildReport rep;
                         std::string berr;
-                        if (nf::project::build_project(bo, rep, berr)) {
+                        if (export_windows_game(app.project_path(), rep, berr)) {
                             NF_LOG_INFO(nf::LogCategory::Editor,
-                                        "Build OK: cooked {}, skipped {}, pruned {}, packaged {} file(s) -> {}",
-                                        rep.cook.cooked, rep.cook.skipped, rep.cook.pruned,
-                                        rep.files_packaged, rep.output_dir.string());
+                                        "Windows EXE exported: {}", rep.game_exe.string());
+#ifdef _WIN32
+                            ShellExecuteW(nullptr, L"open", rep.output_dir.c_str(), nullptr,
+                                          nullptr, SW_SHOWNORMAL);
+#endif
                         } else {
-                            NF_LOG_ERROR(nf::LogCategory::Editor, "Build failed: {}", berr);
+                            NF_LOG_ERROR(nf::LogCategory::Editor, "Windows EXE export failed: {}", berr);
+#ifdef _WIN32
+                            MessageBoxA(nullptr, berr.c_str(), "SANAD Engine - Export", MB_OK | MB_ICONERROR);
+#endif
                         }
                     }
                 }
+
+#ifdef _WIN32
+                if (ui_in.build_android_preview && app.has_project() && !app.playing() &&
+                    !app.dirty() && !android_preview.valid()) {
+                    std::error_code ec;
+                    const auto project = std::filesystem::absolute(app.project_path(), ec);
+                    if (ec) {
+                        MessageBoxW(static_cast<HWND>(window.native_handle()),
+                                    L"Could not resolve the project path.", L"SANAD Engine",
+                                    MB_OK | MB_ICONERROR);
+                    } else {
+                        nf::editor::ui_settings().android_preview_building = true;
+                        NF_LOG_INFO(nf::LogCategory::Editor, "Building Android preview APK");
+                        android_preview = std::async(std::launch::async, [project] {
+                            return nf::project::export_android_preview(
+                                project, std::filesystem::path(NF_TEMPLATES_ROOT).parent_path());
+                        });
+                    }
+                }
+#endif
 
                 if (ui_in.open_scene_dialog_confirm && !ui_in.open_scene_path.empty()) {
                     if (!ui_in.open_scene_approved) {
@@ -2973,25 +3296,13 @@ static nf::ecs::Entity automation_drag_entity{};
                 if (f == 114) {
                     const auto proj_root =
                         nf::FileSystem::scratch_directory() / "nf_editor_auto_project";
-                    nf::project::BuildOptions bo;
-                    bo.project_file = proj_root / "AutoProject.nfproj";
-                    bo.shader_dir = NF_BASIC3D_SHADER_DIR;
-                    const auto exe_dir = std::filesystem::absolute(argv[0]).parent_path();
-                    bo.player_exe = exe_dir / "NFPlayer.exe";
-                    if (!std::filesystem::exists(bo.player_exe)) {
-                        bo.player_exe = exe_dir / "NFPlayer";
-                    }
-
                     nf::project::BuildReport rep;
                     std::string berr;
-                    const bool built = nf::project::build_project(bo, rep, berr);
-                    auto_check(built, "Project build", berr);
+                    const bool built = export_windows_game(proj_root / "AutoProject.nfproj", rep, berr);
+                    auto_check(built, "Windows EXE export", berr);
                     if (built) {
-                        auto_check(std::filesystem::exists(rep.output_dir / "manifest.txt"),
-                                   "Package manifest written");
-                        auto_check(std::filesystem::exists(
-                                       rep.output_dir / "Cache" / "Meshes" / "cube.nfmesh"),
-                                   "Package contains the cooked mesh");
+                        auto_check(std::filesystem::is_regular_file(rep.game_exe),
+                                   "Export contains a Windows executable");
                         auto_check(rep.cook.failed == 0, "Package cooked without failures");
                     }
                     // Leave no artifacts behind, matching the rest of the harness.

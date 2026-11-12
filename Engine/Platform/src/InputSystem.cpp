@@ -1,6 +1,8 @@
 // NF/Platform/InputSystem.cpp
 
 #include <NF/Platform/InputSystem.hpp>
+#include <string>
+#include <vector>
 #include <NF/Core/Logger.hpp>
 
 #ifdef _WIN32
@@ -313,6 +315,39 @@ void InputSystem::apply_gamepad_sample(const GamepadSample& sample) {
         static_cast<f32>(sample.left_trigger) / 255.0f;
     m_state.gamepad_axes[static_cast<usize>(GamepadAxis::RightTrigger)] =
         static_cast<f32>(sample.right_trigger) / 255.0f;
+}
+
+void InputSystem::on_char(char32_t codepoint) {
+    if (codepoint == 0) return;
+    // UTF-16 surrogate pair handling lives in the Win32 backend (it feeds us
+    // already-combined codepoints). This guard rejects a stray surrogate so a
+    // half sequence can never enter the UI as two replacement glyphs.
+    if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return;
+    if (codepoint > 0x10FFFF) return;
+    if (m_text_events.size() >= 256) return; // bounded: a runaway stream cannot pile up
+    std::string utf8;
+    if (codepoint < 0x80) {
+        utf8.push_back(static_cast<char>(codepoint));
+    } else if (codepoint < 0x800) {
+        utf8.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+        utf8.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint < 0x10000) {
+        utf8.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+        utf8.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        utf8.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        utf8.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+        utf8.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+        utf8.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        utf8.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+    m_text_events.push_back(std::move(utf8));
+}
+
+std::vector<std::string> InputSystem::take_text_events() {
+    std::vector<std::string> out;
+    out.swap(m_text_events);
+    return out;
 }
 
 #ifndef _WIN32

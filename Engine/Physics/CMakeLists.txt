@@ -46,5 +46,9 @@ nf_engine_library(NFPhysics
 # Jolt headers are warning-noisy: this TU alone opts out of /W4 /WX.
 # (JoltVehicle.cpp / JoltRagdoll.cpp / JoltCharacter.cpp are Jolt-free by
 # design: no opt-out.)
-set_source_files_properties(src/JoltWorld.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
+if(MSVC)
+    set_source_files_properties(src/JoltWorld.cpp PROPERTIES COMPILE_OPTIONS "/W1;/WX-")
+else()
+    set_source_files_properties(src/JoltWorld.cpp PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 target_link_libraries(NFPhysics PUBLIC Jolt)

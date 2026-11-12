@@ -33,7 +33,7 @@ cmake_minimum_required(VERSION 3.24)
 # Docs/Demo_Release.md says exactly that. Advertising "cross-platform" for a
 # Windows-only product is a claim the repository cannot back.
 project(SANAD
-    VERSION 0.8.0
+    VERSION 0.9.0
     LANGUAGES C CXX
     DESCRIPTION "SANAD Engine - High-performance Windows x64 game engine"
 )
@@ -83,7 +83,11 @@ option(NF_WARNINGS_AS_ERRORS "Treat warnings as errors"   ON)
 # Platform detection
 # ---------------------------------------------------------------------------
 
-if(WIN32)
+if(ANDROID)
+    set(NF_PLATFORM_ANDROID ON)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(NF_PLATFORM_IOS ON)
+elseif(WIN32)
     set(NF_PLATFORM_WINDOWS ON)
 elseif(APPLE)
     set(NF_PLATFORM_MACOS ON)
@@ -141,6 +145,10 @@ add_subdirectory(Engine/Foliage)
 add_subdirectory(Engine/Scene2D)
 add_subdirectory(Engine/Runtime)
 
+if(ANDROID)
+    add_subdirectory(Tools/AndroidPlayer)
+endif()
+
 # ---------------------------------------------------------------------------
 # Project tooling library
 #
@@ -173,8 +181,9 @@ if(NF_BUILD_TOOLS)
     add_subdirectory(Tools/AssetCooker)
     add_subdirectory(Tools/BuildTool)
     add_subdirectory(Tools/ModelImporter)
-    # NFPlayer is what packaging copies into a package, so it is built alongside
-    # the tool that needs it.
+endif()
+
+if(NF_BUILD_TOOLS OR NF_BUILD_EDITOR)
     add_subdirectory(Tools/Player)
 endif()
 

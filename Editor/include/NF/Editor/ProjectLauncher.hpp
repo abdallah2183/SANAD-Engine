@@ -313,12 +313,13 @@ struct LauncherTemplateCard {
 /// `template_name` on a disabled card is what guarantees a click cannot scaffold
 /// a template-less project — which yields a Content/ with no Main.nfscene and an
 /// editor that exits the moment it opens one.
-inline constexpr std::array<LauncherTemplateCard, 6> kLauncherTemplateCards{{
+inline constexpr std::array<LauncherTemplateCard, 7> kLauncherTemplateCards{{
     {"sh_tpl_nature", "sh_tpl_nature_desc", 0, false, ""},
     {"sh_tpl_platformer", "sh_tpl_platformer_desc", 1, true, "Platformer2D"},
     {"sh_tpl_arena", "sh_tpl_arena_desc", 2, true, "FPSStarter"},
     {"sh_tpl_side", "sh_tpl_side_desc", 0, true, "ThirdPerson"},
     {"sh_tpl_blank", "sh_tpl_blank_desc", 2, true, "Default"},
+    {"sh_tpl_ui", "sh_tpl_ui_desc", 0, true, "UiStarter"},
     {"sh_tpl_marine", "sh_tpl_marine_desc", 1, false, ""},
 }};
 

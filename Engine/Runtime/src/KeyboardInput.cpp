@@ -40,8 +40,17 @@ constexpr float kStickDeadzone = 0.18f;
 // Free functions with an opaque context, so the evaluator stays a pure
 // function of (table, action, device) and a test can hand it a fake device.
 
-bool read_key(const void* /*context*/, nf::u16 code) {
+bool read_key(const void* context, nf::u16 code) {
 #ifdef _WIN32
+    // When the scripted UI owns keyboard focus, the keys it consumes must not
+    // also drive gameplay. Only those keys are blocked; WASD etc. still flow.
+    if (context && static_cast<const nf::runtime::KeyboardInputSource*>(context)->ui_text_captured()) {
+        return false; // typing: no key reaches gameplay, including WASD
+    }
+    if (context && static_cast<const nf::runtime::KeyboardInputSource*>(context)->ui_keyboard_captured()) {
+        const int vk = static_cast<int>(code);
+        if (vk == VK_TAB || vk == VK_RETURN || vk == VK_SPACE || vk == VK_LEFT || vk == VK_UP || vk == VK_RIGHT || vk == VK_DOWN) return false;
+    }
     return key_down(static_cast<int>(code));
 #else
     (void)code;
@@ -49,7 +58,13 @@ bool read_key(const void* /*context*/, nf::u16 code) {
 #endif
 }
 
-bool read_pad_button(const void* /*context*/, nf::u16 code) {
+bool read_pad_button(const void* context, nf::u16 code) {
+    if (context && static_cast<const nf::runtime::KeyboardInputSource*>(context)->ui_text_captured()) {
+        return false; // typing: no pad button reaches gameplay either
+    }
+    if (code >= static_cast<nf::u16>(nf::GamepadButton::Count)) {
+        return false;
+    }
     return nf::InputSystem::instance().is_gamepad_down(static_cast<nf::GamepadButton>(code));
 }
 
@@ -58,7 +73,9 @@ bool read_pad_button(const void* /*context*/, nf::u16 code) {
 // state needs a pump that runs before the frame, and the capture code has
 // worked without one since 0.4.0. One query, one answer, whether the caller is
 // asking "did the player click to take the pointer back" or "is attack held".
-bool read_mouse_button(const void* /*context*/, nf::u16 code) {
+bool read_mouse_button(const void* context, nf::u16 code) {
+    if (context && static_cast<const nf::runtime::KeyboardInputSource*>(context)->ui_text_captured()) return false;
+    if (context && static_cast<const nf::runtime::KeyboardInputSource*>(context)->ui_pointer_captured()) return false;
 #ifdef _WIN32
     return key_down(static_cast<int>(code));
 #else
@@ -70,6 +87,9 @@ bool read_mouse_button(const void* /*context*/, nf::u16 code) {
 float read_pad_axis(const void* context, nf::u16 code) {
     if (context == nullptr) {
         return 0.0f;
+    }
+    if (static_cast<const nf::runtime::KeyboardInputSource*>(context)->ui_text_captured()) {
+        return 0.0f; // typing: no axis reaches gameplay either
     }
     // The deadzone was applied to the PAIR in begin_frame(), so this returns
     // an already-centred value: a per-axis deadzone here would let a resting
@@ -201,7 +221,7 @@ void KeyboardInputSource::begin_frame() {
 }
 
 bool KeyboardInputSource::look_delta(float& dx, float& dy) const {
-    if (m_window == nullptr) {
+    if (m_window == nullptr || m_ui_capture) {
         dx = 0.0f;
         dy = 0.0f;
         return false;
@@ -212,10 +232,24 @@ bool KeyboardInputSource::look_delta(float& dx, float& dy) const {
 }
 
 float KeyboardInputSource::wheel_delta() const {
-    return m_wheel;
+    return m_ui_capture ? 0 : m_wheel;
+}
+
+void KeyboardInputSource::set_ui_pointer_capture(bool captured) {
+    m_ui_capture = captured;
+    if (captured) set_pointer_capture(false);
+}
+
+void KeyboardInputSource::set_ui_keyboard_capture(bool captured) {
+    m_ui_kb_capture = captured;
+}
+
+void KeyboardInputSource::set_ui_text_capture(bool captured) {
+    m_ui_text_capture = captured;
 }
 
 void KeyboardInputSource::set_pointer_capture(bool captured) {
+    if (captured && m_ui_capture) return;
 #ifdef _WIN32
     if (m_window == nullptr) {
         m_captured = false;
@@ -266,11 +300,19 @@ void KeyboardInputSource::set_pointer_capture(bool captured) {
 }
 
 bool KeyboardInputSource::action_pressed(const std::string_view action) const {
-    return binding_pressed(m_bindings, action, device_state());
+    if (m_ui_text_capture) {
+        return false; // typing: neither keys nor pad drive gameplay
+    }
+    return binding_pressed(m_bindings, action, device_state()) ||
+           (m_touch_source != nullptr && m_touch_source->action_pressed(action));
 }
 
 float KeyboardInputSource::action_axis(const std::string_view action) const {
-    return binding_axis(m_bindings, action, device_state());
+    if (m_ui_text_capture) {
+        return 0.0f;
+    }
+    const float touch = m_touch_source != nullptr ? m_touch_source->action_axis(action) : 0.0f;
+    return std::clamp(binding_axis(m_bindings, action, device_state()) + touch, -1.0f, 1.0f);
 }
 
 } // namespace nf::runtime

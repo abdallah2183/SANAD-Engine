@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>محرك سَنَد | SANAD Engine</title>
     <meta name="description" content="محرك سَنَد (SANAD Engine) 0.8.0 — محرك ألعاب عربي ثلاثي الأبعاد متطور ومفتوح المصدر مبني بلغة C++23 ومكتبة الرسوميات Vulkan. المؤسس والقائم على العمل: عبدالله.">
+    <link rel="icon" type="image/png" href="Editor/resources/SANAD.png">
+    <link rel="apple-touch-icon" href="Editor/resources/SANAD.png">
+    <meta name="theme-color" content="#0b0d13">
+    <meta property="og:image" content="Editor/resources/SANAD.png">
+    <meta property="og:title" content="محرك سَنَد | SANAD Engine">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -184,12 +189,27 @@
             margin-bottom: 1.8rem;
         }
 
+        .logo-wrapper::before {
+            content: "";
+            position: absolute;
+            inset: -22px;
+            background: radial-gradient(circle, rgba(255, 145, 0, 0.30) 0%, transparent 68%);
+            filter: blur(18px);
+            z-index: -1;
+        }
+
         .logo-wrapper img {
             width: 155px;
             height: 155px;
             border-radius: 20px;
-            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
             border: 1.5px solid rgba(255, 145, 0, 0.45);
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .logo-wrapper img:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 22px 44px rgba(0, 0, 0, 0.65), 0 0 32px rgba(255, 145, 0, 0.25);
         }
 
         .hero-badge-container {
@@ -570,7 +590,7 @@
     <!-- Navigation -->
     <nav>
         <a href="#" class="nav-brand">
-            <img src="Resources/Branding/sanad_logo.jpg" alt="SANAD Engine Logo">
+            <img src="Editor/resources/SANAD.png" alt="SANAD Engine Logo">
             <span class="brand-title">محرك سَنَد | SANAD</span>
         </a>
 
@@ -593,7 +613,7 @@
     <!-- Hero Section -->
     <header class="hero container">
         <div class="logo-wrapper">
-            <img src="Resources/Branding/sanad_logo.jpg" alt="SANAD Engine Logo">
+            <img src="Editor/resources/SANAD.png" alt="SANAD Engine Logo">
         </div>
         <div class="hero-badge-container">
             <span class="hero-badge" data-i18n="hero_badge">الإصدار 0.8.0 — محرك ألعاب عربي مفتوح المصدر وقابل للتطوير</span>
@@ -879,6 +899,8 @@
     <!-- Footer -->
     <footer>
         <div class="container">
+            <img src="Resources/Branding/sanad_mark.png" alt="SANAD Engine" width="52" height="52"
+                 style="display:block;margin:0 auto 0.9rem;filter:drop-shadow(0 4px 14px rgba(255,145,0,0.35));">
             <p style="margin-bottom: 0.5rem; font-weight: 700; font-size: 1.1rem; color: #ffffff;">
                 محرك سَنَد | SANAD Engine
             </p>

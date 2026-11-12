@@ -6,6 +6,8 @@
 
 set(NFRENDERING_SOURCES
     src/RenderGraph.cpp
+    src/GameUiOverlay.cpp
+    src/UiDisplayDraw.cpp
     src/Material.cpp
     src/MaterialAsset.cpp
     src/StbImage.cpp
@@ -47,7 +49,7 @@ set(NFRENDERING_SOURCES
 
 nf_engine_library(NFRendering
     SOURCES ${NFRENDERING_SOURCES}
-    DEPENDS NFCore NFRHI NFJobs NFAssets
+    DEPENDS NFCore NFRHI NFJobs NFAssets NFUI imgui
 )
 
 target_include_directories(NFRendering
@@ -58,4 +60,9 @@ target_include_directories(NFRendering
 
 if(MSVC)
     set_property(TARGET NFRendering PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# The standalone runtime also builds ImGui's platform backend without the editor.
+if(DEFINED NF_VULKAN_SDK_PATH)
+    target_include_directories(imgui PRIVATE "${NF_VULKAN_SDK_PATH}/Include")
 endif()

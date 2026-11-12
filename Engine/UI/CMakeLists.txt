@@ -12,6 +12,8 @@ set(NFUI_SOURCES
     src/ArabicShaper.cpp
     src/Localization.cpp
     src/Widgets.cpp
+    src/TextLayout.cpp
+    src/ScriptCanvas.cpp
     src/GameUI.cpp
 )
 

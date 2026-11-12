@@ -31,6 +31,40 @@ void push_text(DisplayList& dl, const Label& l, float width, float height) {
 
 } // namespace
 
+std::vector<std::string> split_hard_lines(std::string_view text) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n') {
+            out.push_back(std::move(cur));
+            cur.clear();
+        } else {
+            cur.push_back(text[i]);
+        }
+    }
+    out.push_back(std::move(cur));
+    if (out.empty()) out.emplace_back("");
+    return out;
+}
+
+std::vector<std::string> split_words(std::string_view line) {
+    std::vector<std::string> out;
+    std::string word;
+    for (std::size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (c == ' ' || c == '\t' || c == '\r') {
+            if (!word.empty()) {
+                out.push_back(std::move(word));
+                word.clear();
+            }
+        } else {
+            word.push_back(c);
+        }
+    }
+    if (!word.empty()) out.push_back(std::move(word));
+    return out;
+}
+
 // --- MenuList ----------------------------------------------------------------
 
 bool MenuList::move(int delta) {

@@ -12,6 +12,12 @@
 #include <NF/Runtime/RuntimeSceneLoader.hpp>
 #include <NF/Runtime/SceneValidator.hpp>
 #include <NF/Core/CrashHandler.hpp>
+#include <NF/Core/Logger.hpp>
+
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+#include "EmbeddedGame.hpp"
+#include <NF/Project/WindowsProcess.hpp>
+#endif
 
 #include <charconv>
 #include <cstdint>
@@ -61,6 +67,10 @@ void print_help() {
               << "  --replay-strict     Fail the run if --replay served no frames\n"
               << "  --help\n"
               << "\n"
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+              << "This export runs its embedded project. Game data, saves and logs\n"
+              << "are kept in the current user's local SANAD application data folder.\n";
+#else
               << "Without --project, a single .nfproj beside the executable is used.\n"
               << "\n"
               << "Crash dumps and human-readable reports are written to Crashes/ next\n"
@@ -70,6 +80,7 @@ void print_help() {
               << "Test hook: --crash-test [dir] arms the crash handler, raises a fatal\n"
               << "exception, and exits — used to verify the dump + report path. With\n"
               << "no dir, it writes to Crashes/ beside the executable.\n";
+#endif
 }
 
 // The directory the running executable lives in.
@@ -99,6 +110,7 @@ std::filesystem::path executable_directory(const char* argv0) {
 
 // Look for exactly one .nfproj next to the executable. A package contains one,
 // so a shipped game can be launched with no arguments at all.
+#if !defined(NF_EMBEDDED_GAME_PLAYER)
 std::string find_project_beside(const std::filesystem::path& dir) {
     if (dir.empty()) return {};
     std::error_code ec;
@@ -112,6 +124,7 @@ std::string find_project_beside(const std::filesystem::path& dir) {
     }
     return found.size() == 1 ? found.front().string() : std::string{};
 }
+#endif
 
 // A frame count, or nothing.
 //
@@ -137,6 +150,9 @@ bool parse_frame_count(const std::string& text, uint32_t& out_frames) {
 } // namespace
 
 int main(int argc, char** argv) {
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+    nf::project::attach_parent_console();
+#endif
     nf::runtime::ApplicationConfig config;
 
     std::string project_path;
@@ -217,6 +233,9 @@ int main(int argc, char** argv) {
     // launched from anywhere else would otherwise write its dumps into the
     // user's current directory, outside the folder that is the whole install.
     const auto exe_dir = executable_directory(argv[0]);
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+    if (crash_test)
+#endif
     {
         nf::CrashHandlerConfig crash_cfg;
         crash_cfg.dump_directory = (exe_dir / "Crashes").string();
@@ -251,11 +270,13 @@ int main(int argc, char** argv) {
     // typo there used to become 0 through atoi, which silently turned a
     // bounded run into an unbounded one.
 #ifdef _MSC_VER
+#if !defined(NF_EMBEDDED_GAME_PLAYER)
     char* buf = nullptr; size_t sz = 0;
     if (_dupenv_s(&buf, &sz, "NF_PLAYER_PROJECT") == 0 && buf) {
         if (project_path.empty()) project_path = buf;
         std::free(buf);
     }
+#endif
     char* b2 = nullptr; size_t s2 = 0;
     if (_dupenv_s(&b2, &s2, "NF_PLAYER_FRAMES") == 0 && b2) {
         uint32_t frames = 0;
@@ -289,7 +310,9 @@ int main(int argc, char** argv) {
         std::free(b6);
     }
 #else
+#if !defined(NF_EMBEDDED_GAME_PLAYER)
     if (auto e = std::getenv("NF_PLAYER_PROJECT"); e && project_path.empty()) project_path = e;
+#endif
     if (auto e = std::getenv("NF_PLAYER_FRAMES")) {
         uint32_t frames = 0;
         if (!parse_frame_count(e, frames)) {
@@ -305,6 +328,32 @@ int main(int argc, char** argv) {
     if (std::getenv("NF_PLAYER_FRAME_STATS")) config.frame_stats = true;
 #endif
 
+    auto report_error = [&](const std::string& message) {
+        std::cerr << "NFPlayer: " << message << "\n";
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+        if (!config.headless && !validate_only) {
+            MessageBoxA(nullptr, message.c_str(), "SANAD Engine", MB_OK | MB_ICONERROR);
+        }
+#endif
+        return 1;
+    };
+
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+    if (!project_path.empty()) return report_error("A Windows EXE export runs its embedded project.");
+    nf::player::EmbeddedGame embedded;
+    std::string error;
+    if (!nf::player::prepare_embedded_game(embedded, error)) return report_error(error);
+    project_path = embedded.project_file.string();
+    config.saves_directory = embedded.user_directory / "Saves";
+
+    const auto log_path = (embedded.user_directory / "player.log").string();
+    nf::Logger::instance().add_sink(nf::Logger::make_file_sink(log_path));
+    nf::CrashHandlerConfig crash_cfg;
+    crash_cfg.dump_directory = (embedded.user_directory / "Crashes").string();
+    crash_cfg.dump_prefix = "NFPlayer";
+    crash_cfg.app_version = kPlayerVersion;
+    nf::install_crash_handler(crash_cfg);
+#else
     if (project_path.empty()) {
         project_path = find_project_beside(exe_dir);
         if (project_path.empty()) {
@@ -313,6 +362,7 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+#endif
 
     // Fail before touching the GPU: a missing or malformed project is a much
     // clearer error here than a blank window.
@@ -320,8 +370,7 @@ int main(int argc, char** argv) {
         std::string err;
         auto desc = nf::assets::ProjectDescriptor::load_from_file(project_path, err);
         if (!desc) {
-            std::cerr << "NFPlayer: " << err << "\n";
-            return 1;
+            return report_error(err);
         }
         std::cout << "NFPlayer: project '" << desc->name() << "' (" << project_path << ")\n";
 
@@ -329,6 +378,9 @@ int main(int argc, char** argv) {
         // and no device — a validator that needs a GPU is a validator CI
         // cannot run.
         if (validate_only) {
+            if (!config.saves_directory.empty()) {
+                desc->add_mount("saves://", config.saves_directory);
+            }
             nf::assets::VirtualFileSystem vfs;
             std::string mount_error;
             if (!desc->apply_mounts(vfs, mount_error)) {
@@ -396,5 +448,14 @@ int main(int argc, char** argv) {
 
     config.project_path = project_path;
     nf::runtime::Application app(config);
+#if defined(NF_EMBEDDED_GAME_PLAYER)
+    if (!config.headless) nf::player::show_sanad_splash();
+    const int result = app.run();
+    if (result != 0 && !config.headless) {
+        report_error("The game could not start or stopped with an error. See " + log_path);
+    }
+    return result;
+#else
     return app.run();
+#endif
 }

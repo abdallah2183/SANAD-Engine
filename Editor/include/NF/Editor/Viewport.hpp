@@ -124,4 +124,88 @@ inline bool grid_cell_is_world_axis(int index, float spacing) {
     return spacing > 0.0f && index == 0;
 }
 
+
+// --- Game View (nf.ui preview in the editor viewport) -------------------------
+//
+// The editor Playing session renders the game into the same offscreen target
+// as edit mode and draws `Runtime::game_ui()` over it, inside the ImGui::Image
+// rect only. The layout viewport is the game content size (the offscreen
+// target size), NOT the ImGui window size: layout, drawing and hit-testing
+// must agree, or the UI would drift from the scene whenever the dock resizes.
+// When the game's aspect differs from the display rect, the content rect is
+// the aspect-fit letterbox inside it; input and drawing both use that rect,
+// so the black bars never receive UI.
+//
+// All math is in ImGui logical coordinates (the shell is DPI aware; the
+// offscreen target follows the displayed size 1:1, so one logical pixel is
+// one game pixel here). Pure and header-inline so EditorTests pins it without
+// a GPU — the same rule as grid_line_visible above.
+
+struct GameContentRect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+    bool valid() const { return w >= 1.0f && h >= 1.0f; }
+    bool contains(float sx, float sy) const {
+        return valid() && sx >= x && sy >= y && sx < x + w && sy < y + h;
+    }
+};
+
+// Aspect-fit of `game_w x game_h` into the display rect (dx, dy, dw, dh).
+// Equal aspects return the display rect itself. Invalid game/display sizes
+// return an empty rect (never a zero-size div).
+inline GameContentRect game_content_fit(float dx, float dy, float dw, float dh,
+                                        uint32_t game_w, uint32_t game_h) {
+    if (!(dw >= 1.0f) || !(dh >= 1.0f) || game_w == 0 || game_h == 0) {
+        return GameContentRect{};
+    }
+    const float game_aspect = static_cast<float>(game_w) / static_cast<float>(game_h);
+    const float disp_aspect = dw / dh;
+    GameContentRect out{};
+    out.x = dx;
+    out.y = dy;
+    if (disp_aspect > game_aspect) {
+        // Pillarbox: black bars left/right, full height used.
+        out.h = dh;
+        out.w = dh * game_aspect;
+        out.x = dx + (dw - out.w) * 0.5f;
+    } else {
+        // Letterbox: black bars top/bottom, full width used.
+        out.w = dw;
+        out.h = dw / game_aspect;
+        out.y = dy + (dh - out.h) * 0.5f;
+    }
+    return out;
+}
+
+// Screen (ImGui logical) -> game normalized (0..1, origin top-left).
+// Returns false outside the content rect (bars, margins, or invalid rect),
+// which the shell turns into an unfocused pointer — never a clamped edge
+// press that would hit a button through the black bar.
+inline bool game_screen_to_normal(float sx, float sy, const GameContentRect& rect,
+                                  float& out_x, float& out_y) {
+    if (!rect.contains(sx, sy)) {
+        return false;
+    }
+    out_x = (sx - rect.x) / rect.w;
+    out_y = (sy - rect.y) / rect.h;
+    if (out_x < 0.0f) out_x = 0.0f;
+    if (out_x > 1.0f) out_x = 1.0f;
+    if (out_y < 0.0f) out_y = 0.0f;
+    if (out_y > 1.0f) out_y = 1.0f;
+    return true;
+}
+
+// Game normalized -> screen (for tests; the shell draws with offset math).
+inline bool game_normal_to_screen(float nx, float ny, const GameContentRect& rect,
+                                  float& out_x, float& out_y) {
+    if (!rect.valid() || !(nx >= 0.0f && nx <= 1.0f && ny >= 0.0f && ny <= 1.0f)) {
+        return false;
+    }
+    out_x = rect.x + nx * rect.w;
+    out_y = rect.y + ny * rect.h;
+    return true;
+}
+
 } // namespace nf::editor

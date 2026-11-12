@@ -311,6 +311,8 @@ bool load_instance_functions(VkInstance instance) {
     failed |= !load_fn(vkCreateDevice,                           vkGetInstanceProcAddr, instance, "vkCreateDevice");
 #ifdef _WIN32
     failed |= !load_fn(vkCreateWin32SurfaceKHR,                   vkGetInstanceProcAddr, instance, "vkCreateWin32SurfaceKHR");
+#elif defined(__ANDROID__)
+    failed |= !load_fn(vkCreateAndroidSurfaceKHR,                 vkGetInstanceProcAddr, instance, "vkCreateAndroidSurfaceKHR");
 #endif
 
     if (failed) {

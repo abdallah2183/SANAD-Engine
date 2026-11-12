@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Editor/resources/SANAD.png" alt="محرك سَنَد" width="76">
+<img src="Editor/resources/SANAD.png" alt="محرك سَنَد" width="112">
 
 # محرك سَنَد
 

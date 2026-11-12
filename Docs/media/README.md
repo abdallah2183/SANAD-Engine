@@ -17,7 +17,7 @@ Screenshots were recorded from native **SANAD 0.8.0** on Windows on **2026-11-05
 
 `shot_game.png`, `shot_vehicle.png`, `shot_editor_en.png` and `shot_editor_ar.png` are required by the native launcher's thumbnail lookup and portable packager. Keep those filenames unless the lookup and packaging contract change together.
 
-The canonical editor mark is [`Editor/resources/SANAD.png`](../../Editor/resources/SANAD.png). The existing branding artwork is kept once at [`Resources/Branding/sanad_logo.jpg`](../../Resources/Branding/sanad_logo.jpg).
+The canonical mark is [`Editor/resources/SANAD.png`](../../Editor/resources/SANAD.png). The editor embeds it for the toolbar and About window. The website and README use the same PNG. The launcher and exported games use [`Editor/resources/SANAD.ico`](../../Editor/resources/SANAD.ico), generated from the PNG with `powershell -File make_icon.ps1`. The [JPEG](../../Resources/Branding/sanad_logo.jpg) and [transparent mark](../../Resources/Branding/sanad_mark.png) provide variants for game and website use. The supplied source is preserved in [`sanad_logo_original.png`](../../Resources/Branding/sanad_logo_original.png).
 
 ## Add or replace a screenshot
 

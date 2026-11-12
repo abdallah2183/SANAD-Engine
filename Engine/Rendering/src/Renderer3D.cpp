@@ -495,6 +495,12 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         dpd.push_constant_size = 128; // view_proj + model
         dpd.push_constant_stages = rhi::ShaderStage::Vertex;
         m_depth_pipeline = m_pipeline_cache->get_or_create(dpd);
+        // glTF doubleSided: the depth prepass must record the rear face too,
+        // or the gbuffer pass would have no depth to reconstruct position from
+        // and the lighting pass would treat those pixels as sky.
+        rhi::PipelineDesc dpd_nocull = dpd;
+        dpd_nocull.rasterizer.cull_mode = rhi::CullMode::None;
+        m_depth_pipeline_nocull = m_pipeline_cache->get_or_create(dpd_nocull);
 
         // GBuffer: full material pipeline (layout shared with MaterialLibrary)
         rhi::VertexLayout gvl{};
@@ -526,6 +532,10 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         gmd.push_constant_size = gpd.push_constant_size;
         gmd.push_constant_stages = gpd.push_constant_stages;
         m_gbuffer_material = std::make_unique<Material>(device, *m_pipeline_cache, gmd);
+        MaterialDesc gmd_nocull = gmd;
+        gmd_nocull.rasterizer.cull_mode = rhi::CullMode::None;
+        m_gbuffer_material_nocull =
+            std::make_unique<Material>(device, *m_pipeline_cache, gmd_nocull);
 
         // Lighting: fullscreen, no vertex input
         rhi::PipelineDesc lpd{};
@@ -571,6 +581,9 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
         fpd.push_constant_size = 128;    // view_proj + model
         fpd.push_constant_stages = rhi::ShaderStage::Vertex;
         m_forward_pipeline = m_pipeline_cache->get_or_create(fpd);
+        rhi::PipelineDesc fpd_nocull = fpd;
+        fpd_nocull.rasterizer.cull_mode = rhi::CullMode::None;
+        m_forward_pipeline_nocull = m_pipeline_cache->get_or_create(fpd_nocull);
 
         // Decal (Phase 36): a fullscreen triangle per decal, scissored on the
         // CPU to its projected rect. No vertex input, no depth attachment, no
@@ -781,7 +794,13 @@ bool Renderer3D::init(rhi::IGraphicsDevice& device, const std::filesystem::path&
     }
     rhi::SamplerDesc samp_desc{};
     m_sampler = device.create_sampler(samp_desc);
-    if (!m_white_texture || !m_white_view || !m_sampler) {
+    rhi::SamplerDesc depth_sampler{};
+    depth_sampler.min = rhi::Filter::Nearest;
+    depth_sampler.mag = rhi::Filter::Nearest;
+    depth_sampler.address_u = rhi::AddressMode::ClampToEdge;
+    depth_sampler.address_v = rhi::AddressMode::ClampToEdge;
+    m_depth_sampler = device.create_sampler(depth_sampler);
+    if (!m_white_texture || !m_white_view || !m_sampler || !m_depth_sampler) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create fallback texture/sampler");
         return false;
     }
@@ -1200,6 +1219,10 @@ void Renderer3D::destroy_resolution_dependent() {
     m_ssao_blur_view.reset();
 }
 
+void Renderer3D::release_target_framebuffers() {
+    m_tonemap_fbs.clear();
+}
+
 void Renderer3D::resize(u32 width, u32 height) {
     if (!m_device) return;
     // A missing graph means a previous rebuild failed; the same size must be
@@ -1261,13 +1284,16 @@ void Renderer3D::shutdown() {
     m_splat_palette.reset();
     m_material_library.reset();
     m_gbuffer_material.reset();
+    m_gbuffer_material_nocull.reset();
     if (m_pipeline_cache) {
         delete m_pipeline_cache;
         m_pipeline_cache = nullptr;
     }
     m_depth_pipeline = nullptr;
+    m_depth_pipeline_nocull = nullptr;
     m_lighting_pipeline = nullptr;
     m_forward_pipeline = nullptr;
+    m_forward_pipeline_nocull = nullptr;
     m_decal_pipeline = nullptr;
     m_tonemap_pipeline_off = nullptr;
     m_tonemap_pipeline_present = nullptr;
@@ -1309,6 +1335,7 @@ void Renderer3D::shutdown() {
     m_bloom_rp.reset();
     m_ssao_rp.reset();
     m_tonemap_present_ready = false;
+    m_present_format = rhi::Format::Unknown;
     for (u32 level = 0; level < kBloomLevels; ++level) {
         m_bloom_handles[level] = kInvalidRGHandle;
     }
@@ -1330,6 +1357,7 @@ void Renderer3D::shutdown() {
     m_local_shadow_map.reset();
     m_local_shadow_atlas_size = 0;
     m_sampler.reset();
+    m_depth_sampler.reset();
     m_device = nullptr;
 }
 
@@ -1868,7 +1896,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const rhi::Sampler* clamp_sampler = m_env_sampler ? m_env_sampler.get() : m_sampler.get();
         const std::array<rhi::DescriptorWrite, 3> ssao_writes{{
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
-             m_gbuffer_depth_view.get(), clamp_sampler},
+             m_gbuffer_depth_view.get(), m_depth_sampler.get()},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
              m_gbuffer1_view.get(), clamp_sampler},
             {2, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0, 144,
@@ -1880,7 +1908,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
              m_ssao_raw_view.get(), clamp_sampler},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
-             m_gbuffer_depth_view.get(), clamp_sampler},
+             m_gbuffer_depth_view.get(), m_depth_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
              m_gbuffer1_view.get(), clamp_sampler},
         }};
@@ -1939,10 +1967,10 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer0_view.get(), m_sampler.get()},
             {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer1_view.get(), m_sampler.get()},
             {2, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer2_view.get(), m_sampler.get()},
-            {3, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer_depth_view.get(), m_sampler.get()},
+            {3, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer_depth_view.get(), m_depth_sampler.get()},
             {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0, sizeof(FrameUniforms), nullptr, nullptr},
-            {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_shadow_view.get(), m_sampler.get()},
-            {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_sampler.get()},
+            {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_shadow_view.get(), m_depth_sampler.get()},
+            {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_local_shadow_view.get(), m_depth_sampler.get()},
             {7, rhi::DescriptorType::SampledImage, nullptr, 0, 0, m_gbuffer3_view.get(), m_sampler.get()},
             {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, env_view, env_sampler},
             {9, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
@@ -1979,7 +2007,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         // shader's `dof_max_radius > 0` guard means it is then never read.
         tonemap_writes[2 + kBloomLevels] = {2 + kBloomLevels, rhi::DescriptorType::SampledImage,
                                             nullptr, 0, 0, m_gbuffer_depth_view.get(),
-                                            m_sampler.get()};
+                                            m_depth_sampler.get()};
         // The colour-grading LUT, or the 1x1 white texture when none is bound.
         // Bound unconditionally for the usual reason: an unwritten binding is
         // not a valid set, and `lut_strength` at 0 means the substitute is
@@ -2050,6 +2078,10 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             pd.lod = effective;
         }
         MaterialEntry* entry = m_material_library->get(ro.material_handle);
+        if (entry != nullptr) {
+            // glTF doubleSided decides which culling pipeline each draw uses.
+            pd.double_sided = entry->double_sided;
+        }
         if (entry && entry->material && entry->material->valid()) {
             if (entry->params.base_color[3] < 1.0f) {
                 // The transparent path. Its descriptor set is the union layout
@@ -2076,11 +2108,11 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                     {4, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0,
                      sizeof(FrameUniforms), nullptr, nullptr},
                     {5, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
-                     m_shadow_view.get(), m_sampler.get()},
+                     m_shadow_view.get(), m_depth_sampler.get()},
                     {6, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
-                     m_local_shadow_view.get(), m_sampler.get()},
+                     m_local_shadow_view.get(), m_depth_sampler.get()},
                     {7, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
-                     16 * sizeof(float), nullptr, nullptr},
+                     20 * sizeof(float), nullptr, nullptr},
                     {8, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
                     {9, rhi::DescriptorType::SampledImage, nullptr, 0, 0, fwd_env, fwd_env_sampler},
                     {10, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
@@ -2099,7 +2131,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                 m_device->update_descriptor_set(*fwd_set,
                                                 std::span<const rhi::DescriptorWrite>(forward_writes));
                 transparent.push_back(TransparentDraw{&ro, mesh, fwd_set.get(), pd.lod,
-                                                      camera_distance});
+                                                      camera_distance, pd.double_sided});
                 forward_sets.push_back(std::move(fwd_set));
                 continue;
             }
@@ -2131,7 +2163,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
                     entry->emissive_view ? entry->emissive_view : m_white_view.get();
                 const std::array<rhi::DescriptorWrite, 7> material_writes{{
                     {0, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
-                     16 * sizeof(float), nullptr, nullptr},
+                     20 * sizeof(float), nullptr, nullptr},
                     {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0, albedo, m_sampler.get()},
                     {2, rhi::DescriptorType::UniformBuffer, m_splat_palette.get(), 0,
                      sizeof(SplatPaletteGPU), nullptr, nullptr},
@@ -2203,13 +2235,13 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             }
             const std::array<rhi::DescriptorWrite, 5> writes{{
                 {0, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
-                 m_gbuffer_depth_view.get(), clamp_sampler},
+                 m_gbuffer_depth_view.get(), m_depth_sampler.get()},
                 {1, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
                  m_gbuffer1_view.get(), clamp_sampler},
                 {2, rhi::DescriptorType::UniformBuffer, m_frame_uniforms[frame_slot].get(), 0, 144,
                  nullptr, nullptr},
                 {3, rhi::DescriptorType::UniformBuffer, entry->params_ubo.get(), 0,
-                 16 * sizeof(float), nullptr, nullptr},
+                 20 * sizeof(float), nullptr, nullptr},
                 {4, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
                  entry->albedo_view ? entry->albedo_view : m_white_view.get(),
                  m_sampler.get()},
@@ -2258,7 +2290,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     FxaaTarget* fxaa_src = nullptr;
     bool fxaa_pass = false;
     if (fxaa_active()) {
-        if (out_is_present_source && !ensure_present_variants()) {
+        if (out_is_present_source && !ensure_present_variants(out_target.format())) {
             NF_LOG_WARN(LogCategory::RHI, "Renderer3D: FXAA skipped, present variants unavailable");
         } else {
             rhi::Pipeline* pipe = out_is_present_source ? m_fxaa_pipeline_present
@@ -2417,6 +2449,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const std::array<rhi::ClearValue, 0> no_clears{};
         gcmd.begin_render_pass(*m_depth_rp, *m_depth_fb, std::span<const rhi::ClearValue>(no_clears), 1.0f, 0);
         gcmd.bind_pipeline(*m_depth_pipeline);
+        const rhi::Pipeline* bound_depth_pipeline = m_depth_pipeline;
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
@@ -2425,6 +2458,14 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const StaticMesh* bound_mesh = nullptr;
         u32 bound_lod = u32_max;
         for (auto& pd : prepared) {
+            if (pd.double_sided && m_depth_pipeline_nocull != nullptr &&
+                bound_depth_pipeline != m_depth_pipeline_nocull) {
+                gcmd.bind_pipeline(*m_depth_pipeline_nocull);
+                bound_depth_pipeline = m_depth_pipeline_nocull;
+            } else if (!pd.double_sided && bound_depth_pipeline != m_depth_pipeline) {
+                gcmd.bind_pipeline(*m_depth_pipeline);
+                bound_depth_pipeline = m_depth_pipeline;
+            }
             std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
             const rhi::Buffer* vb = pd.mesh->vertex_buffer(pd.lod);
@@ -2466,6 +2507,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         };
         gcmd.begin_render_pass(*m_gbuffer_rp, *m_gbuffer_fb, std::span<const rhi::ClearValue>(clears), 1.0f, 0);
         gcmd.bind_pipeline(m_gbuffer_material->pipeline());
+        const rhi::Pipeline* bound_gbuffer_pipeline = &m_gbuffer_material->pipeline();
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
@@ -2476,6 +2518,15 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
         const rhi::DescriptorSet* bound_set = nullptr;
         for (auto& pd : prepared) {
             if (!pd.material_set) continue;
+            if (pd.double_sided && m_gbuffer_material_nocull &&
+                m_gbuffer_material_nocull->valid() &&
+                bound_gbuffer_pipeline != &m_gbuffer_material_nocull->pipeline()) {
+                gcmd.bind_pipeline(m_gbuffer_material_nocull->pipeline());
+                bound_gbuffer_pipeline = &m_gbuffer_material_nocull->pipeline();
+            } else if (!pd.double_sided && bound_gbuffer_pipeline != &m_gbuffer_material->pipeline()) {
+                gcmd.bind_pipeline(m_gbuffer_material->pipeline());
+                bound_gbuffer_pipeline = &m_gbuffer_material->pipeline();
+            }
             std::memcpy(push.model, pd.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
             // The state sort groups objects by (mesh, lod, material set), so a
@@ -2717,12 +2768,21 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
             return;
         }
         gcmd.bind_pipeline(*m_forward_pipeline);
+        const rhi::Pipeline* bound_forward_pipeline = m_forward_pipeline;
         struct Push { float view_proj[16]; float model[16]; };
         Push push{};
         std::memcpy(push.view_proj, camera.view_projection.m, sizeof(push.view_proj));
         gcmd.set_viewport(0, 0, m_render_width, m_render_height);
         gcmd.set_scissor(0, 0, m_render_width, m_render_height);
         for (auto& td : transparent) {
+            if (td.double_sided && m_forward_pipeline_nocull != nullptr &&
+                bound_forward_pipeline != m_forward_pipeline_nocull) {
+                gcmd.bind_pipeline(*m_forward_pipeline_nocull);
+                bound_forward_pipeline = m_forward_pipeline_nocull;
+            } else if (!td.double_sided && bound_forward_pipeline != m_forward_pipeline) {
+                gcmd.bind_pipeline(*m_forward_pipeline);
+                bound_forward_pipeline = m_forward_pipeline;
+            }
             std::memcpy(push.model, td.object->world.m, sizeof(push.model));
             gcmd.push_constants(rhi::ShaderStage::Vertex, 0, sizeof(Push), &push);
             const std::array<const rhi::DescriptorSet*, 1> sets{td.forward_set};
@@ -2857,7 +2917,7 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     if (tonemap_presents) {
         // The present variant needs the swapchain extension, which a
         // headless/CI device does not have — created lazily on first use.
-        if (!ensure_present_variants()) {
+        if (!ensure_present_variants(out_target.format())) {
             NF_LOG_ERROR(LogCategory::RHI, "Renderer3D: failed to create present render pass "
                                            "(device has no swapchain extension?)");
             return false;
@@ -3075,9 +3135,10 @@ bool Renderer3D::render(rhi::CommandBuffer& cmd, const RenderWorld& render_world
     return true;
 }
 
-bool Renderer3D::ensure_present_variants() {
-    if (m_tonemap_present_ready) return true;
+bool Renderer3D::ensure_present_variants(rhi::Format format) {
+    if (m_tonemap_present_ready) return m_present_format == format;
     rhi::ColorAttachment back_present{};
+    back_present.format = format;
     const std::array<rhi::ColorAttachment, 1> present_atts{back_present};
     rhi::RenderPassDesc tonemap_present_rpd{};
     tonemap_present_rpd.color_attachments = std::span<const rhi::ColorAttachment>(present_atts);
@@ -3145,6 +3206,7 @@ bool Renderer3D::ensure_present_variants() {
         }
     }
     m_tonemap_present_ready = true;
+    m_present_format = format;
     return true;
 }
 
@@ -3214,7 +3276,7 @@ bool Renderer3D::present_texture(rhi::CommandBuffer& cmd, rhi::Texture& src,
                      "(shader directory has no present_*.spv)");
         return false;
     }
-    if (out_is_present_source && !ensure_present_variants()) {
+    if (out_is_present_source && !ensure_present_variants(out_target.format())) {
         NF_LOG_ERROR(LogCategory::RHI, "Renderer3D::present_texture: present pass unavailable");
         return false;
     }
@@ -3252,7 +3314,7 @@ bool Renderer3D::present_texture(rhi::CommandBuffer& cmd, rhi::Texture& src,
     const rhi::TextureView* depth_view =
         m_gbuffer_depth_view ? m_gbuffer_depth_view.get() : src_view;
     writes[2 + kBloomLevels] = {2 + kBloomLevels, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
-                                depth_view, m_sampler.get()};
+                                depth_view, m_depth_sampler.get()};
     writes[3 + kBloomLevels] = {3 + kBloomLevels, rhi::DescriptorType::SampledImage, nullptr, 0, 0,
                                 src_view, m_sampler.get()};
     m_device->update_descriptor_set(*set, std::span<const rhi::DescriptorWrite>(writes));

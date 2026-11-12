@@ -91,6 +91,16 @@ bool MaterialAsset::load_from_text(const std::string& text, MaterialAsset& out, 
             if (parse_floats(val, &v, 1)) {
                 parsed.params.emission_strength = v;
             }
+        } else if (key == "normal_scale") {
+            float v = 0.0f;
+            if (parse_floats(val, &v, 1)) {
+                parsed.params.normal_scale = v;
+            }
+        } else if (key == "occlusion_strength") {
+            float v = 0.0f;
+            if (parse_floats(val, &v, 1)) {
+                parsed.params.occlusion_strength = v;
+            }
         } else if (key == "albedo") {
             parsed.albedo = val;
         } else if (key == "normal") {
@@ -101,6 +111,13 @@ bool MaterialAsset::load_from_text(const std::string& text, MaterialAsset& out, 
             parsed.occlusion = val;
         } else if (key == "emissive_map") {
             parsed.emissive = val;
+        } else if (key == "double_sided") {
+            // Tolerant like every other key: an explicit 0/1 or a truthy
+            // number; anything unparseable keeps the default (false).
+            float v = 0.0f;
+            if (parse_floats(val, &v, 1)) {
+                parsed.double_sided = v > 0.5f;
+            }
         } else if (key == "mip") {
             if (val == "none") {
                 parsed.mip_mode = rhi::MipMapMode::None;
@@ -144,14 +161,31 @@ std::string MaterialAsset::save_to_text() const {
     if (!normal.empty()) {
         out += "normal: " + normal + "\n";
     }
+    // Omitted at the default, so re-saving an existing .nfmat stays
+    // byte-identical; an absent key parses back as 1, the glTF default.
+    if (params.normal_scale != 1.0f) {
+        std::snprintf(buf, sizeof(buf), "normal_scale: %g\n",
+                      static_cast<double>(params.normal_scale));
+        out += buf;
+    }
     if (!mrough.empty()) {
         out += "mrough: " + mrough + "\n";
     }
     if (!occlusion.empty()) {
         out += "occlusion: " + occlusion + "\n";
     }
+    // Omitted at the default (like normal_scale) so re-saving an existing
+    // .nfmat stays byte-identical; an absent key parses back as 1.
+    if (params.occlusion_strength != 1.0f) {
+        std::snprintf(buf, sizeof(buf), "occlusion_strength: %g\n",
+                      static_cast<double>(params.occlusion_strength));
+        out += buf;
+    }
     if (!emissive.empty()) {
         out += "emissive_map: " + emissive + "\n";
+    }
+    if (double_sided) {
+        out += "double_sided: 1\n";
     }
     out += std::string("mip: ") +
            (mip_mode == rhi::MipMapMode::None

@@ -1,4 +1,5 @@
 #pragma once
+#include <NF/Editor/ComponentCatalog.hpp>
 
 // NF/Editor/EditorApp.hpp — central editor state machine (window/RHI-free).
 //
@@ -70,12 +71,30 @@ const char* primitive_asset_stem(PrimitiveKind kind);
 /// Logical path of the primitive's mesh asset: content://Meshes/<stem>.nfmesh.
 std::string primitive_asset_path(PrimitiveKind kind);
 
+// Last Game View (Viewport panel) geometry, written by Panels each frame and
+// read by the shell BEFORE Runtime::update, so input routing lags one frame
+// behind the drawn rect on resize — the same one-frame contract the
+// ScriptCanvas capture already uses. ImGui logical coordinates.
+struct GameViewInfo {
+    float min_x = 0.0f;
+    float min_y = 0.0f;
+    float size_x = 0.0f;
+    float size_y = 0.0f;
+    bool open = false;
+    bool hovered = false;
+};
+
 class EditorApp {
 public:
     EditorApp(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry,
               assets::AssetManager& manager, ConsoleBuffer& console);
 
-    void attach_runtime(runtime::Runtime* runtime) { m_runtime = runtime; }
+    void attach_runtime(runtime::Runtime* runtime) {
+        m_runtime = runtime;
+        if (m_runtime != nullptr) {
+            m_runtime->set_settings_project(m_project_name);
+        }
+    }
 
     // --- Scene file ops ---
     bool new_scene(std::string& out_err);
@@ -124,6 +143,9 @@ public:
         if (!m_project_path.empty()) {
             m_imports.set_scratch_dir(std::filesystem::path(m_project_path).parent_path() / "Cache");
         }
+        if (m_runtime != nullptr) {
+            m_runtime->set_settings_project(m_project_name);
+        }
     }
     const std::string& project_path() const { return m_project_path; }
     const std::string& project_name() const { return m_project_name; }
@@ -145,7 +167,15 @@ public:
     /// "(n)" suffix. Fails while playing, like every structural edit.
     bool duplicate_selection(std::string& out_err);
     bool rename_entity(ecs::Entity e, const std::string& new_name, std::string& out_err);
+    bool add_component(ecs::Entity e, ComponentKind kind, std::string& error);
+    bool set_sprite(ecs::Entity e, const runtime::SpriteComponent& edit, std::string& error);
+    bool set_tilemap(ecs::Entity e, const runtime::TilemapComponent& edit, std::string& error);
+    bool set_body_2d(ecs::Entity e, const runtime::RigidBody2DComponent& edit, std::string& error);
+    bool set_collider_2d(ecs::Entity e, const runtime::Collider2DComponent& edit, std::string& error);
     bool set_transform(ecs::Entity e, const TransformEdit& edit, std::string& out_err);
+    // Validated live pose without history; commit once with the drag-start snapshot.
+    bool preview_transform(ecs::Entity e, const TransformEdit& edit, std::string& out_err);
+    bool commit_transform(ecs::Entity e, const TransformEdit& before, std::string& out_err);
     bool reparent(ecs::Entity e, ecs::Entity new_parent, std::string& out_err);
     bool set_camera(ecs::Entity e, const CameraEdit& edit, std::string& out_err);
     bool set_light(ecs::Entity e, const LightEdit& edit, std::string& out_err);
@@ -560,6 +590,11 @@ public:
     bool play(std::string& out_err);
     bool stop(std::string& out_err);
     bool playing() const { return m_play.playing(); }
+    bool paused() const { return m_play.paused(); }
+    void set_paused(bool paused_flag) { m_play.set_paused(paused_flag); }
+    /// Game View geometry written by the Viewport panel (see GameViewInfo).
+    GameViewInfo& game_view() { return m_game_view; }
+    const GameViewInfo& game_view() const { return m_game_view; }
     // Launches the current scene in a standalone game window (NFGamePlayer,
     // spawned next to the editor). The live edit scene is written to a
     // play-session file first, so Play plays exactly what is on screen,
@@ -818,6 +853,9 @@ private:
     double m_browser_cache_age = 1e9;
     bool m_browser_cache_dirty = true;
     PlaySession m_play;
+    std::string m_play_scene_path;
+    uint64_t m_play_scene_version = 0;
+    GameViewInfo m_game_view{};
     ProfilerSession m_profiler_session;
     ViewportState m_viewport;
     // Orbit pivot in world space. VIEW state only: not scene data, never

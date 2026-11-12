@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Editor/resources/SANAD.png" alt="SANAD Engine" width="76">
+<img src="Editor/resources/SANAD.png" alt="SANAD Engine" width="112">
 
 # SANAD Engine
 

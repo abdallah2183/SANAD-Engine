@@ -13,7 +13,7 @@
 // Changing BaseColor / Metallic / Roughness / AO / Emission rewrites the
 // instance's parameter buffer. It never touches the pipeline, never touches
 // the PipelineCache, and never allocates GPU memory beyond the initial
-// 64-byte block — that is the contract the tests enforce.
+// 80-byte block — that is the contract the tests enforce.
 //
 // The parameter block is backend-neutral (plain floats); the descriptor
 // plumbing lives in Material/MaterialInstance above the RHI abstraction.
@@ -30,9 +30,10 @@
 namespace nf::rendering {
 
 /// PBR surface parameters, exposed by the gbuffer shader. Kept as a plain
-/// 16-float block so it maps 1:1 onto the shader's std140 uniform:
+/// 20-float block so it maps 1:1 onto the shader's std140 uniform:
 ///   vec4 baseColor;  vec4(metallic, roughness, ao, emissionStrength);
 ///   vec4 emission.rgb, useBaseColorTex;  vec4(useNormalTex, useMRoughTex, useOcclusionTex, useEmissiveTex)
+///   vec4 normalScale, occlusionStrength, (unused)
 struct PBRMaterialParams {
     float base_color[4] = {0.8f, 0.2f, 0.2f, 1.0f};
     float metallic = 0.0f;
@@ -48,8 +49,23 @@ struct PBRMaterialParams {
     float use_mrough_texture = 0.0f;
     float use_occlusion_texture = 0.0f;
     float use_emissive_texture = 0.0f;
+    /// glTF `normalTexture.scale`: multiplies the decoded normal map's XY
+    /// before renormalising. 1 is the glTF default and leaves every existing
+    /// material bit-for-bit unchanged; 0 collapses exactly to the geometric
+    /// normal. Only meaningful while use_normal_texture is set.
+    float normal_scale = 1.0f;
+    /// glTF `occlusionTexture.strength`: blends the sampled occlusion R toward
+    /// 1 (unoccluded) as `mix(1, r, strength)`. 1 is the glTF default and leaves
+    /// every existing material bit-for-bit unchanged; 0 disables the map's
+    /// effect entirely. Only meaningful while use_occlusion_texture is set.
+    /// Rides normalParams.y so the block stays a dense 20 floats.
+    float occlusion_strength = 1.0f;
+    /// Completes the 5th std140 vec4 (normalParams.zw). std140 rounds the
+    /// block up to a vec4 multiple anyway, so carrying the tail here keeps
+    /// sizeof() equal to the GPU block size and the 1:1 mapping honest.
+    float normal_params_tail[2] = {0.0f, 0.0f};
 
-    /// Packs into the exact 12-float uniform layout (std140-safe order).
+    /// Packs into the exact 20-float uniform layout (std140-safe order).
     ///
     /// An UNSET emission colour (all three channels exactly zero) resolves to
     /// the base colour. That rule is what makes the emission colour a strict
@@ -68,7 +84,7 @@ struct PBRMaterialParams {
     /// and a hand-constructed `PBRMaterialParams` in a test or a sample all end
     /// up in this function, and a default expressed anywhere else would be a
     /// default one of them does not get.
-    void pack(float out[16]) const {
+    void pack(float out[20]) const {
         const bool emission_unset =
             emission[0] == 0.0f && emission[1] == 0.0f && emission[2] == 0.0f;
         const float er = emission_unset ? base_color[0] : emission[0];
@@ -81,11 +97,13 @@ struct PBRMaterialParams {
         out[11] = use_base_color_texture;
         out[12] = use_normal_texture; out[13] = use_mrough_texture;
         out[14] = use_occlusion_texture; out[15] = use_emissive_texture;
+        out[16] = normal_scale; out[17] = occlusion_strength;
+        out[18] = 0.0f; out[19] = 0.0f;
     }
 };
 
-static_assert(sizeof(PBRMaterialParams) == 16 * sizeof(float),
-              "PBRMaterialParams must stay a dense 16-float block");
+static_assert(sizeof(PBRMaterialParams) == 20 * sizeof(float),
+              "PBRMaterialParams must stay a dense 20-float block");
 
 class Material;
 
@@ -93,7 +111,7 @@ class Material;
 struct MaterialEntry {
     Material* material = nullptr;          // non-owning; pipeline is shared
     PBRMaterialParams params;
-    std::unique_ptr<rhi::Buffer> params_ubo; // persistent 64-byte uniform block
+    std::unique_ptr<rhi::Buffer> params_ubo; // persistent 80-byte uniform block
     const rhi::TextureView* albedo_view = nullptr; // optional texture binding
     // Optional PBR map bindings (bindings 3-6 of the material layout). Views
     // are owned by the caller (the runtime texture cache), like albedo_view.
@@ -118,6 +136,10 @@ struct MaterialEntry {
     /// has already waited on the frame fence.
     std::unique_ptr<rhi::DescriptorSet> cached_set;
     bool set_dirty = true;
+    /// glTF `doubleSided`. Per-instance (not in the packed UBO) because it
+    /// selects a rasterizer state, not a shading parameter: the renderer binds
+    /// a no-cull pipeline variant for these draws.
+    bool double_sided = false;
 };
 
 class MaterialLibrary {
@@ -129,7 +151,7 @@ public:
     MaterialLibrary& operator=(const MaterialLibrary&) = delete;
 
     /// Registers an instance sharing `material`'s pipeline. Allocates only the
-    /// 48-byte parameter buffer — never a pipeline, never a descriptor set at
+    /// 80-byte parameter buffer — never a pipeline, never a descriptor set at
     /// creation time (the renderer builds `cached_set` lazily, on first draw).
     MaterialHandle create_instance(Material& material, const PBRMaterialParams& params,
                                    std::string name = "material");
@@ -142,6 +164,10 @@ public:
     void set_params(MaterialHandle handle, const PBRMaterialParams& params);
 
     const PBRMaterialParams* params(MaterialHandle handle) const;
+
+    /// glTF `doubleSided`. Pure CPU state: no UBO rewrite, no descriptor
+    /// rebuild. The renderer reads it when choosing the culling pipeline.
+    void set_double_sided(MaterialHandle handle, bool value);
 
     /// Optional per-instance albedo texture (binding 1 of the material layout).
     /// The view/sampler must outlive the library entry.

@@ -80,6 +80,22 @@ struct GltfMaterialInfo {
     float roughness = 1.0f;
     float emissive[3] = {0, 0, 0};
     float emissive_strength = 1.0f;
+    /// glTF `doubleSided`: the surface is visible (and lit) from both sides.
+    /// cgltf defaults it to false; the renderer needs the flag because its
+    /// fixed-CW back-face culling would otherwise hide the rear of a plane.
+    bool double_sided = false;
+
+    /// glTF `normalTexture.scale`: strength multiplier applied to the decoded
+    /// normal map's tangent-plane components. cgltf defaults it to 1, which is
+    /// also the glTF 2.0 spec default, so an asset that omits it is unchanged.
+    /// Meaningless when normal_image is -1.
+    float normal_scale = 1.0f;
+
+    /// glTF `occlusionTexture.strength`: blends the sampled occlusion R toward
+    /// 1 (unoccluded). cgltf defaults it to 1 (the glTF 2.0 spec default), so an
+    /// asset that omits it is unchanged; 0 disables the map. Meaningless when
+    /// occlusion_image is -1.
+    float occlusion_strength = 1.0f;
 
     /// Index into MeshImportResult::images for the base-colour (albedo) texture,
     /// -1 when the material has none.

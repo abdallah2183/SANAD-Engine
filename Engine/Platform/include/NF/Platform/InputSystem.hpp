@@ -196,6 +196,14 @@ public:
     f32 mouse_delta_x() const { return m_state.mouse_delta_x; }
     f32 mouse_delta_y() const { return m_state.mouse_delta_y; }
     f32 scroll_delta() const { return m_state.scroll_delta; }
+
+    // --- Text input (WM_CHAR) -------------------------------------------------
+    // Dedicated codepoint queue (UTF-8, one string per codepoint). The Win32
+    // backend combines UTF-16 surrogate pairs on WM_CHAR and hands the decoded
+    // codepoint here via on_char(). Application drains it once per frame into
+    // UiKeys::text. Never derive characters from GetAsyncKeyState.
+    void on_char(char32_t codepoint);
+    std::vector<std::string> take_text_events();
     f32 gamepad_axis(GamepadAxis axis) const { return m_state.axis(axis); }
 
     /// Reads hardware (XInput slots 0–3 on Windows) and applies the sample.
@@ -227,6 +235,8 @@ private:
 
     InputState m_state;
     InputState m_prev_state;
+    std::vector<std::string> m_text_events;
+    char32_t m_pending_high = 0;
     HashMap<std::string, InputAction> m_actions;
     bool m_gamepad_connected = false;
 };

@@ -1,0 +1,35 @@
+# SANAD Asset Registry
+version: 1
+count: 4
+---
+id: 0e50b139-1e61-44fd-9658-edc7c55cbd12
+type: Material
+logical: content://Materials/Default.nfmat
+cooked: cache://Materials/Default.nfmat
+fingerprint: bda5d08f1073c327
+format: nfmat-v1
+version: 1
+---
+id: f04e488b-4dc8-414b-baee-e3c50e8829ad
+type: Mesh
+logical: content://Meshes/cube.nfmesh
+cooked: cache://Meshes/cube.nfmesh
+fingerprint: deef258cf95adca8
+format: nfmesh-v1
+version: 1
+---
+id: 8862b542-b2ab-4f1b-9739-7c9e62349f7f
+type: Scene
+logical: content://Scenes/Main.nfscene
+cooked: cache://Scenes/Main.nfscene
+fingerprint: 1cab6832436325e8
+format: nfscene-v1
+version: 1
+---
+id: 9cbe4223-6d51-4a87-a926-66d3f30c3470
+type: Script
+logical: content://Scripts/example.lua
+cooked: cache://Scripts/example.lua
+fingerprint: f727ad8228e31c58
+format: lua-v1
+version: 1

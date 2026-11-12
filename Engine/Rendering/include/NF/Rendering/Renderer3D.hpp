@@ -530,6 +530,8 @@ public:
     /// `width`/`height` are the output size; the internal targets are rebuilt
     /// from it and the current render scale.
     void resize(u32 width, u32 height);
+    // Caller must wait for GPU idle before replacing external render targets.
+    void release_target_framebuffers();
 
     // --- Internal render scale (Phase 37) ---
     //
@@ -1017,6 +1019,13 @@ private:
     rhi::Pipeline* m_depth_pipeline = nullptr;    // owned by m_pipeline_cache
     rhi::Pipeline* m_lighting_pipeline = nullptr; // owned by m_pipeline_cache
     rhi::Pipeline* m_forward_pipeline = nullptr;  // owned by m_pipeline_cache
+    // CullMode::None twins for glTF `doubleSided` materials. Same shaders,
+    // same layouts, same cache — only the rasterizer state differs. Null means
+    // the variant could not be created and those materials fall back to the
+    // single-sided pipelines (visible from the front, never a crash).
+    std::unique_ptr<Material> m_gbuffer_material_nocull;
+    rhi::Pipeline* m_depth_pipeline_nocull = nullptr;
+    rhi::Pipeline* m_forward_pipeline_nocull = nullptr;
     // Decal pass (Phase 36), optional at init like bloom: without the shader
     // pair this stays null and no decal draw is recorded.
     rhi::Pipeline* m_decal_pipeline = nullptr;    // owned by m_pipeline_cache
@@ -1035,7 +1044,7 @@ private:
     /// Lazily creates the swapchain-variant tonemap/present render pass and
     /// pipelines (they need the swapchain extension, which headless/CI devices
     /// do not have). Idempotent; returns false only if the device refused.
-    bool ensure_present_variants();
+    bool ensure_present_variants(rhi::Format format);
 
     // --- descriptor layouts ---
     std::unique_ptr<rhi::DescriptorSetLayout> m_material_layout;   // set 0: UBO + albedo
@@ -1092,6 +1101,7 @@ private:
     // it eagerly would fail vkCreateRenderPass there.
     std::unique_ptr<rhi::RenderPass> m_tonemap_rp_present;
     bool m_tonemap_present_ready = false;
+    rhi::Format m_present_format = rhi::Format::Unknown;
 
     // --- graph-owned targets ---
     RGTextureHandle m_depth_handle = kInvalidRGHandle;
@@ -1114,6 +1124,7 @@ private:
     std::unique_ptr<rhi::TextureView> m_hdr_view;
     std::unique_ptr<rhi::TextureView> m_bloom_views[kBloomLevels];
     std::unique_ptr<rhi::Sampler> m_sampler;
+    std::unique_ptr<rhi::Sampler> m_depth_sampler;
 
     // Framebuffers: depth-only, gbuffer, lighting, transparency, and one per
     // output target
@@ -1238,6 +1249,8 @@ private:
         const StaticMesh* mesh;
         const rhi::DescriptorSet* material_set; // non-owning: cached on the entry
         u32 lod = 0;                            // effective LOD for this frame
+        // glTF doubleSided: select a no-cull pipeline for this draw.
+        bool double_sided = false;
     };
     struct TransparentDraw {
         const RenderObject* object;
@@ -1245,6 +1258,7 @@ private:
         const rhi::DescriptorSet* forward_set; // non-owning: held by forward_sets
         u32 lod = 0;
         float distance = 0.0f;                 // camera -> surface, for the sort
+        bool double_sided = false;
     };
     /// One decal ready to record: its source instance, the per-frame descriptor
     /// set (held by m_decal_sets until execute() returns), and the CPU-projected

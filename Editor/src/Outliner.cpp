@@ -130,6 +130,16 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
         } else if (world.has<runtime::MeshComponent>(f.e)) {
             kind = OutlinerKind::Mesh;
         }
+        // Category membership is independent of the priority-picked type glyph.
+        if (world.has<runtime::MeshComponent>(f.e)) mask |= (1 << 8);
+        if (world.has<runtime::DirectionalLight>(f.e) || world.has<runtime::PointLightComponent>(f.e) ||
+            world.has<runtime::SpotLightComponent>(f.e) || world.has<runtime::SkyComponent>(f.e)) mask |= (1 << 9);
+        if (world.has<physics::RigidBodyComponent>(f.e) || world.has<physics::ColliderComponent>(f.e) ||
+            world.has<runtime::RigidBody2DComponent>(f.e) || world.has<runtime::Collider2DComponent>(f.e) ||
+            world.has<runtime::CableComponent>(f.e) || world.has<runtime::RagdollComponent>(f.e)) mask |= (1 << 10);
+        if (world.has<runtime::SpriteComponent>(f.e) || world.has<runtime::TilemapComponent>(f.e) ||
+            world.has<runtime::RuleTileComponent>(f.e)) mask |= (1 << 11);
+        if (world.has<audio::AudioComponent>(f.e)) mask |= (1 << 12);
         rows.push_back(OutlinerRow{f.e, f.depth, has_children,
                                   world.has<scene::PrefabLinkComponent>(f.e),
                                   entity_label(world, f.e), kind, mask});
@@ -143,8 +153,8 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
 }
 
 std::vector<OutlinerRow> filter_outliner_rows(const std::vector<OutlinerRow>& rows,
-                                              const std::string& filter) {
-    if (filter.empty()) {
+                                              const std::string& filter, OutlinerCategory category) {
+    if (filter.empty() && category == OutlinerCategory::All) {
         return rows;
     }
     std::string needle = filter;
@@ -155,9 +165,25 @@ std::vector<OutlinerRow> filter_outliner_rows(const std::vector<OutlinerRow>& ro
         std::string hay = row.label;
         std::transform(hay.begin(), hay.end(), hay.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (hay.find(needle) != std::string::npos) {
+        bool category_match = false;
+        switch (category) {
+        case OutlinerCategory::All: category_match = true; break;
+        case OutlinerCategory::Mesh: category_match = row.feature_mask & (1 << 8); break;
+        case OutlinerCategory::TwoD: category_match = row.feature_mask & (1 << 11); break;
+        case OutlinerCategory::Light: category_match = row.feature_mask & (1 << 9); break;
+        case OutlinerCategory::Audio: category_match = row.feature_mask & ((1 << 7) | (1 << 12)); break;
+        case OutlinerCategory::Physics: category_match = row.feature_mask & (1 << 10); break;
+        case OutlinerCategory::Weather: category_match = row.feature_mask & (1 << 0); break;
+        case OutlinerCategory::Cable: category_match = row.feature_mask & (1 << 1); break;
+        case OutlinerCategory::Navigation: category_match = row.feature_mask & (1 << 3); break;
+        case OutlinerCategory::Talents: category_match = row.feature_mask & (1 << 4); break;
+        case OutlinerCategory::Camera: category_match = row.kind == OutlinerKind::Camera; break;
+        case OutlinerCategory::Inventory: category_match = row.feature_mask & (1 << 5); break;
+        }
+        if (category_match && hay.find(needle) != std::string::npos) {
             OutlinerRow flat = row;
             flat.depth = 0;
+            flat.has_children = false;
             out.push_back(flat);
         }
     }

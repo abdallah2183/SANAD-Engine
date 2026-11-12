@@ -261,3 +261,21 @@ NF_TEST(project_descriptor_load_reports_a_missing_file) {
     NF_CHECK(!d.has_value());
     NF_CHECK(!err.empty());
 }
+
+
+NF_TEST(project_descriptor_relative_and_trailing_roots_accept_local_mounts) {
+    const auto base = proj_temp_dir("nf_proj_relative_base");
+    std::string error;
+    const std::string text = "version: 1\nname: Relative\nmount: content:// -> Content\n";
+    const auto relative = std::filesystem::relative(base, std::filesystem::current_path());
+    auto descriptor = ProjectDescriptor::parse(text, relative, error);
+    NF_CHECK(descriptor.has_value());
+    if (descriptor) NF_CHECK(descriptor->mount_path("content://") == (base / "Content").lexically_normal());
+    auto trailing = ProjectDescriptor::parse(text, base / "", error);
+    NF_CHECK(trailing.has_value());
+    auto dot = ProjectDescriptor::parse(text, ".", error);
+    NF_CHECK(dot.has_value());
+    auto escape = ProjectDescriptor::parse("version: 1\nname: Relative\nmount: content:// -> ../outside\n", ".", error);
+    NF_CHECK(!escape.has_value());
+    std::filesystem::remove_all(base);
+}

@@ -8,6 +8,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <cstdio>
 #endif
 
 namespace nf::project {
@@ -61,6 +62,17 @@ std::filesystem::path executable_directory() {
                                              static_cast<DWORD>(buffer.size()));
     if (length == 0 || length >= buffer.size()) return {};
     return std::filesystem::path(buffer.data()).parent_path();
+#endif
+}
+
+void attach_parent_console() {
+#if defined(_WIN32)
+    const bool has_stdout = _fileno(stdout) >= 0;
+    const bool has_stderr = _fileno(stderr) >= 0;
+    if ((has_stdout && has_stderr) || !AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    FILE* console = nullptr;
+    if (!has_stdout) freopen_s(&console, "CONOUT$", "w", stdout);
+    if (!has_stderr) freopen_s(&console, "CONOUT$", "w", stderr);
 #endif
 }
 

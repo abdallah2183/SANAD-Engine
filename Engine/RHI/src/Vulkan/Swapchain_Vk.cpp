@@ -130,13 +130,29 @@ VulkanSwapchain::VulkanSwapchain(VulkanDevice* device, const SwapchainDesc& desc
         create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     }
 
+#ifdef __ANDROID__
+    // Until the renderer pre-rotates its camera and UI, ask the compositor to
+    // apply display rotation. Claiming currentTransform here displays our
+    // unrotated landscape render sideways on portrait-native phones.
+    create_info.preTransform = (capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : capabilities.currentTransform;
+#else
     create_info.preTransform = capabilities.currentTransform;
-    create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+#endif
+    constexpr VkCompositeAlphaFlagBitsKHR alpha_modes[] = {
+        VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR};
+    for (const auto mode : alpha_modes) {
+        if (capabilities.supportedCompositeAlpha & mode) { create_info.compositeAlpha = mode; break; }
+    }
     create_info.presentMode = present_mode;
     create_info.clipped = VK_TRUE;
     create_info.oldSwapchain = VK_NULL_HANDLE;
 
     if (!NF_VK_CHECK(vkCreateSwapchainKHR(ctx.device, &create_info, nullptr, &m_swapchain))) {
+        // Vulkan does not guarantee the output handle on failure. Never let
+        // the factory or destructor treat an undefined handle as a live object.
+        m_swapchain = VK_NULL_HANDLE;
         NF_LOG_ERROR(LogCategory::RHI, "Failed to create swapchain");
         return;
     }

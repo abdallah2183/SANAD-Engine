@@ -141,6 +141,36 @@ bool input_handle_message(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return true;
         }
 
+        case WM_CHAR: {
+            // WM_CHAR carries one UTF-16 code unit in wparam. A supplementary
+            // character arrives as a high-surrogate message followed by a
+            // low-surrogate message: buffer the high half and only emit the
+            // combined codepoint, so a sequence is never cut in half. An
+            // orphan high surrogate is dropped when the next char is not its
+            // low partner.
+            const unsigned int unit = static_cast<unsigned int>(wparam);
+            static unsigned int pending_high = 0;
+            if (unit >= 0xD800 && unit <= 0xDBFF) {
+                pending_high = unit;
+                return true;
+            }
+            if (unit >= 0xDC00 && unit <= 0xDFFF) {
+                if (pending_high != 0) {
+                    const char32_t cp = static_cast<char32_t>(0x10000u + ((pending_high - 0xD800u) << 10) + (unit - 0xDC00u));
+                    input.on_char(cp);
+                }
+                pending_high = 0;
+                return true;
+            }
+            pending_high = 0;
+            // Control characters (Enter/Backspace/Tab) are editing keys handled
+            // by polling edges; only printable text is queued.
+            if (unit >= 0x20 && unit != 0x7F) {
+                input.on_char(static_cast<char32_t>(unit));
+            }
+            return true;
+        }
+
         case WM_MOUSEWHEEL: {
             // 120 is one detent on a standard wheel; normalize to +/-1.
             const i32 delta = GET_WHEEL_DELTA_WPARAM(wparam);

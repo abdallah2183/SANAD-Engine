@@ -1,4 +1,7 @@
 #pragma once
+#include <NF/UI/ScriptCanvas.hpp>
+#include <NF/Scripting/SceneFlow.hpp>
+#include <NF/Assets/SettingsStore.hpp>
 
 #include <NF/Assets/VirtualFileSystem.hpp>
 #include <NF/Assets/AssetRegistry.hpp>
@@ -96,6 +99,11 @@ public:
     // Load a scene from a logical path (e.g. content://Scenes/Example.nfscene)
     // Returns true on success (even if some assets are missing, it will log and continue)
     bool load_scene(const std::string& logical_path, std::string& out_error);
+    /// Queued Lua commands are applied at the next live update boundary.
+    scripting::SceneFlow& game_flow() { return m_game_flow; }
+    const scripting::SceneFlow& game_flow() const { return m_game_flow; }
+    void reset_game_session() { m_game_flow.reset_session(); }
+
 
     /// Installs an already-built scene as the live one, running everything
     /// load_scene does *after* parsing: display naming, physics rebuild, gameplay
@@ -441,6 +449,15 @@ public:
     /// Forgets cached Lua environments (sources recompile lazily). Called on
     /// scene adopt so a previous scene's bytecode never serves the next one.
     void clear_script_cache();
+    std::filesystem::path shader_directory() const { return resolve_shader_dir(); }
+    ui::ScriptCanvas& game_ui() { return m_game_ui; }
+    const ui::ScriptCanvas& game_ui() const { return m_game_ui; }
+    void set_ui_pointer(ui::UiPointer pointer) { m_ui_pointer = pointer; }
+    void set_ui_keys(ui::UiKeys keys) { m_ui_keys = keys; }
+    void set_viewport(float w, float h) { m_game_ui.set_viewport(w, h); }
+    assets::SettingsStore& settings_store() { return m_settings_store; }
+    const assets::SettingsStore& settings_store() const { return m_settings_store; }
+    void set_settings_project(const std::string& name) { m_settings_store.set_project_name(name); }
     /// Loads every ScriptComponent path through the VFS into its source.
     /// Unresolvable paths keep an empty source with a warning — the scene
     /// keeps its path so a later save round-trips instead of dropping it.
@@ -794,6 +811,19 @@ public:
     void set_playing(bool playing) { m_playing = playing; }
     [[nodiscard]] bool playing() const { return m_playing; }
 
+    /// True pause: `update(dt)` is a no-op for simulation regardless of the
+    /// passed `dt` — no scripts (even without dt), physics, animation,
+    /// gameplay, AI, nav, particles, weapons, destruction or audio are
+    /// stepped, and the `ScriptCanvas` snapshot is kept as-is for frozen
+    /// inspection. Streaming/asset-sync are also skipped so a paused edit
+    /// cannot mutate the world membership hidden from the user. Only
+    /// transform propagation runs so editor writes stay visible. The
+    /// editor mirrors its PlaySession pause here; `dt = 0` alone (edit
+    /// mode) must not be the only guard because a script that increments
+    /// a counter or saves without reading `dt` would still advance.
+    void set_paused(bool paused) { m_paused = paused; }
+    [[nodiscard]] bool paused() const { return m_paused; }
+
     /// The yaw of the scene's active camera, in degrees; 0 when the scene has
     /// no active camera.
     ///
@@ -1066,7 +1096,8 @@ public:
     /// scene's static colliders so shards land on the level. No-op when already
     /// enabled (call disable_destruction() first to reconfigure). Returns false
     /// when the Jolt world could not be created, in which case nothing is built.
-    bool enable_destruction(const DestructionConfig& config = DestructionConfig{});
+    bool enable_destruction();
+    bool enable_destruction(const DestructionConfig& config);
 
     /// Retires every shard, drops the bindings and tears the three objects down.
     /// The next enable_destruction() starts clean.
@@ -1136,6 +1167,11 @@ public:
     // re-inserting an existing id does not grow the set.
     size_t failed_mesh_reports() const { return m_failed_mesh_reports; }
     const rendering::Renderer3D* renderer() const { return m_renderer.get(); }
+
+    /// Inexpensive starting point for mobile players. Authored post-process
+    /// settings can still change the render scale when their scene is drawn.
+    /// Call before the first frame so the smaller targets are allocated once.
+    void set_mobile_render_defaults();
 
     // --- GPU profiling (Phase 39) ---
     //
@@ -1268,7 +1304,10 @@ public:
     // --- Texture assets for material albedo (Phase 5) ---
     // Decoded once from content://, uploaded, and cached; materials reference
     // textures by path and rebind automatically on reload.
-    bool ensure_texture(const std::string& logical_path, std::string& out_error);
+    /// `srgb` selects the GPU texture FORMAT: true for colour maps (glTF
+    /// baseColorTexture / emissiveTexture), false for linear data maps
+    /// (normal, metallicRoughness, occlusion, LUT). See texture_cache_key.
+    bool ensure_texture(const std::string& logical_path, bool srgb, std::string& out_error);
     // Re-decodes and re-uploads (failure keeps the old texture live), then
     // rebinds every material using it. Hot Reload's texture path.
     bool reload_texture(const std::string& logical_path, std::string& out_error);
@@ -1776,6 +1815,11 @@ private:
     // Lua scripts (Phase 15 engine, Phase 24 frame wiring). One VM for the
     // whole scene, matching ScriptSystem's own design (per-source sandboxed
     // environments inside, not one VM per entity).
+    ui::ScriptCanvas m_game_ui;
+    scripting::SceneFlow m_game_flow;
+    assets::SettingsStore m_settings_store;
+    ui::UiPointer m_ui_pointer;
+    ui::UiKeys m_ui_keys;
     std::unique_ptr<scripting::ScriptSystem> m_scripts;
     size_t m_script_updates = 0;
     // Particles / cloth / characters (Phase 25 wiring). One live simulation
@@ -1881,6 +1925,9 @@ private:
     /// set_playing). Defaults to editing so a harness that never sets it gets
     /// the editor-safe behaviour, not gameplay driving the scene.
     bool m_playing = false;
+    /// See set_paused(). Independent of `dt`: even a caller that passes a
+    /// real `dt` while paused gets no simulation step.
+    bool m_paused = false;
     void sort_gameplay_modules();
     /// Fills a context from the current scene/physics/audio state.
     gameplay::GameplayContext build_gameplay_context(f32 dt);
@@ -2188,7 +2235,7 @@ private:
     bool load_material_file(const std::string& path, rendering::PBRMaterialParams& out) const;
     std::unique_ptr<TextureObjects> upload_texture_objects(const std::string& logical_path,
                                                            const rendering::DecodedImage& img,
-                                                           std::string& out_error);
+                                                           bool srgb, std::string& out_error);
 
     // Fallback clear resources: kept alive until shutdown() so the command
     // buffer that references them stays valid past cmd->end()/submit.

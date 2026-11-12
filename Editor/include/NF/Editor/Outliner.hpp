@@ -51,6 +51,10 @@ struct OutlinerRow {
     uint16_t feature_mask = 0;
 };
 
+enum class OutlinerCategory : uint8_t {
+    All, Mesh, TwoD, Light, Audio, Physics, Weather, Cable, Navigation, Talents, Camera, Inventory
+};
+
 struct OutlinerState {
     // Entity ids whose children are expanded (default: all expanded).
     std::set<uint32_t> collapsed;
@@ -58,6 +62,8 @@ struct OutlinerState {
     // undoable, so there is no confirmation target to carry between frames.
     // Live search text (bound to the panel's input box). Empty = no filter.
     std::string filter_text;
+    OutlinerCategory category = OutlinerCategory::All;
+    bool filtering() const { return !filter_text.empty() || category != OutlinerCategory::All; }
 
     bool is_expanded(ecs::Entity e) const { return collapsed.count(e.id) == 0; }
     void set_expanded(ecs::Entity e, bool expanded) {
@@ -76,7 +82,8 @@ std::vector<OutlinerRow> build_outliner_rows(const ecs::World& world, const Outl
 /// matches flattened (depth 0) in entity-id order, so a match nested under a
 /// collapsed parent is still reachable.
 std::vector<OutlinerRow> filter_outliner_rows(const std::vector<OutlinerRow>& rows,
-                                              const std::string& filter);
+                                              const std::string& filter,
+                                              OutlinerCategory category = OutlinerCategory::All);
 bool is_descendant_of(const ecs::World& world, ecs::Entity e, ecs::Entity ancestor);
 
 } // namespace nf::editor

@@ -34,7 +34,11 @@ namespace nf::ecs {
 class World;
 } // namespace nf::ecs
 
+namespace nf::ui { class ScriptCanvas; }
+namespace nf::assets { class SettingsStore; }
+
 namespace nf::scripting {
+class SceneFlow;
 
 /// Log routing for nf.log_*: defaults to the engine logger; tests override.
 using LogCallback = std::function<void(const std::string& level, const std::string& message)>;
@@ -301,6 +305,9 @@ public:
     /// adapter may die as soon as this returns. Pass a default ScriptInput to
     /// disable input queries.
     void set_input_source(const ScriptInput& input);
+    void set_ui_canvas(ui::ScriptCanvas* canvas);
+    void set_settings_store(assets::SettingsStore* store);
+    void set_game_flow(SceneFlow* flow);
 
     LuaVM& vm() { return *m_vm; }
     void set_instruction_limit(u64 limit);

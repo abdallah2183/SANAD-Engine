@@ -32,6 +32,8 @@ See the [Editor guide](Editor_Guide.md) for camera navigation, input bindings an
 
 ## 4. Package a standalone game
 
+For single-file export from a current engine build, see [Export a Windows game](Windows_Export.md).
+
 From the extracted engine folder:
 
 ```bat

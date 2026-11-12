@@ -23,6 +23,9 @@ std::wstring build_windows_command_line(const std::vector<std::wstring>& argumen
 /// launched through PATH may receive only its command name.
 std::filesystem::path executable_directory();
 
+/// Connects a GUI process's missing diagnostic streams to an existing terminal.
+void attach_parent_console();
+
 /// Starts `executable` directly with CreateProcessW, waits for it, and returns
 /// its exit code. `arguments` excludes argv[0]. On failure, returns 1 and fills
 /// `out_error`; there is no shell fallback.

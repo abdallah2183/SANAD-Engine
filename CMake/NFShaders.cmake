@@ -210,3 +210,16 @@ else()
         "     (Searched: $ENV{VULKAN_SDK}/Bin, C:/VulkanSDK/<version>/Bin, PATH)")
 endif()
 
+
+# Ship the runtime UI beside the regular renderer shaders. Existing project
+# packaging copies this whole directory, including its font license.
+if(TARGET NFEditorImGuiShaders)
+    set(NF_GAME_UI_SHADER_DIR "${NF_BASIC3D_SHADER_DIR}/UI")
+    add_custom_target(NFGameUiAssets ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${NF_GAME_UI_SHADER_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NF_EDITOR_IMGUI_SHADER_DIR}/imgui_vert.spv" "${NF_GAME_UI_SHADER_DIR}/imgui_vert.spv"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NF_EDITOR_IMGUI_SHADER_DIR}/imgui_frag.spv" "${NF_GAME_UI_SHADER_DIR}/imgui_frag.spv"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Resources/fonts/Amiri-Regular.ttf" "${NF_GAME_UI_SHADER_DIR}/Amiri-Regular.ttf"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Resources/fonts/OFL.txt" "${NF_GAME_UI_SHADER_DIR}/OFL.txt"
+        DEPENDS NFEditorImGuiShaders)
+endif()

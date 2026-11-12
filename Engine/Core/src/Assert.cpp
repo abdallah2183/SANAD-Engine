@@ -35,9 +35,11 @@ void default_assert_handler(std::string_view msg, std::string_view file, u32 lin
     Logger::instance().error(LogCategory::Core, msg, file, line);
 
     // Break into debugger if present
+#ifdef _WIN32
     if (IsDebuggerPresent()) {
         __debugbreak();
     }
+#endif
 
     std::abort();
 }

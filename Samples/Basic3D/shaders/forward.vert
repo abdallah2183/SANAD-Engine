@@ -39,8 +39,20 @@ void main() {
     vec4 world = pc.model * vec4(in_position, 1.0);
     vec4 clip = pc.view_proj * world;
     gl_Position = clip;
-    // Transform normal by model (assume uniform scale, so use mat3(model))
-    out_normal = mat3(pc.model) * in_normal;
+    // Normals transform with the INVERSE TRANSPOSE of the model matrix, exactly
+    // as in gbuffer.vert: the deferred and forward paths must agree about what
+    // a surface normal is, or a doubleSided pane lit forward would not match the
+    // wall behind it. mat3(model) is only correct for rigid/uniform-scale
+    // transforms; a non-uniform scale shears it. For rigid/uniform-scale the two
+    // agree up to a positive scalar, which the fragment shader's normalize()
+    // removes, so existing assets are bit-for-bit unchanged. A singular model
+    // (zero scale) falls back to the raw matrix instead of producing NaN.
+    mat3 model3 = mat3(pc.model);
+    mat3 normal_matrix = model3;
+    if (abs(determinant(model3)) > 1e-8) {
+        normal_matrix = transpose(inverse(model3));
+    }
+    out_normal = normal_matrix * in_normal;
     out_uv = in_uv0;
     out_world_pos = world.xyz;
     out_screen_uv = (clip.xy / clip.w) * 0.5 + 0.5;

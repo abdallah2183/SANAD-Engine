@@ -11,8 +11,10 @@ set(NFRUNTIME_SOURCES
     src/InputLog.cpp
     src/BuiltinModules.cpp
     src/PlayerControllerModule.cpp
+    src/PlatformerControllerModule.cpp
     src/OrbitCameraModule.cpp
     src/KeyboardInput.cpp
+    src/TouchInput.cpp
     src/InputBindings.cpp
     src/CameraFollow.cpp
     src/PlayerLook.cpp
@@ -48,3 +50,7 @@ target_compile_definitions(NFRuntime PRIVATE "NF_BASIC3D_SHADER_DIR=\"${NF_BASIC
 # The save format stamps the engine version into every slot's meta.txt. Taken
 # from the CMake project version so the stamp cannot drift from the binary.
 target_compile_definitions(NFRuntime PRIVATE "NF_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
+
+if(TARGET NFGameUiAssets)
+    add_dependencies(NFRuntime NFGameUiAssets)
+endif()

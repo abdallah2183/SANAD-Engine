@@ -19,6 +19,8 @@ Choose the guide for your task. Current user documentation, technical references
 
 | Guide | Focus |
 |:---|:---|
+| [Android preview (development)](Android_Preview_Ar.md) | Build and test an experimental APK on Android |
+| [Runtime UI (development)](Runtime_UI.md) | Lua panels, labels, buttons, progress bars and sliders in the standalone player |
 | [Lua scripting](Lua_Scripting_Ar.md) | Script lifecycle and the engine's gameplay API |
 | [AI agent workflow](AI_Game_Guide.md) | Executable native-project workflow for coding agents |
 | [Asset import](Asset_Import.md) | Mesh formats, textures, materials and import tools |

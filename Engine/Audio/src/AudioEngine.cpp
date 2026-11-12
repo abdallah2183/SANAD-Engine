@@ -10,6 +10,10 @@
 
 namespace nf::audio {
 
+#ifdef __ANDROID__
+std::unique_ptr<AudioDevice> create_android_output_device();
+#endif
+
 // ---------------------------------------------------------------------------
 // Attenuation
 // ---------------------------------------------------------------------------
@@ -447,6 +451,13 @@ std::unique_ptr<AudioDevice> create_output_device() {
         return wasapi;
     }
     NF_LOG_INFO(LogCategory::Audio, "Audio output: no usable endpoint, silent null device");
+#elif defined(__ANDROID__)
+    auto android = create_android_output_device();
+    if (android) {
+        NF_LOG_INFO(LogCategory::Audio, "Audio output: {}", android->backend_name());
+        return android;
+    }
+    NF_LOG_WARN(LogCategory::Audio, "Audio output: Android device unavailable, using silence");
 #endif
     auto null_dev = std::make_unique<NullAudioDevice>();
     null_dev->initialize(kDefaultSampleRate, kDefaultBufferFrames);

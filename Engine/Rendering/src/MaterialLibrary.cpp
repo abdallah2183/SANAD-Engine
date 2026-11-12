@@ -5,8 +5,8 @@
 
 namespace nf::rendering {
 
-// Matches the gbuffer shader's MaterialParams uniform block (std140, 64 bytes).
-static constexpr usize kMaterialParamsUboSize = 16 * sizeof(float);
+// Matches the gbuffer shader's MaterialParams uniform block (std140, 80 bytes).
+static constexpr usize kMaterialParamsUboSize = 20 * sizeof(float);
 
 MaterialLibrary::MaterialLibrary(rhi::IGraphicsDevice& device) : m_device(&device) {}
 
@@ -27,7 +27,7 @@ MaterialHandle MaterialLibrary::create_instance(Material& material, const PBRMat
         return kInvalidMaterialHandle;
     }
 
-    float packed[16];
+    float packed[20];
     params.pack(packed);
     entry->params_ubo->update(packed, 0, kMaterialParamsUboSize);
 
@@ -49,7 +49,7 @@ void MaterialLibrary::set_params(MaterialHandle handle, const PBRMaterialParams&
     MaterialEntry* entry = get(handle);
     if (!entry || !entry->params_ubo) return;
     entry->params = params;
-    float packed[16];
+    float packed[20];
     params.pack(packed);
     entry->params_ubo->update(packed, 0, kMaterialParamsUboSize);
 }
@@ -57,6 +57,14 @@ void MaterialLibrary::set_params(MaterialHandle handle, const PBRMaterialParams&
 const PBRMaterialParams* MaterialLibrary::params(MaterialHandle handle) const {
     const MaterialEntry* entry = get(handle);
     return entry ? &entry->params : nullptr;
+}
+
+void MaterialLibrary::set_double_sided(MaterialHandle handle, bool value) {
+    MaterialEntry* entry = get(handle);
+    if (!entry) return;
+    // Rasterizer state, not shading data: no UBO write and no set_dirty.
+    // The renderer resolves the pipeline at draw time.
+    entry->double_sided = value;
 }
 
 void MaterialLibrary::clear_albedo_texture(MaterialHandle handle) {

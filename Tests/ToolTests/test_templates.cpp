@@ -64,6 +64,9 @@ using namespace nf::runtime;
 #ifndef NF_TEMPLATE_PLATFORMER2D_DIR
     #define NF_TEMPLATE_PLATFORMER2D_DIR ""
 #endif
+#ifndef NF_TEMPLATE_UISTARTER_DIR
+    #define NF_TEMPLATE_UISTARTER_DIR ""
+#endif
 
 namespace {
 
@@ -225,6 +228,8 @@ const TemplateSpec kFpsStarter{
     NF_TEMPLATE_FPSSTARTER_DIR, "FPSStarter", 16};
 const TemplateSpec kPlatformer2D{
     NF_TEMPLATE_PLATFORMER2D_DIR, "Platformer2D", 16};
+const TemplateSpec kUiStarter{
+    NF_TEMPLATE_UISTARTER_DIR, "UiStarter", 6};
 
 } // namespace
 
@@ -238,6 +243,37 @@ NF_TEST(template_fpsstarter_scaffolds_into_a_playable_project) {
 
 NF_TEST(template_platformer2d_scaffolds_into_a_playable_project) {
     run_template_suite(kPlatformer2D, "nf_tpl_platformer2d");
+}
+
+NF_TEST(template_uistarter_scaffolds_into_a_playable_project) {
+    run_template_suite(kUiStarter, "nf_tpl_uistarter");
+    // The UI starter must ship the settings flow: load-once, save-on-demand,
+    // and no Cache/personal settings in the template itself.
+    if (std::string(kUiStarter.template_dir).empty()) return;
+    auto root = scaffold_from(kUiStarter, "nf_tpl_uistarter_files");
+    const auto script = root / "Content" / "Scripts" / "example.lua";
+    NF_CHECK(std::filesystem::exists(script));
+    std::string text;
+    {
+        std::ifstream in(script);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    NF_CHECK(text.find("nf.settings.load") != std::string::npos);
+    NF_CHECK(text.find("nf.settings.save") != std::string::npos);
+    NF_CHECK(text.find("nf.ui.text_input") != std::string::npos);
+    NF_CHECK(text.find("nf.ui.number_input") != std::string::npos);
+    NF_CHECK(text.find("nf.ui.button") != std::string::npos);
+    // Every destination referenced by the starter must load from the scaffold.
+    for (const char* scene_name : {"Main", "DemoLevel", "Results"}) {
+        const auto scene_path = root / "Content" / "Scenes" / (std::string(scene_name) + ".nfscene");
+        auto loaded = load_scene_from_physical(scene_path);
+        NF_CHECK_MSG(loaded.success && loaded.scene, ("UiStarter destination failed: " + loaded.error).c_str());
+        NF_CHECK(loaded.warnings.empty());
+    }
+    // No personal settings/cache shipped.
+    NF_CHECK(!std::filesystem::exists(root / "Content" / "settings.txt"));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }
 
 NF_TEST(template_default_is_still_green) {
@@ -379,6 +415,14 @@ void check_template_builds_and_plays(const TemplateSpec& spec, const std::string
     NF_CHECK_MSG(std::filesystem::exists(package_dir / "NFPlayer.exe"),
                  (label + ": package has no NFPlayer.exe").c_str());
 
+    if (std::string(spec.label) == "UiStarter") {
+        for (const char* file : {"Scenes/Main.nfscene", "Scenes/DemoLevel.nfscene", "Scenes/Results.nfscene",
+                                 "Scripts/example.lua", "Scripts/level.lua", "Scripts/results.lua"}) {
+            NF_CHECK_MSG(std::filesystem::exists(package_dir / "Content" / file),
+                         ("UiStarter package is missing " + std::string(file)).c_str());
+        }
+    }
+
     // No --project: the package must describe itself from beside the player.
     const PlayerRun run = run_packaged_player(package_dir);
     const std::string& log = run.log;
@@ -429,6 +473,7 @@ void check_template_builds_and_plays(const TemplateSpec& spec, const std::string
 const TemplateSpec kThirdPersonPlay{NF_TEMPLATE_THIRDPERSON_DIR, "ThirdPerson", 12};
 const TemplateSpec kFpsStarterPlay{NF_TEMPLATE_FPSSTARTER_DIR, "FPSStarter", 16};
 const TemplateSpec kPlatformer2DPlay{NF_TEMPLATE_PLATFORMER2D_DIR, "Platformer2D", 16};
+const TemplateSpec kUiStarterPlay{NF_TEMPLATE_UISTARTER_DIR, "UiStarter", 6};
 
 } // namespace
 
@@ -442,4 +487,8 @@ NF_TEST(template_fpsstarter_builds_and_plays_in_the_shipped_player) {
 
 NF_TEST(template_platformer2d_builds_and_plays_in_the_shipped_player) {
     check_template_builds_and_plays(kPlatformer2DPlay, "nf_tpl_2d_play");
+}
+
+NF_TEST(template_uistarter_builds_and_plays_in_the_shipped_player) {
+    check_template_builds_and_plays(kUiStarterPlay, "nf_tpl_ui_play");
 }

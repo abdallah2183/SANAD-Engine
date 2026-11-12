@@ -79,6 +79,7 @@ struct EditorUiSettings {
     float accent_g = 0.553f;
     float accent_b = 1.000f;
     // Export dialog memory
+    bool android_preview_building = false;
     int export_format = 5;        // MeshFormat::Glb — one self-contained file
     bool export_whole_scene = true;
     // Sky preset the Create > Sky and Settings buttons write: 0 clear day,

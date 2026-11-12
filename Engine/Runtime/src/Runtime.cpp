@@ -33,6 +33,16 @@ namespace nf::runtime {
 
 namespace {
 
+// A texture's bytes are either COLOUR (sRGB: glTF baseColorTexture and
+// emissiveTexture) or DATA (linear: normal, metallicRoughness, occlusion,
+// colour-grading LUT). The GPU must decode the former on sample: the final
+// tonemap pass applies pow(x, 1/2.2), so feeding sRGB bytes straight into
+// linear lighting double-gamma-encodes every imported albedo. The two uses of
+// the SAME png therefore need two distinct GPU images, hence the cache key.
+std::string texture_cache_key(const std::string& logical_path, bool srgb) {
+    return srgb ? logical_path + "#srgb" : logical_path + "#linear";
+}
+
 // Scale ratio for applying an animated pose as an offset on top of an authored
 // transform. A rest scale of zero is not a meaningful rig, but it is reachable
 // from a hand-edited scene, and dividing by it would poison the entity's
@@ -95,6 +105,9 @@ Runtime::Runtime(assets::VirtualFileSystem& vfs, assets::AssetRegistry& registry
     m_pipeline_cache = std::make_unique<rendering::PipelineCache>(m_device);
     m_renderer = std::make_unique<rendering::Renderer3D>();
     m_scripts = std::make_unique<scripting::ScriptSystem>();
+    m_scripts->set_ui_canvas(&m_game_ui);
+    m_scripts->set_settings_store(&m_settings_store);
+    m_scripts->set_game_flow(&m_game_flow);
     // Default open-field grid; games resize expectations through ai_world()
     // (set_budget/set_tier_radii) or by replacing the population per scene.
     m_ai_world = std::make_unique<ai::AIWorld>(32.0f, 8, 8);
@@ -116,6 +129,17 @@ Runtime::~Runtime() {
         m_renderer->shutdown();
         m_renderer_initialized = false;
     }
+}
+
+void Runtime::set_mobile_render_defaults() {
+    if (!m_renderer) return;
+    // Keep the 3D passes inexpensive on entry-level phones. UI stays at the
+    // native output size, and a scene can explicitly choose another scale.
+    m_renderer->set_render_scale(0.4f);
+    m_renderer->set_shadow_tile_size(256);
+    m_renderer->set_local_shadow_tile_size(128);
+    m_renderer->set_ssao_enabled(false);
+    m_renderer->set_ibl_enabled(false);
 }
 
 void Runtime::shutdown() {
@@ -174,6 +198,9 @@ void Runtime::shutdown() {
 }
 
 void Runtime::on_swapchain_resized(rhi::Swapchain* swapchain) {
+    if (m_renderer && m_swapchain != swapchain) {
+        m_renderer->release_target_framebuffers();
+    }
     m_swapchain = swapchain;
     if (m_renderer && m_renderer_initialized && m_swapchain) {
         const auto w = m_swapchain->width();
@@ -457,6 +484,14 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
             }
         }
     }
+    adopt_scene(std::move(result.scene), logical_path);
+    return true;
+}
+
+void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string& logical_path) {
+    // This also serves editor Stop and externally opened scenes, not only
+    // queued transitions. Finish in-flight reads before old GPU owners die.
+    m_device.wait_idle();
     // A previous scene's modules get a chance to release what they hold while
     // the world they were pointing at is still alive.
     if (m_scene_data_ptr && m_scene_data_ptr->scene && !m_gameplay_modules.empty()) {
@@ -465,11 +500,14 @@ bool Runtime::load_scene(const std::string& logical_path, std::string& out_error
             slot.module->on_scene_unload(unload_ctx);
         }
     }
-    adopt_scene(std::move(result.scene), logical_path);
-    return true;
-}
-
-void Runtime::adopt_scene(std::unique_ptr<scene::Scene> scene, const std::string& logical_path) {
+    if (m_streaming_enabled) disable_streaming();
+    m_game_ui.reset();
+    m_game_flow.scene_adopted(logical_path);
+    // Entity IDs may be reused by the next world. Their previous audio cursor
+    // and filter state must not be mistaken for the next scene's emitters.
+    m_audio_emitters.clear();
+    m_audio_emitter_seen.clear();
+    m_audio_accumulator = 0.0f;
     m_scene_data_ptr = std::make_unique<SceneRuntimeData>();
     m_scene_data_ptr->scene = std::move(scene);
     m_loaded_scene_path = logical_path;
@@ -670,6 +708,26 @@ void Runtime::mark_scene_edited() {
 }
 
 void Runtime::update(float dt) {
+    // A paused host must not execute scripts, even those independent of dt.
+    if (m_paused) {
+        if (m_scene_data_ptr && m_scene_data_ptr->scene) {
+            scene::propagate_transforms(m_scene_data_ptr->scene->world());
+        }
+        return;
+    }
+    if (dt > 0.0f && m_game_flow.pending()) {
+        // Every prior Lua call has returned. Parsing errors leave the previous
+        // scene alive; GPU users of that scene finish before adoption.
+        const std::string destination = m_game_flow.pending_path();
+        std::string error;
+        const bool loaded = load_scene(destination, error);
+        m_game_flow.complete(loaded, error);
+        NF_LOG_INFO(LogCategory::Core, "Scene transition {}: '{}'{}", loaded ? "ready" : "failed",
+                    destination, error.empty() ? "" : " — " + error);
+        m_ui_pointer = {};
+        m_ui_keys = {};
+        dt = std::min(dt, 1.0f / 60.0f);
+    }
     // Frame-local combat events: the completed frame becomes the script-visible
     // `previous` slot, and `current` starts empty for this frame's shots.
     m_impacts.begin_frame();
@@ -746,6 +804,14 @@ void Runtime::update(float dt) {
     // the same post-simulation world a module does, and damage it applies
     // still spawns shards in the same frame.
     step_script(dt);
+    if (m_game_flow.pending()) {
+        // Presented before the synchronous load at the next update boundary.
+        m_game_ui.reset();
+        m_game_ui.set_scope(0xFFFFFFFFu, 0xFFFFFFFFu);
+        m_game_ui.panel("transition", {0.0f, 0.0f, 1.0f, 1.0f});
+        m_game_ui.label("loading", "Loading... / جارٍ التحميل", {0.15f, 0.40f, 0.70f, 0.16f}, 28.0f);
+        m_game_ui.cursor(true);
+    }
     // World-scale AI plans next: a plan only assigns tiers and grants, so a
     // script that moved an actor this frame is already visible to it.
     step_ai_world(dt);
@@ -1680,6 +1746,7 @@ u32 Runtime::step_script(float dt) {
         };
     }
     m_scripts->set_input_source(input);
+    m_game_ui.begin_frame(m_ui_pointer, m_ui_keys);
     m_scripts->update(world, dt);
     m_script_updates += runnable;
     return static_cast<u32>(runnable);
@@ -1708,6 +1775,7 @@ size_t Runtime::scripts_runnable_count() const {
 }
 
 void Runtime::clear_script_cache() {
+    m_game_ui.reset();
     if (m_scripts) {
         m_scripts->clear_cache();
     }
@@ -3604,6 +3672,10 @@ void Runtime::rebuild_physics_from_scene() {
     }
 }
 
+bool Runtime::enable_destruction() {
+    return enable_destruction(DestructionConfig{});
+}
+
 bool Runtime::enable_destruction(const DestructionConfig& config) {
     if (m_destruction_enabled) {
         return true;
@@ -5366,12 +5438,12 @@ void Runtime::extract_post_process() {
             m_lut_view = nullptr;
             if (!m_lut_path.empty()) {
                 std::string lut_err;
-                if (!ensure_texture(m_lut_path, lut_err)) {
+                if (!ensure_texture(m_lut_path, false, lut_err)) {
                     NF_LOG_WARN(LogCategory::Core,
                                 "Runtime: colour LUT '{}' unusable ({}); the LUT stage is off",
                                 m_lut_path, lut_err);
                 } else {
-                    const auto it = m_textures.find(m_lut_path);
+                    const auto it = m_textures.find(texture_cache_key(m_lut_path, false));
                     if (it != m_textures.end() && it->second && it->second->view) {
                         // The shader reads a kLutSize^3 cube laid out as a strip.
                         // A wrong-sized image would be sampled out of range, so
@@ -5850,6 +5922,10 @@ rendering::MaterialHandle Runtime::material_for_path(const std::string& logical_
         return rendering::kInvalidMaterialHandle;
     }
     m_material_instances.emplace(path, h);
+    // glTF doubleSided: rasterizer state, carried through .nfmat so imported
+    // planes/foliage stay lit from both sides. Engine-authored materials
+    // without the key keep the default single-sided behaviour.
+    m_renderer->materials().set_double_sided(h, have_file && file_asset.double_sided);
     m_material_mip[path] =
         have_file ? file_asset.mip_mode : rhi::MipMapMode::Linear;
     // Map bindings follow the file; failures stay scalar (never fatal).
@@ -5982,6 +6058,17 @@ bool Runtime::save_material(const std::string& src_path, const std::string& dst_
     asset.occlusion = material_occlusion(src);
     asset.emissive = material_emissive_map(src);
     asset.mip_mode = material_mip_mode(src);
+    // Preserve glTF sidedness across an editor save: an .nfmat round-trip must
+    // not silently turn a double-sided plane back into a one-sided one.
+    {
+        rendering::MaterialAsset existing;
+        std::string existing_err;
+        auto read = m_vfs.read_text(src);
+        if (read.ok &&
+            rendering::MaterialAsset::load_from_text(read.value, existing, existing_err)) {
+            asset.double_sided = existing.double_sided;
+        }
+    }
     auto r = m_vfs.write_text(dst, asset.save_to_text());
     if (!r.ok) {
         out_error = r.error;
@@ -6042,15 +6129,16 @@ bool Runtime::rebind_material_sampling(const std::string& material_path,
     using SetFn = void (Lib::*)(rendering::MaterialHandle, const rhi::TextureView&,
                                 const rhi::Sampler&);
     using ClearFn = void (Lib::*)(rendering::MaterialHandle);
-    auto bind_one = [&](const std::string& tex_path, SetFn set, ClearFn clear) -> bool {
+    auto bind_one = [&](const std::string& tex_path, bool srgb, SetFn set,
+                        ClearFn clear) -> bool {
         if (tex_path.empty()) {
             (m_renderer->materials().*clear)(handle);
             return true;
         }
-        if (!ensure_texture(tex_path, out_error)) {
+        if (!ensure_texture(tex_path, srgb, out_error)) {
             return false;
         }
-        auto tit = m_textures.find(tex_path);
+        auto tit = m_textures.find(texture_cache_key(tex_path, srgb));
         if (tit == m_textures.end() || !tit->second->view) {
             out_error = "Texture objects missing for '" + tex_path + "'";
             return false;
@@ -6063,23 +6151,26 @@ bool Runtime::rebind_material_sampling(const std::string& material_path,
         (m_renderer->materials().*set)(handle, *tit->second->view, *sampler);
         return true;
     };
-    if (!bind_one(material_albedo(material_path), &Lib::set_albedo_texture,
+    // glTF colour maps are sRGB; the packed data maps are linear. This is a
+    // FORMAT rule, not a per-asset setting, so it applies to every imported
+    // glTF mesh without any extra authoring step.
+    if (!bind_one(material_albedo(material_path), true, &Lib::set_albedo_texture,
                   &Lib::clear_albedo_texture)) {
         return false;
     }
-    if (!bind_one(material_normal(material_path), &Lib::set_normal_texture,
+    if (!bind_one(material_normal(material_path), false, &Lib::set_normal_texture,
                   &Lib::clear_normal_texture)) {
         return false;
     }
-    if (!bind_one(material_mrough(material_path), &Lib::set_mrough_texture,
+    if (!bind_one(material_mrough(material_path), false, &Lib::set_mrough_texture,
                   &Lib::clear_mrough_texture)) {
         return false;
     }
-    if (!bind_one(material_occlusion(material_path), &Lib::set_occlusion_texture,
+    if (!bind_one(material_occlusion(material_path), false, &Lib::set_occlusion_texture,
                   &Lib::clear_occlusion_texture)) {
         return false;
     }
-    if (!bind_one(material_emissive_map(material_path), &Lib::set_emissive_texture,
+    if (!bind_one(material_emissive_map(material_path), true, &Lib::set_emissive_texture,
                   &Lib::clear_emissive_texture)) {
         return false;
     }
@@ -6087,7 +6178,8 @@ bool Runtime::rebind_material_sampling(const std::string& material_path,
 }
 
 std::unique_ptr<Runtime::TextureObjects> Runtime::upload_texture_objects(
-    const std::string& logical_path, const rendering::DecodedImage& img, std::string& out_error) {
+    const std::string& logical_path, const rendering::DecodedImage& img, bool srgb,
+    std::string& out_error) {
     const size_t px = static_cast<size_t>(img.width) * static_cast<size_t>(img.height);
     if (px == 0 || px > 64u * 1024u * 1024u || !img.ok()) {
         out_error = "Texture '" + logical_path + "' has unreasonable dimensions";
@@ -6097,7 +6189,10 @@ std::unique_ptr<Runtime::TextureObjects> Runtime::upload_texture_objects(
     rhi::TextureDesc td{};
     td.width = static_cast<u32>(img.width);
     td.height = static_cast<u32>(img.height);
-    td.format = rhi::Format::R8G8B8A8_UNorm;
+    // sRGB formats make the GPU linearize on SAMPLE (exact piecewise transfer
+    // function, no 8-bit CPU preconversion and no shader cost). Colour maps
+    // need it; normal/MR/occlusion/LUT data must stay raw linear.
+    td.format = srgb ? rhi::Format::R8G8B8A8_sRGB : rhi::Format::R8G8B8A8_UNorm;
     td.mip_levels = levels;
     td.usage = rhi::ImageUsage::Sampled | rhi::ImageUsage::TransferDst | rhi::ImageUsage::TransferSrc;
     auto tex = m_device.create_texture(td);
@@ -6159,8 +6254,10 @@ std::unique_ptr<Runtime::TextureObjects> Runtime::upload_texture_objects(
     return nullptr;
 }
 
-bool Runtime::ensure_texture(const std::string& logical_path, std::string& out_error) {
-    auto it = m_textures.find(logical_path);
+bool Runtime::ensure_texture(const std::string& logical_path, bool srgb,
+                             std::string& out_error) {
+    const std::string key = texture_cache_key(logical_path, srgb);
+    auto it = m_textures.find(key);
     if (it != m_textures.end() && it->second && it->second->texture) {
         return true;
     }
@@ -6175,13 +6272,13 @@ bool Runtime::ensure_texture(const std::string& logical_path, std::string& out_e
         out_error = "Cannot decode texture '" + logical_path + "': " + dec_err;
         return false;
     }
-    auto entry = upload_texture_objects(logical_path, img, out_error);
+    auto entry = upload_texture_objects(logical_path, img, srgb, out_error);
     if (!entry) {
         return false;
     }
-    NF_LOG_INFO(LogCategory::Core, "Runtime: texture uploaded '{}' ({}x{})", logical_path, img.width,
-                img.height);
-    m_textures[logical_path] = std::move(entry);
+    NF_LOG_INFO(LogCategory::Core, "Runtime: texture uploaded '{}' ({}x{}, {})", logical_path,
+                img.width, img.height, srgb ? "sRGB" : "linear");
+    m_textures[key] = std::move(entry);
     return true;
 }
 
@@ -6199,13 +6296,37 @@ bool Runtime::reload_texture(const std::string& logical_path, std::string& out_e
         out_error = "Cannot decode texture '" + logical_path + "': " + dec_err;
         return false;
     }
-    auto entry = upload_texture_objects(logical_path, img, out_error);
-    if (!entry) {
-        return false;
+    // One path can be cached in BOTH colour spaces (the same PNG bound as an
+    // sRGB albedo and as a linear data map). Rebuild every live variant, or a
+    // hot reload would leave the other one serving stale bytes.
+    std::vector<std::string> keys;
+    std::vector<std::unique_ptr<TextureObjects>> replacements;
+    for (bool srgb : {false, true}) {
+        const std::string key = texture_cache_key(logical_path, srgb);
+        if (m_textures.find(key) == m_textures.end()) {
+            continue;
+        }
+        auto entry = upload_texture_objects(logical_path, img, srgb, out_error);
+        if (!entry) {
+            return false;
+        }
+        keys.push_back(key);
+        replacements.push_back(std::move(entry));
+    }
+    if (keys.empty()) {
+        // Nothing was bound yet: warm the linear variant for the caller.
+        auto entry = upload_texture_objects(logical_path, img, false, out_error);
+        if (!entry) {
+            return false;
+        }
+        keys.push_back(texture_cache_key(logical_path, false));
+        replacements.push_back(std::move(entry));
     }
     // Swap under wait_idle: in-flight frames may still reference the old view.
     m_device.wait_idle();
-    m_textures[logical_path] = std::move(entry);
+    for (usize i = 0; i < keys.size(); ++i) {
+        m_textures[keys[i]] = std::move(replacements[i]);
+    }
     // Rebind every material sampling this path (raw pointers changed), each
     // with its own recorded mip mode. A texture can sit in any of the five
     // map slots, so every slot map is consulted — checking only the albedo
@@ -6245,8 +6366,8 @@ bool Runtime::set_material_albedo(const std::string& material_path, const std::s
         return true;
     }
     // Pre-validate (warms the cache): a bad file fails here, before the map
-    // or the renderer is touched.
-    if (!ensure_texture(texture_path, out_error)) {
+    // or the renderer is touched. Albedo is an sRGB colour map.
+    if (!ensure_texture(texture_path, true, out_error)) {
         return false;
     }
     m_material_albedo[path] = texture_path;
@@ -6282,7 +6403,7 @@ bool Runtime::set_material_map(const std::string& material_path, const std::stri
         m_material_dirty[path] = true;
         return true;
     }
-    if (!ensure_texture(texture_path, out_error)) {
+    if (!ensure_texture(texture_path, false, out_error)) {
         return false;
     }
     slot_map[path] = texture_path;
